@@ -2553,7 +2553,11 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "getrandom 0.4.3",
+ "http-body-util",
  "hudsucker",
+ "hyper-rustls",
+ "hyper-util",
+ "ipnet",
  "keyring",
  "libc",
  "minisign-verify",
@@ -2571,6 +2575,7 @@ dependencies = [
  "tauri-plugin-updater",
  "time",
  "tokio",
+ "tower-service",
 ]
 
 [[package]]

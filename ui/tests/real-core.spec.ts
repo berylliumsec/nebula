@@ -349,9 +349,11 @@ test("real Core persists normalized domains and explicit all-target scope throug
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
     await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    const saveScope = page.getByRole("button", { name: "Save scope" });
+    await expect(saveScope).toBeEnabled({ timeout: 20_000 });
     await page.getByLabel("Allowed domains").fill("https://www.Google.com/");
     await page.getByLabel("All targets and ports").check();
-    await page.getByRole("button", { name: "Save scope" }).click();
+    await saveScope.click();
     const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
     await expect(confirmation).toBeVisible();
     await confirmation.getByRole("button", { name: "Allow all targets" }).click();

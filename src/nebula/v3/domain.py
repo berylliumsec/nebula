@@ -9,6 +9,7 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import ipaddress
+import json
 import re
 from datetime import datetime, timezone
 from enum import Enum
@@ -101,6 +102,24 @@ class BrowserActionStatus(StringEnum):
     FAILED = "failed"
     REJECTED = "rejected"
     EXPIRED = "expired"
+
+
+class BrowserAutomationLeaseStatus(StringEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    REVOKED = "revoked"
+    EXPIRED = "expired"
+    COMPLETE = "complete"
+    FAILED = "failed"
+
+
+class BrowserCommandStatus(StringEnum):
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class BrowserHandoffStatus(StringEnum):
@@ -845,10 +864,12 @@ class BrowserSession(Entity):
     status: BrowserSessionStatus = BrowserSessionStatus.ACTIVE
     capture_mode: BrowserCaptureMode = BrowserCaptureMode.HEADERS
     proxy_enabled: bool = False
+    proxy_trust_acknowledged: bool = False
     tabs: list[BrowserTabState] = Field(default_factory=list, max_length=16)
     active_tab_id: str | None = Field(default=None, max_length=200)
     upstream_proxy_enabled: bool = False
     upstream_proxy_url: str | None = Field(default=None, max_length=2_048)
+    upstream_proxy_credential_ref: str | None = Field(default=None, max_length=200)
     interception_enabled: bool = False
     device_owner: str | None = Field(default=None, max_length=200)
     last_seen_at: datetime = Field(default_factory=utc_now)
@@ -867,6 +888,15 @@ class BrowserSession(Entity):
             raise ValueError("upstream proxy must use http, https, or socks5")
         if parsed.username is not None or parsed.password is not None:
             raise ValueError("upstream proxy credentials require protected storage")
+        return value
+
+    @field_validator("upstream_proxy_credential_ref")
+    @classmethod
+    def browser_upstream_credential_ref_is_safe(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value.strip() or any(character.isspace() for character in value)
+        ):
+            raise ValueError("upstream proxy credentials require an opaque reference")
         return value
 
     @field_validator("last_seen_at")
@@ -914,6 +944,7 @@ class BrowserTrafficExchange(Entity):
     completed_at: datetime | None = None
     replay_of_exchange_id: str | None = Field(default=None, max_length=200)
     error: str | None = Field(default=None, max_length=4_000)
+    blocked: bool = False
     truncated: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -1015,6 +1046,167 @@ class BrowserAction(Entity):
             raise ValueError("approved browser actions require approval attribution")
         if self.expires_at <= self.created_at:
             raise ValueError("browser action expiry must follow creation")
+        return self
+
+
+class BrowserAutomationLease(Entity):
+    """Run-scoped authority for native browser and proxy automation."""
+
+    entity_kind: ClassVar[str] = "browser_automation_leases"
+    engagement_id: str
+    run_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    scope_policy_id: str = Field(min_length=1, max_length=200)
+    scope_policy_revision: int = Field(ge=1)
+    target_urls: list[str] = Field(min_length=1, max_length=256)
+    allowed_risk_classes: list[RiskClass] = Field(min_length=1, max_length=16)
+    credential_refs: list[str] = Field(default_factory=list, max_length=64)
+    max_commands: int = Field(default=100, ge=1, le=100_000)
+    max_requests: int = Field(default=1_000, ge=1, le=1_000_000)
+    max_body_bytes: int = Field(default=1_048_576, ge=0, le=8_388_608)
+    commands_used: int = Field(default=0, ge=0)
+    requests_used: int = Field(default=0, ge=0)
+    status: BrowserAutomationLeaseStatus = BrowserAutomationLeaseStatus.ACTIVE
+    expires_at: datetime
+    last_heartbeat_at: datetime = Field(default_factory=utc_now)
+    revoked_at: datetime | None = None
+    stop_reason: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target_urls")
+    @classmethod
+    def browser_lease_targets_are_network_only(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "browser automation targets must be credential-free HTTP(S) URLs"
+                )
+            normalized.append(value)
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("expires_at", "last_heartbeat_at", "revoked_at")
+    @classmethod
+    def browser_lease_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError(
+                "browser automation lease timestamps must include a timezone"
+            )
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_lease_is_coherent(self) -> "BrowserAutomationLease":
+        if self.expires_at <= self.created_at:
+            raise ValueError("browser automation lease expiry must follow creation")
+        if self.commands_used > self.max_commands:
+            raise ValueError("browser automation command usage exceeds its budget")
+        if self.requests_used > self.max_requests:
+            raise ValueError("browser automation request usage exceeds its budget")
+        return self
+
+
+class BrowserCommand(Entity):
+    """Durable, idempotent bridge from Core tools to the native browser worker."""
+
+    entity_kind: ClassVar[str] = "browser_commands"
+    engagement_id: str
+    run_id: str = Field(min_length=1, max_length=200)
+    lease_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    tab_id: str = Field(min_length=1, max_length=200)
+    kind: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,80}$")
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    expected_page_url: str | None = Field(default=None, max_length=16_384)
+    expected_tab_revision: int | None = Field(default=None, ge=1)
+    status: BrowserCommandStatus = BrowserCommandStatus.QUEUED
+    claimed_by_device_id: str | None = Field(default=None, max_length=200)
+    claim_token: str | None = Field(default=None, max_length=200)
+    claimed_at: datetime | None = None
+    claim_expires_at: datetime | None = None
+    expires_at: datetime
+    result: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    error: str | None = Field(default=None, max_length=4_000)
+    idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @field_validator("expected_page_url")
+    @classmethod
+    def browser_command_page_is_network_only(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError(
+                "browser command pages must use credential-free HTTP(S) URLs"
+            )
+        return value
+
+    @field_validator("claimed_at", "claim_expires_at", "expires_at")
+    @classmethod
+    def browser_command_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser command timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_command_claim_is_coherent(self) -> "BrowserCommand":
+        claimed = self.status == BrowserCommandStatus.CLAIMED
+        if claimed and not self.claimed_by_device_id:
+            raise ValueError("claimed browser commands require a device id")
+        if claimed and not self.claim_token:
+            raise ValueError("claimed browser commands require a claim token")
+        if self.expires_at <= self.created_at:
+            raise ValueError("browser command expiry must follow creation")
+        return self
+
+
+class BrowserProxyRule(Entity):
+    """Declarative, bounded, run-owned native proxy rule."""
+
+    entity_kind: ClassVar[str] = "browser_proxy_rules"
+    engagement_id: str
+    run_id: str = Field(min_length=1, max_length=200)
+    lease_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    match: dict[str, Any] = Field(default_factory=dict)
+    action: dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=100, ge=0, le=10_000)
+    enabled: bool = True
+    expires_at: datetime
+    disabled_at: datetime | None = None
+    disabled_reason: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("expires_at", "disabled_at")
+    @classmethod
+    def browser_rule_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser proxy rule timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @field_validator("match", "action")
+    @classmethod
+    def browser_rule_payload_is_bounded(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(json.dumps(value, ensure_ascii=False)) > 32_000:
+            raise ValueError("browser proxy rule payload is too large")
+        return value
+
+    @model_validator(mode="after")
+    def browser_rule_is_coherent(self) -> "BrowserProxyRule":
+        if self.expires_at <= self.created_at:
+            raise ValueError("browser proxy rule expiry must follow creation")
         return self
 
 
@@ -2717,6 +2909,9 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     BrowserTrafficExchange,
     BrowserWebSocketFrame,
     BrowserAction,
+    BrowserAutomationLease,
+    BrowserCommand,
+    BrowserProxyRule,
     BrowserHandoff,
     SoftwareComponent,
     Observation,

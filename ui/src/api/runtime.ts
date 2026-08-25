@@ -4,7 +4,7 @@ import { configureBrowserDiagnostics, logDiagnostic } from "../diagnostics";
 export interface ApiRuntime {
   baseUrl?: string;
   token?: string;
-  mode: "browser" | "desktop";
+  mode: "browser" | "desktop" | "desktop_remote";
   state: "ready" | "unavailable";
   message?: string;
   reason?: "browser_session_token_missing";
@@ -13,7 +13,8 @@ export interface ApiRuntime {
 interface BackendSession {
   endpoint: string;
   token: string;
-  protocol: "nebula-sidecar-v1";
+  protocol: "nebula-sidecar-v1" | "nebula-remote-core-v1";
+  source?: "local" | "remote";
 }
 
 export function browserSessionRequiresRelaunch(
@@ -47,6 +48,14 @@ export async function browserSessionIsAuthorized(normalizedBase: string): Promis
 }
 
 let browserRuntimeToken: string | undefined;
+let desktopDeviceIdentity: string | undefined;
+
+export async function desktopDeviceId(): Promise<string> {
+  if (!isTauriRuntime()) return "paired-browser";
+  if (desktopDeviceIdentity) return desktopDeviceIdentity;
+  desktopDeviceIdentity = await invoke<string>("desktop_device_id");
+  return desktopDeviceIdentity;
+}
 
 function consumeBrowserFragmentToken(): string | undefined {
   if (typeof window === "undefined") return browserRuntimeToken;
@@ -72,25 +81,26 @@ export function isTauriRuntime(): boolean {
 export async function resolveApiRuntime(): Promise<ApiRuntime> {
   if (isTauriRuntime()) {
     try {
-      const session = await invoke<BackendSession>("start_local_backend");
+      const session = await invoke<BackendSession>("resolve_backend_connection");
+      const remote = session.source === "remote";
       void logDiagnostic({
         level: "info",
         eventCode: "interface.runtime.desktop_ready",
-        message: "The interface connected to the supervised local Core.",
+        message: remote ? "The interface connected to the configured remote Core." : "The interface connected to the supervised local Core.",
         outcome: "success",
         stage: "runtime-resolution",
       });
       return {
         baseUrl: session.endpoint,
         token: session.token,
-        mode: "desktop",
+        mode: remote ? "desktop_remote" : "desktop",
         state: "ready",
       };
     } catch (error) {
       void logDiagnostic({
         level: "error",
         eventCode: "interface.runtime.desktop_unavailable",
-        message: "The interface could not connect to the supervised local Core.",
+        message: "The interface could not connect to the selected Core.",
         outcome: "failure",
         stage: "runtime-resolution",
         retryable: true,

@@ -97,6 +97,18 @@ class EntityRow(Base):
         Index("ix_entities_kind_engagement", "kind", "engagement_id"),
         Index("ix_entities_engagement_updated", "engagement_id", "updated_at"),
         Index("ix_entities_kind_updated", "kind", "updated_at"),
+        Index(
+            "ix_entities_automation_run_session",
+            "kind",
+            "automation_run_id",
+            "automation_session_id",
+        ),
+        Index(
+            "ix_entities_automation_status_expiry",
+            "kind",
+            "automation_status",
+            "automation_expires_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(200), primary_key=True)
@@ -104,6 +116,17 @@ class EntityRow(Base):
     engagement_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    # These nullable projections keep the JSON entity envelope authoritative
+    # while making the high-volume browser worker queries indexable.  They are
+    # populated only for the run-scoped browser automation entity family.
+    automation_run_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    automation_session_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    automation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    automation_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

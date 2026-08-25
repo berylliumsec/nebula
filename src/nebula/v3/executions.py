@@ -20,6 +20,7 @@ import os
 import shutil
 import socket
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -189,6 +190,21 @@ class ExecutionEventList(NebulaModel):
 
 class _WorkspaceLimitError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class WorkspaceLimitReport:
+    """Bounded, operator-safe workspace readiness result.
+
+    Counts intentionally stop at the first violated limit so readiness checks
+    cannot turn a project-open action into an unbounded filesystem scan.
+    """
+
+    allowed: bool
+    entries: int
+    allocated_bytes: int
+    error_code: str | None = None
+    detail: str | None = None
 
 
 class ExecutionService:
@@ -1710,7 +1726,7 @@ def _workspace_changes(
     return changes[:1000]
 
 
-def _assert_workspace_limits(workspace: Path) -> None:
+def inspect_workspace_limits(workspace: Path) -> WorkspaceLimitReport:
     entries = 0
     allocated = 0
     for root, directories, files in os.walk(workspace, followlinks=False):
@@ -1722,18 +1738,41 @@ def _assert_workspace_limits(workspace: Path) -> None:
             metadata = path.lstat()
             entries += 1
             if entries > WORKSPACE_MAX_ENTRIES:
-                raise _WorkspaceLimitError(
-                    f"workspace exceeds {WORKSPACE_MAX_ENTRIES} entries"
+                return WorkspaceLimitReport(
+                    allowed=False,
+                    entries=entries,
+                    allocated_bytes=allocated,
+                    error_code="workspace_limit",
+                    detail=f"workspace exceeds {WORKSPACE_MAX_ENTRIES} entries",
                 )
             if path.is_file() and not path.is_symlink():
                 if metadata.st_size > WORKSPACE_MAX_FILE_BYTES:
-                    raise _WorkspaceLimitError(
-                        "workspace contains a file larger than 1 GiB"
+                    return WorkspaceLimitReport(
+                        allowed=False,
+                        entries=entries,
+                        allocated_bytes=allocated,
+                        error_code="workspace_limit",
+                        detail="workspace contains a file larger than 1 GiB",
                     )
                 blocks = getattr(metadata, "st_blocks", 0)
                 allocated += blocks * 512 if blocks else metadata.st_size
                 if allocated > WORKSPACE_MAX_BYTES:
-                    raise _WorkspaceLimitError("workspace exceeds the 5 GiB limit")
+                    return WorkspaceLimitReport(
+                        allowed=False,
+                        entries=entries,
+                        allocated_bytes=allocated,
+                        error_code="workspace_limit",
+                        detail="workspace exceeds the 5 GiB limit",
+                    )
+    return WorkspaceLimitReport(True, entries, allocated)
+
+
+def _assert_workspace_limits(workspace: Path) -> None:
+    report = inspect_workspace_limits(workspace)
+    if not report.allowed:
+        raise _WorkspaceLimitError(
+            report.detail or "workspace exceeds execution limits"
+        )
 
 
 def _artifact_descriptor(artifact: Artifact) -> dict[str, Any]:

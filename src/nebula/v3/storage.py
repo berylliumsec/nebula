@@ -60,6 +60,29 @@ def _dump_entity(entity: Entity) -> dict[str, Any]:
     return entity.model_dump(mode="json")
 
 
+_AUTOMATION_ENTITY_KINDS = frozenset(
+    {
+        "browser_automation_leases",
+        "browser_commands",
+        "browser_proxy_rules",
+    }
+)
+
+
+def _automation_lookup_fields(entity: Entity) -> dict[str, Any]:
+    """Return indexed projections for the run-scoped browser entity family."""
+
+    if entity.entity_kind not in _AUTOMATION_ENTITY_KINDS:
+        return {}
+    status = getattr(entity, "status", None)
+    return {
+        "automation_run_id": getattr(entity, "run_id", None),
+        "automation_session_id": getattr(entity, "session_id", None),
+        "automation_status": getattr(status, "value", status),
+        "automation_expires_at": getattr(entity, "expires_at", None),
+    }
+
+
 def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> EntityT:
     model = ENTITY_MODEL_BY_KIND.get(row.kind)
     if model is None:
@@ -94,6 +117,7 @@ class StoreTransaction:
             engagement_id=entity_engagement_id(entity),
             revision=entity.revision,
             payload=_dump_entity(entity),
+            **_automation_lookup_fields(entity),
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -154,6 +178,7 @@ class StoreTransaction:
             .values(
                 payload=_dump_entity(updated),
                 engagement_id=entity_engagement_id(updated),
+                **_automation_lookup_fields(updated),
                 revision=updated.revision,
                 updated_at=updated.updated_at,
             )
@@ -249,6 +274,7 @@ class NebulaStore:
                     engagement_id=entity_engagement_id(entity),
                     revision=entity.revision,
                     payload=_dump_entity(entity),
+                    **_automation_lookup_fields(entity),
                     created_at=entity.created_at,
                     updated_at=entity.updated_at,
                 )
@@ -320,6 +346,7 @@ class NebulaStore:
                     engagement_id=engagement_id,
                     revision=entity.revision,
                     payload=_dump_entity(entity),
+                    **_automation_lookup_fields(entity),
                     created_at=entity.created_at,
                     updated_at=entity.updated_at,
                 )
@@ -483,6 +510,7 @@ class NebulaStore:
                     engagement_id=call.engagement_id,
                     revision=call.revision,
                     payload=_dump_entity(call),
+                    **_automation_lookup_fields(call),
                     created_at=call.created_at,
                     updated_at=call.updated_at,
                 )
@@ -522,6 +550,10 @@ class NebulaStore:
         model: type[EntityT],
         *,
         engagement_id: str | None = None,
+        automation_run_id: str | None = None,
+        automation_session_id: str | None = None,
+        automation_status: str | None = None,
+        automation_expires_before: datetime | None = None,
         offset: int = 0,
         limit: int = 100,
     ) -> list[EntityT]:
@@ -532,6 +564,22 @@ class NebulaStore:
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
+        if automation_run_id is not None:
+            statement = statement.where(
+                EntityRow.automation_run_id == automation_run_id
+            )
+        if automation_session_id is not None:
+            statement = statement.where(
+                EntityRow.automation_session_id == automation_session_id
+            )
+        if automation_status is not None:
+            statement = statement.where(
+                EntityRow.automation_status == automation_status
+            )
+        if automation_expires_before is not None:
+            statement = statement.where(
+                EntityRow.automation_expires_at <= automation_expires_before
+            )
         statement = (
             statement.order_by(EntityRow.created_at, EntityRow.id)
             .offset(offset)
@@ -659,6 +707,7 @@ class NebulaStore:
                 .values(
                     payload=_dump_entity(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
+                    **_automation_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
                     updated_at=updated_entity.updated_at,
                 )
@@ -758,6 +807,7 @@ class NebulaStore:
                 .values(
                     payload=_dump_entity(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
+                    **_automation_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
                     updated_at=updated_entity.updated_at,
                 )

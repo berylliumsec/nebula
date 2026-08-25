@@ -40,6 +40,11 @@ class PolicyRequest(BaseModel):
     ports: list[int] = Field(default_factory=list)
     action: str | None = None
     resolved_ips: list[str] = Field(default_factory=list)
+    # Native browser traffic is finally authorized by the session-owned proxy,
+    # which sees the actual destination.  Browser automation may use this
+    # explicit authority instead of inventing a Core-side DNS answer; all
+    # other active network tools still require pinned addresses.
+    native_scope_authority: bool = False
     credential_class: str | None = None
     writes_outside_workspace: bool = False
     cloud_transfer: bool = False
@@ -353,7 +358,11 @@ class PolicyEngine:
                     rule="dns_rebinding",
                     normalized_target=target.host,
                 )
-        if target.address is None and request.risk_class != RiskClass.PASSIVE:
+        if (
+            target.address is None
+            and request.risk_class != RiskClass.PASSIVE
+            and not request.native_scope_authority
+        ):
             if not request.resolved_ips:
                 return PolicyDecision(
                     effect=PolicyEffect.DENY,

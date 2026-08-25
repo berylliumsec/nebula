@@ -366,7 +366,8 @@ export async function installDesktopBrowserAdapter(page: Page, core: UsageCore):
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           calls.push({ command, args });
-          if (command === "start_local_backend") return { endpoint: `${endpoint}/api/v1`, token, protocol: "nebula-sidecar-v1" };
+          if (command === "resolve_backend_connection") return { endpoint: `${endpoint}/api/v1`, token, protocol: "nebula-sidecar-v1", source: "local" };
+          if (command === "desktop_device_id") return "desktop-usage";
           if (command === "browser_capabilities") return { engine: "isolated system webview", projectStorage: "persistent" };
           return undefined;
         },

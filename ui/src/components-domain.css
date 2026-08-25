@@ -282,7 +282,7 @@
 .form-error { color: var(--red); }
 .provider-dialog footer { justify-content: flex-end; }
 .resource-dialog { max-height: min(760px, calc(100vh - 40px)); overflow-y: auto; }
-.resource-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.resource-form-grid { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .resource-details { display: grid; grid-template-columns: 1fr 1fr; margin: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }
 .resource-details > div { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
 .resource-details > div:nth-child(even) { border-right: 0; }
@@ -433,10 +433,10 @@
 .developer-pack summary { color: var(--muted-strong); font-size: 11px; cursor: pointer; }
 .developer-pack > div { display: grid; grid-template-columns: 1fr minmax(240px, 1.5fr) auto; gap: 10px; align-items: end; padding-top: 10px; }
 .developer-pack label, .runner-form label, .policy-form-body > label, .policy-form-body .resource-form-grid > label, .inline-select { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: var(--weight-semibold); }
-.developer-pack input:not([type="checkbox"]), .runner-form input, .runner-form select, .policy-form input:not([type="checkbox"]), .policy-form select, .policy-form textarea, .inline-select select { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface-raised); font: inherit; font-size: 11px; }
+.developer-pack input:not([type="checkbox"]), .runner-form input, .runner-form select, .policy-form input:not([type="checkbox"]), .policy-form select, .policy-form textarea, .inline-select select { width: 100%; min-width: 0; max-width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--surface-raised); font: inherit; font-size: 11px; }
 .developer-pack .provider-consent, .policy-form .provider-consent { display: flex; align-items: flex-start; flex-direction: row; gap: 7px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-muted); }
 .developer-pack .provider-consent input, .policy-form .provider-consent input { width: 15px; min-height: 15px; margin: 1px 0 0; padding: 0; }
-.developer-pack .provider-consent span, .policy-form .provider-consent span { display: flex; flex-direction: column; gap: 2px; }
+.developer-pack .provider-consent span, .policy-form .provider-consent span { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
 .developer-pack .provider-consent strong, .policy-form .provider-consent strong { color: var(--text); font-size: 11px; }
 .developer-pack .provider-consent small, .policy-form .provider-consent small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .runner-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(260px, .8fr); gap: 12px; }
@@ -452,8 +452,9 @@
 .runner-status article small, .runner-status article p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .policy-revision { color: var(--muted); font-size: 11px; }
 .policy-editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 12px; }
-.policy-form { overflow: hidden; }
-.policy-form-body { display: grid; gap: 11px; padding: 13px; }
+.policy-form { min-width: 0; max-width: 100%; overflow: hidden; }
+.policy-form-body { display: grid; min-width: 0; max-width: 100%; gap: 11px; padding: 13px; }
+.policy-form-body > label, .policy-form-body > .resource-form-grid, .policy-form-body > .inline-validation-notice { min-width: 0; max-width: 100%; }
 .scope-import-trigger { justify-self: start; }
 .scope-import-dialog { width: min(780px, calc(100vw - 32px)); }
 .scope-import-file { display: flex; align-items: center; gap: 11px; width: 100%; padding: 14px; border: 1px dashed var(--border); border-radius: 8px; color: var(--text); background: var(--surface); text-align: left; cursor: pointer; }

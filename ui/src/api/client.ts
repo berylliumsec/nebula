@@ -43,6 +43,10 @@ import type {
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
   SecurityBrowserAction,
+  SecurityBrowserAutomationStatus,
+  SecurityBrowserAutomationLease,
+  SecurityBrowserCommand,
+  SecurityBrowserProxyRule,
   SecurityBrowserExchange,
   SecurityBrowserHandoff,
   SecurityBrowserIdentity,
@@ -243,10 +247,12 @@ interface WireBrowserSession extends WireEntity {
   status: SecurityBrowserSession["status"];
   capture_mode: SecurityBrowserSession["captureMode"];
   proxy_enabled: boolean;
+  proxy_trust_acknowledged?: boolean;
   tabs: WireBrowserTab[];
   active_tab_id?: string | null;
   upstream_proxy_enabled: boolean;
   upstream_proxy_url?: string | null;
+  upstream_proxy_credential_ref?: string | null;
   interception_enabled: boolean;
   device_owner?: string | null;
   last_seen_at: string;
@@ -274,6 +280,7 @@ interface WireBrowserExchange extends WireEntity {
   completed_at?: string | null;
   replay_of_exchange_id?: string | null;
   error?: string | null;
+  blocked?: boolean;
   truncated: boolean;
 }
 
@@ -324,6 +331,64 @@ interface WireBrowserHandoff extends WireEntity {
   expires_at: string;
   claimed_by_device_id?: string | null;
   error?: string | null;
+}
+
+interface WireBrowserAutomationLease extends WireEntity {
+  engagement_id: string;
+  run_id: string;
+  session_id: string;
+  identity_id: string;
+  scope_policy_id: string;
+  scope_policy_revision: number;
+  target_urls: string[];
+  allowed_risk_classes: string[];
+  credential_refs: string[];
+  max_commands: number;
+  max_requests: number;
+  max_body_bytes: number;
+  commands_used: number;
+  requests_used: number;
+  status: SecurityBrowserAutomationLease["status"];
+  expires_at: string;
+  last_heartbeat_at: string;
+  stop_reason?: string | null;
+}
+
+interface WireBrowserCommand extends WireEntity {
+  engagement_id: string;
+  run_id: string;
+  lease_id: string;
+  session_id: string;
+  tab_id: string;
+  kind: string;
+  arguments: Record<string, unknown>;
+  expected_page_url?: string | null;
+  status: SecurityBrowserCommand["status"];
+  claimed_by_device_id?: string | null;
+  claim_token?: string | null;
+  expires_at: string;
+  result: Record<string, unknown>;
+  evidence_ids: string[];
+  error?: string | null;
+}
+
+interface WireBrowserProxyRule extends WireEntity {
+  engagement_id: string;
+  run_id: string;
+  lease_id: string;
+  session_id: string;
+  match: Record<string, unknown>;
+  action: Record<string, unknown>;
+  priority: number;
+  enabled: boolean;
+  expires_at: string;
+  disabled_reason?: string | null;
+}
+
+interface WireBrowserAutomationStatus {
+  leases: WireBrowserAutomationLease[];
+  commands: WireBrowserCommand[];
+  rules: WireBrowserProxyRule[];
 }
 
 interface WireBrowserWorkspace {
@@ -1108,6 +1173,9 @@ interface WireContainerTerminalCapabilities extends JsonObject {
   engagement_id: string;
   ready: boolean;
   detail?: string | null;
+  error_code?: string | null;
+  workspace_entries?: number | null;
+  workspace_max_entries?: number | null;
   source_image: string;
   installed_packages: string[];
   network: WireContainerTerminalNetwork;
@@ -3033,6 +3101,7 @@ function mapBrowserSession(value: WireBrowserSession): SecurityBrowserSession {
     status: value.status,
     captureMode: value.capture_mode,
     proxyEnabled: value.proxy_enabled,
+    proxyTrustAcknowledged: value.proxy_trust_acknowledged === true,
     tabs: value.tabs.map((tab) => ({
       id: tab.id,
       url: tab.url ?? undefined,
@@ -3044,6 +3113,7 @@ function mapBrowserSession(value: WireBrowserSession): SecurityBrowserSession {
     activeTabId: value.active_tab_id ?? undefined,
     upstreamProxyEnabled: value.upstream_proxy_enabled,
     upstreamProxyUrl: value.upstream_proxy_url ?? undefined,
+    upstreamProxyCredentialRef: value.upstream_proxy_credential_ref ?? undefined,
     interceptionEnabled: value.interception_enabled,
     deviceOwner: value.device_owner ?? undefined,
     lastSeenAt: value.last_seen_at,
@@ -3074,6 +3144,7 @@ function mapBrowserExchange(value: WireBrowserExchange): SecurityBrowserExchange
     completedAt: value.completed_at ?? undefined,
     replayOfExchangeId: value.replay_of_exchange_id ?? undefined,
     error: value.error ?? undefined,
+    blocked: value.blocked === true,
     truncated: value.truncated,
   };
 }
@@ -3132,6 +3203,78 @@ function mapBrowserHandoff(value: WireBrowserHandoff): SecurityBrowserHandoff {
     claimedByDeviceId: value.claimed_by_device_id ?? undefined,
     error: value.error ?? undefined,
     revision: value.revision,
+  };
+}
+
+function mapBrowserAutomationLease(value: WireBrowserAutomationLease): SecurityBrowserAutomationLease {
+  return {
+    id: value.id,
+    revision: value.revision,
+    engagementId: value.engagement_id,
+    runId: value.run_id,
+    sessionId: value.session_id,
+    identityId: value.identity_id,
+    scopePolicyId: value.scope_policy_id,
+    scopePolicyRevision: value.scope_policy_revision,
+    targetUrls: value.target_urls,
+    allowedRiskClasses: value.allowed_risk_classes,
+    credentialRefs: value.credential_refs,
+    maxCommands: value.max_commands,
+    maxRequests: value.max_requests,
+    maxBodyBytes: value.max_body_bytes,
+    commandsUsed: value.commands_used,
+    requestsUsed: value.requests_used,
+    status: value.status,
+    expiresAt: value.expires_at,
+    lastHeartbeatAt: value.last_heartbeat_at,
+    stopReason: value.stop_reason ?? undefined,
+  };
+}
+
+function mapBrowserCommand(value: WireBrowserCommand): SecurityBrowserCommand {
+  return {
+    id: value.id,
+    revision: value.revision,
+    engagementId: value.engagement_id,
+    runId: value.run_id,
+    leaseId: value.lease_id,
+    sessionId: value.session_id,
+    tabId: value.tab_id,
+    kind: value.kind,
+    arguments: value.arguments,
+    expectedPageUrl: value.expected_page_url ?? undefined,
+    status: value.status,
+    claimedByDeviceId: value.claimed_by_device_id ?? undefined,
+    claimToken: value.claim_token ?? undefined,
+    expiresAt: value.expires_at,
+    result: value.result,
+    evidenceIds: value.evidence_ids,
+    error: value.error ?? undefined,
+  };
+}
+
+function mapBrowserProxyRule(value: WireBrowserProxyRule): SecurityBrowserProxyRule {
+  return {
+    id: value.id,
+    revision: value.revision,
+    engagementId: value.engagement_id,
+    runId: value.run_id,
+    leaseId: value.lease_id,
+    sessionId: value.session_id,
+    match: value.match,
+    action: value.action,
+    priority: value.priority,
+    enabled: value.enabled,
+    expiresAt: value.expires_at,
+    disabledReason: value.disabled_reason ?? undefined,
+  };
+}
+
+function mapBrowserAutomationStatus(value: WireBrowserAutomationStatus): SecurityBrowserAutomationStatus {
+  return {
+    leases: value.leases.map(mapBrowserAutomationLease),
+    commands: value.commands.map(mapBrowserCommand),
+    rules: value.rules.map(mapBrowserProxyRule),
   };
 }
 
@@ -3774,6 +3917,20 @@ export class ApiClient {
         max_artifact_queries: body.maxArtifactQueries,
         max_concurrency: body.maxConcurrency ?? 1,
         allow_cloud_tool_results: body.allowCloudToolResults === true,
+        ...(body.browserAutonomy
+          ? {
+              browser_autonomy: {
+                session_id: body.browserAutonomy.sessionId,
+                targets: body.browserAutonomy.targets,
+                allowed_risk_classes: body.browserAutonomy.allowedRiskClasses ?? ["passive", "active_scan", "credential_use"],
+                credential_refs: body.browserAutonomy.credentialRefs ?? [],
+                duration_seconds: body.browserAutonomy.durationSeconds ?? 1800,
+                max_commands: body.browserAutonomy.maxCommands ?? 100,
+                max_requests: body.browserAutonomy.maxRequests ?? 1000,
+                max_body_bytes: body.browserAutonomy.maxBodyBytes ?? 1048576,
+              },
+            }
+          : {}),
       }),
     }).then(mapRun);
   }
@@ -5142,6 +5299,9 @@ export class ApiClient {
       engagementId: value.engagement_id,
       ready: value.ready,
       detail: value.detail ?? undefined,
+      errorCode: value.error_code ?? undefined,
+      workspaceEntries: value.workspace_entries ?? undefined,
+      workspaceMaxEntries: value.workspace_max_entries ?? undefined,
       sourceImage: value.source_image,
       installedPackages: value.installed_packages,
       network: mapContainerTerminalNetwork(value.network),
@@ -6507,6 +6667,60 @@ export class ApiClient {
     ).then(mapBrowserWorkspace);
   }
 
+  getSecurityBrowserAutomation(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SecurityBrowserAutomationStatus> {
+    return this.request<WireBrowserAutomationStatus>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-automation`,
+      { signal },
+    ).then(mapBrowserAutomationStatus);
+  }
+
+  getRunBrowserAutomation(
+    runId: string,
+    signal?: AbortSignal,
+  ): Promise<SecurityBrowserAutomationStatus> {
+    return this.request<WireBrowserAutomationStatus>(
+      `runs/${encodeURIComponent(runId)}/browser-automation`,
+      { signal },
+    ).then(mapBrowserAutomationStatus);
+  }
+
+  claimSecurityBrowserCommand(commandId: string, deviceId: string): Promise<SecurityBrowserCommand> {
+    return this.request<WireBrowserCommand>(
+      `browser-automation/commands/${encodeURIComponent(commandId)}/claim`,
+      { method: "POST", body: JSON.stringify({ device_id: deviceId }) },
+    ).then(mapBrowserCommand);
+  }
+
+  finishSecurityBrowserCommand(
+    command: SecurityBrowserCommand,
+    body: { deviceId: string; claimToken: string; state: "complete" | "failed"; result?: Record<string, unknown>; evidenceIds?: string[]; error?: string },
+  ): Promise<SecurityBrowserCommand> {
+    return this.request<WireBrowserCommand>(
+      `browser-automation/commands/${encodeURIComponent(command.id)}/result`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          device_id: body.deviceId,
+          claim_token: body.claimToken,
+          state: body.state,
+          result: body.result ?? {},
+          evidence_ids: body.evidenceIds ?? [],
+          error: body.error,
+        }),
+      },
+    ).then(mapBrowserCommand);
+  }
+
+  stopSecurityBrowserAutomation(runId: string): Promise<SecurityBrowserAutomationStatus> {
+    return this.request<WireBrowserAutomationStatus>(
+      `runs/${encodeURIComponent(runId)}/browser-automation/stop`,
+      { method: "POST" },
+    ).then(mapBrowserAutomationStatus);
+  }
+
   createSecurityBrowserIdentity(
     engagementId: string,
     body: { name: string; description?: string; color?: string; ephemeral?: boolean },
@@ -6567,7 +6781,7 @@ export class ApiClient {
 
   updateSecurityBrowserCapture(
     session: SecurityBrowserSession,
-    body: Pick<SecurityBrowserSession, "captureMode" | "proxyEnabled" | "interceptionEnabled" | "upstreamProxyEnabled" | "upstreamProxyUrl">,
+    body: Pick<SecurityBrowserSession, "captureMode" | "proxyEnabled" | "interceptionEnabled" | "upstreamProxyEnabled" | "upstreamProxyUrl" | "upstreamProxyCredentialRef"> & { trustAcknowledged?: boolean },
   ): Promise<SecurityBrowserSession> {
     return this.request<WireBrowserSession>(
       `browser-sessions/${encodeURIComponent(session.id)}/capture-settings`,
@@ -6577,9 +6791,11 @@ export class ApiClient {
           expected_revision: session.revision,
           capture_mode: body.captureMode,
           proxy_enabled: body.proxyEnabled,
+          trust_acknowledged: body.trustAcknowledged ?? session.proxyTrustAcknowledged,
           interception_enabled: body.interceptionEnabled,
           upstream_proxy_enabled: body.upstreamProxyEnabled,
           upstream_proxy_url: body.upstreamProxyUrl,
+          upstream_proxy_credential_ref: body.upstreamProxyCredentialRef,
         }),
       },
     ).then(mapBrowserSession);
@@ -6595,10 +6811,14 @@ export class ApiClient {
       statusCode?: number;
       requestHeaders: Record<string, string>;
       responseHeaders: Record<string, string>;
+      requestBodyArtifactId?: string;
+      responseBodyArtifactId?: string;
       requestBytes?: number;
       responseBytes?: number;
       durationMs?: number;
       error?: string;
+      blocked?: boolean;
+      truncated?: boolean;
     },
   ): Promise<SecurityBrowserExchange> {
     return this.request<WireBrowserExchange>(
@@ -6613,13 +6833,44 @@ export class ApiClient {
           status_code: body.statusCode,
           request_headers: body.requestHeaders,
           response_headers: body.responseHeaders,
+          request_body_artifact_id: body.requestBodyArtifactId,
+          response_body_artifact_id: body.responseBodyArtifactId,
           request_bytes: body.requestBytes,
           response_bytes: body.responseBytes,
           duration_ms: body.durationMs,
           error: body.error,
+          blocked: body.blocked,
+          truncated: body.truncated,
         }),
       },
     ).then(mapBrowserExchange);
+  }
+
+  uploadSecurityBrowserBodyArtifact(
+    sessionId: string,
+    body: {
+      direction: "request" | "response";
+      contentBase64: string;
+      mediaType?: string;
+      filename?: string;
+      truncated?: boolean;
+    },
+  ): Promise<{ id: string; sha256: string; size: number; redacted: boolean }> {
+    return this.request<{
+      id: string;
+      sha256: string;
+      size: number;
+      redacted: boolean;
+    }>(`browser-sessions/${encodeURIComponent(sessionId)}/body-artifacts`, {
+      method: "POST",
+      body: JSON.stringify({
+        direction: body.direction,
+        content_base64: body.contentBase64,
+        media_type: body.mediaType,
+        filename: body.filename ?? `browser-${body.direction}-body.txt`,
+        truncated: body.truncated ?? false,
+      }),
+    });
   }
 
   recordSecurityBrowserWebSocketFrame(

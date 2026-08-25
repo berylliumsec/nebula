@@ -2,10 +2,15 @@
 
 mod browser;
 mod browser_proxy;
+mod core_connection;
 mod diagnostics;
 mod release;
 mod sidecar;
 
+use core_connection::{
+    clear_remote_backend, configure_remote_backend, desktop_core_connection, desktop_device_id,
+    resolve_backend_connection, use_local_backend,
+};
 use diagnostics::{
     DiagnosticLevel, DiagnosticsState, diagnostics_files, diagnostics_get_settings,
     diagnostics_log_frontend, diagnostics_recent_errors, diagnostics_reveal_logs,
@@ -144,6 +149,12 @@ fn build_app() -> tauri::App<Wry> {
             backend_status,
             start_local_backend,
             stop_local_backend,
+            desktop_core_connection,
+            configure_remote_backend,
+            clear_remote_backend,
+            use_local_backend,
+            desktop_device_id,
+            resolve_backend_connection,
             release_info,
             check_for_update,
             install_available_update,
@@ -161,12 +172,21 @@ fn build_app() -> tauri::App<Wry> {
             browser::browser_navigate,
             browser::browser_capture_context,
             browser::browser_execute_action,
+            browser::browser_execute_automation_command,
             browser::browser_control,
             browser::browser_set_bounds,
             browser::browser_set_visible,
             browser::browser_close_tab,
             browser::browser_open_devtools,
             browser::browser_reveal_proxy_ca,
+            browser::browser_proxy_ca_status,
+            browser::browser_rotate_proxy_ca,
+            browser::browser_revoke_proxy_ca,
+            browser::browser_stop_session_proxy,
+            browser::browser_configure_session_proxy,
+            browser::browser_apply_proxy_rule,
+            browser::browser_apply_proxy_scope,
+            browser::browser_clear_proxy_scope,
             browser::browser_clear_identity_data,
             browser::browser_clear_project_data,
             browser::browser_import_download,

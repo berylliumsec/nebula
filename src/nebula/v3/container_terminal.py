@@ -40,6 +40,7 @@ from .executions import (
     _WorkspaceLimitError,
     _assert_workspace_limits,
     _digest_json,
+    inspect_workspace_limits,
 )
 from .sandbox import (
     SandboxContainerUser,
@@ -224,6 +225,9 @@ class ContainerTerminalCapabilities(NebulaModel):
     engagement_id: str
     ready: bool
     detail: str | None = None
+    error_code: str | None = None
+    workspace_entries: int | None = Field(default=None, ge=0)
+    workspace_max_entries: int | None = Field(default=None, ge=1)
     source_image: str = DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE
     installed_packages: list[str] = Field(
         default_factory=lambda: ["kali-linux-headless", "iputils-ping"],
@@ -541,12 +545,26 @@ class ContainerTerminalService:
         self.store.get(Engagement, engagement_id)
         ready = False
         detail: str | None = None
+        error_code: str | None = None
+        workspace_entries: int | None = None
+        workspace_max_entries: int | None = None
         if self.tool_platform is None:
             detail = "human terminal container execution is not configured"
         else:
             try:
                 self.tool_platform.resolve_human_terminal_profile(engagement_id)
-                ready = True
+                report = inspect_workspace_limits(
+                    self.tool_platform.workspace_for(engagement_id)
+                )
+                workspace_entries = report.entries
+                # Do not disclose host paths to remote clients. The limit and
+                # bounded count are enough to explain the recovery action.
+                workspace_max_entries = 50_000
+                if report.allowed:
+                    ready = True
+                else:
+                    detail = report.detail
+                    error_code = report.error_code or "workspace_limit"
             except RuntimePlatformError as exc:
                 record_caught_exception(
                     "terminal",
@@ -560,6 +578,9 @@ class ContainerTerminalService:
             engagement_id=engagement_id,
             ready=ready,
             detail=detail,
+            error_code=error_code,
+            workspace_entries=workspace_entries,
+            workspace_max_entries=workspace_max_entries,
             idle_timeout_seconds=int(self.idle_timeout_seconds),
         )
 

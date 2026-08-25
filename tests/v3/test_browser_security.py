@@ -1,3 +1,5 @@
+import base64
+
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
@@ -347,3 +349,89 @@ def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
     assert frame.json()["payload_preview"] == ""
     assert frame.json()["truncated"] is True
     assert store.count(BrowserWebSocketFrame) == 1
+
+
+def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+        )
+    )
+    project, _ = _project(client, store)
+    _, session = _synced_session(client, project)
+    base = {
+        "expected_revision": session["revision"],
+        "capture_mode": "headers",
+        "proxy_enabled": True,
+        "interception_enabled": True,
+        "upstream_proxy_enabled": False,
+        "upstream_proxy_url": None,
+    }
+    untrusted = client.put(
+        f"/api/v1/browser-sessions/{session['id']}/capture-settings",
+        headers=_auth(),
+        json=base,
+    )
+    assert untrusted.status_code == 422
+    assert "trust acknowledgement" in untrusted.json()["detail"]
+
+    trusted = client.put(
+        f"/api/v1/browser-sessions/{session['id']}/capture-settings",
+        headers=_auth(),
+        json={**base, "trust_acknowledged": True},
+    )
+    assert trusted.status_code == 200, trusted.text
+    assert trusted.json()["proxy_trust_acknowledged"] is True
+
+    upstream = client.put(
+        f"/api/v1/browser-sessions/{session['id']}/capture-settings",
+        headers=_auth(),
+        json={
+            **base,
+            "expected_revision": trusted.json()["revision"],
+            "trust_acknowledged": True,
+            "upstream_proxy_enabled": True,
+            "upstream_proxy_url": "http://proxy.example.test:8080",
+        },
+    )
+    assert upstream.status_code == 200, upstream.text
+    assert upstream.json()["upstream_proxy_enabled"] is True
+    assert upstream.json()["upstream_proxy_url"] == "http://proxy.example.test:8080"
+
+    bodies = client.put(
+        f"/api/v1/browser-sessions/{session['id']}/capture-settings",
+        headers=_auth(),
+        json={
+            **base,
+            "expected_revision": upstream.json()["revision"],
+            "trust_acknowledged": True,
+            "capture_mode": "bodies",
+            "upstream_proxy_enabled": True,
+            "upstream_proxy_url": "http://proxy.example.test:8080",
+        },
+    )
+    assert bodies.status_code == 200, bodies.text
+    body = base64.b64encode(
+        b'{"username":"alice","password":"do-not-store","note":"safe"}'
+    ).decode()
+    artifact = client.post(
+        f"/api/v1/browser-sessions/{session['id']}/body-artifacts",
+        headers=_auth(),
+        json={
+            "direction": "request",
+            "content_base64": body,
+            "media_type": "application/json",
+        },
+    )
+    assert artifact.status_code == 201, artifact.text
+    stored = store.get(
+        __import__("nebula.v3.domain", fromlist=["Artifact"]).Artifact,
+        artifact.json()["id"],
+    )
+    assert stored.redacted is True
+    assert b"do-not-store" not in ArtifactStore(tmp_path / "artifacts").read(stored)

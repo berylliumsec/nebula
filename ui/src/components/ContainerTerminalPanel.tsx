@@ -34,6 +34,7 @@ import {
 import { TerminalScreenshotAction } from "./TerminalScreenshotAction";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import type { ContainerTerminalCapabilities } from "../api/types";
 
 interface ContainerTerminalPanelProps {
   active?: boolean;
@@ -453,6 +454,7 @@ export function ContainerTerminalPanel({
   const [auditHealthUnavailable, setAuditHealthUnavailable] = useState(false);
   const [publishedPortsInput, setPublishedPortsInput] = useState("");
   const [publishedPortsError, setPublishedPortsError] = useState<string>();
+  const [terminalCapabilities, setTerminalCapabilities] = useState<ContainerTerminalCapabilities>();
 
   const requestedPublishedPorts = () => {
     const text = publishedPortsInput.trim();
@@ -557,6 +559,7 @@ export function ContainerTerminalPanel({
     try {
       await ensureSetup(key, controller.signal);
       let capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+      setTerminalCapabilities(capabilities);
       let readinessChecks = 0;
       while (!capabilities.ready && readinessChecks < 12) {
         const setup = await api.setupStatus(controller.signal);
@@ -663,10 +666,22 @@ export function ContainerTerminalPanel({
     setInitialError(undefined);
     setLaunchingKey(undefined);
     setInitializing(true);
+    setTerminalCapabilities(undefined);
     setOverflowOpen(false);
 
     const bootstrap = async () => {
       try {
+        // Test and embedding adapters that predate the readiness contract can
+        // still restore terminals; real API clients always provide this method.
+        if (typeof api.containerTerminalCapabilities === "function") {
+          const capabilities = await api.containerTerminalCapabilities(engagementId, controller.signal);
+          if (controller.signal.aborted) return;
+          setTerminalCapabilities(capabilities);
+          if (!capabilities.ready) {
+            setInitializing(false);
+            return;
+          }
+        }
         const recovered = await api.recoverContainerTerminals(engagementId, controller.signal);
         if (controller.signal.aborted) return;
         const recoveredTabs: LiveTerminalTab[] = recovered.sessions.map((item, index) => ({
@@ -825,6 +840,26 @@ export function ContainerTerminalPanel({
       </section>
       <section className="terminal-auto-start" aria-live="polite">
         {initialError ? <><SquareTerminal size={27} /><strong>Terminals could not be restored</strong><DiagnosticErrorNotice error={initialError} fallback="The terminal operation could not be completed." compact /><button className="button primary" type="button" onClick={() => setBootstrapAttempt((value) => value + 1)}><RotateCcw size={15} /> Retry</button></> : <><LoaderCircle className="spin" size={27} /><strong>Restoring Project terminals…</strong><p>Nebula is reconnecting active containers before deciding whether to start a new terminal.</p></>}
+      </section>
+    </div>;
+  }
+
+  if (terminalCapabilities && !terminalCapabilities.ready) {
+    const workspaceBlocked = terminalCapabilities.errorCode === "workspace_limit";
+    return <div className="container-terminal-panel">
+      <section className="container-terminal-intro">
+        <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
+        <div><small>Kali shell</small><h2>Terminal unavailable</h2><p>{workspaceBlocked ? "This Project workspace is too large for a safe terminal mount." : "Terminal readiness needs attention."}</p></div>
+      </section>
+      <section className="terminal-auto-start terminal-blocked" role="alert">
+        <AlertTriangle size={27} />
+        <strong>{workspaceBlocked ? "Choose a smaller Project workspace" : "Terminal is not ready"}</strong>
+        <p>{terminalCapabilities.detail ?? "Core could not prepare a terminal for this Project."}</p>
+        {workspaceBlocked && <p>The Docker runner and verified Kali image can still be healthy. Nebula stopped before creating a container because this workspace has at least {(terminalCapabilities.workspaceEntries ?? 0).toLocaleString()} entries; the limit is {(terminalCapabilities.workspaceMaxEntries ?? 50_000).toLocaleString()}.</p>}
+        <div className="terminal-blocked-actions">
+          {workspaceBlocked && <button className="button primary" type="button" onClick={() => { window.location.assign("/project"); }}>Open Project workspace settings</button>}
+          <button className="button secondary" type="button" onClick={() => setBootstrapAttempt((value) => value + 1)}><RotateCcw size={15} /> Check again</button>
+        </div>
       </section>
     </div>;
   }

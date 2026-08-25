@@ -295,6 +295,39 @@ entry limit, traversal, symlink, and overwrite-confirmation rules as an
 operator upload. A downloaded file enters Project Files only; it is never
 promoted to evidence or sent to a model without another explicit action.
 
+When a desktop session enables capture, Nebula automatically creates or reuses
+one Project-local interception CA and shows its SHA-256 fingerprint, expiry, and
+platform-specific trust instructions. The operator must explicitly trust that
+certificate in the operating system/browser; Nebula never installs it silently.
+The private key remains in protected native application data. Rotation and
+revocation close the Project's native browser tabs and stop its session proxies.
+
+The Hudsucker runtime is owned by the BrowserSession and shared by its tabs. It
+starts with no compiled Project scope, so missing, stale, malformed, or expired
+scope blocks requests locally and records a durable blocked event. It captures
+bounded redacted metadata/headers, HTTP/2 and WebSocket frames, and accepts only
+declarative run-owned rules for pass, block, redirect, delay, non-secret header
+changes, bounded body replacement, and WebSocket drop/replace. Rule errors,
+compressed-body mutation, oversized bodies, and out-of-scope redirects fail
+closed. Explicit body-artifact capture and upstream HTTP CONNECT/SOCKS5 chaining
+are available only when explicitly enabled: Core redacts bounded text/JSON/form/XML
+bodies before creating immutable artifacts, while binary, compressed, malformed,
+and oversized bodies remain metadata-only. Authenticated HTTP/HTTPS CONNECT and
+SOCKS5 chaining is supported through protected credential references, strict TLS
+validation, and URLs without embedded userinfo.
+
+The existing mission lifecycle can start a Project-scoped autonomous web test.
+Core persists a short-lived BrowserAutomationLease pinned to the current scope
+revision, identity, target subset, risk classes, credential references, and
+command/request/body budgets. `browser.*` and `proxy.*` tools enqueue durable
+idempotent commands; a desktop-only shell worker claims them for the paired
+session and returns bounded receipts. Mobile/LAN views may monitor and stop a
+run, but never claim native commands. Autonomous defaults are PASSIVE,
+ACTIVE_SCAN, and CREDENTIAL_USE. Exploitation, persistence, destructive actions,
+and scope changes require a separate durable step-up grant. There is no arbitrary
+JavaScript tool or cookie/storage/password/token read; credential use accepts a
+vault reference only and resolves it ephemerally for bounded fill actions.
+
 Nebula does not provide a host terminal. Workbench uses a human-operated
 **Terminal** in a verified human-workstation image containing the
 `kali-linux-headless` baseline. Core verifies the official base repository,

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Check, Contrast, KeyRound, Moon, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
@@ -16,6 +17,7 @@ import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "..
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
+import { isTauriRuntime } from "../api/runtime";
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "zero-dark", label: "Zero Dark", icon: Moon },
@@ -118,6 +120,40 @@ export function SettingsPage() {
   const [formValidationError, setFormValidationError] = useState<string>();
   const [providerBusy, setProviderBusy] = useState<string>();
   const [providerActionError, setProviderActionError] = useState<string>();
+  const [coreConnection, setCoreConnection] = useState<{ mode: string; endpoint?: string; tokenAvailable: boolean }>();
+  const [remoteEndpoint, setRemoteEndpoint] = useState("");
+  const [remoteToken, setRemoteToken] = useState("");
+  const [insecureTransport, setInsecureTransport] = useState(false);
+  const [coreConnectionBusy, setCoreConnectionBusy] = useState(false);
+  const [coreConnectionError, setCoreConnectionError] = useState<string>();
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    void invoke<{ mode: string; endpoint?: string; tokenAvailable: boolean }>("desktop_core_connection")
+      .then((value) => { setCoreConnection(value); setRemoteEndpoint(value.endpoint ?? ""); })
+      .catch((error) => {
+        void logCaughtDiagnostic("interface.settings_page.core_connection_load_failed", "The UI shell Core connection preference could not be loaded.", error, "settings_page");
+        setCoreConnectionError(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
+
+  const configureRemoteCore = async (event: FormEvent) => {
+    event.preventDefault();
+    setCoreConnectionBusy(true); setCoreConnectionError(undefined);
+    try {
+      // Validate the bearer token against the candidate before persisting it.
+      const normalized = remoteEndpoint.trim().replace(/\/$/, "").replace(/\/api\/v1$/, "");
+      const response = await fetch(`${normalized}/api/v1/health`, { headers: { Accept: "application/json", Authorization: `Bearer ${remoteToken.trim()}` } });
+      if (!response.ok) throw new Error("Remote Core rejected the endpoint or bearer token.");
+      const saved = await invoke<{ mode: string; endpoint?: string; tokenAvailable: boolean }>("configure_remote_backend", { endpoint: remoteEndpoint, token: remoteToken, acknowledgeInsecureTransport: insecureTransport });
+      setCoreConnection(saved); setRemoteToken("");
+      window.location.reload();
+    } catch (error) {
+      void logCaughtDiagnostic("interface.settings_page.remote_core_connection_failed", "The UI shell could not connect to the selected remote Core.", error, "settings_page");
+      setCoreConnectionError(error instanceof Error ? error.message : String(error));
+    }
+    finally { setCoreConnectionBusy(false); }
+  };
   const [operatorDialog, setOperatorDialog] = useState(false);
   const [editingOperator, setEditingOperator] = useState<OperatorProfile>();
   const [operatorName, setOperatorName] = useState("");
@@ -569,6 +605,18 @@ export function SettingsPage() {
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section setup-overview" id="setup-settings">
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
+        {isTauriRuntime() && <section className="panel setup-card core-connection-settings" aria-labelledby="core-connection-title">
+          <header><span className={`status-dot ${coreConnection?.mode === "remote" ? "healthy" : "warning"}`} /><div><small>UI shell connection</small><h3 id="core-connection-title">{coreConnection?.mode === "remote" ? "Remote Core selected" : "Supervised local Core"}</h3></div></header>
+          <p>{coreConnection?.mode === "remote" ? `${coreConnection.endpoint ?? "Remote endpoint"} · this UI shell sends projects, terminals, chats, missions, events, and WebSockets to that Core.` : "This UI shell starts and uses its bundled local Core."}</p>
+          <form className="core-connection-form" onSubmit={(event) => void configureRemoteCore(event)}>
+            <label><span>Remote Core origin</span><input value={remoteEndpoint} onChange={(event) => setRemoteEndpoint(event.target.value)} placeholder="https://nebula.example" autoComplete="url" /></label>
+            <label><span>Bearer token</span><input value={remoteToken} onChange={(event) => setRemoteToken(event.target.value)} type="password" placeholder={coreConnection?.tokenAvailable ? "Saved token; enter a replacement" : "Remote Core token"} autoComplete="off" required /></label>
+            <label className="core-connection-insecure"><input type="checkbox" checked={insecureTransport} onChange={(event) => setInsecureTransport(event.target.checked)} /><span><strong>Allow HTTP for this connection</strong><small>Bearer tokens can be intercepted on an insecure network.</small></span></label>
+            <div className="core-connection-actions"><button className="button primary" type="submit" disabled={coreConnectionBusy}>{coreConnectionBusy ? "Testing…" : "Connect UI shell to remote Core"}</button>{coreConnection?.mode === "remote" && <button className="button secondary" type="button" disabled={coreConnectionBusy} onClick={() => void invoke("use_local_backend").then(() => window.location.reload()).catch((error) => { void logCaughtDiagnostic("interface.settings_page.local_core_switch_failed", "The UI shell could not switch back to its local Core.", error, "settings_page"); setCoreConnectionError(error instanceof Error ? error.message : String(error)); })}>Use local Core</button>}</div>
+          </form>
+          <p className="core-connection-boundary"><strong>Local-only capability:</strong> Native Browser/proxy automation is disabled while this shell uses a remote Core.</p>
+          {coreConnectionError && <DiagnosticErrorNotice error={coreConnectionError} fallback="The Core connection could not be updated." compact />}
+        </section>}
         <div className="setup-card-grid">
           <article className="panel setup-card">
             <header><span className={`status-dot ${setupStatus?.terminal.status === "ready" ? "healthy" : ["detecting_runner", "preparing_image"].includes(setupStatus?.terminal.status ?? "") ? "warning" : "unavailable"}`} /><div><small>Terminal</small><h3>{setupStatus?.terminal.status === "ready" ? "Kali runtime ready" : setupStatus?.terminal.status === "detecting_runner" ? "Checking Docker or Podman…" : imagePreparationActive ? "Preparing Kali runtime…" : imagePreparationFailed ? `Kali preparation ${imagePreparation?.phase}` : setupStatus?.terminal.status === "needs_runner" ? "Docker or Podman needed" : "Needs attention"}</h3></div></header>

@@ -28,6 +28,7 @@ from nebula.v3.executions import (
     ExecutionService,
     ExecutionServiceError,
     ExecutionStartRequest,
+    inspect_workspace_limits,
 )
 from nebula.v3.sandbox import SandboxNetwork, SandboxResult
 from nebula.v3.storage import NebulaStore
@@ -44,6 +45,18 @@ def async_test(function):
         return asyncio.run(function(*args, **kwargs))
 
     return run
+
+
+def test_workspace_limit_report_stops_at_the_entry_limit(tmp_path):
+    for index in range(50_001):
+        (tmp_path / f"entry-{index}").touch()
+
+    report = inspect_workspace_limits(tmp_path)
+
+    assert report.allowed is False
+    assert report.error_code == "workspace_limit"
+    assert report.entries == 50_001
+    assert report.detail == "workspace exceeds 50000 entries"
 
 
 class RecordingRunner:
