@@ -565,13 +565,17 @@ class NebulaStore:
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
-            statement = statement.where(EntityRow.automation_run_id == automation_run_id)
+            statement = statement.where(
+                EntityRow.automation_run_id == automation_run_id
+            )
         if automation_session_id is not None:
             statement = statement.where(
                 EntityRow.automation_session_id == automation_session_id
             )
         if automation_status is not None:
-            statement = statement.where(EntityRow.automation_status == automation_status)
+            statement = statement.where(
+                EntityRow.automation_status == automation_status
+            )
         if automation_expires_before is not None:
             statement = statement.where(
                 EntityRow.automation_expires_at <= automation_expires_before

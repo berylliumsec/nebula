@@ -119,15 +119,11 @@ class EntityRow(Base):
     # These nullable projections keep the JSON entity envelope authoritative
     # while making the high-volume browser worker queries indexable.  They are
     # populated only for the run-scoped browser automation entity family.
-    automation_run_id: Mapped[str | None] = mapped_column(
-        String(200), nullable=True
-    )
+    automation_run_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     automation_session_id: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
-    automation_status: Mapped[str | None] = mapped_column(
-        String(40), nullable=True
-    )
+    automation_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
     automation_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -20,9 +20,7 @@ def upgrade() -> None:
         batch.add_column(sa.Column("automation_run_id", sa.String(length=200)))
         batch.add_column(sa.Column("automation_session_id", sa.String(length=200)))
         batch.add_column(sa.Column("automation_status", sa.String(length=40)))
-        batch.add_column(
-            sa.Column("automation_expires_at", sa.DateTime(timezone=True))
-        )
+        batch.add_column(sa.Column("automation_expires_at", sa.DateTime(timezone=True)))
     op.create_index(
         "ix_entities_automation_run_session",
         "entities",

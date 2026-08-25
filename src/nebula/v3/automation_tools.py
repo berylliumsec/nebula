@@ -601,7 +601,9 @@ class AutomationToolPlatform:
             extra_components = None
             if run.runtime_snapshot.get("mcp_snapshot"):
                 if self.mcp_platform is None:
-                    raise MissionConfigurationError("mission MCP runtime is unavailable")
+                    raise MissionConfigurationError(
+                        "mission MCP runtime is unavailable"
+                    )
                 try:
                     mcp_profiles = tuple(
                         McpServerProfile.model_validate(item)
@@ -618,10 +620,16 @@ class AutomationToolPlatform:
                     )
                 except Exception as exc:
                     raise MissionConfigurationError(str(exc)) from exc
-            if self.browser_automation is not None and run.metadata.get("browser_autonomy"):
+            if self.browser_automation is not None and run.metadata.get(
+                "browser_autonomy"
+            ):
                 browser_specs = autonomous_browser_specs()
-                browser_broker = BrowserAutomationBroker(self.store, self.browser_automation)
-                browser_scope = self.chat_components(engagement_id=run.engagement_id).scope
+                browser_broker = BrowserAutomationBroker(
+                    self.store, self.browser_automation
+                )
+                browser_scope = self.chat_components(
+                    engagement_id=run.engagement_id
+                ).scope
                 browser_workspace = self.workspace_resolver(run.engagement_id)
                 browser_components = AutomationToolComponents(
                     broker=browser_broker,
@@ -633,7 +641,9 @@ class AutomationToolPlatform:
                 if extra_components is None:
                     extra_components = browser_components
                 else:
-                    duplicate_names = set(extra_components.specs).intersection(browser_specs)
+                    duplicate_names = set(extra_components.specs).intersection(
+                        browser_specs
+                    )
                     if duplicate_names:
                         raise MissionConfigurationError(
                             f"duplicate browser capabilities: {sorted(duplicate_names)}"
@@ -641,7 +651,10 @@ class AutomationToolPlatform:
                     extra_components = AutomationToolComponents(
                         broker=CompositeBroker(
                             {
-                                **{name: extra_components.broker for name in extra_components.specs},
+                                **{
+                                    name: extra_components.broker
+                                    for name in extra_components.specs
+                                },
                                 **{name: browser_broker for name in browser_specs},
                             }
                         ),
@@ -654,7 +667,9 @@ class AutomationToolPlatform:
                 engagement_id=run.engagement_id,
                 extra_components=extra_components,
             )
-        runtime_digest = "browser-native-v1" if browser_only else self.manager.runtime_digest
+        runtime_digest = (
+            "browser-native-v1" if browser_only else self.manager.runtime_digest
+        )
         snapshot = {
             "automation_runtime_digest": runtime_digest,
             **(

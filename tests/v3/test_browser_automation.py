@@ -47,12 +47,17 @@ def test_browser_automation_lease_claim_and_finish_are_durable(tmp_path):
         limit=1,
     )
     if not session:
-        identity = __import__("nebula.v3.domain", fromlist=["BrowserIdentity"]).BrowserIdentity(
-            engagement_id=project.id, name="Test identity"
-        )
+        identity = __import__(
+            "nebula.v3.domain", fromlist=["BrowserIdentity"]
+        ).BrowserIdentity(engagement_id=project.id, name="Test identity")
         store.create(identity)
-        session_entity = __import__("nebula.v3.domain", fromlist=["BrowserSession"]).BrowserSession(
-            engagement_id=project.id, name="Test session", identity_id=identity.id, device_owner="desktop-1"
+        session_entity = __import__(
+            "nebula.v3.domain", fromlist=["BrowserSession"]
+        ).BrowserSession(
+            engagement_id=project.id,
+            name="Test session",
+            identity_id=identity.id,
+            device_owner="desktop-1",
         )
         store.create(session_entity)
     else:
@@ -72,7 +77,9 @@ def test_browser_automation_lease_claim_and_finish_are_durable(tmp_path):
         ),
         "agent",
     )
-    claimed = service.claim_command(command.id, BrowserCommandClaimRequest(device_id="desktop-1"))
+    claimed = service.claim_command(
+        command.id, BrowserCommandClaimRequest(device_id="desktop-1")
+    )
     assert claimed.status == BrowserCommandStatus.CLAIMED
     finished = service.finish_command(
         command.id,
@@ -127,7 +134,11 @@ def test_browser_automation_rejects_scope_expansion_and_secret_values(tmp_path):
             BrowserCommandCreateRequest(
                 tab_id="tab-1",
                 kind="browser.replay",
-                arguments={"url": "https://app.example.test/", "method": "POST", "password": "plaintext"},
+                arguments={
+                    "url": "https://app.example.test/",
+                    "method": "POST",
+                    "password": "plaintext",
+                },
             ),
             "agent",
         )
@@ -184,7 +195,10 @@ def test_scope_revision_invalidates_queued_commands_and_rules(tmp_path):
     identity = BrowserIdentity(engagement_id=project.id, name="Test identity")
     store.create(identity)
     session = BrowserSession(
-        engagement_id=project.id, name="Test session", identity_id=identity.id, device_owner="desktop-1"
+        engagement_id=project.id,
+        name="Test session",
+        identity_id=identity.id,
+        device_owner="desktop-1",
     )
     store.create(session)
     lease = service.create_lease(
@@ -221,7 +235,10 @@ def test_scope_revision_invalidates_queued_commands_and_rules(tmp_path):
 
     status = service.status(project.id, run.id)
     assert status.leases[0].status.value == "revoked"
-    assert next(item for item in status.commands if item.id == command.id).status == BrowserCommandStatus.CANCELLED
+    assert (
+        next(item for item in status.commands if item.id == command.id).status
+        == BrowserCommandStatus.CANCELLED
+    )
     assert next(item for item in status.rules if item.id == rule.id).enabled is False
 
 
@@ -235,7 +252,10 @@ def test_credential_use_is_lease_bound_and_stays_as_a_reference(tmp_path):
     identity = BrowserIdentity(engagement_id=project.id, name="Test identity")
     store.create(identity)
     session = BrowserSession(
-        engagement_id=project.id, name="Test session", identity_id=identity.id, device_owner="desktop-1"
+        engagement_id=project.id,
+        name="Test session",
+        identity_id=identity.id,
+        device_owner="desktop-1",
     )
     store.create(session)
     lease = service.create_lease(
@@ -244,7 +264,11 @@ def test_credential_use_is_lease_bound_and_stays_as_a_reference(tmp_path):
         BrowserAutonomyRequestModel(
             session_id=session.id,
             targets=["https://app.example.test/"],
-            allowed_risk_classes=[RiskClass.PASSIVE, RiskClass.ACTIVE_SCAN, RiskClass.CREDENTIAL_USE],
+            allowed_risk_classes=[
+                RiskClass.PASSIVE,
+                RiskClass.ACTIVE_SCAN,
+                RiskClass.CREDENTIAL_USE,
+            ],
             credential_refs=["vault:credential-1"],
         ),
         "operator",

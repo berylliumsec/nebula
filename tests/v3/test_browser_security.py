@@ -351,7 +351,9 @@ def test_websocket_payload_preview_requires_body_capture_mode(tmp_path):
     assert store.count(BrowserWebSocketFrame) == 1
 
 
-def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies(tmp_path):
+def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies(
+    tmp_path,
+):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
         create_app(
@@ -427,6 +429,9 @@ def test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodi
         },
     )
     assert artifact.status_code == 201, artifact.text
-    stored = store.get(__import__("nebula.v3.domain", fromlist=["Artifact"]).Artifact, artifact.json()["id"])
+    stored = store.get(
+        __import__("nebula.v3.domain", fromlist=["Artifact"]).Artifact,
+        artifact.json()["id"],
+    )
     assert stored.redacted is True
     assert b"do-not-store" not in ArtifactStore(tmp_path / "artifacts").read(stored)

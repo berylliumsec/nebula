@@ -108,10 +108,11 @@ class BrowserCaptureSettingsRequest(NebulaModel):
     @classmethod
     def upstream_credential_ref_is_opaque(cls, value: str | None) -> str | None:
         if value is not None and (
-            not value.strip()
-            or any(character.isspace() for character in value)
+            not value.strip() or any(character.isspace() for character in value)
         ):
-            raise ValueError("upstream proxy credentials must be referenced by an opaque identifier")
+            raise ValueError(
+                "upstream proxy credentials must be referenced by an opaque identifier"
+            )
         return value
 
 
@@ -131,7 +132,9 @@ class BrowserBodyArtifactUploadRequest(NebulaModel):
         normalized = value.replace("\\", "/").rsplit("/", 1)[-1].strip()
         if not normalized or normalized in {".", ".."}:
             raise ValueError("body artifact filename is invalid")
-        if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        if any(
+            ord(character) < 32 or ord(character) == 127 for character in normalized
+        ):
             raise ValueError("body artifact filename cannot contain control characters")
         return normalized
 
@@ -243,7 +246,9 @@ def _redact_body_json(value: Any, key: str = "") -> Any:
     if isinstance(value, list):
         return [_redact_body_json(item, key) for item in value[:500]]
     if isinstance(value, str):
-        return _ASSIGNMENT_BODY.sub(r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", value))
+        return _ASSIGNMENT_BODY.sub(
+            r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", value)
+        )
     return value
 
 
@@ -260,11 +265,16 @@ def redact_browser_body(data: bytes, media_type: str | None) -> bytes:
     if len(data) > MAX_BROWSER_BODY_ARTIFACT_BYTES:
         raise BrowserWorkflowError("browser body exceeds the 1 MiB artifact limit")
     normalized = (media_type or "text/plain").partition(";")[0].strip().lower()
-    if normalized in {"application/json", "application/graphql+json"} or normalized.endswith("+json"):
+    if normalized in {
+        "application/json",
+        "application/graphql+json",
+    } or normalized.endswith("+json"):
         try:
             parsed = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise BrowserWorkflowError("JSON body capture must be valid UTF-8 JSON") from exc
+            raise BrowserWorkflowError(
+                "JSON body capture must be valid UTF-8 JSON"
+            ) from exc
         redacted = json.dumps(
             _redact_body_json(parsed),
             ensure_ascii=False,
@@ -272,28 +282,44 @@ def redact_browser_body(data: bytes, media_type: str | None) -> bytes:
         ).encode("utf-8")
     elif normalized == "application/x-www-form-urlencoded":
         try:
-            pairs = parse_qsl(data.decode("utf-8"), keep_blank_values=True, max_num_fields=500)
+            pairs = parse_qsl(
+                data.decode("utf-8"), keep_blank_values=True, max_num_fields=500
+            )
         except (UnicodeDecodeError, ValueError) as exc:
-            raise BrowserWorkflowError("form body capture must be valid UTF-8 form data") from exc
+            raise BrowserWorkflowError(
+                "form body capture must be valid UTF-8 form data"
+            ) from exc
         redacted = urlencode(
             [
-                (key, "<redacted>" if _SECRET_BODY_KEY.search(key) else _BEARER_BODY.sub(r"\1<redacted>", value))
+                (
+                    key,
+                    "<redacted>"
+                    if _SECRET_BODY_KEY.search(key)
+                    else _BEARER_BODY.sub(r"\1<redacted>", value),
+                )
                 for key, value in pairs
             ],
             doseq=True,
         ).encode("utf-8")
-    elif normalized.startswith("text/") or normalized in {"application/graphql", "application/xml"}:
+    elif normalized.startswith("text/") or normalized in {
+        "application/graphql",
+        "application/xml",
+    }:
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise BrowserWorkflowError("text body capture must be valid UTF-8") from exc
-        redacted = _ASSIGNMENT_BODY.sub(r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", text)).encode("utf-8")
+        redacted = _ASSIGNMENT_BODY.sub(
+            r"\1<redacted>", _BEARER_BODY.sub(r"\1<redacted>", text)
+        ).encode("utf-8")
     else:
         raise BrowserWorkflowError(
             "body capture supports JSON, form, GraphQL, XML, and text media types only"
         )
     if len(redacted) > MAX_BROWSER_BODY_ARTIFACT_BYTES:
-        raise BrowserWorkflowError("redacted browser body exceeds the 1 MiB artifact limit")
+        raise BrowserWorkflowError(
+            "redacted browser body exceeds the 1 MiB artifact limit"
+        )
     return redacted
 
 
@@ -461,7 +487,9 @@ class BrowserSecurityService:
             raise BrowserWorkflowError(
                 "an enabled upstream proxy requires an explicit URL"
             )
-        upstream_url = request.upstream_proxy_url if request.upstream_proxy_enabled else None
+        upstream_url = (
+            request.upstream_proxy_url if request.upstream_proxy_enabled else None
+        )
         upstream_credential_ref = (
             request.upstream_proxy_credential_ref
             if request.upstream_proxy_enabled
@@ -518,22 +546,33 @@ class BrowserSecurityService:
         actor_id: str,
     ) -> Artifact:
         if self.artifact_store is None:
-            raise BrowserWorkflowError("browser body artifacts require an artifact store")
+            raise BrowserWorkflowError(
+                "browser body artifacts require an artifact store"
+            )
         session = self.store.get(BrowserSession, session_id)
         if session.status != BrowserSessionStatus.ACTIVE:
-            raise BrowserWorkflowError("body artifacts require an active browser session")
+            raise BrowserWorkflowError(
+                "body artifacts require an active browser session"
+            )
         if session.capture_mode != BrowserCaptureMode.BODIES:
-            raise BrowserWorkflowError("body artifacts require explicit body capture mode")
+            raise BrowserWorkflowError(
+                "body artifacts require explicit body capture mode"
+            )
         try:
             data = base64.b64decode(request.content_base64, validate=True)
         except (binascii.Error, ValueError) as exc:
-            raise BrowserWorkflowError("body artifact content must be valid base64") from exc
+            raise BrowserWorkflowError(
+                "body artifact content must be valid base64"
+            ) from exc
         redacted = redact_browser_body(data, request.media_type)
         stored = self.artifact_store.put_bytes_with_status(
             redacted,
             engagement_id=session.engagement_id,
             filename=request.filename,
-            media_type=(request.media_type or "text/plain").partition(";")[0].strip().lower(),
+            media_type=(request.media_type or "text/plain")
+            .partition(";")[0]
+            .strip()
+            .lower(),
             source="security-browser-body",
             metadata={
                 "browser_session_id": session.id,
@@ -585,11 +624,15 @@ class BrowserSecurityService:
             # outside the policy; ordinary traffic continues to require an
             # in-scope decision below.
             try:
-                self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
+                self._require_in_scope(
+                    scope, request.url, "browser.capture", RiskClass.PASSIVE
+                )
             except BrowserWorkflowError:
                 scope_state = "out_of_scope"
         else:
-            self._require_in_scope(scope, request.url, "browser.capture", RiskClass.PASSIVE)
+            self._require_in_scope(
+                scope, request.url, "browser.capture", RiskClass.PASSIVE
+            )
         if session.capture_mode != BrowserCaptureMode.BODIES and (
             request.request_body_artifact_id or request.response_body_artifact_id
         ):

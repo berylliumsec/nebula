@@ -1770,7 +1770,9 @@ def inspect_workspace_limits(workspace: Path) -> WorkspaceLimitReport:
 def _assert_workspace_limits(workspace: Path) -> None:
     report = inspect_workspace_limits(workspace)
     if not report.allowed:
-        raise _WorkspaceLimitError(report.detail or "workspace exceeds execution limits")
+        raise _WorkspaceLimitError(
+            report.detail or "workspace exceeds execution limits"
+        )
 
 
 def _artifact_descriptor(artifact: Artifact) -> dict[str, Any]:

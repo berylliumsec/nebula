@@ -73,7 +73,9 @@ COMMAND_RISK: dict[str, RiskClass] = {
     "proxy.replay": RiskClass.ACTIVE_SCAN,
     "proxy.emergency_stop": RiskClass.ACTIVE_SCAN,
 }
-CREDENTIAL_CAPABLE_COMMANDS = frozenset({"browser.interact", "browser.replay", "proxy.replay"})
+CREDENTIAL_CAPABLE_COMMANDS = frozenset(
+    {"browser.interact", "browser.replay", "proxy.replay"}
+)
 REQUEST_METERED_COMMANDS = frozenset(
     {"browser.navigate", "browser.interact", "browser.replay", "proxy.replay"}
 )
@@ -126,7 +128,9 @@ class BrowserAutonomyRequestModel(BaseModel):
     def credential_refs_are_opaque(cls, values: list[str]) -> list[str]:
         for value in values:
             if not value or len(value) > 200 or any(char.isspace() for char in value):
-                raise ValueError("credential references must be opaque non-space identifiers")
+                raise ValueError(
+                    "credential references must be opaque non-space identifiers"
+                )
         return list(dict.fromkeys(values))
 
 
@@ -142,7 +146,10 @@ class BrowserCommandCreateRequest(BaseModel):
     def kind_is_known(self) -> "BrowserCommandCreateRequest":
         if self.kind not in COMMAND_RISK:
             raise ValueError(f"unsupported browser automation command: {self.kind}")
-        if len(json.dumps(self.arguments, ensure_ascii=False)) > COMMAND_MAX_ARGUMENT_BYTES:
+        if (
+            len(json.dumps(self.arguments, ensure_ascii=False))
+            > COMMAND_MAX_ARGUMENT_BYTES
+        ):
             raise ValueError("browser automation arguments are too large")
         return self
 
@@ -226,7 +233,10 @@ def _safe_json(value: Any, *, limit: int) -> dict[str, Any]:
     if not isinstance(cleaned, dict):
         cleaned = {"value": cleaned}
     if len(json.dumps(cleaned, ensure_ascii=False)) > limit:
-        return {"truncated": True, "sha256": hashlib.sha256(json.dumps(cleaned).encode()).hexdigest()}
+        return {
+            "truncated": True,
+            "sha256": hashlib.sha256(json.dumps(cleaned).encode()).hexdigest(),
+        }
     return cleaned
 
 
@@ -240,23 +250,37 @@ class BrowserAutomationService:
     ) -> BrowserSession:
         session = self.store.get(BrowserSession, request.session_id)
         if session.engagement_id != engagement_id:
-            raise BrowserAutomationRequestError("browser session belongs to another Project")
+            raise BrowserAutomationRequestError(
+                "browser session belongs to another Project"
+            )
         if session.status != BrowserSessionStatus.ACTIVE:
-            raise BrowserAutomationRequestError("autonomous browser tests require an active session")
+            raise BrowserAutomationRequestError(
+                "autonomous browser tests require an active session"
+            )
         if session.identity_id not in {
             identity.id
-            for identity in self.store.list_entities(BrowserIdentity, engagement_id=engagement_id, limit=1_000)
+            for identity in self.store.list_entities(
+                BrowserIdentity, engagement_id=engagement_id, limit=1_000
+            )
         }:
-            raise BrowserAutomationRequestError("browser session identity is unavailable")
+            raise BrowserAutomationRequestError(
+                "browser session identity is unavailable"
+            )
         scope = self._scope(engagement_id)
         for target in request.targets:
-            self._require_target(scope, target, RiskClass.PASSIVE, "browser.autonomy.target")
+            self._require_target(
+                scope, target, RiskClass.PASSIVE, "browser.autonomy.target"
+            )
         requested = set(request.allowed_risk_classes)
         if not requested:
-            raise BrowserAutomationRequestError("autonomous runs require at least one risk class")
+            raise BrowserAutomationRequestError(
+                "autonomous runs require at least one risk class"
+            )
         default_allowed = set(DEFAULT_AUTONOMOUS_RISKS)
         for risk in requested - default_allowed:
-            if risk not in HIGH_RISK_CLASSES or not self._grant_covers(scope, risk, request.targets):
+            if risk not in HIGH_RISK_CLASSES or not self._grant_covers(
+                scope, risk, request.targets
+            ):
                 raise BrowserAutomationRequestError(
                     f"risk class {risk.value} requires an explicit active scope grant"
                 )
@@ -304,7 +328,9 @@ class BrowserAutomationService:
         )
         return self._create(lease, "browser_automation_lease.created", actor_id)
 
-    def status(self, engagement_id: str, run_id: str | None = None) -> BrowserAutomationStatus:
+    def status(
+        self, engagement_id: str, run_id: str | None = None
+    ) -> BrowserAutomationStatus:
         leases = self.store.list_entities(
             BrowserAutomationLease,
             engagement_id=engagement_id,
@@ -347,7 +373,9 @@ class BrowserAutomationService:
             )
         ]
         if not leases:
-            raise BrowserAutomationRequestError("the mission has no browser automation lease")
+            raise BrowserAutomationRequestError(
+                "the mission has no browser automation lease"
+            )
         return self._active_lease(leases[-1].id)
 
     def enqueue_command(
@@ -375,22 +403,35 @@ class BrowserAutomationService:
         self._reject_secret_values(request.arguments)
         target = request.expected_page_url or self._argument_target(request.arguments)
         if target:
-            self._require_target(self._scope(lease.engagement_id), target, risk, request.kind)
+            self._require_target(
+                self._scope(lease.engagement_id), target, risk, request.kind
+            )
             if not self._target_in_lease(target, lease.target_urls):
-                raise BrowserAutomationRequestError("browser command target is outside the lease target subset")
+                raise BrowserAutomationRequestError(
+                    "browser command target is outside the lease target subset"
+                )
         if request.arguments.get("credential_ref") is not None:
             credential_ref = request.arguments["credential_ref"]
             if credential_ref not in lease.credential_refs:
-                raise BrowserAutomationRequestError("credential reference is not authorized by this lease")
-            if request.kind != "browser.interact" or request.arguments.get("operation") != "fill":
+                raise BrowserAutomationRequestError(
+                    "credential reference is not authorized by this lease"
+                )
+            if (
+                request.kind != "browser.interact"
+                or request.arguments.get("operation") != "fill"
+            ):
                 raise BrowserAutomationRequestError(
                     "credential_ref is supported only for bounded browser.interact fill actions"
                 )
         if lease.commands_used >= lease.max_commands:
-            raise BrowserAutomationRequestError("browser automation command budget is exhausted")
+            raise BrowserAutomationRequestError(
+                "browser automation command budget is exhausted"
+            )
         request_cost = 1 if request.kind in REQUEST_METERED_COMMANDS else 0
         if lease.requests_used + request_cost > lease.max_requests:
-            raise BrowserAutomationRequestError("browser automation request budget is exhausted")
+            raise BrowserAutomationRequestError(
+                "browser automation request budget is exhausted"
+            )
         body_values = [
             value
             for value in (
@@ -400,8 +441,12 @@ class BrowserAutomationService:
             )
             if isinstance(value, str)
         ]
-        if any(len(value.encode("utf-8")) > lease.max_body_bytes for value in body_values):
-            raise BrowserAutomationRequestError("browser automation body budget is exhausted")
+        if any(
+            len(value.encode("utf-8")) > lease.max_body_bytes for value in body_values
+        ):
+            raise BrowserAutomationRequestError(
+                "browser automation body budget is exhausted"
+            )
         updated = self.store.update(
             BrowserAutomationLease,
             lease.id,
@@ -433,7 +478,10 @@ class BrowserAutomationService:
     ) -> BrowserCommand:
         command = self.store.get(BrowserCommand, command_id)
         lease = None
-        if command.status in {BrowserCommandStatus.QUEUED, BrowserCommandStatus.CLAIMED}:
+        if command.status in {
+            BrowserCommandStatus.QUEUED,
+            BrowserCommandStatus.CLAIMED,
+        }:
             lease = self._active_lease(command.lease_id)
             self._require_paired_desktop(lease, request.device_id)
         if (
@@ -458,7 +506,15 @@ class BrowserAutomationService:
             return command
         assert lease is not None
         if command.expires_at <= utc_now():
-            return self._update_command(command, {"status": BrowserCommandStatus.EXPIRED, "error": "command expired before claim"}, "browser_command.expired", request.device_id)
+            return self._update_command(
+                command,
+                {
+                    "status": BrowserCommandStatus.EXPIRED,
+                    "error": "command expired before claim",
+                },
+                "browser_command.expired",
+                request.device_id,
+            )
         token = secrets.token_urlsafe(24)
         try:
             return self._update_command(
@@ -468,7 +524,8 @@ class BrowserAutomationService:
                     "claimed_by_device_id": request.device_id,
                     "claim_token": token,
                     "claimed_at": utc_now(),
-                    "claim_expires_at": utc_now() + timedelta(seconds=COMMAND_CLAIM_SECONDS),
+                    "claim_expires_at": utc_now()
+                    + timedelta(seconds=COMMAND_CLAIM_SECONDS),
                 },
                 "browser_command.claimed",
                 request.device_id,
@@ -486,14 +543,27 @@ class BrowserAutomationService:
         if command.status == BrowserCommandStatus.COMPLETE:
             return command
         if command.status != BrowserCommandStatus.CLAIMED:
-            raise BrowserAutomationRequestError("only claimed browser commands can finish")
+            raise BrowserAutomationRequestError(
+                "only claimed browser commands can finish"
+            )
         lease = self._active_lease(command.lease_id)
         self._require_paired_desktop(lease, request.device_id)
-        if command.claimed_by_device_id != request.device_id or command.claim_token != request.claim_token:
-            raise BrowserAutomationRequestError("browser command claim does not match the paired device")
+        if (
+            command.claimed_by_device_id != request.device_id
+            or command.claim_token != request.claim_token
+        ):
+            raise BrowserAutomationRequestError(
+                "browser command claim does not match the paired device"
+            )
         if command.claim_expires_at and command.claim_expires_at <= utc_now():
-            raise BrowserAutomationRequestError("browser command claim expired; retry the command")
-        status = BrowserCommandStatus.COMPLETE if request.state == "complete" else BrowserCommandStatus.FAILED
+            raise BrowserAutomationRequestError(
+                "browser command claim expired; retry the command"
+            )
+        status = (
+            BrowserCommandStatus.COMPLETE
+            if request.state == "complete"
+            else BrowserCommandStatus.FAILED
+        )
         return self._update_command(
             command,
             {
@@ -523,11 +593,28 @@ class BrowserAutomationService:
                 BrowserAutomationLeaseStatus.REVOKED,
                 BrowserAutomationLeaseStatus.EXPIRED,
             }:
-                self._update_lease(lease, {"status": BrowserAutomationLeaseStatus.REVOKED, "revoked_at": utc_now(), "stop_reason": reason}, "browser_automation_lease.revoked", actor_id)
+                self._update_lease(
+                    lease,
+                    {
+                        "status": BrowserAutomationLeaseStatus.REVOKED,
+                        "revoked_at": utc_now(),
+                        "stop_reason": reason,
+                    },
+                    "browser_automation_lease.revoked",
+                    actor_id,
+                )
                 count += 1
             for command in self._commands_for_lease(lease):
-                if command.status in {BrowserCommandStatus.QUEUED, BrowserCommandStatus.CLAIMED}:
-                    self._update_command(command, {"status": BrowserCommandStatus.CANCELLED, "error": reason}, "browser_command.cancelled", actor_id)
+                if command.status in {
+                    BrowserCommandStatus.QUEUED,
+                    BrowserCommandStatus.CLAIMED,
+                }:
+                    self._update_command(
+                        command,
+                        {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                        "browser_command.cancelled",
+                        actor_id,
+                    )
         for rule in self.store.list_entities(
             BrowserProxyRule,
             engagement_id=run.engagement_id,
@@ -620,14 +707,23 @@ class BrowserAutomationService:
                 continue
         return count
 
-    def add_rule(self, lease_id: str, request: BrowserProxyRuleRequest, actor_id: str) -> BrowserProxyRule:
+    def add_rule(
+        self, lease_id: str, request: BrowserProxyRuleRequest, actor_id: str
+    ) -> BrowserProxyRule:
         lease = self._active_lease(lease_id)
         if RiskClass.ACTIVE_SCAN not in lease.allowed_risk_classes:
-            raise BrowserAutomationRequestError("proxy mutation requires active-scan authorization")
+            raise BrowserAutomationRequestError(
+                "proxy mutation requires active-scan authorization"
+            )
         self._reject_secret_values({"match": request.match, "action": request.action})
         replacement = request.action.get("body") or request.action.get("value")
-        if isinstance(replacement, str) and len(replacement.encode("utf-8")) > lease.max_body_bytes:
-            raise BrowserAutomationRequestError("browser automation body budget is exhausted")
+        if (
+            isinstance(replacement, str)
+            and len(replacement.encode("utf-8")) > lease.max_body_bytes
+        ):
+            raise BrowserAutomationRequestError(
+                "browser automation body budget is exhausted"
+            )
         rule = BrowserProxyRule(
             engagement_id=lease.engagement_id,
             run_id=lease.run_id,
@@ -636,7 +732,10 @@ class BrowserAutomationService:
             match=request.match,
             action=request.action,
             priority=request.priority,
-            expires_at=min(lease.expires_at, utc_now() + timedelta(seconds=request.duration_seconds)),
+            expires_at=min(
+                lease.expires_at,
+                utc_now() + timedelta(seconds=request.duration_seconds),
+            ),
         )
         return self._create(rule, "browser_proxy_rule.created", actor_id)
 
@@ -646,18 +745,28 @@ class BrowserAutomationService:
         updated, _ = self.store.update_with_operation_event(
             BrowserProxyRule,
             rule.id,
-            {"enabled": False, "disabled_at": utc_now(), "disabled_reason": "removed by automation"},
+            {
+                "enabled": False,
+                "disabled_at": utc_now(),
+                "disabled_reason": "removed by automation",
+            },
             expected_revision=rule.revision,
             operation_id=rule.id,
             operation_kind="browser_proxy_rule",
             engagement_id=rule.engagement_id,
             event_type="browser_proxy_rule.removed",
-            event_payload={"rule_id": rule.id, "run_id": rule.run_id, "lease_id": rule.lease_id},
+            event_payload={
+                "rule_id": rule.id,
+                "run_id": rule.run_id,
+                "lease_id": rule.lease_id,
+            },
             actor_id=actor_id,
         )
         return updated
 
-    async def wait_for_command(self, command_id: str, timeout_seconds: float) -> BrowserCommand:
+    async def wait_for_command(
+        self, command_id: str, timeout_seconds: float
+    ) -> BrowserCommand:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
             command = self.store.get(BrowserCommand, command_id)
@@ -681,12 +790,16 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError("Project scope ownership is invalid")
         return scope
 
-    def _require_target(self, scope: ScopePolicy, target: str, risk: RiskClass, action: str) -> None:
+    def _require_target(
+        self, scope: ScopePolicy, target: str, risk: RiskClass, action: str
+    ) -> None:
         parsed = urlsplit(target)
         try:
             parsed.port
         except ValueError as exc:
-            raise BrowserAutomationRequestError("browser target contains an invalid port") from exc
+            raise BrowserAutomationRequestError(
+                "browser target contains an invalid port"
+            ) from exc
         if (
             parsed.scheme.lower() not in {"http", "https"}
             or not parsed.hostname
@@ -789,8 +902,7 @@ class BrowserAutomationService:
             candidate_origin = (
                 candidate.scheme.lower(),
                 candidate.hostname.lower(),
-                candidate_port
-                or (443 if candidate.scheme.lower() == "https" else 80),
+                candidate_port or (443 if candidate.scheme.lower() == "https" else 80),
             )
             candidate_path = candidate.path or "/"
             candidate_path = candidate_path.rstrip("/") or "/"
@@ -818,7 +930,9 @@ class BrowserAutomationService:
                     key = str(raw_key).lower().replace("-", "_")
                     if key != "non_secret_text" and (
                         key in SECRET_ARGUMENT_KEYS
-                        or any(fragment in key for fragment in SECRET_ARGUMENT_FRAGMENTS)
+                        or any(
+                            fragment in key for fragment in SECRET_ARGUMENT_FRAGMENTS
+                        )
                     ):
                         return True
                     if walk(item):
@@ -835,7 +949,9 @@ class BrowserAutomationService:
     def _active_lease(self, lease_id: str) -> BrowserAutomationLease:
         lease = self._reconcile_lease(self.store.get(BrowserAutomationLease, lease_id))
         if lease.status != BrowserAutomationLeaseStatus.ACTIVE:
-            raise BrowserAutomationRequestError(f"browser automation lease is {lease.status.value}")
+            raise BrowserAutomationRequestError(
+                f"browser automation lease is {lease.status.value}"
+            )
         if lease.expires_at <= utc_now():
             raise BrowserAutomationRequestError("browser automation lease has expired")
         return lease
@@ -844,7 +960,15 @@ class BrowserAutomationService:
         if lease.status == BrowserAutomationLeaseStatus.ACTIVE:
             if lease.expires_at <= utc_now():
                 try:
-                    updated = self._update_lease(lease, {"status": BrowserAutomationLeaseStatus.EXPIRED, "stop_reason": "lease expired"}, "browser_automation_lease.expired", "system")
+                    updated = self._update_lease(
+                        lease,
+                        {
+                            "status": BrowserAutomationLeaseStatus.EXPIRED,
+                            "stop_reason": "lease expired",
+                        },
+                        "browser_automation_lease.expired",
+                        "system",
+                    )
                     self._disable_lease_dependents(lease, "lease expired")
                     return updated
                 except ConflictError:
@@ -853,16 +977,32 @@ class BrowserAutomationService:
                 current_scope = self._scope(lease.engagement_id)
             except BrowserAutomationRequestError:
                 current_scope = None
-            if current_scope is None or current_scope.revision != lease.scope_policy_revision:
+            if (
+                current_scope is None
+                or current_scope.revision != lease.scope_policy_revision
+            ):
                 try:
-                    updated = self._update_lease(lease, {"status": BrowserAutomationLeaseStatus.REVOKED, "revoked_at": utc_now(), "stop_reason": "Project scope policy revision changed"}, "browser_automation_lease.scope_invalidated", "system")
-                    self._disable_lease_dependents(lease, "Project scope policy revision changed")
+                    updated = self._update_lease(
+                        lease,
+                        {
+                            "status": BrowserAutomationLeaseStatus.REVOKED,
+                            "revoked_at": utc_now(),
+                            "stop_reason": "Project scope policy revision changed",
+                        },
+                        "browser_automation_lease.scope_invalidated",
+                        "system",
+                    )
+                    self._disable_lease_dependents(
+                        lease, "Project scope policy revision changed"
+                    )
                     return updated
                 except ConflictError:
                     return self.store.get(BrowserAutomationLease, lease.id)
         return lease
 
-    def _commands_for_lease(self, lease: BrowserAutomationLease) -> list[BrowserCommand]:
+    def _commands_for_lease(
+        self, lease: BrowserAutomationLease
+    ) -> list[BrowserCommand]:
         return [
             item
             for item in self.store.list_entities(
@@ -875,17 +1015,29 @@ class BrowserAutomationService:
             if item.lease_id == lease.id
         ]
 
-    def _require_paired_desktop(self, lease: BrowserAutomationLease, device_id: str) -> None:
+    def _require_paired_desktop(
+        self, lease: BrowserAutomationLease, device_id: str
+    ) -> None:
         session = self.store.get(BrowserSession, lease.session_id)
         if session.device_owner != device_id:
             raise BrowserAutomationRequestError(
                 "browser commands can be claimed only by the paired desktop device"
             )
 
-    def _disable_lease_dependents(self, lease: BrowserAutomationLease, reason: str) -> None:
+    def _disable_lease_dependents(
+        self, lease: BrowserAutomationLease, reason: str
+    ) -> None:
         for command in self._commands_for_lease(lease):
-            if command.status in {BrowserCommandStatus.QUEUED, BrowserCommandStatus.CLAIMED}:
-                self._update_command(command, {"status": BrowserCommandStatus.CANCELLED, "error": reason}, "browser_command.cancelled", "system")
+            if command.status in {
+                BrowserCommandStatus.QUEUED,
+                BrowserCommandStatus.CLAIMED,
+            }:
+                self._update_command(
+                    command,
+                    {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                    "browser_command.cancelled",
+                    "system",
+                )
         for rule in self.store.list_entities(
             BrowserProxyRule,
             engagement_id=lease.engagement_id,
@@ -921,16 +1073,63 @@ class BrowserAutomationService:
         )
         return updated
 
-    def _update_lease(self, lease: BrowserAutomationLease, changes: dict[str, Any], event_type: str, actor_id: str) -> BrowserAutomationLease:
-        updated, _ = self.store.update_with_operation_event(BrowserAutomationLease, lease.id, changes, expected_revision=lease.revision, operation_id=lease.id, operation_kind="browser_automation_lease", engagement_id=lease.engagement_id, event_type=event_type, event_payload={"run_id": lease.run_id, "lease_id": lease.id}, actor_id=actor_id)
+    def _update_lease(
+        self,
+        lease: BrowserAutomationLease,
+        changes: dict[str, Any],
+        event_type: str,
+        actor_id: str,
+    ) -> BrowserAutomationLease:
+        updated, _ = self.store.update_with_operation_event(
+            BrowserAutomationLease,
+            lease.id,
+            changes,
+            expected_revision=lease.revision,
+            operation_id=lease.id,
+            operation_kind="browser_automation_lease",
+            engagement_id=lease.engagement_id,
+            event_type=event_type,
+            event_payload={"run_id": lease.run_id, "lease_id": lease.id},
+            actor_id=actor_id,
+        )
         return updated
 
-    def _update_command(self, command: BrowserCommand, changes: dict[str, Any], event_type: str, actor_id: str) -> BrowserCommand:
-        updated, _ = self.store.update_with_operation_event(BrowserCommand, command.id, changes, expected_revision=command.revision, operation_id=command.id, operation_kind="browser_command", engagement_id=command.engagement_id, event_type=event_type, event_payload={"run_id": command.run_id, "lease_id": command.lease_id, "command_id": command.id}, actor_id=actor_id)
+    def _update_command(
+        self,
+        command: BrowserCommand,
+        changes: dict[str, Any],
+        event_type: str,
+        actor_id: str,
+    ) -> BrowserCommand:
+        updated, _ = self.store.update_with_operation_event(
+            BrowserCommand,
+            command.id,
+            changes,
+            expected_revision=command.revision,
+            operation_id=command.id,
+            operation_kind="browser_command",
+            engagement_id=command.engagement_id,
+            event_type=event_type,
+            event_payload={
+                "run_id": command.run_id,
+                "lease_id": command.lease_id,
+                "command_id": command.id,
+            },
+            actor_id=actor_id,
+        )
         return updated
 
     def _create(self, entity: Any, event_type: str, actor_id: str) -> Any:
-        created, _ = self.store.create_with_operation_event(entity, operation_id=entity.id, operation_kind=entity.entity_kind, engagement_id=entity.engagement_id, event_type=event_type, event_payload={"entity_id": entity.id}, actor_id=actor_id, idempotency_key=f"create:{entity.id}")
+        created, _ = self.store.create_with_operation_event(
+            entity,
+            operation_id=entity.id,
+            operation_kind=entity.entity_kind,
+            engagement_id=entity.engagement_id,
+            event_type=event_type,
+            event_payload={"entity_id": entity.id},
+            actor_id=actor_id,
+            idempotency_key=f"create:{entity.id}",
+        )
         return created
 
 
