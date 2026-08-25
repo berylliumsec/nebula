@@ -148,26 +148,21 @@ impl Service<hudsucker::hyper::Uri> for DynamicConnector {
         let http_destination = with_default_http_port(destination.clone());
         Box::pin(async move {
             match connector {
-                NativeConnector::Direct(mut value) => value
-                    .call(destination)
-                    .await
-                    .map(NativeTransport::Direct)
-                    .map_err(Into::into),
+                NativeConnector::Direct(mut value) => {
+                    value.call(destination).await.map(NativeTransport::Direct)
+                }
                 NativeConnector::HttpTunnel(mut value) => value
                     .call(http_destination)
                     .await
-                    .map(NativeTransport::HttpTunnel)
-                    .map_err(Into::into),
+                    .map(NativeTransport::HttpTunnel),
                 NativeConnector::HttpsTunnel(mut value) => value
                     .call(http_destination)
                     .await
-                    .map(NativeTransport::HttpsTunnel)
-                    .map_err(Into::into),
+                    .map(NativeTransport::HttpsTunnel),
                 NativeConnector::Socks5(mut value) => value
                     .call(http_destination)
                     .await
-                    .map(NativeTransport::Socks5)
-                    .map_err(Into::into),
+                    .map(NativeTransport::Socks5),
             }
         })
     }
@@ -1125,6 +1120,7 @@ async fn capture_body(
     Ok((Body::from(bytes), Some(capture)))
 }
 
+#[allow(clippy::result_large_err)]
 async fn mutate_request(
     mut request: Request<Body>,
     rules: &[NativeProxyRule],
@@ -1508,7 +1504,7 @@ impl HttpHandler for CaptureHandler {
                 None
             }
         };
-        let response = if let Some(request) = pending {
+        if let Some(request) = pending {
             let request_id = request.request_id;
             let response = match mutate_response(response, &request.rules).await {
                 Ok(value) => value,
@@ -1564,8 +1560,7 @@ impl HttpHandler for CaptureHandler {
             response
         } else {
             response
-        };
-        response
+        }
     }
 
     async fn handle_error(
@@ -1734,6 +1729,7 @@ impl WebSocketHandler for CaptureHandler {
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn mutate_response(
     response: Response<Body>,
     rules: &[NativeProxyRule],
@@ -1880,7 +1876,7 @@ fn with_ca_lock<T>(
                 std::io::Error::last_os_error()
             ));
         }
-        return result;
+        result
     }
 
     #[cfg(not(unix))]

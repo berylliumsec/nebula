@@ -1836,6 +1836,7 @@ pub(crate) fn browser_execute_action(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn browser_execute_automation_command(
     app: AppHandle,
     state: State<'_, BrowserState>,
