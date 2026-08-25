@@ -1207,6 +1207,7 @@ def create_app(
     if automation_tool_platform is not None:
         mission_components_factory = automation_tool_platform.mission_components
     else:
+
         def mission_components_factory(run: AgentRun, provider: Any):
             if run.metadata.get("browser_autonomy"):
                 return browser_automation_platform.mission_components(run, provider)
@@ -6096,16 +6097,23 @@ def create_app(
         requested_tool_calls = request.max_tool_calls
         if request.browser_autonomy is not None and requested_tool_calls == 0:
             requested_tool_calls = min(request.browser_autonomy.max_commands, 100)
+        budget_values: dict[str, Any] = {
+            key: value
+            for key, value in {
+                "max_duration_seconds": request.max_duration_seconds,
+                "max_tokens": request.max_tokens,
+                "max_cost_usd": request.max_cost_usd,
+                "max_tool_calls": requested_tool_calls,
+                "max_artifact_queries": request.max_artifact_queries,
+            }.items()
+            if value is not None
+        }
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
             max_delegation_depth=(1 if command_tools or request.mcp_server_ids else 0),
-            max_duration_seconds=request.max_duration_seconds,
-            max_tokens=request.max_tokens,
-            max_cost_usd=request.max_cost_usd,
-            max_tool_calls=requested_tool_calls,
-            max_artifact_queries=request.max_artifact_queries,
             max_retries=request.max_retries,
             per_target_active_operations=1,
+            **budget_values,
         )
         if request.backend == RunBackend.HARNESS:
             return await harness_runtime.start_mission(
@@ -6294,13 +6302,19 @@ def create_app(
             budget=RunBudget(
                 max_concurrency=1,
                 max_delegation_depth=0,
-                max_duration_seconds=request.max_duration_seconds,
-                max_tokens=request.max_tokens,
-                max_cost_usd=request.max_cost_usd,
-                max_tool_calls=request.max_tool_calls,
-                max_artifact_queries=request.max_artifact_queries,
                 max_retries=0,
                 per_target_active_operations=1,
+                **{
+                    key: value
+                    for key, value in {
+                        "max_duration_seconds": request.max_duration_seconds,
+                        "max_tokens": request.max_tokens,
+                        "max_cost_usd": request.max_cost_usd,
+                        "max_tool_calls": request.max_tool_calls,
+                        "max_artifact_queries": request.max_artifact_queries,
+                    }.items()
+                    if value is not None
+                },
             ),
             harness_session_id=chat.harness_session_id,
             actor_id=active_operator_id(),
@@ -8044,7 +8058,9 @@ def create_app(
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserAutomationStatus:
         run = store.get(AgentRun, run_id)
-        browser_automation.revoke_run(run_id, "Emergency stop requested by operator", x_nebula_actor)
+        browser_automation.revoke_run(
+            run_id, "Emergency stop requested by operator", x_nebula_actor
+        )
         return browser_automation.status(run.engagement_id, run_id=run_id)
 
     @app.get(

@@ -1087,7 +1087,9 @@ class BrowserAutomationLease(Entity):
                 or parsed.password is not None
                 or parsed.fragment
             ):
-                raise ValueError("browser automation targets must be credential-free HTTP(S) URLs")
+                raise ValueError(
+                    "browser automation targets must be credential-free HTTP(S) URLs"
+                )
             normalized.append(value)
         return list(dict.fromkeys(normalized))
 
@@ -1095,7 +1097,9 @@ class BrowserAutomationLease(Entity):
     @classmethod
     def browser_lease_time_is_aware(cls, value: datetime | None) -> datetime | None:
         if value is not None and (value.tzinfo is None or value.utcoffset() is None):
-            raise ValueError("browser automation lease timestamps must include a timezone")
+            raise ValueError(
+                "browser automation lease timestamps must include a timezone"
+            )
         return value.astimezone(timezone.utc) if value is not None else None
 
     @model_validator(mode="after")
@@ -1145,7 +1149,9 @@ class BrowserCommand(Entity):
             or parsed.username is not None
             or parsed.password is not None
         ):
-            raise ValueError("browser command pages must use credential-free HTTP(S) URLs")
+            raise ValueError(
+                "browser command pages must use credential-free HTTP(S) URLs"
+            )
         return value
 
     @field_validator("claimed_at", "claim_expires_at", "expires_at")
@@ -1426,6 +1432,29 @@ class RunBudget(NebulaModel):
     max_artifact_queries: int | None = Field(default=None, ge=0)
     max_retries: int = Field(default=2, ge=0, le=100)
     per_target_active_operations: int = Field(default=1, ge=1, le=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_nullable_limits(cls, value: Any) -> Any:
+        """Migrate explicit pre-alpha nulls without changing omitted limits."""
+
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        defaults = {
+            "max_concurrency": 1,
+            "max_delegation_depth": 3,
+            "max_duration_seconds": 3600,
+            "max_tool_calls": 100,
+            "max_artifact_queries": 200,
+            "max_retries": 2,
+            "per_target_active_operations": 1,
+        }
+        for field, default in defaults.items():
+            if field in normalized and normalized[field] is None:
+                normalized[field] = default
+        return normalized
+
 
 class AgentRun(Entity):
     entity_kind: ClassVar[str] = "runs"
