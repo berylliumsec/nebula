@@ -148,7 +148,7 @@ export function AppShell() {
       <WorkbenchEditorProvider>
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
-            <BrowserAutomationWorker />
+            {runtime?.mode !== "desktop_remote" && <BrowserAutomationWorker />}
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
@@ -166,7 +166,7 @@ export function AppShell() {
               <main id="main-content" className="main-content" tabIndex={-1}>
                 {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
-                {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status"><span><strong>Starting Nebula…</strong><small>Connecting to the local Core service.</small></span></div>}
+                {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status"><span><strong>Starting Nebula…</strong><small>{runtime?.mode === "desktop_remote" ? "Connecting this UI shell to the selected remote Core." : "Connecting to the local Core service."}</small></span></div>}
                 {workspaceState === "bootstrapping" && <div className="workspace-state-banner starting" role="status"><span><strong>Preparing your workspace…</strong><small>{setupStatus?.stageDetail ?? "Loading Projects and checking Terminal setup."}</small></span></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span>{coreError && <button className="button quiet" type="button" onClick={reconnect}>Retry Core</button>}</div>}
                 {workspaceState !== "failed" && Object.entries(resourceStatus).some(([, status]) => status.state === "failed") && <section className="workspace-resource-failures" aria-label="Workspace features needing attention">

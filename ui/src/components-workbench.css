@@ -1384,6 +1384,19 @@ kbd { font-size: 11px; }
 .setup-card > header { display: flex; align-items: center; gap: 10px; }
 .setup-card > header > div { display: grid; gap: 2px; }
 .setup-card small { color: var(--muted); font-size: 11px; }
+.core-connection-settings { width: 100%; min-width: 0; }
+.core-connection-form { display: grid; width: min(100%, 760px); min-width: 0; gap: 14px; }
+.core-connection-form > label:not(.core-connection-insecure) { display: grid; min-width: 0; gap: 6px; color: var(--muted-strong); font-size: 12px; font-weight: 650; }
+.core-connection-form input:not([type="checkbox"]) { width: 100%; min-width: 0; }
+.core-connection-insecure { display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: start; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-subtle); }
+.core-connection-insecure input { width: 18px; height: 18px; margin: 1px 0 0; }
+.core-connection-insecure > span { display: grid; min-width: 0; gap: 3px; }
+.core-connection-insecure strong { color: var(--text); font-size: 12px; }
+.core-connection-insecure small { white-space: normal; overflow-wrap: anywhere; }
+.core-connection-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.core-connection-actions .button { min-height: 44px; }
+.core-connection-boundary { padding-top: 12px; border-top: 1px solid var(--border-soft); }
+.browser-remote-core-boundary { margin: 20px; }
 
 .diagnostics-unavailable {
   display: flex;

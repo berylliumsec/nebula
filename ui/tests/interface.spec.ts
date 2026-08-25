@@ -563,9 +563,10 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
           calls.push({ command, args });
-          if (command === "start_local_backend") {
-            return { endpoint: `${location.origin}/api/v1`, token: "", protocol: "nebula-sidecar-v1" };
+          if (command === "resolve_backend_connection") {
+            return { endpoint: `${location.origin}/api/v1`, token: "", protocol: "nebula-sidecar-v1", source: "local" };
           }
+          if (command === "desktop_device_id") return "desktop-playwright";
           if (command === "browser_capabilities") {
             return { engine: "Playwright native-bounds mock", projectStorage: "persistent" };
           }
@@ -2804,6 +2805,62 @@ test("settings shows the live Kali preparation stage instead of a passive runtim
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeVisible();
   await expect(page.getByText("Downloading and installing the pinned Kali toolset", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Preparing Kali…" })).toBeDisabled();
+});
+
+test("remote Core mode controls the UI shell and keeps native Browser local-only", async ({ browser }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "Desktop Core selection is a native-shell capability.");
+  const context = await browser.newContext({ viewport: { width: 1024, height: 900 }, colorScheme: "dark" });
+  const page = await context.newPage();
+  await installTruthfulCore(page);
+  await page.addInitScript(() => {
+    localStorage.setItem("nebula.theme", "zero-dark");
+    const calls: string[] = [];
+    Object.assign(window, { __NEBULA_REMOTE_CORE_CALLS__: calls });
+    Object.assign(window, {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string) => {
+          calls.push(command);
+          if (command === "resolve_backend_connection") return { endpoint: `${location.origin}/api/v1`, token: "", protocol: "nebula-remote-core-v1", source: "remote" };
+          if (command === "desktop_core_connection") return { mode: "remote", endpoint: `${location.origin}/api/v1`, tokenAvailable: true, deviceId: "desktop-remote-test" };
+          return undefined;
+        },
+        transformCallback: () => 1,
+        unregisterCallback: () => undefined,
+        convertFileSrc: (value: string) => value,
+      },
+    });
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  const card = page.locator(".core-connection-settings");
+  await expect(card.getByRole("heading", { name: "Remote Core selected" })).toBeVisible();
+  const geometry = await card.evaluate((element) => {
+    const cardRect = element.getBoundingClientRect();
+    const controls = [...element.querySelectorAll<HTMLElement>("input, button")].map((control) => control.getBoundingClientRect());
+    return {
+      card: { left: cardRect.left, right: cardRect.right, width: cardRect.width },
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+      controls: controls.map((rect) => ({ left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom })),
+    };
+  });
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  for (const control of geometry.controls) {
+    expect(control.left).toBeGreaterThanOrEqual(geometry.card.left - 1);
+    expect(control.right).toBeLessThanOrEqual(geometry.card.right + 1);
+  }
+  for (let index = 1; index < geometry.controls.length; index += 1) {
+    const previous = geometry.controls[index - 1];
+    const current = geometry.controls[index];
+    expect(current.top >= previous.bottom - 1 || current.left >= previous.right - 1).toBe(true);
+  }
+
+  await page.goto("/");
+  await page.getByRole("tab", { name: "Project browser", exact: true }).click();
+  await expect(page.getByText("Native Browser stays with the local desktop Core")).toBeVisible();
+  await expect(page.getByText(/Projects, terminals, chats, missions, and events use that remote Core/)).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { __NEBULA_REMOTE_CORE_CALLS__?: string[] }).__NEBULA_REMOTE_CORE_CALLS__?.some((command) => command.startsWith("browser_")))).toBe(false);
+  await context.close();
 });
 
 test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {
