@@ -88,6 +88,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice(decision === "forward" ? "The paused transaction was released." : "The paused transaction was dropped.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.intercept_decision_failed", "The paused browser transaction could not be decided.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -112,6 +113,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Bounded crawl saved as a draft. Queue and start it explicitly from the owning desktop.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.crawl_create_failed", "The bounded browser crawl could not be created.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -124,6 +126,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       await api.transitionSecurityBrowserCrawl(crawl, action, operatorId);
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.crawl_transition_failed", "The browser crawl state could not be changed.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -145,6 +148,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Repeater tab saved. Sending remains an explicit native action.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.repeater_create_failed", "The Repeater tab could not be saved.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -174,6 +178,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Intruder attack saved as a draft. Queue it when its positions and budgets are correct.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.attack_create_failed", "The bounded Intruder draft could not be saved.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -186,6 +191,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       await api.transitionSecurityBrowserAttack(attack, action, operatorId);
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.attack_transition_failed", "The Intruder attack state could not be changed.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -200,6 +206,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setDecoderOutput(typeof result.result === "string" ? result.result : JSON.stringify(result.result, null, 2));
       setError(undefined);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.decoder_failed", "The browser Decoder transformation failed.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -214,6 +221,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setCompareOutput(JSON.stringify(result, null, 2));
       setError(undefined);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.comparer_failed", "The browser comparison failed.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
@@ -230,6 +238,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Token samples were analyzed descriptively; this is not a cryptographic certification.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.sequencer_failed", "The token analysis could not be completed.", caught, "browser_research_suite");
       setError(message(caught));
     } finally {
       setBusy(false);
