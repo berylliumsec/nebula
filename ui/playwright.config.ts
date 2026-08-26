@@ -58,13 +58,13 @@ export default defineConfig({
     {
       name: "mobile-chromium-wide",
       testMatch: "**/interface.spec.ts",
-      grep: /activity ledger groups repeated work|browser research tools expose durable workflows/,
+      grep: /activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output/,
       use: { ...devices["Pixel 5"], viewport: { width: 430, height: 932 } },
     },
     {
       name: "mobile-webkit-small",
       testMatch: "**/interface.spec.ts",
-      grep: /activity ledger groups repeated work|browser research tools expose durable workflows/,
+      grep: /activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output/,
       use: { ...devices["iPhone 13"], viewport: { width: 320, height: 700 } },
     },
     {

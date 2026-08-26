@@ -2732,6 +2732,11 @@ test("completed harness output keeps one continuous transcript scroll", async ({
         started_at: entity.created_at,
         last_activity_at: entity.updated_at,
         detail: "A harness turn is currently running.",
+        plan: [
+          { id: "inspect", title: "Inspect the current operator workflow", status: "completed" },
+          { id: "implement", title: "Implement the expandable status rail", status: "in_progress" },
+          { id: "verify", title: "Verify a deliberately long plan step remains readable without horizontal clipping on compact screens", status: "pending" },
+        ],
       }) });
       return;
     }
@@ -2804,6 +2809,33 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
   await expect(guidanceComposer).toHaveValue("");
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
+  const planToggle = page.getByRole("button", { name: "Expand plan steps, 1 of 3 completed" });
+  await expect(planToggle).toBeVisible();
+  await planToggle.click();
+  const collapsePlan = page.getByRole("button", { name: "Collapse plan steps, 1 of 3 completed" });
+  await expect(collapsePlan).toHaveAttribute("aria-expanded", "true");
+  const planSteps = page.getByRole("list", { name: "Plan steps" });
+  await expect(planSteps).toBeVisible();
+  await expect(planSteps.getByText("Implement the expandable status rail")).toBeVisible();
+  await expect(planSteps.getByText("In progress")).toBeVisible();
+  const planGeometry = await page.locator(".harness-status-rail").evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: innerWidth,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(planGeometry.left).toBeGreaterThanOrEqual(0);
+  expect(planGeometry.right).toBeLessThanOrEqual(planGeometry.viewportWidth + 1);
+  expect(planGeometry.scrollWidth).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
+  if (testInfo.project.name.startsWith("mobile-")) {
+    const planToggleBounds = await collapsePlan.boundingBox();
+    expect(planToggleBounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  const planAccessibility = await new AxeBuilder({ page }).include(".harness-status-rail").analyze();
+  expect(planAccessibility.violations).toEqual([]);
+  await collapsePlan.click();
+  await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: 5_000 });
   await ledger.getByRole("button", { name: "Show activity" }).click();

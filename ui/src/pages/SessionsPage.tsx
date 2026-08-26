@@ -84,6 +84,7 @@ import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { copySelectionText, createHashedSelectionAttachment } from "../components/selection";
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { HarnessSkillAutocomplete, findHarnessSkillToken, type HarnessSkillTokenRange } from "../components/HarnessSkillAutocomplete";
+import { HarnessStatusRail } from "../components/HarnessStatusRail";
 import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
 import { TabBar, Toolbar } from "../components/SurfacePrimitives";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
@@ -3228,7 +3229,7 @@ export function SessionsPage() {
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
-              {showHarnessStatusRail && harnessActivity && <section className="harness-status-rail" aria-label="Harness status"><span className={`status-dot ${harnessActivity.live ? harnessActivity.busy ? "pending" : "available" : "unavailable"}`} /><strong>{!harnessActivity.live ? "Connection unavailable" : pendingHarnessRequests ? "Action required" : "Working"}</strong>{harnessActivity.goal && <span title={harnessActivity.goal.objective}>Goal: {harnessActivity.goal.status}{typeof harnessActivity.goal.progress === "number" ? ` · ${Math.round(harnessActivity.goal.progress * 100)}%` : ""}</span>}{harnessActivity.plan?.length ? <span>{harnessActivity.plan.filter((entry) => entry.status === "completed").length}/{harnessActivity.plan.length} plan steps</span> : null}{pendingHarnessRequests > 0 && <span>{pendingHarnessRequests} request{pendingHarnessRequests === 1 ? "" : "s"}</span>}</section>}
+              {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} />}
               {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue" aria-label="Queued follow-up messages" aria-live="polite">
                 <header><div><ListTodo size={14} aria-hidden="true" /><span><strong>Follow-up queue</strong><small>{queuedFollowUps.length} message{queuedFollowUps.length === 1 ? "" : "s"} · text only · current browser tab</small></span></div><button className="button quiet" type="button" disabled={queuedFollowUps.some((item) => item.status === "sending")} onClick={() => { followUpAutoDrainRef.current = false; followUpDrainIdRef.current = undefined; setQueuedFollowUps([]); setMessageActionStatus("Follow-up queue cleared."); }}>Clear</button></header>
                 <ol>{queuedFollowUps.map((item, index) => <li key={item.id} className={`chat-follow-up-${item.status}`}>

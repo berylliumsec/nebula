@@ -1281,21 +1281,50 @@ kbd { font-size: 11px; }
 }
 
 .harness-status-rail {
-  display: flex;
-  align-items: center;
-  gap: 10px;
   margin: 6px 12px 0;
-  padding: 7px 10px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--surface-muted);
   color: var(--muted);
   font-size: 11px;
-  overflow-x: auto;
-  white-space: nowrap;
+  overflow: hidden;
 }
 
 .harness-status-rail strong { color: var(--text); }
+.harness-status-summary {
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+}
+
+button.harness-status-summary { cursor: pointer; }
+button.harness-status-summary:hover { background: var(--surface-hover); }
+button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.harness-status-chevron { margin-left: auto; flex: 0 0 auto; transition: transform 160ms ease; }
+.harness-status-rail.expanded .harness-status-chevron { transform: rotate(180deg); }
+.harness-plan-steps { display: grid; gap: 0; margin: 0; padding: 0; border-top: 1px solid var(--border-soft); list-style: none; }
+.harness-plan-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--border-soft); white-space: normal; }
+.harness-plan-steps li:last-child { border-bottom: 0; }
+.harness-plan-steps li > span:last-child { display: grid; min-width: 0; gap: 2px; }
+.harness-plan-steps li strong { overflow-wrap: anywhere; font-size: 12px; line-height: 1.4; }
+.harness-plan-steps li small { color: var(--muted); font-size: 10px; }
+.harness-plan-marker { display: grid; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; color: var(--muted); }
+.harness-plan-steps .status-in_progress .harness-plan-marker { color: var(--blue); }
+.harness-plan-steps .status-completed .harness-plan-marker { color: var(--green); }
+.harness-plan-steps .status-blocked .harness-plan-marker { color: var(--red); }
+
+@media (prefers-reduced-motion: reduce) {
+  .harness-status-chevron { transition: none; }
+}
 
 .device-pairing-action { align-self: center; }
 .device-pairing-capability { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--border-soft); color: var(--muted); }
