@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle, Braces, GitCompareArrows, LoaderCircle, Pause, Play, RefreshCw, Send, ShieldAlert, Square, Target } from "lucide-react";
+import { AlertTriangle, Braces, GitCompareArrows, LoaderCircle, Pause, Play, RefreshCw, Send, ShieldAlert, Square, Target, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../api/client";
 import type {
@@ -10,6 +10,7 @@ import type {
   SecurityBrowserSession,
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useConfirmation } from "./DialogSystem";
 
 export type BrowserResearchToolView = "target" | "intercepts" | "repeater" | "intruder" | "utilities";
 
@@ -27,7 +28,17 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function headerPairs(value: string): Array<[string, string]> {
+  const parsed = JSON.parse(value || "{}") as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+    || Object.values(parsed).some((item) => typeof item !== "string")) {
+    throw new Error("Headers must be a JSON object with string values.");
+  }
+  return Object.entries(parsed) as Array<[string, string]>;
+}
+
 export function BrowserResearchSuite({ api, desktop, identity, operatorId, projectId, session, view }: Props) {
+  const confirm = useConfirmation();
   const [workspace, setWorkspace] = useState<SecurityBrowserResearchWorkspace>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -36,11 +47,17 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
   const [repeaterName, setRepeaterName] = useState("Repeater");
   const [repeaterMethod, setRepeaterMethod] = useState("GET");
   const [repeaterUrl, setRepeaterUrl] = useState("");
+  const [repeaterHeaders, setRepeaterHeaders] = useState("{}");
+  const [repeaterBody, setRepeaterBody] = useState("");
+  const [selectedRepeaterId, setSelectedRepeaterId] = useState<string>();
+  const [bodyPreviews, setBodyPreviews] = useState<Record<string, string>>({});
   const [attackName, setAttackName] = useState("Identifier boundaries");
   const [attackStrategy, setAttackStrategy] = useState<SecurityBrowserAttack["strategy"]>("sniper");
   const [attackMethod, setAttackMethod] = useState("GET");
   const [attackUrl, setAttackUrl] = useState("");
   const [attackPosition, setAttackPosition] = useState("id");
+  const [attackHeaders, setAttackHeaders] = useState("{}");
+  const [attackBody, setAttackBody] = useState("");
   const [payloads, setPayloads] = useState("0\n1\n-1");
   const [decoderOperation, setDecoderOperation] = useState("url_encode");
   const [decoderInput, setDecoderInput] = useState("");
@@ -54,8 +71,8 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
   const [crawlDepth, setCrawlDepth] = useState(2);
   const [crawlRequests, setCrawlRequests] = useState(100);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     try {
       setWorkspace(await api.getSecurityBrowserResearch(projectId));
       setError(undefined);
@@ -70,11 +87,21 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
   useEffect(() => { void refresh(); }, [refresh]);
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void refresh(true);
+    }, 1_500);
+    const onFocus = () => void refresh(true);
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, [refresh]);
+
+  useEffect(() => {
     const current = session?.tabs.find((tab) => tab.id === session.activeTabId)?.url ?? session?.tabs[0]?.url ?? "";
-    if (!repeaterUrl) setRepeaterUrl(current);
-    if (!attackUrl) setAttackUrl(current ? `${current.replace(/\/$/, "")}/§id§` : "");
-    if (!crawlUrl) setCrawlUrl(current);
-  }, [attackUrl, crawlUrl, repeaterUrl, session]);
+    setRepeaterUrl(current);
+    setAttackUrl(current ? `${current.replace(/\/$/, "")}/§id§` : "");
+    setCrawlUrl(current);
+    setSelectedRepeaterId(undefined);
+  }, [session?.id]);
 
   const sessionItems = <T extends { sessionId: string }>(items: T[] | undefined): T[] =>
     items?.filter((item) => item.sessionId === session?.id) ?? [];
@@ -106,7 +133,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
         startUrl: crawlUrl,
         maxDepth: crawlDepth,
         maxRequests: crawlRequests,
-        maxConcurrency: 2,
+        maxConcurrency: 1,
         maxDurationSeconds: 300,
         maxBodyBytes: 1_048_576,
       });
@@ -120,7 +147,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     }
   };
 
-  const transitionCrawl = async (crawl: SecurityBrowserCrawlJob, action: "queue" | "start" | "pause" | "resume" | "cancel") => {
+  const transitionCrawl = async (crawl: SecurityBrowserCrawlJob, action: "queue" | "pause" | "resume" | "retry" | "cancel") => {
     setBusy(true);
     try {
       await api.transitionSecurityBrowserCrawl(crawl, action, operatorId);
@@ -133,19 +160,48 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     }
   };
 
+  const deleteCrawl = async (crawl: SecurityBrowserCrawlJob) => {
+    if (!await confirm({ title: "Delete this crawl?", message: "The crawl definition and pending frontier will be deleted. Discovered target-map entries remain available.", confirmLabel: "Delete crawl", tone: "danger" })) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deleteSecurityBrowserCrawl(crawl);
+      setNotice("Crawl and its pending frontier were deleted. Discovered target-map entries were retained.");
+      await refresh();
+    } catch (caught) {
+      setError(`${message(caught)} Cancel active work before deleting it.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const createRepeater = async (event: FormEvent) => {
     event.preventDefault();
     if (!session || !identity) return;
     setBusy(true);
+    setError(undefined);
     try {
-      await api.createSecurityBrowserRepeaterTab(projectId, {
-        sessionId: session.id,
-        identityId: identity.id,
-        name: repeaterName,
-        method: repeaterMethod,
-        url: repeaterUrl,
-      });
-      setNotice("Repeater tab saved. Sending remains an explicit native action.");
+      const headers = headerPairs(repeaterHeaders);
+      const selected = workspace?.repeaterTabs.find((tab) => tab.id === selectedRepeaterId);
+      const saved = selected
+        ? await api.updateSecurityBrowserRepeaterTab(selected, {
+            name: repeaterName,
+            method: repeaterMethod,
+            url: repeaterUrl,
+            headers,
+            bodyTemplate: repeaterBody,
+          })
+        : await api.createSecurityBrowserRepeaterTab(projectId, {
+            sessionId: session.id,
+            identityId: identity.id,
+            name: repeaterName,
+            method: repeaterMethod,
+            url: repeaterUrl,
+            headers,
+            bodyTemplate: repeaterBody,
+          });
+      setSelectedRepeaterId(saved.id);
+      setNotice(selected ? "Repeater request updated." : "Repeater request saved. Review it, then queue one native send.");
       await refresh();
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.repeater_create_failed", "The Repeater tab could not be saved.", caught, "browser_research_suite");
@@ -155,12 +211,89 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     }
   };
 
+  const selectRepeater = (tab: SecurityBrowserResearchWorkspace["repeaterTabs"][number]) => {
+    setSelectedRepeaterId(tab.id);
+    setRepeaterName(tab.name);
+    setRepeaterMethod(tab.method);
+    setRepeaterUrl(tab.url);
+    setRepeaterHeaders(JSON.stringify(Object.fromEntries(tab.headers), null, 2));
+    setRepeaterBody(tab.bodyTemplate);
+    setError(undefined);
+    setNotice(undefined);
+  };
+
+  const transitionRepeater = async (
+    tab: SecurityBrowserResearchWorkspace["repeaterTabs"][number],
+    action: "queue" | "cancel" | "retry",
+  ) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.transitionSecurityBrowserRepeaterTab(tab, action, operatorId);
+      setNotice(action === "queue" || action === "retry"
+        ? "Request queued for the owning desktop. It remains durable if this panel closes."
+        : "Repeater request cancelled.");
+      await refresh();
+    } catch (caught) {
+      setError(`${message(caught)} Refresh the durable request and retry.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteRepeater = async (tab: SecurityBrowserResearchWorkspace["repeaterTabs"][number]) => {
+    if (!await confirm({ title: `Delete ${tab.name}?`, message: "The durable request and its retained result history will be deleted.", confirmLabel: "Delete request", tone: "danger" })) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deleteSecurityBrowserRepeaterTab(tab);
+      if (selectedRepeaterId === tab.id) setSelectedRepeaterId(undefined);
+      setNotice("Repeater request and its retained result history were deleted.");
+      await refresh();
+    } catch (caught) {
+      setError(`${message(caught)} Cancel active work before deleting it.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const loadRepeaterBody = async (artifactId: string) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const blob = await api.getArtifactContent(artifactId);
+      const body = (await blob.text()).slice(0, 1_048_576);
+      setBodyPreviews((current) => ({ ...current, [artifactId]: body }));
+    } catch (caught) {
+      setError(`${message(caught)} The response metadata remains available; retry the body preview.`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const createAttack = async (event: FormEvent) => {
     event.preventDefault();
     if (!session || !identity) return;
-    const values = payloads.split("\n").map((value) => value.trim()).filter(Boolean);
+    const positions = attackPosition.split(",").map((value) => value.trim()).filter(Boolean);
+    const payloadSets = payloads.split(/^---$/m).map((set) => set.split("\n").map((value) => value.trim()).filter(Boolean));
     setBusy(true);
+    setError(undefined);
     try {
+      const headers = headerPairs(attackHeaders);
+      const templates = [attackUrl, attackBody, ...headers.map(([, value]) => value)];
+      const missing = positions.filter((position) => !templates.some((value) => value.includes(`§${position}§`)));
+      if (missing.length) {
+        throw new Error(`Add ${missing.map((position) => `§${position}§`).join(", ")} to the URL, a header value, or the body before saving.`);
+      }
+      const requiredSets = ["pitchfork", "cluster_bomb"].includes(attackStrategy) ? positions.length : 1;
+      if (payloadSets.length !== requiredSets || payloadSets.some((set) => !set.length)) throw new Error(`${attackStrategy.replaceAll("_", " ")} requires ${requiredSets} non-empty payload set${requiredSets === 1 ? "" : "s"}. Separate sets with a line containing only ---.`);
+      const plannedRequests = attackStrategy === "sniper"
+        ? positions.length * payloadSets[0].length
+        : attackStrategy === "battering_ram"
+          ? payloadSets[0].length
+          : attackStrategy === "pitchfork"
+            ? Math.min(...payloadSets.map((set) => set.length))
+            : payloadSets.reduce((total, set) => total * set.length, 1);
       await api.createSecurityBrowserAttack(projectId, {
         sessionId: session.id,
         identityId: identity.id,
@@ -168,10 +301,12 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
         strategy: attackStrategy,
         method: attackMethod,
         urlTemplate: attackUrl,
-        positions: [attackPosition],
-        payloadValues: values,
+        headersTemplate: headers,
+        bodyTemplate: attackBody,
+        positions,
+        payloadSets,
         transforms: ["url_encode"],
-        maxRequests: Math.min(1000, Math.max(1, values.length)),
+        maxRequests: Math.min(1000, Math.max(1, plannedRequests)),
         maxConcurrency: 1,
         requestsPerSecond: 2,
       });
@@ -185,7 +320,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     }
   };
 
-  const transitionAttack = async (attack: SecurityBrowserAttack, action: "queue" | "start" | "pause" | "resume" | "cancel") => {
+  const transitionAttack = async (attack: SecurityBrowserAttack, action: "queue" | "pause" | "resume" | "retry" | "cancel") => {
     setBusy(true);
     try {
       await api.transitionSecurityBrowserAttack(attack, action, operatorId);
@@ -193,6 +328,21 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.attack_transition_failed", "The Intruder attack state could not be changed.", caught, "browser_research_suite");
       setError(message(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deleteAttack = async (attack: SecurityBrowserAttack) => {
+    if (!await confirm({ title: `Delete ${attack.name}?`, message: "The bounded attack definition and every retained result will be deleted.", confirmLabel: "Delete attack", tone: "danger" })) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.deleteSecurityBrowserAttack(attack);
+      setNotice("Intruder attack and its results were deleted.");
+      await refresh();
+    } catch (caught) {
+      setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
     }
@@ -255,26 +405,34 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     {view === "target" && <section aria-labelledby="browser-target-heading">
       <header className="browser-suite-heading"><div><Target size={16} /><span><h3 id="browser-target-heading">Target map</h3><small>In-scope locations discovered by browsing, proxy capture, HAR, crawl, and automation.</small></span></div><button className="icon-button subtle" aria-label="Refresh target map" type="button" onClick={() => void refresh()}><RefreshCw size={14} /></button></header>
       <form className="browser-suite-form" onSubmit={createCrawl}><label className="browser-suite-wide">Crawl start URL<input required value={crawlUrl} onChange={(event) => setCrawlUrl(event.target.value)} /></label><label>Maximum depth<input type="number" min={0} max={10} value={crawlDepth} onChange={(event) => setCrawlDepth(Number(event.target.value))} /></label><label>Request budget<input type="number" min={1} max={10000} value={crawlRequests} onChange={(event) => setCrawlRequests(Number(event.target.value))} /></label><button className="button primary" disabled={busy || !desktop || !session || !identity || !crawlUrl} type="submit">Create bounded crawl</button>{!desktop && <small className="browser-suite-wide">A paired client can inspect and stop crawls; the desktop owns network execution.</small>}</form>
-      {sessionItems(workspace?.crawlJobs).length > 0 && <ol className="browser-suite-list">{[...sessionItems(workspace?.crawlJobs)].reverse().map((crawl) => <li key={crawl.id}><span className={`browser-action-status ${crawl.state}`}>{crawl.state}</span><div><strong>{crawl.startUrl}</strong><small>depth {crawl.maxDepth} · {crawl.requestsCompleted}/{crawl.maxRequests} requests · {crawl.nodesDiscovered} nodes</small><span className="browser-suite-actions">{crawl.state === "draft" && <button className="button secondary" type="button" onClick={() => void transitionCrawl(crawl, "queue")}>Queue</button>}{crawl.state === "queued" && desktop && <button className="button primary" type="button" onClick={() => void transitionCrawl(crawl, "start")}><Play size={13} /> Start</button>}{crawl.state === "running" && <button className="button secondary" type="button" onClick={() => void transitionCrawl(crawl, "pause")}><Pause size={13} /> Pause</button>}{crawl.state === "paused" && desktop && <button className="button primary" type="button" onClick={() => void transitionCrawl(crawl, "resume")}><Play size={13} /> Resume</button>}{["draft", "queued", "running", "paused"].includes(crawl.state) && <button className="button quiet danger" type="button" onClick={() => void transitionCrawl(crawl, "cancel")}><Square size={13} /> Cancel</button>}</span></div></li>)}</ol>}
+      {sessionItems(workspace?.crawlJobs).length > 0 && <ol className="browser-suite-list">{[...sessionItems(workspace?.crawlJobs)].reverse().map((crawl) => <li key={crawl.id}><span className={`browser-action-status ${crawl.state}`}>{crawl.state}</span><div><strong>{crawl.startUrl}</strong><small>depth {crawl.maxDepth} · {crawl.requestsCompleted}/{crawl.maxRequests} requests · {crawl.nodesDiscovered} nodes{crawl.error ? ` · ${crawl.error}` : ""}</small><span className="browser-suite-actions">{crawl.state === "draft" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "queue")}>Queue on desktop</button>}{crawl.state === "queued" && <small>Waiting for the owning desktop…</small>}{crawl.state === "running" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "pause")}><Pause size={13} /> Pause</button>}{crawl.state === "paused" && <button className="button primary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "resume")}><Play size={13} /> Resume</button>}{["failed", "cancelled"].includes(crawl.state) && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "retry")}>Retry</button>}{["draft", "queued", "running", "paused"].includes(crawl.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "cancel")}><Square size={13} /> Cancel</button>}{["draft", "complete", "cancelled", "failed"].includes(crawl.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete crawl ${crawl.startUrl}`} type="button" onClick={() => void deleteCrawl(crawl)}><Trash2 size={13} /> Delete</button>}</span></div></li>)}</ol>}
       {sessionItems(workspace?.siteNodes).length ? <ol className="browser-suite-list">{sessionItems(workspace?.siteNodes).map((node) => <li key={node.id}><span className={`browser-method method-${node.method.toLowerCase()}`}>{node.method}</span><div><strong>{node.url}</strong><small>{node.kind} · {node.discoverySource}{node.statusCode ? ` · ${node.statusCode}` : ""}{node.parameterNames.length ? ` · parameters: ${node.parameterNames.join(", ")}` : ""}</small></div></li>)}</ol> : <div className="browser-research-empty"><Target size={20} /><strong>No mapped targets</strong><span>Browse an authorized page, import a HAR, or start a bounded crawl.</span></div>}
     </section>}
 
     {view === "intercepts" && <section aria-labelledby="browser-intercept-heading">
       <header className="browser-suite-heading"><div><ShieldAlert size={16} /><span><h3 id="browser-intercept-heading">Intercept queue</h3><small>Paused native requests and responses fail closed on expiry or disconnect.</small></span></div></header>
       {!desktop && <p className="browser-automation-mobile-note">This paired device can decide durable items, but only the desktop owns the live transaction.</p>}
-      {sessionItems(workspace?.intercepts).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.intercepts)].reverse().map((item) => <li key={item.id}><span className={`browser-action-status ${item.state}`}>{item.state}</span><div><strong>{item.phase} · {item.method} {item.url}</strong><small>Expires {new Date(item.expiresAt).toLocaleTimeString()}{item.error ? ` · ${item.error}` : ""}</small>{item.state === "paused" && <span className="browser-suite-actions"><button className="button secondary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "drop")}>Drop</button><button className="button primary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "forward")}>Forward</button></span>}</div></li>)}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No paused traffic</strong><span>Enable interception in Session, then configure a breakpoint in the native proxy.</span></div>}
+      {sessionItems(workspace?.intercepts).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.intercepts)].reverse().map((item) => <li key={item.id}><span className={`browser-action-status ${item.state}`}>{item.state}</span><div><strong>{item.phase} · {item.method} {item.url}</strong><small>Expires {new Date(item.expiresAt).toLocaleTimeString()}{item.error ? ` · ${item.error}` : ""}</small>{item.state === "paused" && <span className="browser-suite-actions"><button className="button secondary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "drop")}>Drop</button><button className="button primary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "forward")}>Forward</button></span>}</div></li>)}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No paused traffic</strong><span>Enable interception in Session. Every in-scope request and response will pause here for an explicit decision.</span></div>}
     </section>}
 
     {view === "repeater" && <section aria-labelledby="browser-repeater-heading">
-      <header className="browser-suite-heading"><div><Send size={16} /><span><h3 id="browser-repeater-heading">Repeater</h3><small>Save protocol-aware request tabs without copying identity cookies.</small></span></div></header>
-      <form className="browser-suite-form" onSubmit={createRepeater}><label>Name<input value={repeaterName} onChange={(event) => setRepeaterName(event.target.value)} /></label><label>Method<input value={repeaterMethod} onChange={(event) => setRepeaterMethod(event.target.value.toUpperCase())} /></label><label>URL<input required value={repeaterUrl} onChange={(event) => setRepeaterUrl(event.target.value)} /></label><button className="button primary" disabled={busy || !session || !identity || !repeaterUrl} type="submit">Save Repeater tab</button></form>
-      {sessionItems(workspace?.repeaterTabs).length ? <ol className="browser-suite-list">{sessionItems(workspace?.repeaterTabs).map((tab) => <li key={tab.id}><span className={`browser-method method-${tab.method.toLowerCase()}`}>{tab.method}</span><div><strong>{tab.name}</strong><small>{tab.url} · {tab.historyExchangeIds.length} responses · identity isolated</small></div></li>)}</ol> : <div className="browser-research-empty"><Send size={20} /><strong>No Repeater tabs</strong><span>Save the current request or create a new in-scope request above.</span></div>}
+      <header className="browser-suite-heading"><div><Send size={16} /><span><h3 id="browser-repeater-heading">Repeater</h3><small>Edit and send one scope-checked request through the selected desktop identity. Cookies remain native.</small></span></div></header>
+      {!desktop && <p className="browser-automation-mobile-note">This device can inspect, cancel, retry, and delete durable requests. The paired desktop performs sends.</p>}
+      <form className="browser-suite-form" onSubmit={createRepeater}><label>Name<input required value={repeaterName} onChange={(event) => setRepeaterName(event.target.value)} /></label><label>Method<input required maxLength={32} value={repeaterMethod} onChange={(event) => setRepeaterMethod(event.target.value.toUpperCase())} /></label><label className="browser-suite-wide">URL<input required value={repeaterUrl} onChange={(event) => setRepeaterUrl(event.target.value)} /></label><label className="browser-suite-wide">Headers JSON<textarea rows={5} value={repeaterHeaders} onChange={(event) => setRepeaterHeaders(event.target.value)} /></label><label className="browser-suite-wide">Body<textarea rows={6} maxLength={65536} value={repeaterBody} onChange={(event) => setRepeaterBody(event.target.value)} /></label><button className="button primary" disabled={busy || !session || !identity || !repeaterUrl} type="submit">{selectedRepeaterId ? "Save request changes" : "Save Repeater request"}</button></form>
+      {sessionItems(workspace?.repeaterTabs).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.repeaterTabs)].reverse().map((tab) => {
+        const results = (workspace?.repeaterResults ?? []).filter((result) => result.tabId === tab.id).sort((left, right) => right.sequence - left.sequence);
+        return <li key={tab.id} className={selectedRepeaterId === tab.id ? "selected" : ""}><span className={`browser-method method-${tab.method.toLowerCase()}`}>{tab.method}</span><div><button className="browser-suite-select" type="button" onClick={() => selectRepeater(tab)}><strong>{tab.name}</strong><small>{tab.url} · {results.length} retained result{results.length === 1 ? "" : "s"} · identity isolated</small></button><span className={`browser-action-status ${tab.state}`}>{tab.state}</span>{tab.error && <small className="browser-suite-error">{tab.error}</small>}<span className="browser-suite-actions">{["draft", "ready"].includes(tab.state) && <button className="button primary" disabled={busy || !desktop} title={!desktop ? "The paired desktop owns native sends." : undefined} type="button" onClick={() => void transitionRepeater(tab, "queue")}><Send size={13} /> Send once</button>}{["failed", "cancelled"].includes(tab.state) && <button className="button secondary" disabled={busy || !desktop} type="button" onClick={() => void transitionRepeater(tab, "retry")}>Retry send</button>}{["queued", "running"].includes(tab.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionRepeater(tab, "cancel")}><Square size={13} /> Cancel</button>}{!["queued", "running"].includes(tab.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete Repeater request ${tab.name}`} type="button" onClick={() => void deleteRepeater(tab)}><Trash2 size={13} /> Delete</button>}</span>{results.length > 0 && <details><summary>Result history ({results.length})</summary><ol className="browser-result-list">{results.map((result) => <li key={result.id}><strong>{result.error ? "Failed" : result.statusCode ?? "No status"}</strong><span>{result.durationMs === undefined ? "—" : `${result.durationMs} ms`} · {result.responseBytes === undefined ? "—" : `${result.responseBytes} bytes`}</span>{result.error && <small>{result.error}</small>}<pre>{JSON.stringify(Object.fromEntries(result.responseHeaders), null, 2)}</pre>{result.responseBodyArtifactId && <div className="browser-result-body"><button className="button secondary" disabled={busy} type="button" onClick={() => void loadRepeaterBody(result.responseBodyArtifactId!)}>Preview redacted body</button>{bodyPreviews[result.responseBodyArtifactId] !== undefined && <pre>{bodyPreviews[result.responseBodyArtifactId]}</pre>}</div>}</li>)}</ol></details>}</div></li>;
+      })}</ol> : <div className="browser-research-empty"><Send size={20} /><strong>No Repeater requests</strong><span>Save the current URL or import an in-scope request from Proxy traffic.</span></div>}
     </section>}
 
     {view === "intruder" && <section aria-labelledby="browser-intruder-heading">
       <header className="browser-suite-heading"><div><ShieldAlert size={16} /><span><h3 id="browser-intruder-heading">Intruder</h3><small>Curated or inert custom payloads with explicit rate, concurrency, and request budgets.</small></span></div></header>
-      <form className="browser-suite-form" onSubmit={createAttack}><label>Name<input value={attackName} onChange={(event) => setAttackName(event.target.value)} /></label><label>Strategy<select value={attackStrategy} onChange={(event) => setAttackStrategy(event.target.value as SecurityBrowserAttack["strategy"])}><option value="sniper">Sniper</option><option value="battering_ram">Battering ram</option><option value="pitchfork">Pitchfork</option><option value="cluster_bomb">Cluster bomb</option></select></label><label>Method<input value={attackMethod} onChange={(event) => setAttackMethod(event.target.value.toUpperCase())} /></label><label>Position name<input value={attackPosition} onChange={(event) => setAttackPosition(event.target.value)} /></label><label className="browser-suite-wide">URL template<input required value={attackUrl} onChange={(event) => setAttackUrl(event.target.value)} /><small>Mark a position as <code>§{attackPosition || "id"}§</code>.</small></label><label className="browser-suite-wide">Payloads<textarea rows={5} value={payloads} onChange={(event) => setPayloads(event.target.value)} /></label><button className="button primary" disabled={busy || !session || !identity || !attackUrl || !payloads.trim()} type="submit">Save attack draft</button></form>
-      {sessionItems(workspace?.attacks).length ? <ol className="browser-suite-list">{sessionItems(workspace?.attacks).map((attack) => <li key={attack.id}><span className={`browser-action-status ${attack.state}`}>{attack.state}</span><div><strong>{attack.name}</strong><small>{attack.strategy.replace("_", " ")} · {attack.requestCount}/{attack.maxRequests} requests · {attack.requestsPerSecond}/s</small><span className="browser-suite-actions">{attack.state === "draft" && <button className="button secondary" type="button" onClick={() => void transitionAttack(attack, "queue")}>Queue</button>}{attack.state === "queued" && <button className="button primary" type="button" onClick={() => void transitionAttack(attack, "start")}><Play size={13} /> Start</button>}{attack.state === "running" && <button className="button secondary" type="button" onClick={() => void transitionAttack(attack, "pause")}><Pause size={13} /> Pause</button>}{attack.state === "paused" && <button className="button primary" type="button" onClick={() => void transitionAttack(attack, "resume")}><Play size={13} /> Resume</button>}{["draft", "queued", "running", "paused"].includes(attack.state) && <button className="button quiet danger" type="button" onClick={() => void transitionAttack(attack, "cancel")}><Square size={13} /> Cancel</button>}</span></div></li>)}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No attacks</strong><span>Create a bounded attack draft; it sends nothing until explicitly started.</span></div>}
+      {!desktop && <p className="browser-automation-mobile-note">This device can monitor, pause, cancel, and retry. Only the paired desktop executes payload requests.</p>}
+      <form className="browser-suite-form" onSubmit={createAttack}><label>Name<input required value={attackName} onChange={(event) => setAttackName(event.target.value)} /></label><label>Strategy<select value={attackStrategy} onChange={(event) => setAttackStrategy(event.target.value as SecurityBrowserAttack["strategy"])}><option value="sniper">Sniper</option><option value="battering_ram">Battering ram</option><option value="pitchfork">Pitchfork</option><option value="cluster_bomb">Cluster bomb</option></select></label><label>Method<input required value={attackMethod} onChange={(event) => setAttackMethod(event.target.value.toUpperCase())} /></label><label>Position names<input required value={attackPosition} onChange={(event) => setAttackPosition(event.target.value)} /><small>Comma-separated, for example <code>id, role</code>.</small></label><label className="browser-suite-wide">URL template<input required value={attackUrl} onChange={(event) => setAttackUrl(event.target.value)} /><small>Put a marker such as <code>§id§</code> in the URL, a header value, or the body for every named position.</small></label><label className="browser-suite-wide">Headers JSON<textarea rows={4} value={attackHeaders} onChange={(event) => setAttackHeaders(event.target.value)} /></label><label className="browser-suite-wide">Body template<textarea rows={5} maxLength={65536} value={attackBody} onChange={(event) => setAttackBody(event.target.value)} /></label><label className="browser-suite-wide">Payload sets<textarea rows={7} value={payloads} onChange={(event) => setPayloads(event.target.value)} /><small>One value per line. Pitchfork and cluster bomb need one set per position, in the same order; separate sets with a line containing only <code>---</code>.</small></label><button className="button primary" disabled={busy || !session || !identity || !attackUrl || !attackPosition.trim() || !payloads.trim()} type="submit">Save attack draft</button></form>
+      {sessionItems(workspace?.attacks).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.attacks)].reverse().map((attack) => {
+        const results = (workspace?.attackResults ?? []).filter((result) => result.attackId === attack.id).sort((left, right) => left.sequence - right.sequence);
+        return <li key={attack.id}><span className={`browser-action-status ${attack.state}`}>{attack.state}</span><div><strong>{attack.name}</strong><small>{attack.strategy.replaceAll("_", " ")} · {attack.requestCount}/{attack.maxRequests} requests · {attack.errorCount} errors · {attack.requestsPerSecond}/s{attack.error ? ` · ${attack.error}` : ""}</small><span className="browser-suite-actions">{attack.state === "draft" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "queue")}>Queue on desktop</button>}{attack.state === "queued" && <small>Waiting for the owning desktop…</small>}{attack.state === "running" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "pause")}><Pause size={13} /> Pause</button>}{attack.state === "paused" && <button className="button primary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "resume")}><Play size={13} /> Resume</button>}{["failed", "cancelled"].includes(attack.state) && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "retry")}>Retry remaining</button>}{["draft", "queued", "running", "paused"].includes(attack.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "cancel")}><Square size={13} /> Cancel</button>}{["draft", "complete", "cancelled", "failed"].includes(attack.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete Intruder attack ${attack.name}`} type="button" onClick={() => void deleteAttack(attack)}><Trash2 size={13} /> Delete</button>}</span>{results.length > 0 && <details><summary>Results ({results.length})</summary><ol className="browser-result-list">{results.map((result) => <li key={result.id}><code>#{result.sequence + 1}</code><strong>{result.error ? "ERR" : result.statusCode ?? "—"}</strong><span>{result.payloads.join(", ")} · {result.responseBytes ?? "—"} bytes · {result.durationMs ?? "—"} ms</span>{result.error && <small>{result.error}</small>}</li>)}</ol></details>}</div></li>;
+      })}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No attacks</strong><span>Create a bounded attack draft; requests run only after you queue it.</span></div>}
     </section>}
 
     {view === "utilities" && <section aria-labelledby="browser-utilities-heading">

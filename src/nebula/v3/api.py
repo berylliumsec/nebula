@@ -104,6 +104,7 @@ from .browser_research import (
     InterceptCreateRequest,
     InterceptDecisionRequest,
     RepeaterResultRequest,
+    RepeaterStateRequest,
     RepeaterTabCreateRequest,
     RepeaterTabUpdateRequest,
     SiteEdgeRecordRequest,
@@ -442,6 +443,7 @@ CUSTOM_RESOURCES = {
     "browser_crawl_jobs",
     "browser_intercepts",
     "browser_repeater_tabs",
+    "browser_repeater_results",
     "browser_attacks",
     "browser_attack_results",
     "browser_token_analyses",
@@ -8178,6 +8180,18 @@ def create_app(
     ) -> Any:
         return browser_research.transition_crawl(crawl_id, request)
 
+    @app.delete(
+        f"{API_PREFIX}/browser-crawls/{{crawl_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_crawl(
+        crawl_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_crawl(crawl_id, expected_revision)
+        return Response(status_code=204)
+
     @app.post(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/intercepts",
         status_code=201,
@@ -8230,6 +8244,16 @@ def create_app(
         return browser_research.update_repeater_tab(tab_id, request, x_nebula_actor)
 
     @app.post(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/state",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transition_browser_repeater_tab(
+        tab_id: str, request: RepeaterStateRequest
+    ) -> Any:
+        return browser_research.transition_repeater_tab(tab_id, request)
+
+    @app.post(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/results",
         tags=["security-browser"],
         dependencies=[Depends(require_auth)],
@@ -8238,6 +8262,18 @@ def create_app(
         tab_id: str, request: RepeaterResultRequest
     ) -> Any:
         return browser_research.record_repeater_result(tab_id, request)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_repeater_tab(
+        tab_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_repeater_tab(tab_id, expected_revision)
+        return Response(status_code=204)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-attacks",
@@ -8277,6 +8313,18 @@ def create_app(
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
         return browser_research.add_attack_result(attack_id, request, x_nebula_actor)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-attacks/{{attack_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_attack(
+        attack_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_attack(attack_id, expected_revision)
+        return Response(status_code=204)
 
     @app.post(
         f"{API_PREFIX}/browser-utilities/decode",

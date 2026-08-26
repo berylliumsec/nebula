@@ -6,11 +6,15 @@ import {
   workbenchBrowser,
   type BrowserActionEvent,
   type BrowserContextEvent,
+  type BrowserInterceptEvent,
 } from "../api/workbenchBrowser";
 import type {
   EngagementScopePolicy,
   SecurityBrowserAutomationStatus,
+  SecurityBrowserAttack,
+  SecurityBrowserCrawlJob,
   SecurityBrowserCommand,
+  SecurityBrowserRepeaterTab,
   SecurityBrowserSession,
 } from "../api/types";
 import { desktopDeviceId, isTauriRuntime } from "../api/runtime";
@@ -31,6 +35,85 @@ type Receipt = {
   evidenceIds?: string[];
   error?: string;
 };
+
+type ResearchEntry =
+  | { kind: "repeater"; projectId: string; session: SecurityBrowserSession; tab: SecurityBrowserRepeaterTab }
+  | { kind: "attack"; projectId: string; session: SecurityBrowserSession; attack: SecurityBrowserAttack; sequence: number; payloads: string[] }
+  | { kind: "crawl"; projectId: string; session: SecurityBrowserSession; crawl: SecurityBrowserCrawlJob; url: string; depth: number; scope: EngagementScopePolicy };
+
+const CURATED_PAYLOADS: Record<string, string[]> = {
+  booleans: ["true", "false", "1", "0", "null"],
+  boundary_numbers: ["-1", "0", "1", "2147483647", "2147483648"],
+  path_boundaries: [".", "..", "../", "%2e%2e%2f"],
+  header_boundaries: ["", "0", "null", "undefined"],
+};
+
+function payloadValues(payloadSet: Record<string, unknown>): string[] {
+  if (payloadSet.kind === "list" && Array.isArray(payloadSet.values)) {
+    return payloadSet.values.filter((value): value is string => typeof value === "string");
+  }
+  if (payloadSet.kind === "curated" && typeof payloadSet.name === "string") {
+    return CURATED_PAYLOADS[payloadSet.name] ?? [];
+  }
+  return [];
+}
+
+function transformPayload(value: string, transforms: string[]): string {
+  return transforms.reduce((current, transform) => {
+    if (transform === "url_encode") return encodeURIComponent(current);
+    if (transform === "url_decode") { try { return decodeURIComponent(current); } catch { return current; } }
+    if (transform === "base64_encode") return btoa(unescape(encodeURIComponent(current)));
+    if (transform === "base64_decode") { try { return decodeURIComponent(escape(atob(current))); } catch { return current; } }
+    if (transform === "hex_encode") return Array.from(new TextEncoder().encode(current), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (transform === "hex_decode") { try { return new TextDecoder().decode(Uint8Array.from(current.match(/.{1,2}/g) ?? [], (item) => Number.parseInt(item, 16))); } catch { return current; } }
+    if (transform === "html_encode") return current.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
+    if (transform === "html_decode") { const element = document.createElement("textarea"); element.innerHTML = current; return element.value; }
+    if (transform === "lowercase") return current.toLowerCase();
+    if (transform === "uppercase") return current.toUpperCase();
+    return current;
+  }, value);
+}
+
+function attackPayloads(attack: SecurityBrowserAttack, sequence: number): Record<string, string> | undefined {
+  const sets = attack.payloadSets.map(payloadValues);
+  if (!sets.length || sets.some((values) => !values.length)) return undefined;
+  const result: Record<string, string> = {};
+  if (attack.strategy === "battering_ram") {
+    const value = sets[0][sequence];
+    if (value === undefined) return undefined;
+    for (const position of attack.positions) result[position] = transformPayload(value, attack.transforms);
+    return result;
+  }
+  if (attack.strategy === "sniper") {
+    const values = sets[0];
+    const positionIndex = Math.floor(sequence / values.length);
+    const value = values[sequence % values.length];
+    if (!attack.positions[positionIndex] || value === undefined) return undefined;
+    for (const position of attack.positions) result[position] = "";
+    result[attack.positions[positionIndex]] = transformPayload(value, attack.transforms);
+    return result;
+  }
+  if (attack.strategy === "pitchfork") {
+    if (sequence >= Math.min(...sets.map((values) => values.length))) return undefined;
+    attack.positions.forEach((position, index) => { result[position] = transformPayload(sets[index][sequence], attack.transforms); });
+    return result;
+  }
+  let remainder = sequence;
+  for (let index = sets.length - 1; index >= 0; index -= 1) {
+    const values = sets[index];
+    const value = values[remainder % values.length];
+    remainder = Math.floor(remainder / values.length);
+    result[attack.positions[index]] = transformPayload(value, attack.transforms);
+  }
+  return remainder > 0 ? undefined : result;
+}
+
+function substitute(template: string, payloads: Record<string, string>): string {
+  return Object.entries(payloads).reduce(
+    (value, [position, payload]) => value.split(`§${position}§`).join(payload),
+    template,
+  );
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -76,6 +159,9 @@ export function BrowserAutomationWorker() {
   const appliedScopes = useRef(new Map<string, string>());
   const appliedProxyConfigs = useRef(new Map<string, string>());
   const observedLeaseStates = useRef(new Map<string, string>());
+  const researchPending = useRef(new Map<string, ResearchEntry>());
+  const researchNextAt = useRef(new Map<string, number>());
+  const resolvedIntercepts = useRef(new Set<string>());
   const apiRef = useRef(api);
   const engagementsRef = useRef(engagements);
 
@@ -220,21 +306,136 @@ export function BrowserAutomationWorker() {
       }
     };
 
+    const finishResearchAction = async (event: BrowserActionEvent) => {
+      const entry = researchPending.current.get(event.actionId);
+      const currentApi = apiRef.current;
+      if (!entry || !currentApi) return;
+      const result = event.result ?? {};
+      const actionError = event.state === "failed"
+        ? (event.detail ?? "The native browser request failed.").slice(0, 4_000)
+        : undefined;
+      try {
+        if (entry.kind === "repeater") {
+          let artifactId: string | undefined;
+          const responseText = typeof result.responseText === "string" ? result.responseText : "";
+          if (responseText && entry.session.captureMode === "bodies") {
+            const artifact = await currentApi.uploadSecurityBrowserBodyArtifact(entry.session.id, {
+              direction: "response",
+              contentBase64: utf8Base64(responseText),
+              mediaType: typeof result.contentType === "string" ? result.contentType : "text/plain",
+              filename: `repeater-${entry.tab.id}-${entry.tab.requestCount}.txt`,
+              truncated: result.responseTruncated === true,
+            });
+            artifactId = artifact.id;
+          }
+          await currentApi.recordSecurityBrowserRepeaterResult(entry.tab, {
+            statusCode: typeof result.status === "number" ? result.status : undefined,
+            responseHeaders: result.responseHeaders && typeof result.responseHeaders === "object"
+              ? Object.entries(result.responseHeaders).filter((pair): pair is [string, string] => typeof pair[1] === "string")
+              : [],
+            responseBytes: typeof result.responseBytes === "number" ? result.responseBytes : undefined,
+            durationMs: typeof result.durationMs === "number" ? result.durationMs : undefined,
+            responseBodyArtifactId: artifactId,
+            error: actionError,
+          });
+          return;
+        }
+        if (entry.kind === "attack") {
+          await currentApi.recordSecurityBrowserAttackResult(entry.attack, {
+            sequence: entry.sequence,
+            payloads: entry.payloads,
+            statusCode: typeof result.status === "number" ? result.status : undefined,
+            responseBytes: typeof result.responseBytes === "number" ? result.responseBytes : undefined,
+            durationMs: typeof result.durationMs === "number" ? result.durationMs : undefined,
+            error: actionError,
+          });
+          researchNextAt.current.set(
+            entry.attack.id,
+            Date.now() + Math.ceil(1_000 / entry.attack.requestsPerSecond),
+          );
+          return;
+        }
+        if (actionError) {
+          await currentApi.transitionSecurityBrowserCrawl(entry.crawl, "fail", "desktop-browser-worker", { error: actionError });
+          return;
+        }
+        await currentApi.recordSecurityBrowserSiteNode(entry.projectId, {
+          sessionId: entry.session.id,
+          url: entry.url,
+          discoverySource: "crawl",
+          statusCode: typeof result.status === "number" ? result.status : undefined,
+          contentType: typeof result.contentType === "string" ? result.contentType : undefined,
+        });
+        const visited = Array.from(new Set([...entry.crawl.visitedUrls, entry.url])).slice(-10_000);
+        const nextLinks = entry.depth < entry.crawl.maxDepth && Array.isArray(result.links)
+          ? result.links.filter((value): value is string => typeof value === "string")
+              .filter((url) => evaluateBrowserScope(url, entry.scope).state === "in_scope")
+              .filter((url) => !visited.includes(url) && !entry.crawl.frontier.some(([queued]) => queued === url))
+              .slice(0, Math.max(0, entry.crawl.maxRequests - visited.length))
+              .map((url): [string, number] => [url, entry.depth + 1])
+          : [];
+        const frontier = [...entry.crawl.frontier.slice(1), ...nextLinks].slice(0, 10_000);
+        const requestsCompleted = entry.crawl.requestsCompleted + 1;
+        const complete = !frontier.length || requestsCompleted >= entry.crawl.maxRequests;
+        await currentApi.transitionSecurityBrowserCrawl(
+          entry.crawl,
+          complete ? "complete" : "progress",
+          "desktop-browser-worker",
+          {
+            requestsCompleted,
+            nodesDiscovered: visited.length,
+            checkpoint: entry.crawl.checkpoint + 1,
+            frontier,
+            visitedUrls: visited,
+          },
+        );
+      } catch (caught) {
+        void logCaughtDiagnostic(
+          "interface.security_browser.research_receipt_failed",
+          "A native browser research receipt could not be saved; durable state will be reconciled.",
+          caught,
+          "browser-automation-worker",
+        );
+      } finally {
+        researchPending.current.delete(event.actionId);
+      }
+    };
+
     const registerListeners = async () => {
       const contextStop = await listen<BrowserContextEvent>("nebula-browser-context", ({ payload }) => {
         const entry = pending.current.get(payload.requestId);
         if (entry) void finishContextCommand(entry, payload);
       });
       const actionStop = await listen<BrowserActionEvent>("nebula-browser-action", ({ payload }) => {
-        if (!payload.actionId.startsWith("automation:")) return;
-        const entry = pending.current.get(payload.actionId.slice("automation:".length));
-        if (entry) finishNativeAction(entry, payload);
+        if (payload.actionId.startsWith("automation:")) {
+          const entry = pending.current.get(payload.actionId.slice("automation:".length));
+          if (entry) finishNativeAction(entry, payload);
+          return;
+        }
+        if (payload.actionId.startsWith("research-")) void finishResearchAction(payload);
+      });
+      const interceptStop = await listen<BrowserInterceptEvent>("nebula-browser-intercept", ({ payload }) => {
+        const currentApi = apiRef.current;
+        if (!currentApi) {
+          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch(() => undefined);
+          return;
+        }
+        void currentApi.createSecurityBrowserIntercept(payload.sessionId, payload).catch((caught) => {
+          void logCaughtDiagnostic(
+            "interface.security_browser.intercept_persist_failed",
+            "A paused native request could not be persisted and was failed closed.",
+            caught,
+            "browser-automation-worker",
+          );
+          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch(() => undefined);
+        });
       });
       if (disposed) {
         contextStop();
         actionStop();
+        interceptStop();
       } else {
-        stops.push(contextStop, actionStop);
+        stops.push(contextStop, actionStop, interceptStop);
       }
     };
     void registerListeners().catch((caught) => {
@@ -284,7 +485,7 @@ export function BrowserAutomationWorker() {
             enabled: session.upstreamProxyEnabled,
             url: session.upstreamProxyUrl,
             credentialRef: session.upstreamProxyCredentialRef,
-          }, session.captureMode === "bodies");
+          }, session.captureMode === "bodies", session.interceptionEnabled);
           appliedProxyConfigs.current.set(session.id, proxySignature);
         } catch {
           // diagnostic-expected: a missing native proxy handle is configured when its visible tab is created.
@@ -334,17 +535,140 @@ export function BrowserAutomationWorker() {
         if (!currentApi) return;
         for (const engagement of engagementsRef.current) {
           if (disposed) return;
-          const [status, workspace, scope] = await Promise.all([
+          const [status, workspace, scope, research] = await Promise.all([
             currentApi.getSecurityBrowserAutomation(engagement.id),
             currentApi.getSecurityBrowserWorkspace(engagement.id),
             currentApi.getEngagementScope(engagement.id).catch(() => {
               // diagnostic-expected: absent scope fails closed in syncNativeSession and is retried on the next poll.
               return undefined;
             }),
+            currentApi.getSecurityBrowserResearch(engagement.id),
           ]);
           const sessions = workspace.sessions;
           for (const session of sessions) {
             await syncNativeSession(engagement.id, session, scope, status);
+          }
+          const researchSessionBusy = (sessionId: string) => Array.from(researchPending.current.values())
+            .some((entry) => entry.session.id === sessionId);
+          for (const intercept of research.intercepts) {
+            if (intercept.state === "paused" || resolvedIntercepts.current.has(intercept.transactionId)) continue;
+            const session = sessions.find((item) => item.id === intercept.sessionId);
+            if (!session || session.deviceOwner !== deviceId) continue;
+            const decision = intercept.state === "forwarded" ? "forward" : "drop";
+            try {
+              await workbenchBrowser.decideProxyIntercept(engagement.id, session.id, intercept.transactionId, decision);
+              resolvedIntercepts.current.add(intercept.transactionId);
+            } catch (caught) {
+              if (!/no longer paused|expired/i.test(errorMessage(caught))) {
+                void logCaughtDiagnostic("interface.security_browser.intercept_delivery_failed", "A durable intercept decision could not reach the native proxy and will be retried.", caught, "browser-automation-worker");
+              } else {
+                resolvedIntercepts.current.add(intercept.transactionId);
+              }
+            }
+          }
+          for (const durableTab of research.repeaterTabs) {
+            if (researchSessionBusy(durableTab.sessionId)) continue;
+            const session = sessions.find((item) => item.id === durableTab.sessionId);
+            if (!session || session.deviceOwner !== deviceId) continue;
+            const nativeTab = session.tabs.find((item) => item.id === session.activeTabId) ?? session.tabs[0];
+            if (!nativeTab?.url) continue;
+            let tab = durableTab;
+            if (tab.state === "running") {
+              await currentApi.transitionSecurityBrowserRepeaterTab(
+                tab,
+                "fail",
+                "desktop-browser-worker",
+                "The desktop restarted before the request receipt was saved. Retry explicitly to avoid an ambiguous duplicate request.",
+              ).catch(() => undefined);
+              continue;
+            }
+            if (tab.state !== "queued") continue;
+            try {
+              tab = await currentApi.transitionSecurityBrowserRepeaterTab(tab, "start", "desktop-browser-worker");
+              const actionId = `research-repeater-${tab.id}-${tab.requestCount}`;
+              researchPending.current.set(actionId, { kind: "repeater", projectId: engagement.id, session, tab });
+              await workbenchBrowser.executeAction(nativeTab.id, engagement.id, {
+                actionId,
+                kind: "research_request",
+                locator: {},
+                arguments: {
+                  method: tab.method,
+                  url: tab.url,
+                  headers: Object.fromEntries(tab.headers),
+                  body: tab.bodyTemplate,
+                },
+                pageUrl: nativeTab.url,
+              });
+            } catch (caught) {
+              researchPending.current.forEach((entry, id) => { if (entry.kind === "repeater" && entry.tab.id === tab.id) researchPending.current.delete(id); });
+              await currentApi.transitionSecurityBrowserRepeaterTab(tab, "fail", "desktop-browser-worker", errorMessage(caught)).catch(() => undefined);
+            }
+          }
+          for (const durableAttack of research.attacks) {
+            if (researchSessionBusy(durableAttack.sessionId)) continue;
+            if ((researchNextAt.current.get(durableAttack.id) ?? 0) > Date.now()) continue;
+            const session = sessions.find((item) => item.id === durableAttack.sessionId);
+            if (!session || session.deviceOwner !== deviceId) continue;
+            const nativeTab = session.tabs.find((item) => item.id === session.activeTabId) ?? session.tabs[0];
+            if (!nativeTab?.url) continue;
+            let attack = durableAttack;
+            try {
+              if (attack.state === "queued") attack = await currentApi.transitionSecurityBrowserAttack(attack, "start", "desktop-browser-worker");
+              if (attack.state !== "running" || attack.requestCount >= attack.maxRequests) continue;
+              const replacements = attackPayloads(attack, attack.requestCount);
+              if (!replacements) {
+                await currentApi.transitionSecurityBrowserAttack(attack, "complete", "desktop-browser-worker");
+                continue;
+              }
+              const payloads = attack.positions.map((position) => replacements[position]);
+              const actionId = `research-attack-${attack.id}-${attack.requestCount}`;
+              researchPending.current.set(actionId, { kind: "attack", projectId: engagement.id, session, attack, sequence: attack.requestCount, payloads });
+              await workbenchBrowser.executeAction(nativeTab.id, engagement.id, {
+                actionId,
+                kind: "research_request",
+                locator: {},
+                arguments: {
+                  method: attack.method,
+                  url: substitute(attack.urlTemplate, replacements),
+                  headers: Object.fromEntries(attack.headersTemplate.map(([name, value]) => [name, substitute(value, replacements)])),
+                  body: substitute(attack.bodyTemplate, replacements),
+                },
+                pageUrl: nativeTab.url,
+              });
+            } catch (caught) {
+              researchPending.current.forEach((entry, id) => { if (entry.kind === "attack" && entry.attack.id === attack.id) researchPending.current.delete(id); });
+              await currentApi.transitionSecurityBrowserAttack(attack, "fail", "desktop-browser-worker", errorMessage(caught)).catch(() => undefined);
+              void logCaughtDiagnostic("interface.security_browser.attack_execution_failed", "A bounded Intruder request could not execute.", caught, "browser-automation-worker");
+            }
+          }
+          if (scope) for (const durableCrawl of research.crawlJobs) {
+            if (researchSessionBusy(durableCrawl.sessionId)) continue;
+            const session = sessions.find((item) => item.id === durableCrawl.sessionId);
+            if (!session || session.deviceOwner !== deviceId) continue;
+            const nativeTab = session.tabs.find((item) => item.id === session.activeTabId) ?? session.tabs[0];
+            if (!nativeTab?.url) continue;
+            let crawl = durableCrawl;
+            try {
+              if (crawl.state === "queued") crawl = await currentApi.transitionSecurityBrowserCrawl(crawl, "start", "desktop-browser-worker");
+              if (crawl.state !== "running") continue;
+              const [url, depth] = crawl.frontier[0] ?? [];
+              if (!url || crawl.requestsCompleted >= crawl.maxRequests) {
+                await currentApi.transitionSecurityBrowserCrawl(crawl, "complete", "desktop-browser-worker");
+                continue;
+              }
+              const actionId = `research-crawl-${crawl.id}-${crawl.checkpoint}`;
+              researchPending.current.set(actionId, { kind: "crawl", projectId: engagement.id, session, crawl, url, depth, scope });
+              await workbenchBrowser.executeAction(nativeTab.id, engagement.id, {
+                actionId,
+                kind: "research_request",
+                locator: {},
+                arguments: { method: "GET", url, headers: {}, body: "" },
+                pageUrl: nativeTab.url,
+              });
+            } catch (caught) {
+              researchPending.current.forEach((entry, id) => { if (entry.kind === "crawl" && entry.crawl.id === crawl.id) researchPending.current.delete(id); });
+              await currentApi.transitionSecurityBrowserCrawl(crawl, "fail", "desktop-browser-worker", { error: errorMessage(caught) }).catch(() => undefined);
+            }
           }
           for (const lease of status.leases) {
             const previous = observedLeaseStates.current.get(lease.id);

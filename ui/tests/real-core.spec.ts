@@ -495,7 +495,8 @@ test("production LAN mission ledger survives failure, retry, and relaunch throug
 
 test("real Core Browser shows durable scope and an honest device-browser handoff", async ({ page }) => {
   test.setTimeout(60_000);
-  const core = await startRealCore();
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -536,6 +537,22 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByText(/In scope · Matches Project scope revision 2/)).toBeVisible();
     await expect(page.getByText("The isolated embedded webview is a desktop-app capability.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Research workbench" }).click();
+    await page.getByRole("button", { name: "Repeater", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
+    await page.getByLabel("Name").fill("Durable account request");
+    await page.getByLabel("URL", { exact: true }).fill("https://example.com/account");
+    await page.getByRole("button", { name: "Save Repeater request" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Repeater request saved" })).toBeVisible();
+    await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send once" })).toBeDisabled();
+    await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Research workbench" }).click();
+    await page.getByRole("button", { name: "Repeater", exact: true }).click();
+    await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
   } finally {
     await api.dispose();
     await stopRealCore(core);

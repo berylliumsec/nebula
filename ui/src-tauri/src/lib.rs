@@ -184,6 +184,7 @@ fn build_app() -> tauri::App<Wry> {
             browser::browser_revoke_proxy_ca,
             browser::browser_stop_session_proxy,
             browser::browser_configure_session_proxy,
+            browser::browser_decide_session_intercept,
             browser::browser_apply_proxy_rule,
             browser::browser_apply_proxy_scope,
             browser::browser_clear_proxy_scope,

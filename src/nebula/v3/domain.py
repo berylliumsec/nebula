@@ -1291,6 +1291,8 @@ class BrowserCrawlJob(Entity):
     requests_completed: int = Field(default=0, ge=0)
     nodes_discovered: int = Field(default=0, ge=0)
     checkpoint: int = Field(default=0, ge=0)
+    frontier: list[tuple[str, int]] = Field(default_factory=list, max_length=10_000)
+    visited_urls: list[str] = Field(default_factory=list, max_length=10_000)
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = Field(default=None, max_length=4_000)
@@ -1362,11 +1364,39 @@ class BrowserRepeaterTab(Entity):
     method: str = Field(default="GET", pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     url: str = Field(min_length=1, max_length=16_384)
     headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    body_template: str = Field(default="", max_length=65_536)
     body_artifact_id: str | None = Field(default=None, max_length=200)
     source_exchange_id: str | None = Field(default=None, max_length=200)
     history_exchange_ids: list[str] = Field(default_factory=list, max_length=500)
     evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    state: Literal["draft", "queued", "running", "ready", "cancelled", "failed"] = (
+        "draft"
+    )
+    request_count: int = Field(default=0, ge=0)
+    error: str | None = Field(default=None, max_length=4_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserRepeaterResult(Entity):
+    entity_kind: ClassVar[str] = "browser_repeater_results"
+    engagement_id: str
+    tab_id: str = Field(min_length=1, max_length=200)
+    sequence: int = Field(ge=0)
+    exchange_id: str | None = Field(default=None, max_length=200)
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    response_headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    response_bytes: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    response_body_artifact_id: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=4_000)
+    created_at: datetime = Field(default_factory=utc_now)
+
+    @field_validator("created_at")
+    @classmethod
+    def repeater_result_time_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("repeater result timestamps must include a timezone")
+        return value.astimezone(timezone.utc)
 
 
 class BrowserAttack(Entity):
@@ -3148,6 +3178,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     BrowserSiteEdge,
     BrowserInterceptItem,
     BrowserRepeaterTab,
+    BrowserRepeaterResult,
     BrowserAttack,
     BrowserAttackResult,
     BrowserTokenAnalysis,

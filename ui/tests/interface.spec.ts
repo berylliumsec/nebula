@@ -255,6 +255,49 @@ async function installTruthfulCore(page: Page) {
         actions: [],
         handoffs: [],
       };
+    } else if (path.endsWith("/engagements/scratch-project/browser-research")) {
+      body = {
+        site_nodes: [],
+        crawl_jobs: [],
+        intercepts: [],
+        repeater_tabs: [{
+          ...entity,
+          id: "repeater-preview",
+          engagement_id: "scratch-project",
+          session_id: "browser-session-preview",
+          identity_id: "browser-identity-preview",
+          name: "Profile lookup",
+          group: "Ungrouped",
+          notes: "",
+          protocol: "http",
+          method: "GET",
+          url: "https://example.com/profile",
+          headers: [["Accept", "application/json"]],
+          body_template: "",
+          history_exchange_ids: ["repeater-result-preview"],
+          evidence_ids: [],
+          state: "ready",
+          request_count: 1,
+          error: null,
+        }],
+        repeater_results: [{
+          ...entity,
+          id: "repeater-result-preview",
+          engagement_id: "scratch-project",
+          tab_id: "repeater-preview",
+          sequence: 0,
+          exchange_id: null,
+          status_code: 200,
+          response_headers: [["content-type", "application/json"]],
+          response_bytes: 128,
+          duration_ms: 18,
+          response_body_artifact_id: null,
+          error: null,
+        }],
+        attacks: [],
+        attack_results: [],
+        token_analyses: [],
+      };
     } else if (path.endsWith("/browser-sessions/browser-session-preview/tabs") && request.method() === "PUT") {
       const update = request.postDataJSON() as { tabs: unknown[]; active_tab_id: string | null; device_owner: string };
       body = { ...entity, revision: 2, id: "browser-session-preview", engagement_id: "scratch-project", name: "Research session", identity_id: "browser-identity-preview", status: "active", capture_mode: "headers", proxy_enabled: false, tabs: update.tabs, active_tab_id: update.active_tab_id, upstream_proxy_enabled: false, upstream_proxy_url: null, interception_enabled: false, device_owner: update.device_owner, last_seen_at: entity.updated_at, metadata: {} };
@@ -3926,6 +3969,29 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add to Sources" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
+});
+
+test("browser research tools expose durable workflows on paired clients", async ({ page }) => {
+  await openWorkspace(page, "/?view=browser&browserTool=repeater", "Workbench");
+  await page.getByRole("button", { name: "Research workbench" }).click();
+  await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
+  await expect(page.getByText("Profile lookup", { exact: true })).toBeVisible();
+  await page.getByText("Profile lookup", { exact: true }).click();
+  await expect(page.getByLabel("Headers JSON")).toHaveValue('{\n  "Accept": "application/json"\n}');
+  await expect(page.getByRole("button", { name: "Send once" })).toBeDisabled();
+  await expect(page.getByText(/paired desktop performs sends/i)).toBeVisible();
+  await page.getByText("Result history (1)").click();
+  await expect(page.getByText("128 bytes", { exact: false })).toBeVisible();
+
+  await page.getByRole("button", { name: "Intruder", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Intruder" })).toBeVisible();
+  await expect(page.getByLabel("Position names")).toBeVisible();
+  await expect(page.locator("label", { hasText: "Payload sets" }).locator("small")).toContainText("separate sets with a line containing only");
+
+  const suite = page.locator(".browser-suite");
+  expect(await suite.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const axe = await new AxeBuilder({ page }).include(".browser-suite").analyze();
+  expect(axe.violations).toEqual([]);
 });
 
 test("Assistant session details are optional and persist as a shell preference", async ({ page }) => {

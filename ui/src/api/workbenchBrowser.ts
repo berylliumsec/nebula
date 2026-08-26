@@ -104,6 +104,19 @@ export interface BrowserTrafficEvent {
   requestId?: number;
   blocked?: boolean;
 }
+
+export interface BrowserInterceptEvent {
+  projectId: string;
+  sessionId: string;
+  tabId: string;
+  transactionId: string;
+  phase: "request" | "response";
+  method: string;
+  url: string;
+  headers: Array<[string, string]>;
+  statusCode?: number;
+  timeoutSeconds: number;
+}
 export interface BrowserWebSocketFrameEvent {
   sessionId: string;
   tabId: string;
@@ -322,7 +335,7 @@ export function formatBrowserContextForAssistant(context: BrowserPageContext, sc
 
 export const workbenchBrowser = {
   capabilities: () => invoke<BrowserCapabilities>("browser_capabilities"),
-  create: (tabId: string, projectId: string, identityPartition: string, sessionId: string, proxyEnabled: boolean, url: string, bounds: BrowserBounds, upstreamProxy?: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies = false) => invoke<void>("browser_create_tab", { tabId, projectId, identityPartition, sessionId, proxyEnabled, url, bounds, upstreamProxyEnabled: upstreamProxy?.enabled ?? false, upstreamProxyUrl: upstreamProxy?.url, upstreamProxyCredentialRef: upstreamProxy?.credentialRef, captureBodies }),
+  create: (tabId: string, projectId: string, identityPartition: string, sessionId: string, proxyEnabled: boolean, url: string, bounds: BrowserBounds, upstreamProxy?: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies = false, interceptionEnabled = false) => invoke<void>("browser_create_tab", { tabId, projectId, identityPartition, sessionId, proxyEnabled, url, bounds, upstreamProxyEnabled: upstreamProxy?.enabled ?? false, upstreamProxyUrl: upstreamProxy?.url, upstreamProxyCredentialRef: upstreamProxy?.credentialRef, captureBodies, interceptionEnabled }),
   navigate: (tabId: string, projectId: string, url: string) => invoke<void>("browser_navigate", { tabId, projectId, url }),
   control: (tabId: string, projectId: string, action: "back" | "forward" | "stop" | "reload") => invoke<void>("browser_control", { tabId, projectId, action }),
   bounds: (tabId: string, projectId: string, bounds: BrowserBounds) => invoke<void>("browser_set_bounds", { tabId, projectId, bounds }),
@@ -334,7 +347,8 @@ export const workbenchBrowser = {
   rotateProxyCa: (projectId: string) => invoke<BrowserCaStatus>("browser_rotate_proxy_ca", { projectId }),
   revokeProxyCa: (projectId: string) => invoke<void>("browser_revoke_proxy_ca", { projectId }),
   stopProxy: (projectId: string, sessionId: string) => invoke<void>("browser_stop_session_proxy", { projectId, sessionId }),
-  configureProxy: (projectId: string, sessionId: string, upstreamProxy: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies: boolean) => invoke<void>("browser_configure_session_proxy", { projectId, sessionId, upstreamProxyEnabled: upstreamProxy.enabled, upstreamProxyUrl: upstreamProxy.url, upstreamProxyCredentialRef: upstreamProxy.credentialRef, captureBodies }),
+  configureProxy: (projectId: string, sessionId: string, upstreamProxy: { enabled: boolean; url?: string; credentialRef?: string }, captureBodies: boolean, interceptionEnabled = false) => invoke<void>("browser_configure_session_proxy", { projectId, sessionId, upstreamProxyEnabled: upstreamProxy.enabled, upstreamProxyUrl: upstreamProxy.url, upstreamProxyCredentialRef: upstreamProxy.credentialRef, captureBodies, interceptionEnabled }),
+  decideProxyIntercept: (projectId: string, sessionId: string, transactionId: string, decision: "forward" | "drop") => invoke<void>("browser_decide_session_intercept", { projectId, sessionId, transactionId, decision }),
   clearIdentity: (projectId: string, identityPartition: string) => invoke<void>("browser_clear_identity_data", { projectId, identityPartition }),
   clear: (projectId: string) => invoke<void>("browser_clear_project_data", { projectId }),
   importDownload: (downloadId: string, projectId: string, overwrite: boolean) => invoke<BrowserImportResult>("browser_import_download", { downloadId, projectId, overwrite }),

@@ -29,10 +29,12 @@ from .browser_security import (
     redact_browser_headers,
 )
 from .domain import (
+    Artifact,
     BrowserAttack,
     BrowserAttackResult,
     BrowserCrawlJob,
     BrowserInterceptItem,
+    BrowserRepeaterResult,
     BrowserRepeaterTab,
     BrowserSession,
     BrowserSiteEdge,
@@ -78,6 +80,7 @@ class BrowserResearchWorkspace(NebulaModel):
     crawl_jobs: list[BrowserCrawlJob]
     intercepts: list[BrowserInterceptItem]
     repeater_tabs: list[BrowserRepeaterTab]
+    repeater_results: list[BrowserRepeaterResult]
     attacks: list[BrowserAttack]
     attack_results: list[BrowserAttackResult]
     token_analyses: list[BrowserTokenAnalysis]
@@ -120,11 +123,13 @@ class CrawlCreateRequest(NebulaModel):
 
 class CrawlStateRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
-    action: Literal["queue", "start", "pause", "resume", "complete", "cancel", "fail"]
+    action: Literal["queue", "start", "progress", "pause", "resume", "retry", "complete", "cancel", "fail"]
     actor_id: str = Field(min_length=1, max_length=200)
     requests_completed: int | None = Field(default=None, ge=0)
     nodes_discovered: int | None = Field(default=None, ge=0)
     checkpoint: int | None = Field(default=None, ge=0)
+    frontier: list[tuple[str, int]] | None = Field(default=None, max_length=10_000)
+    visited_urls: list[str] | None = Field(default=None, max_length=10_000)
     error: str | None = Field(default=None, max_length=4_000)
 
 
@@ -160,6 +165,7 @@ class RepeaterTabCreateRequest(NebulaModel):
     method: str = Field(default="GET", pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     url: str = Field(min_length=1, max_length=16_384)
     headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    body_template: str = Field(default="", max_length=65_536)
     body_artifact_id: str | None = Field(default=None, max_length=200)
     source_exchange_id: str | None = Field(default=None, max_length=200)
 
@@ -172,12 +178,26 @@ class RepeaterTabUpdateRequest(NebulaModel):
     method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
     url: str = Field(min_length=1, max_length=16_384)
     headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    body_template: str = Field(default="", max_length=65_536)
     body_artifact_id: str | None = Field(default=None, max_length=200)
+
+
+class RepeaterStateRequest(NebulaModel):
+    expected_revision: int = Field(ge=1)
+    action: Literal["queue", "start", "cancel", "complete", "fail", "retry"]
+    actor_id: str = Field(min_length=1, max_length=200)
+    error: str | None = Field(default=None, max_length=4_000)
 
 
 class RepeaterResultRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
-    exchange_id: str = Field(min_length=1, max_length=200)
+    exchange_id: str | None = Field(default=None, max_length=200)
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    response_headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    response_bytes: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    response_body_artifact_id: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=4_000)
     actor_id: str = Field(min_length=1, max_length=200)
 
 
@@ -229,12 +249,31 @@ class AttackCreateRequest(NebulaModel):
                 raise ValueError("payload sets must be curated or inert lists")
         if total > 50_000:
             raise ValueError("combined payload sets exceed the 50000-value limit")
+        if len(set(self.positions)) != len(self.positions) or any(
+            not position.strip() for position in self.positions
+        ):
+            raise ValueError("Intruder positions must be unique non-empty names")
+        templates = "\n".join(
+            [self.url_template, self.body_template, *(value for _, value in self.headers_template)]
+        )
+        missing = [
+            position for position in self.positions if f"§{position}§" not in templates
+        ]
+        if missing:
+            raise ValueError(
+                f"Intruder templates are missing position markers: {sorted(missing)}"
+            )
+        expected_sets = 1 if self.strategy in {"sniper", "battering_ram"} else len(self.positions)
+        if len(self.payload_sets) != expected_sets:
+            raise ValueError(
+                f"{self.strategy} requires {expected_sets} payload set(s) for {len(self.positions)} position(s)"
+            )
         return self
 
 
 class AttackStateRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
-    action: Literal["queue", "start", "pause", "resume", "cancel", "complete", "fail"]
+    action: Literal["queue", "start", "pause", "resume", "retry", "cancel", "complete", "fail"]
     actor_id: str = Field(min_length=1, max_length=200)
     error: str | None = Field(default=None, max_length=4_000)
 
@@ -328,6 +367,9 @@ class BrowserResearchService:
             repeater_tabs=self.store.list_entities(
                 BrowserRepeaterTab, engagement_id=engagement_id, limit=1_000
             ),
+            repeater_results=self.store.list_entities(
+                BrowserRepeaterResult, engagement_id=engagement_id, limit=1_000
+            ),
             attacks=self.store.list_entities(
                 BrowserAttack, engagement_id=engagement_id, limit=1_000
             ),
@@ -354,7 +396,9 @@ class BrowserResearchService:
         )
         return self._create(
             BrowserCrawlJob(
-                engagement_id=session.engagement_id, **request.model_dump()
+                engagement_id=session.engagement_id,
+                frontier=[(request.start_url, 0)],
+                **request.model_dump(),
             ),
             "browser_crawl.created",
             actor_id,
@@ -368,12 +412,15 @@ class BrowserResearchService:
             "draft": {"queue": "queued", "cancel": "cancelled"},
             "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
             "running": {
+                "progress": "running",
                 "pause": "paused",
                 "complete": "complete",
                 "cancel": "cancelled",
                 "fail": "failed",
             },
             "paused": {"resume": "running", "cancel": "cancelled", "fail": "failed"},
+            "failed": {"retry": "queued", "cancel": "cancelled"},
+            "cancelled": {"retry": "queued"},
         }
         next_state = transitions.get(crawl.state, {}).get(request.action)
         if next_state is None:
@@ -381,7 +428,13 @@ class BrowserResearchService:
                 f"cannot {request.action} a crawl in {crawl.state} state"
             )
         changes: dict[str, Any] = {"state": next_state, "error": request.error}
-        for field in ("requests_completed", "nodes_discovered", "checkpoint"):
+        for field in (
+            "requests_completed",
+            "nodes_discovered",
+            "checkpoint",
+            "frontier",
+            "visited_urls",
+        ):
             value = getattr(request, field)
             if value is not None:
                 changes[field] = value
@@ -407,6 +460,12 @@ class BrowserResearchService:
             actor_id=request.actor_id,
         )
         return updated
+
+    def delete_crawl(self, crawl_id: str, expected_revision: int) -> None:
+        crawl = self.store.get(BrowserCrawlJob, crawl_id)
+        if crawl.state in {"queued", "running", "paused"}:
+            raise BrowserWorkflowError("cancel the crawl before deleting it")
+        self.store.delete(BrowserCrawlJob, crawl.id, expected_revision=expected_revision)
 
     def record_site_node(
         self, request: SiteNodeRecordRequest, actor_id: str
@@ -690,6 +749,8 @@ class BrowserResearchService:
         self, tab_id: str, request: RepeaterTabUpdateRequest, actor_id: str
     ) -> BrowserRepeaterTab:
         tab = self.store.get(BrowserRepeaterTab, tab_id)
+        if tab.state in {"queued", "running"}:
+            raise BrowserWorkflowError("a queued or running Repeater tab cannot be edited")
         self.security._require_in_scope(
             self.security._scope(tab.engagement_id),
             request.url,
@@ -713,31 +774,103 @@ class BrowserResearchService:
         )
         return updated
 
-    def record_repeater_result(
-        self, tab_id: str, request: RepeaterResultRequest
+    def transition_repeater_tab(
+        self, tab_id: str, request: RepeaterStateRequest
     ) -> BrowserRepeaterTab:
         tab = self.store.get(BrowserRepeaterTab, tab_id)
-        exchange = self._owned(
-            BrowserTrafficExchange, request.exchange_id, tab.engagement_id
-        )
-        if exchange.session_id != tab.session_id:
+        transitions = {
+            "draft": {"queue": "queued", "cancel": "cancelled"},
+            "ready": {"queue": "queued", "cancel": "cancelled"},
+            "failed": {"retry": "queued", "cancel": "cancelled"},
+            "cancelled": {"retry": "queued"},
+            "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
+            "running": {"complete": "ready", "fail": "failed", "cancel": "cancelled"},
+        }
+        next_state = transitions.get(tab.state, {}).get(request.action)
+        if next_state is None:
             raise BrowserWorkflowError(
-                "Repeater result belongs to another browser session"
+                f"cannot {request.action} a Repeater tab in {tab.state} state"
             )
-        history = list(dict.fromkeys([*tab.history_exchange_ids, exchange.id]))[-500:]
         updated, _ = self.store.update_with_operation_event(
             BrowserRepeaterTab,
             tab.id,
-            {"history_exchange_ids": history},
+            {"state": next_state, "error": request.error},
+            expected_revision=request.expected_revision,
+            operation_id=tab.id,
+            operation_kind="browser_repeater_tab",
+            engagement_id=tab.engagement_id,
+            event_type=f"browser_repeater_tab.{next_state}",
+            event_payload={},
+            actor_id=request.actor_id,
+        )
+        return updated
+
+    def record_repeater_result(
+        self, tab_id: str, request: RepeaterResultRequest
+    ) -> BrowserRepeaterResult:
+        tab = self.store.get(BrowserRepeaterTab, tab_id)
+        if tab.state != "running":
+            raise BrowserWorkflowError("Repeater results require a running tab")
+        if request.exchange_id:
+            exchange = self._owned(
+                BrowserTrafficExchange, request.exchange_id, tab.engagement_id
+            )
+            if exchange.session_id != tab.session_id:
+                raise BrowserWorkflowError(
+                    "Repeater result belongs to another browser session"
+                )
+        if request.response_body_artifact_id:
+            artifact = self._owned(
+                Artifact, request.response_body_artifact_id, tab.engagement_id
+            )
+            if artifact.metadata.get("browser_session_id") != tab.session_id:
+                raise BrowserWorkflowError(
+                    "Repeater response body belongs to another browser session"
+                )
+        result = BrowserRepeaterResult(
+            engagement_id=tab.engagement_id,
+            tab_id=tab.id,
+            sequence=tab.request_count,
+            exchange_id=request.exchange_id,
+            status_code=request.status_code,
+            response_headers=self._redact_pairs(request.response_headers),
+            response_bytes=request.response_bytes,
+            duration_ms=request.duration_ms,
+            response_body_artifact_id=request.response_body_artifact_id,
+            error=request.error,
+        )
+        created = self._create(result, "browser_repeater_result.created", request.actor_id)
+        history = list(dict.fromkeys([*tab.history_exchange_ids, created.id]))[-500:]
+        updated, _ = self.store.update_with_operation_event(
+            BrowserRepeaterTab,
+            tab.id,
+            {
+                "history_exchange_ids": history,
+                "request_count": tab.request_count + 1,
+                "state": "failed" if request.error else "ready",
+                "error": request.error,
+            },
             expected_revision=request.expected_revision,
             operation_id=tab.id,
             operation_kind="browser_repeater_tab",
             engagement_id=tab.engagement_id,
             event_type="browser_repeater_tab.result_recorded",
-            event_payload={"exchange_id": exchange.id},
+            event_payload={"result_id": created.id, "exchange_id": request.exchange_id},
             actor_id=request.actor_id,
         )
-        return updated
+        del updated
+        return created
+
+    def delete_repeater_tab(self, tab_id: str, expected_revision: int) -> None:
+        tab = self.store.get(BrowserRepeaterTab, tab_id)
+        if tab.state in {"queued", "running"}:
+            raise BrowserWorkflowError("cancel the Repeater request before deleting it")
+        for result in self.store.list_entities(
+            BrowserRepeaterResult, engagement_id=tab.engagement_id, limit=1_000
+        ):
+            if result.tab_id == tab.id:
+                self.store.delete(BrowserRepeaterResult, result.id)
+        self.store.delete(BrowserRepeaterTab, tab.id, expected_revision=expected_revision)
 
     def create_attack(
         self, request: AttackCreateRequest, actor_id: str
@@ -776,6 +909,8 @@ class BrowserResearchService:
                 "fail": "failed",
             },
             "paused": {"resume": "running", "cancel": "cancelled", "fail": "failed"},
+            "failed": {"retry": "queued", "cancel": "cancelled"},
+            "cancelled": {"retry": "queued"},
         }
         next_state = transitions.get(attack.state, {}).get(request.action)
         if next_state is None:
@@ -824,9 +959,13 @@ class BrowserResearchService:
         if existing is not None:
             return existing
         if request.exchange_id:
-            self._owned(
+            exchange = self._owned(
                 BrowserTrafficExchange, request.exchange_id, attack.engagement_id
             )
+            if exchange.session_id != attack.session_id:
+                raise BrowserWorkflowError(
+                    "Intruder result belongs to another browser session"
+                )
         result = BrowserAttackResult(
             engagement_id=attack.engagement_id,
             attack_id=attack.id,
@@ -834,22 +973,37 @@ class BrowserResearchService:
         )
         created = self._create(result, "browser_attack_result.created", actor_id)
         latest = self.store.get(BrowserAttack, attack.id)
+        next_count = latest.request_count + 1
+        complete = next_count >= latest.max_requests
         self.store.update_with_operation_event(
             BrowserAttack,
             latest.id,
             {
-                "request_count": latest.request_count + 1,
+                "request_count": next_count,
                 "error_count": latest.error_count + (1 if request.error else 0),
+                "state": "complete" if complete else latest.state,
+                "completed_at": utc_now() if complete else latest.completed_at,
             },
             expected_revision=latest.revision,
             operation_id=latest.id,
             operation_kind="browser_attack",
             engagement_id=latest.engagement_id,
             event_type="browser_attack.progress",
-            event_payload={"request_count": latest.request_count + 1},
+            event_payload={"request_count": next_count, "complete": complete},
             actor_id=actor_id,
         )
         return created
+
+    def delete_attack(self, attack_id: str, expected_revision: int) -> None:
+        attack = self.store.get(BrowserAttack, attack_id)
+        if attack.state in {"queued", "running", "paused"}:
+            raise BrowserWorkflowError("cancel the Intruder attack before deleting it")
+        for result in self.store.list_entities(
+            BrowserAttackResult, engagement_id=attack.engagement_id, limit=1_000
+        ):
+            if result.attack_id == attack.id:
+                self.store.delete(BrowserAttackResult, result.id)
+        self.store.delete(BrowserAttack, attack.id, expected_revision=expected_revision)
 
     def decode(self, request: DecoderRequest) -> dict[str, Any]:
         value = request.value
@@ -1270,6 +1424,7 @@ __all__ = [
     "InterceptCreateRequest",
     "InterceptDecisionRequest",
     "RepeaterResultRequest",
+    "RepeaterStateRequest",
     "RepeaterTabCreateRequest",
     "RepeaterTabUpdateRequest",
     "SiteEdgeRecordRequest",
