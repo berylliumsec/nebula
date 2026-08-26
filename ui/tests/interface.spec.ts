@@ -1949,6 +1949,136 @@ test("New chat detaches from an in-flight saved conversation load", async ({ pag
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
 });
 
+test("conversation switching commits URL identity before loading and defers saved work details", async ({ page }) => {
+  const sourceSessionId = "chat-switch-source";
+  const targetSessionId = "chat-switch-target";
+  let sourceMessageLoads = 0;
+  let targetActivityLoads = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
+        {
+          ...entity,
+          id: targetSessionId,
+          engagement_id: "scratch-project",
+          title: "Target conversation",
+          backend: "harness",
+          harness_profile_id: "harness-ready",
+          harness_session_id: "harness-session-target",
+          model: "gpt-5-codex",
+          metadata: {},
+        },
+        {
+          ...entity,
+          id: sourceSessionId,
+          engagement_id: "scratch-project",
+          title: "Source conversation",
+          backend: "harness",
+          harness_profile_id: "harness-ready",
+          harness_session_id: "harness-session-source",
+          model: "gpt-5-codex",
+          metadata: {},
+        },
+      ]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sourceSessionId}/messages`)) {
+      sourceMessageLoads += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "assistant-switch-source",
+        engagement_id: "scratch-project",
+        session_id: sourceSessionId,
+        sequence: 1,
+        role: "assistant",
+        content: "Source transcript",
+        citations: [],
+        metadata: { harness_turn_id: "turn-switch-source" },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${targetSessionId}/messages`)) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "assistant-switch-target",
+        engagement_id: "scratch-project",
+        session_id: targetSessionId,
+        sequence: 1,
+        role: "assistant",
+        content: "Target transcript",
+        citations: [],
+        metadata: { harness_turn_id: "turn-switch-target" },
+      }]) });
+      return;
+    }
+    if (path.endsWith("/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    if (path.includes("/harness-sessions/") && path.endsWith("/activity")) {
+      const target = path.includes("harness-session-target");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: target ? "harness-session-target" : "harness-session-source",
+        session_status: "idle",
+        busy: false,
+        live: true,
+        turn_id: null,
+        turn_status: null,
+        turn_origin: null,
+        started_at: null,
+        last_activity_at: entity.updated_at,
+        detail: "This harness session is idle.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/harness-turns/turn-switch-target/events")) {
+      targetActivityLoads += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        events: [{
+          id: "event-switch-target",
+          schema_version: "nebula.harness-activity/v1",
+          sequence: 1,
+          type: "item_upsert",
+          vendor: "codex_app_server",
+          harness_session_id: "harness-session-target",
+          harness_turn_id: "turn-switch-target",
+          item_id: "command-switch-target",
+          item_kind: "command",
+          item_status: "completed",
+          title: "Deferred command",
+          artifact_ids: [],
+          payload: {},
+        }],
+        next_sequence: 1,
+      }) });
+      return;
+    }
+    if (path.endsWith("/harness-turns/turn-switch-target/interactions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sourceSessionId}`, "Workbench");
+  await expect(page.getByText("Source transcript")).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
+  else await page.getByRole("button", { name: "Show conversations" }).click();
+  await page.locator(".session-select").filter({ hasText: "Target conversation" }).click();
+
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetSessionId);
+  await expect(page.locator(".session-list-item.active")).toContainText("Target conversation");
+  await expect(page.getByText("Target transcript")).toBeVisible();
+  expect(sourceMessageLoads).toBe(1);
+  expect(targetActivityLoads).toBe(0);
+
+  await page.locator(".chat-message.assistant").filter({ hasText: "Target transcript" }).getByRole("button", { name: "Show activity" }).click();
+  await expect(page.getByText("Deferred command")).toBeVisible();
+  expect(targetActivityLoads).toBe(1);
+});
+
 test("harness model controls expose only the selected runtime's advertised options", async ({ page }, testInfo) => {
   const harnesses = [{
     ...entity,
@@ -2260,10 +2390,26 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
       await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
       return;
     }
+    if (path.endsWith("/harness-sessions/session-verbose/activity")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: "session-verbose",
+        session_status: "idle",
+        busy: false,
+        live: true,
+        turn_id: null,
+        turn_status: null,
+        turn_origin: null,
+        started_at: null,
+        last_activity_at: entity.updated_at,
+        detail: "This harness session is idle.",
+      }) });
+      return;
+    }
     await route.fallback();
   });
 
   await openWorkspace(page, "/?view=chat&session=chat-verbose-activity", "Workbench");
+  await page.getByRole("button", { name: "Show activity" }).click();
   const notice = page.locator(".chat-panel .diagnostic-error-notice.compact");
   await expect(notice).toBeVisible();
   await expect(notice.locator("strong")).toHaveText("The supplied summary exceeded its validated length limit.");
@@ -2290,6 +2436,7 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
 test("activity ledger groups repeated work into a compact operator receipt", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact", "narrow"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by permanent desktop and mobile browser projects.");
   const turnId = "turn-activity-ledger";
+  let activityLoads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
@@ -2321,6 +2468,7 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
       return;
     }
     if (path.endsWith(`/harness-turns/${turnId}/events`)) {
+      activityLoads += 1;
       const events = Array.from({ length: 36 }, (_, index) => ({
         id: `activity-${index + 1}`,
         type: "item_upsert",
@@ -2369,8 +2517,8 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
 
   await openWorkspace(page, "/?view=chat&session=chat-activity-ledger", "Workbench");
   const ledger = page.getByRole("region", { name: "Work summary" });
-  await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
-  await expect(ledger).not.toContainText("item upsert");
+  await expect(ledger.getByText(/0 actions/).first()).toBeVisible();
+  expect(activityLoads).toBe(0);
   const showActivity = ledger.getByRole("button", { name: "Show activity" });
   if (testInfo.project.name.startsWith("mobile-") || testInfo.project.name === "narrow") {
     const bounds = await showActivity.boundingBox();
@@ -2389,7 +2537,10 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
   await showActivity.click();
+  await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
+  await expect(ledger).not.toContainText("item upsert");
   await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
+  expect(activityLoads).toBe(1);
 });
 
 test("native assistant tools use the shared activity ledger", async ({ page }, testInfo) => {

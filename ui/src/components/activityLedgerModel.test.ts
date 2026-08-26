@@ -72,6 +72,37 @@ describe("activity ledger presentation model", () => {
     expect(model.actionCount).toBe(1);
   });
 
+  it("advances Now to newer completed work instead of pinning stale streaming context", () => {
+    const model = activityLedgerFromHarness("Work summary", "streaming", [
+      harnessItem({
+        key: "goal",
+        kind: "goal",
+        title: "AirPlay research",
+        summary: "Revisit the active goal.",
+        sequence: 1,
+        goal: {
+          objective: "Revisit AirPlay research.",
+          currentStep: "Revisit the active goal.",
+          status: "running",
+          childAgents: 0,
+        },
+      }),
+      harnessItem({ key: "narrative", kind: "reasoning", title: "Revisit the active goal", status: "streaming", sequence: 2 }),
+      harnessItem({ key: "tool", kind: "tool", title: "Refresh AirPlay sources", status: "completed", sequence: 3 }),
+    ]);
+
+    expect(model.currentAction).toBe("Refresh AirPlay sources");
+  });
+
+  it("keeps unresolved operator attention ahead of newer routine activity", () => {
+    const model = activityLedgerFromHarness("Work summary", "streaming", [
+      harnessItem({ key: "approval", kind: "tool", title: "Approve network access", status: "waiting_approval", sequence: 1 }),
+      harnessItem({ key: "tool", kind: "tool", title: "Refresh local index", status: "completed", sequence: 2 }),
+    ]);
+
+    expect(model.currentAction).toBe("Approve network access");
+  });
+
   it("deduplicates replayed mission harness lifecycle updates", () => {
     const events: RunEvent[] = [
       {
