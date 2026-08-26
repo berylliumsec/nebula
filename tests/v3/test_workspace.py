@@ -429,6 +429,41 @@ def test_host_workspace_folder_browser_lists_only_directories(tmp_path):
     assert unavailable.json()["detail"] == "folder is unavailable"
 
 
+def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+
+    created = client.post(
+        "/api/v1/workspace-folders",
+        headers=AUTH,
+        json={"parent_path": str(tmp_path), "name": "new-project"},
+    )
+
+    assert created.status_code == 201
+    listing = created.json()
+    expected = (tmp_path / "new-project").resolve()
+    assert expected.is_dir()
+    assert listing["path"] == str(expected)
+    assert listing["parent"] == str(tmp_path.resolve())
+
+    duplicate = client.post(
+        "/api/v1/workspace-folders",
+        headers=AUTH,
+        json={"parent_path": str(tmp_path), "name": "new-project"},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "folder already exists"
+
+    for invalid_name in ("../outside", "nested/child", r"nested\child"):
+        rejected = client.post(
+            "/api/v1/workspace-folders",
+            headers=AUTH,
+            json={"parent_path": str(tmp_path), "name": invalid_name},
+        )
+        assert rejected.status_code == 422
+    assert not (tmp_path.parent / "outside").exists()
+    assert not (tmp_path / "nested").exists()
+
+
 def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     store, artifacts, platform, workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)

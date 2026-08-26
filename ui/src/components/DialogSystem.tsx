@@ -7,6 +7,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -39,10 +40,16 @@ interface ModalSurfaceProps extends PropsWithChildren {
   noValidate?: boolean;
 }
 
+type RegisterDialog = () => () => void;
+const DialogRegistrationContext = createContext<RegisterDialog>(() => () => undefined);
+
 export function ModalSurface({ children, className = "", labelledBy, onClose, as = "div", onSubmit, noValidate }: ModalSurfaceProps) {
+  const registerDialog = useContext(DialogRegistrationContext);
   const surfaceRef = useRef<HTMLElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const returnFocusIdentityRef = useRef<{ tag: string; ariaLabel: string; text: string } | undefined>(undefined);
+
+  useLayoutEffect(() => registerDialog(), [registerDialog]);
 
   useEffect(() => {
     const surface = surfaceRef.current;
@@ -157,6 +164,17 @@ const DialogOpenContext = createContext(false);
 
 export function DialogProvider({ children }: PropsWithChildren) {
   const [pending, setPending] = useState<PendingConfirmation>();
+  const [registeredDialogs, setRegisteredDialogs] = useState(0);
+
+  const registerDialog = useCallback<RegisterDialog>(() => {
+    setRegisteredDialogs((count) => count + 1);
+    let registered = true;
+    return () => {
+      if (!registered) return;
+      registered = false;
+      setRegisteredDialogs((count) => Math.max(0, count - 1));
+    };
+  }, []);
 
   const confirm = useCallback<Confirm>((options) => new Promise((resolve) => {
     setPending({ options, resolve });
@@ -169,40 +187,48 @@ export function DialogProvider({ children }: PropsWithChildren) {
 
   return (
     <ConfirmationContext.Provider value={confirm}>
-      <DialogOpenContext.Provider value={Boolean(pending)}>
-        {children}
-        {pending && (
-        <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
-          <header role="presentation">
-            <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
-              <AlertTriangle size={20} />
-            </span>
-            <div>
-              <h2 id="confirmation-title">{pending.options.title}</h2>
-              <div className="confirmation-message">{pending.options.message}</div>
-            </div>
-            <button className="icon-button subtle" type="button" aria-label="Close" onClick={() => finish(false)}>
-              <X size={17} />
-            </button>
-          </header>
-          <footer>
-            <button className="button secondary" type="button" onClick={() => finish(false)}>
-              {pending.options.cancelLabel ?? "Cancel"}
-            </button>
-            <button
-              className={`button ${pending.options.tone === "danger" ? "danger" : "primary"}`}
-              type="button"
-              data-autofocus
-              onClick={() => finish(true)}
-            >
-              {pending.options.confirmLabel ?? "Continue"}
-            </button>
-          </footer>
-        </ModalSurface>
-        )}
-      </DialogOpenContext.Provider>
+      <DialogRegistrationContext.Provider value={registerDialog}>
+        <DialogOpenContext.Provider value={Boolean(pending) || registeredDialogs > 0}>
+          {children}
+          {pending && (
+          <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
+            <header role="presentation">
+              <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
+                <AlertTriangle size={20} />
+              </span>
+              <div>
+                <h2 id="confirmation-title">{pending.options.title}</h2>
+                <div className="confirmation-message">{pending.options.message}</div>
+              </div>
+              <button className="icon-button subtle" type="button" aria-label="Close" onClick={() => finish(false)}>
+                <X size={17} />
+              </button>
+            </header>
+            <footer>
+              <button className="button secondary" type="button" onClick={() => finish(false)}>
+                {pending.options.cancelLabel ?? "Cancel"}
+              </button>
+              <button
+                className={`button ${pending.options.tone === "danger" ? "danger" : "primary"}`}
+                type="button"
+                data-autofocus
+                onClick={() => finish(true)}
+              >
+                {pending.options.confirmLabel ?? "Continue"}
+              </button>
+            </footer>
+          </ModalSurface>
+          )}
+        </DialogOpenContext.Provider>
+      </DialogRegistrationContext.Provider>
     </ConfirmationContext.Provider>
   );
+}
+
+/** Register a non-modal blocking surface that must occlude native child webviews. */
+export function useDialogPresence(open: boolean): void {
+  const registerDialog = useContext(DialogRegistrationContext);
+  useLayoutEffect(() => open ? registerDialog() : undefined, [open, registerDialog]);
 }
 
 export function useDialogOpen(): boolean {

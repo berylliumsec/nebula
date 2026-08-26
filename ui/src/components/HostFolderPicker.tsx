@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, ChevronRight, Folder, FolderOpen, LoaderCircle, Server, X } from "lucide-react";
+import { ArrowUp, ChevronRight, Folder, FolderOpen, FolderPlus, LoaderCircle, Server, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface } from "./DialogSystem";
@@ -21,13 +21,23 @@ export function HostFolderPicker({ api, value, onSelect }: {
   const [listing, setListing] = useState<FolderListing>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [createError, setCreateError] = useState<string>();
   const browseButtonRef = useRef<HTMLButtonElement>(null);
   const folderListRef = useRef<HTMLDivElement>(null);
+  const newFolderInputRef = useRef<HTMLInputElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
   const selectButtonRef = useRef<HTMLButtonElement>(null);
 
   const load = async (path?: string, moveFocus = false) => {
     if (!api) return;
+    if (moveFocus) {
+      setNewFolderOpen(false);
+      setNewFolderName("");
+      setCreateError(undefined);
+    }
     setLoading(true);
     setError(undefined);
     try {
@@ -54,7 +64,43 @@ export function HostFolderPicker({ api, value, onSelect }: {
   const closeBrowser = () => {
     setOpen(false);
     setError(undefined);
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    setCreateError(undefined);
     requestAnimationFrame(() => browseButtonRef.current?.focus());
+  };
+
+  const beginCreateFolder = () => {
+    setNewFolderOpen(true);
+    setCreateError(undefined);
+    requestAnimationFrame(() => newFolderInputRef.current?.focus());
+  };
+
+  const cancelCreateFolder = () => {
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    setCreateError(undefined);
+  };
+
+  const createFolder = async (event: FormEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!api || !listing || creatingFolder || !newFolderName.trim()) return;
+    setCreatingFolder(true);
+    setCreateError(undefined);
+    try {
+      const created = await api.createHostWorkspaceFolder(listing.path, newFolderName);
+      setListing(created);
+      setNewFolderOpen(false);
+      setNewFolderName("");
+      requestAnimationFrame(() => selectButtonRef.current?.focus());
+    } catch (caught) {
+      logCaughtDiagnostic("interface.host_folder.create_failed", "A host workspace folder could not be created.", caught, "host-folder-picker");
+      setCreateError(caught instanceof Error ? caught.message : "Folder could not be created.");
+      requestAnimationFrame(() => newFolderInputRef.current?.focus());
+    } finally {
+      setCreatingFolder(false);
+    }
   };
 
   const selectCurrentFolder = () => {
@@ -81,6 +127,14 @@ export function HostFolderPicker({ api, value, onSelect }: {
         <div className="host-folder-location">
           <span>Current folder</span>
           <code title={listing?.path}>{(listing?.path ?? value?.trim()) || "Loading home folder…"}</code>
+        </div>
+        <div className="host-folder-create">
+          {newFolderOpen ? <form onSubmit={(event) => void createFolder(event)}>
+            <label><span>New folder name</span><input ref={newFolderInputRef} required maxLength={255} value={newFolderName} onChange={(event) => { setNewFolderName(event.target.value); if (createError) setCreateError(undefined); }} /></label>
+            <button className="button quiet" type="button" disabled={creatingFolder} onClick={cancelCreateFolder}>Cancel</button>
+            <button className="button primary" type="submit" disabled={creatingFolder || !newFolderName.trim()}>{creatingFolder ? <LoaderCircle className="spin" size={14} /> : <FolderPlus size={14} />} {creatingFolder ? "Creating…" : "Create folder"}</button>
+          </form> : <button className="button secondary" type="button" disabled={!listing || loading} onClick={beginCreateFolder}><FolderPlus size={14} /> New folder</button>}
+          {createError && <small role="alert">{createError}</small>}
         </div>
         <div ref={folderListRef} className="host-folder-list" aria-busy={loading}>
           {loading && <div className="host-folder-state" role="status"><LoaderCircle className="spin" size={20} /><span>Loading folders…</span></div>}
