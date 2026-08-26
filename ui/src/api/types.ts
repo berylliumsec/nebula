@@ -1219,6 +1219,8 @@ export interface HarnessActivityEvent {
   itemStatus?: string;
   title?: string;
   summary?: string;
+  serverId?: string;
+  toolName?: string;
   stream?: string;
   delta?: string;
   message?: string;
@@ -1645,8 +1647,19 @@ export interface PersistedChatMessage extends ChatMessage {
   citations: ChatCitation[];
   contextAttachments: ChatContextAttachment[];
   harnessTurnId?: Identifier;
+  toolResults?: ChatToolResult[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChatToolResult {
+  toolCallId: Identifier;
+  capability: string;
+  status: string;
+  summary?: string;
+  evidenceIds: Identifier[];
+  resultArtifactId?: Identifier;
+  receipt: Record<string, unknown>;
 }
 
 export interface KnowledgeSource {

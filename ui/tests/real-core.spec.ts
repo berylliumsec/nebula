@@ -103,10 +103,12 @@ interface LocalModelStub {
   origin: string;
   requests: Array<Record<string, unknown>>;
   server: Server;
+  fail: boolean;
 }
 
-async function startLocalModelStub(): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
+  const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
     response.setHeader("Content-Type", "application/json");
     if (request.method === "GET" && request.url === "/v1/models") {
@@ -120,6 +122,11 @@ async function startLocalModelStub(): Promise<LocalModelStub> {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      if (stub.fail) {
+        response.statusCode = 503;
+        response.end(JSON.stringify({ error: { message: "deliberate acceptance failure" } }));
+        return;
+      }
       response.end(JSON.stringify({
         id: "chatcmpl-real-core",
         object: "chat.completion",
@@ -137,12 +144,14 @@ async function startLocalModelStub(): Promise<LocalModelStub> {
     response.statusCode = 404;
     response.end(JSON.stringify({ error: "not found" }));
   });
+  stub.server = server;
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const address = server.address() as AddressInfo;
-  return { origin: `http://127.0.0.1:${address.port}`, requests, server };
+  stub.origin = `http://127.0.0.1:${address.port}`;
+  return stub;
 }
 
 async function stopLocalModelStub(stub: LocalModelStub): Promise<void> {
@@ -280,6 +289,88 @@ test("production assistant preserves exact research context and relaunch-safe dr
     expect(transcript).toContain("Real Core retained the exact research context.");
     expect(transcript).toContain(selectedContext);
     expect(transcript).toContain(selectedContextHash);
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    await stopLocalModelStub(modelStub);
+  }
+});
+
+test("production LAN mission ledger survives failure, retry, and relaunch through real Core", async ({ page }) => {
+  test.setTimeout(90_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ fail: true });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Mission ledger acceptance model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+
+    const missionResponse = await api.post("missions", { data: {
+      engagement_id: projectId,
+      name: "Durable ledger recovery",
+      objective: "Summarize the verified scope without executable tools.",
+      backend: "native",
+      provider_id: provider.id,
+      model: "security-model",
+      stages: [{ title: "Analyze", objective: "Review scope" }, { title: "Verify", objective: "Record the outcome" }],
+      max_tool_calls: 0,
+      max_retries: 0,
+      max_concurrency: 1,
+    } });
+    expect(missionResponse.ok(), await missionResponse.text()).toBe(true);
+    const failedMission = await missionResponse.json() as { id: string };
+    await expect.poll(async () => {
+      const response = await api.get(`runs?engagement_id=${encodeURIComponent(projectId!)}`);
+      const runs = await response.json() as Array<{ id: string; status: string }>;
+      return runs.find((run) => run.id === failedMission.id)?.status;
+    }, { timeout: 30_000 }).toBe("failed");
+
+    const missionUrl = `${core.origin}/?view=missions#token=${encodeURIComponent(core.token)}`;
+    await page.goto(missionUrl);
+    await expect(page.getByText("Durable ledger recovery", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("region", { name: "Mission activity" })).toBeVisible();
+    await expect(page.getByText("item upsert", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("This mission failed")).toBeVisible();
+
+    modelStub.fail = false;
+    const retryResponse = await api.post(`runs/${failedMission.id}/retry`, { data: { allow_cloud_tool_results: false } });
+    expect(retryResponse.ok(), await retryResponse.text()).toBe(true);
+    const retriedMission = await retryResponse.json() as { id: string };
+    await expect.poll(async () => {
+      const response = await api.get(`runs?engagement_id=${encodeURIComponent(projectId!)}`);
+      const runs = await response.json() as Array<{ id: string; status: string }>;
+      return runs.find((run) => run.id === retriedMission.id)?.status;
+    }, { timeout: 30_000 }).toBe("complete");
+
+    // Core intentionally keeps bearer credentials in memory; use the same
+    // authorized launch URL to exercise a fresh production document.
+    await page.goto(missionUrl);
+    await expect(page.getByText("Durable ledger recovery", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+    const ledger = page.getByRole("region", { name: "Mission activity" });
+    await expect(ledger).toBeVisible();
+    await expect(ledger.getByText(/actions?$/)).toBeVisible();
+    await expect(page.getByText("item upsert", { exact: false })).toHaveCount(0);
     expect(new URL(page.url()).hostname).toBe(lanAddress);
   } finally {
     await api.dispose();

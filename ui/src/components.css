@@ -337,8 +337,6 @@ textarea { border-radius: var(--radius-control); }
 .chat-message-actions { opacity: 0; }
 .chat-message:hover .chat-message-actions,
 .chat-message:focus-within .chat-message-actions { opacity: 1; }
-.harness-timeline-group > summary { padding: 7px 0; border: 0; border-top: 1px solid var(--border-soft); border-radius: 0; background: transparent; }
-.harness-timeline-group[open] > summary { border-bottom: 1px solid var(--border-soft); }
 
 .session-toolbar { padding-inline: 0; }
 .session-toolbar .session-tabs { border-radius: 0; background: transparent; }

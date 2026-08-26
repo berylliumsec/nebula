@@ -1191,7 +1191,14 @@ describe("ApiClient", () => {
         role: "user",
         content: "Review scope",
         citations: [],
-        metadata: {},
+        metadata: { tool_results: [{
+          tool_call_id: "tool-1",
+          capability: "Search evidence",
+          status: "complete",
+          summary: "Found evidence.",
+          evidence_ids: ["evidence-1"],
+          result_artifact_id: "artifact-1",
+        }] },
       }]), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         ...entity,
@@ -1211,6 +1218,14 @@ describe("ApiClient", () => {
 
     expect(sessions.items[0]).toMatchObject({ id: "session-1", providerId: "provider-1", revision: 1 });
     expect(messages[0]).toMatchObject({ sessionId: "session-1", sequence: 1, role: "user" });
+    expect(messages[0].toolResults).toEqual([expect.objectContaining({
+      toolCallId: "tool-1",
+      capability: "Search evidence",
+      status: "complete",
+      summary: "Found evidence.",
+      evidenceIds: ["evidence-1"],
+      resultArtifactId: "artifact-1",
+    })]);
     expect(renamed).toMatchObject({ id: "session-1", title: "Renamed scope review", revision: 2 });
     expect(fetchMock.mock.calls[0][0]).toBe(
       "http://127.0.0.1:8765/api/v1/chat-sessions?engagement_id=engagement-1&limit=1000&offset=0",
