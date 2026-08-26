@@ -1,11 +1,11 @@
 import type { ChatCompletionRequest } from "../api/types";
 
-export function detachHarnessStream(
+export function detachChatStream(
   controller: AbortController | undefined,
-  backend: ChatCompletionRequest["backend"] | undefined,
+  _backend: ChatCompletionRequest["backend"] | undefined,
   detachedStreams: WeakSet<AbortController>,
 ): boolean {
-  if (!controller || backend !== "harness") return false;
+  if (!controller) return false;
   detachedStreams.add(controller);
   controller.abort();
   return true;

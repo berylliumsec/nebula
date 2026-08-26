@@ -106,7 +106,7 @@ interface LocalModelStub {
   fail: boolean;
 }
 
-async function startLocalModelStub(options: { fail?: boolean } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
@@ -154,6 +154,37 @@ async function startLocalModelStub(options: { fail?: boolean } = {}): Promise<Lo
           }],
           usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
         }));
+        return;
+      }
+      if (body.stream === true && options.streamDelayMs !== undefined) {
+        response.setHeader("Content-Type", "text/event-stream");
+        response.setHeader("Cache-Control", "no-cache");
+        response.flushHeaders();
+        response.write(`data: ${JSON.stringify({
+          id: "chatcmpl-real-core-stream",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "security-model",
+          choices: [{ index: 0, delta: { role: "assistant", content: "Core is continuing in Project A" }, finish_reason: null }],
+        })}\n\n`);
+        setTimeout(() => {
+          response.write(`data: ${JSON.stringify({
+            id: "chatcmpl-real-core-stream",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "security-model",
+            choices: [{ index: 0, delta: { content: " and finished after the viewer detached." }, finish_reason: null }],
+          })}\n\n`);
+          response.write(`data: ${JSON.stringify({
+            id: "chatcmpl-real-core-stream",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "security-model",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 12, completion_tokens: 10, total_tokens: 22 },
+          })}\n\n`);
+          response.end("data: [DONE]\n\n");
+        }, options.streamDelayMs);
         return;
       }
       response.end(JSON.stringify({
@@ -408,6 +439,80 @@ test("production assistant preserves exact research context and relaunch-safe dr
     await api.dispose();
     await stopRealCore(core);
     await stopLocalModelStub(modelStub);
+  }
+});
+
+test("production assistant work survives a project switch through real Core", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 1_500 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projectsResponse = await api.get("engagements");
+    expect(projectsResponse.ok()).toBe(true);
+    const projects = await projectsResponse.json() as Array<{ id: string; name: string }>;
+    const projectA = projects[0];
+    expect(projectA).toBeTruthy();
+    const projectBResponse = await api.post("engagements", { data: {
+      name: "Background Project B",
+      description: "Project switch acceptance target",
+      status: "active",
+      tags: [],
+    } });
+    expect(projectBResponse.ok(), await projectBResponse.text()).toBe(true);
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Real Core streaming model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+
+    await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), projectA.id);
+    await page.goto(`${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    await expect(composer).toBeEnabled({ timeout: 20_000 });
+    await composer.fill("Keep this response running while I switch projects");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("Core is continuing in Project A")).toBeVisible({ timeout: 20_000 });
+
+    await page.getByRole("button", { name: "Switch project" }).click();
+    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Background Project B/ }).click();
+    await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Background Project B");
+
+    let sourceSessionId = "";
+    await expect.poll(async () => {
+      const sessionsResponse = await api.get(`chat-sessions?engagement_id=${encodeURIComponent(projectA.id)}`);
+      if (!sessionsResponse.ok()) return "";
+      const sessions = await sessionsResponse.json() as Array<{ id: string; title: string }>;
+      sourceSessionId = sessions.find((session) => session.title === "Keep this response running while I switch projects")?.id ?? "";
+      if (!sourceSessionId) return "";
+      const messagesResponse = await api.get(`chat/sessions/${sourceSessionId}/messages`);
+      if (!messagesResponse.ok()) return "";
+      const messages = await messagesResponse.json() as Array<{ role: string; content: string }>;
+      return messages.find((message) => message.role === "assistant")?.content ?? "";
+    }, { timeout: 20_000 }).toBe("Core is continuing in Project A and finished after the viewer detached.");
+
+    await page.getByRole("button", { name: "Switch project" }).click();
+    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: new RegExp(projectA.name) }).click();
+    await page.getByRole("button", { name: "Show conversations" }).click();
+    await page.locator(".session-select").filter({ hasText: "Keep this response running while I switch projects" }).click();
+    await expect(page.getByText("Core is continuing in Project A and finished after the viewer detached.")).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
   }
 });
 

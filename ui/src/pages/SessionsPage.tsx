@@ -100,7 +100,7 @@ import {
   shouldShowActivityItem,
   type HarnessActivityItem,
 } from "./harnessActivity";
-import { detachHarnessStream } from "./chatStreamLifecycle";
+import { detachChatStream } from "./chatStreamLifecycle";
 import {
   reconcileCompletedAssistantMessage,
   type ReconciledConversationMessage,
@@ -527,7 +527,8 @@ export function SessionsPage() {
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const streamBackendRef = useRef<ChatCompletionRequest["backend"] | undefined>(undefined);
-  const detachedHarnessStreamsRef = useRef(new WeakSet<AbortController>());
+  const activeProviderTurnIdRef = useRef<string | undefined>(undefined);
+  const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -702,15 +703,16 @@ export function SessionsPage() {
     return true;
   };
 
-  const detachActiveHarnessStream = () => {
+  const detachActiveChatStream = () => {
     const controller = abortRef.current;
-    if (!detachHarnessStream(
+    if (!detachChatStream(
       controller,
       streamBackendRef.current,
-      detachedHarnessStreamsRef.current,
+      detachedStreamsRef.current,
     )) return false;
     abortRef.current = undefined;
     streamBackendRef.current = undefined;
+    activeProviderTurnIdRef.current = undefined;
     return true;
   };
   const commandRuntimeReason = !modelVerified
@@ -1017,7 +1019,7 @@ export function SessionsPage() {
     sessionLoadAbortRef.current?.abort();
     historicalActivityAbortRef.current.forEach((controller) => controller.abort());
     historicalActivityAbortRef.current.clear();
-    if (!detachActiveHarnessStream()) abortRef.current?.abort();
+    detachActiveChatStream();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setSending(false);
@@ -1099,7 +1101,7 @@ export function SessionsPage() {
       sessionLoadAbortRef.current?.abort();
       historicalActivityAbortRef.current.forEach((controller) => controller.abort());
       historicalActivityAbortRef.current.clear();
-      if (!detachActiveHarnessStream()) abortRef.current?.abort();
+      detachActiveChatStream();
     };
   }, []);
 
@@ -1154,7 +1156,7 @@ export function SessionsPage() {
     historicalActivityAbortRef.current.clear();
     followUpAutoDrainRef.current = false;
     followUpDrainIdRef.current = undefined;
-    if (!detachActiveHarnessStream()) abortRef.current?.abort();
+    detachActiveChatStream();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setSending(false);
@@ -1437,7 +1439,7 @@ export function SessionsPage() {
     sessionLoadAbortRef.current = loadController;
     followUpAutoDrainRef.current = false;
     followUpDrainIdRef.current = undefined;
-    detachActiveHarnessStream();
+    detachActiveChatStream();
     setSending(false);
     setSessionId(id);
     setConversationOpen(true);
@@ -1781,6 +1783,9 @@ export function SessionsPage() {
       void refreshSessions();
     }
     if (streamEvent.type === "started") {
+      if (request.backend === "provider" && streamEvent.turnId) {
+        activeProviderTurnIdRef.current = streamEvent.turnId;
+      }
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
       if (request.backend === "harness") {
         setHarnessProgress((current) => ({
@@ -1918,6 +1923,7 @@ export function SessionsPage() {
       }));
     }
     if (streamEvent.type === "done") {
+      if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
       if (streamFrameRef.current !== undefined) {
         cancelAnimationFrame(streamFrameRef.current);
         streamFrameRef.current = undefined;
@@ -2322,7 +2328,7 @@ export function SessionsPage() {
         await refreshSessions(returnedSessionId);
       }
     } catch (error) {
-      const detached = detachedHarnessStreamsRef.current.has(controller);
+      const detached = detachedStreamsRef.current.has(controller);
       if (detached) {
         failQueuedFollowUp("The response was detached before this follow-up completed. Review it before retrying.");
         return;
@@ -2679,8 +2685,17 @@ export function SessionsPage() {
           return;
         }
       }
-    } else if (pendingResponse && api) {
-      await api.cancelChatTurn(pendingResponse.turnId);
+    } else if (api) {
+      const turnId = activeProviderTurnIdRef.current ?? pendingResponse?.turnId;
+      if (turnId) {
+        try {
+          await api.cancelChatTurn(turnId);
+        } catch (error) {
+          void logCaughtDiagnostic("interface.sessions_page.provider_stop", "Could not stop provider turn.", error, "sessions_page");
+          setChatError(error instanceof Error ? error.message : "Could not stop the provider turn.");
+          return;
+        }
+      }
     }
     abortRef.current?.abort();
   };
@@ -3153,6 +3168,9 @@ export function SessionsPage() {
                   const message = messagesById.get(threadMessage.id);
                   if (!message) return null;
                   const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));
+                  const commentaryItems = messageActivityItems
+                    .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
+                    .filter((item): item is { key: string; text: string } => Boolean(item.text));
                   const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
                   const historicalTurnId = message.durable ? message.harnessTurnId : undefined;
                   const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
@@ -3176,6 +3194,9 @@ export function SessionsPage() {
                   >
                     <div className="chat-message-body">
                       <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
+                      {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
+                        {commentaryItems.map((item) => <p key={item.key}>{item.text}</p>)}
+                      </div>}
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p className={message.role === "assistant" && message.state === "streaming" ? "assistant-streaming-text" : undefined}>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {activityLedger && <ActivityLedger

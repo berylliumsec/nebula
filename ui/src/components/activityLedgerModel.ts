@@ -112,6 +112,10 @@ const INTERNAL_LABELS = new Set([
   "commentary",
   "output delta",
   "output_delta",
+  "tool started",
+  "tool_started",
+  "tool completed",
+  "tool_completed",
 ]);
 
 const ACTIVE_STATUSES = new Set(["running", "streaming", "in_progress", "started", "planning", "connecting", "cancelling"]);

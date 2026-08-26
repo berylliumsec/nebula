@@ -2122,6 +2122,106 @@ test("conversation switching commits URL identity before loading and defers save
   expect(targetActivityLoads).toBe(1);
 });
 
+test("conversation switching between projects detaches the provider viewer without stopping Core work", async ({ page }) => {
+  let cancelRequests = 0;
+  const projects = [
+    { ...entity, id: "project-a", name: "Project A", description: "Active provider work", status: "active", tags: [], metadata: {} },
+    { ...entity, id: "project-b", name: "Project B", description: "Parallel workspace", status: "active", tags: [], metadata: {} },
+  ];
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/engagements") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(projects) });
+      return;
+    }
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "provider-continuity",
+        name: "Local provider",
+        provider_type: "vllm",
+        endpoint: "http://127.0.0.1:8000/v1",
+        enabled: true,
+        is_local: true,
+        secret_ref: null,
+        model_allowlist: ["model-a"],
+        capabilities: { streaming: true },
+        privacy: { local_only: true, permits_sensitive_data: true },
+        metadata: { default_model: "model-a" },
+      }]) });
+      return;
+    }
+    if (path.includes("/chat/turns/") && path.endsWith("/cancel")) {
+      cancelRequests += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "provider-turn-a",
+        session_id: "provider-session-a",
+        status: "cancelled",
+        approval_id: null,
+        harness_turn_id: null,
+        tool_call_ids: [],
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-continuity", model: "model-a", session_id: "provider-session-a", turn_id: "provider-turn-a" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", provider_id: "provider-continuity", model: "model-a", delta: "Inspecting Project A without blocking navigation." })}\n\n`));
+        },
+      });
+      init?.signal?.addEventListener("abort", () => {
+        (globalThis as typeof globalThis & { __providerViewerDetached?: boolean }).__providerViewerDetached = true;
+        streamController?.error(new DOMException("Viewer detached", "AbortError"));
+        globalThis.setTimeout(() => {
+          (globalThis as typeof globalThis & { __providerCoreCompleted?: boolean }).__providerCoreCompleted = true;
+        }, 60);
+      }, { once: true });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Continue while I inspect another project");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Inspecting Project A without blocking navigation.")).toBeVisible();
+
+  const mobileViewport = (page.viewportSize()?.width ?? 1_000) <= 760;
+  if (mobileViewport) await page.getByRole("button", { name: "Show sidebar" }).click();
+  await page.getByRole("button", { name: "Switch project" }).click();
+  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Project B/ }).click();
+  await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Project B");
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __providerViewerDetached?: boolean }).__providerViewerDetached)).toBe(true);
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __providerCoreCompleted?: boolean }).__providerCoreCompleted)).toBe(true);
+  expect(cancelRequests).toBe(0);
+
+  await page.getByRole("button", { name: "Switch project" }).click();
+  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Project A/ }).click();
+  if (mobileViewport) {
+    await page.getByRole("button", { name: "Close sidebar" }).click({
+      position: { x: (page.viewportSize()?.width ?? 390) - 8, y: 80 },
+    });
+  }
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByPlaceholder("Ask about this project…").fill("Stop this response explicitly");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await page.getByRole("button", { name: "Stop response" }).click();
+  await expect.poll(() => cancelRequests).toBe(1);
+});
+
 test("harness model controls expose only the selected runtime's advertised options", async ({ page }, testInfo) => {
   const harnesses = [{
     ...entity,
@@ -2757,9 +2857,10 @@ test("completed harness output keeps one continuous transcript scroll", async ({
       const answer = "Verification completed successfully. The operator remains in control of the next action.\n\n".repeat(30);
       const frames: unknown[] = [
         { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
-        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
-        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
-        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", artifact_ids: [], payload: { command: "npm test", exit_code: 0 } },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary-1", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I found the verification path. I’m checking the production behavior before changing anything.", artifact_ids: [], payload: {} },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 4, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", artifact_ids: [], payload: { command: "npm test", exit_code: 0 } },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
         { type: "done", session_id: "chat-harness-completion", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", message: { id: "assistant-harness-completion", role: "assistant", content: answer }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
       ];
@@ -2798,6 +2899,10 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect(composer).toHaveValue("$review");
   await composer.fill("$review Run the verification.");
   await page.getByRole("button", { name: "Send message" }).click();
+  const commentary = page.getByLabel("Assistant commentary");
+  await expect(commentary).toContainText("I found the verification path. I’m checking the production behavior before changing anything.");
+  await expect(commentary).toBeVisible();
+  await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_mode?: string } }).__harnessTurnRequest?.harness_mode)).toBe("plan");
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_skill?: unknown } }).__harnessTurnRequest?.harness_skill)).toEqual({
     name: "review",
@@ -2865,6 +2970,98 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
   }
+});
+
+test("completed harness output surfaces Grok commentary as live narrative", async ({ page }) => {
+  const sessionId = "grok-commentary-session";
+  const turnId = "grok-commentary-turn";
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "harness-grok-commentary",
+        name: "Grok ACP",
+        kind: "grok_acp",
+        connection_mode: "spawn",
+        transport: "stdio",
+        executable: "grok",
+        endpoint: null,
+        auth_mode: "existing_session",
+        secret_ref: null,
+        default_model: "grok-4.6",
+        enabled: true,
+        privacy: { local_only: true, permits_sensitive_data: true },
+        native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: false },
+        capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", interruption: true },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/harness-sessions/${sessionId}/activity`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: sessionId,
+        session_status: "running",
+        busy: true,
+        live: true,
+        turn_id: turnId,
+        turn_status: "running",
+        turn_origin: "chat",
+        started_at: entity.created_at,
+        last_activity_at: entity.updated_at,
+        detail: "Grok is working.",
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(({ session, turn }) => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const frames = [
+        { type: "started", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", session_id: "chat-grok-commentary", turn_id: "chat-turn-grok-commentary" },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I’ve mapped the workspace. Next I’m validating the affected files before I make the change.", artifact_ids: [], payload: {} },
+        { type: "tool_started", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "tool-1", item_kind: "tool", item_status: "running", title: "Inspect workspace", artifact_ids: [], payload: {} },
+        { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
+        { type: "done", session_id: "chat-grok-commentary", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", message: { id: "assistant-grok-commentary", role: "assistant", content: "The workspace validation is complete." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
+      ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          frames.forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  }, { session: sessionId, turn: turnId });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+  await page.keyboard.press("Escape");
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Inspect the workspace and explain what you are doing");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const commentary = page.getByLabel("Assistant commentary");
+  await expect(commentary).toContainText("I’ve mapped the workspace. Next I’m validating the affected files before I make the change.");
+  await expect(commentary).toBeVisible();
+  await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
+  const commentaryGeometry = await commentary.evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: innerWidth,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(commentaryGeometry.left).toBeGreaterThanOrEqual(0);
+  expect(commentaryGeometry.right).toBeLessThanOrEqual(commentaryGeometry.viewportWidth + 1);
+  expect(commentaryGeometry.scrollWidth).toBeLessThanOrEqual(commentaryGeometry.clientWidth + 1);
+  expect((await new AxeBuilder({ page }).include(".assistant-commentary").analyze()).violations).toEqual([]);
 });
 
 test("the workbench expands to the full viewport and restores in place", async ({ page }) => {

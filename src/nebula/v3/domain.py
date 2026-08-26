@@ -2721,7 +2721,7 @@ class ChatTurnStatus(StringEnum):
 
 
 class ChatTurn(Entity):
-    """A durable, idempotently resumable chat tool loop."""
+    """A durable, idempotently resumable provider response."""
 
     entity_kind: ClassVar[str] = "chat_turns"
     engagement_id: str

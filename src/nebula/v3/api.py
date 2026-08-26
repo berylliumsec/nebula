@@ -1256,16 +1256,24 @@ def create_app(
     entity_validator = ApiEntityValidator(store)
     operators = OperatorProfileService(store)
 
+    def active_operator_id() -> str:
+        active = operators.active_profile_or_none()
+        # Work can begin before the user chooses a display name. Attribute that
+        # technical activity to the system rather than inventing a human actor.
+        return active.id if active is not None else "system"
+
+    provider_chat = ChatService(
+        store,
+        tool_platform=tool_platform,
+        automation_tool_platform=automation_tool_platform,
+        provider_factory=chat_provider_factory,
+        operator_id=active_operator_id,
+        knowledge_index=knowledge_index,
+        artifact_store=artifact_store,
+    )
+
     def chat_service() -> ChatService:
-        return ChatService(
-            store,
-            tool_platform=tool_platform,
-            automation_tool_platform=automation_tool_platform,
-            provider_factory=chat_provider_factory,
-            operator_id=active_operator_id,
-            knowledge_index=knowledge_index,
-            artifact_store=artifact_store,
-        )
+        return provider_chat
 
     if harness_runtime.knowledge_retriever is None:
         harness_runtime.bind_knowledge_retriever(
@@ -1278,12 +1286,6 @@ def create_app(
                 )
             )
         )
-
-    def active_operator_id() -> str:
-        active = operators.active_profile_or_none()
-        # Work can begin before the user chooses a display name. Attribute that
-        # technical activity to the system rather than inventing a human actor.
-        return active.id if active is not None else "system"
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -1518,6 +1520,9 @@ def create_app(
                     execution_ai.startup,
                     execution_ai.shutdown,
                 )
+            await start_component(
+                "chat", "provider-runtime", provider_chat.startup, provider_chat.shutdown
+            )
             await start_component(
                 "harnesses",
                 "runtime",
@@ -7197,6 +7202,12 @@ def create_app(
         if not request.stream:
             return await service.complete(prepared)
 
+        turn_id = (
+            service.start_provider_turn(prepared)
+            if prepared.turn is not None
+            else None
+        )
+
         async def event_stream() -> Any:
             started_at = time.monotonic()
             event_count = 0
@@ -7212,7 +7223,12 @@ def create_app(
                 session_id=chat_session.id if chat_session else None,
             )
             try:
-                async for event, payload in service.stream(prepared):
+                source = (
+                    service.follow_provider_turn(turn_id)
+                    if turn_id is not None
+                    else service.stream(prepared)
+                )
+                async for event, payload in source:
                     event_count += 1
                     yield _server_sent_event(event, payload)
             except asyncio.CancelledError as caught_error:
@@ -7286,13 +7302,20 @@ def create_app(
     )
     async def resume_chat_turn(turn_id: str) -> StreamingResponse:
         service = chat_service()
-        prepared = service.prepare_resume(turn_id)
+        prepared = (
+            None
+            if service.has_active_provider_turn(turn_id)
+            else service.prepare_resume(turn_id)
+        )
+        if prepared is not None:
+            service.start_provider_turn(prepared)
 
         async def event_stream() -> Any:
             started_at = time.monotonic()
             event_count = 0
             outcome = "success"
-            chat_session = prepared.session or prepared.pending_session
+            turn = store.get(ChatTurn, turn_id)
+            chat_session = store.get(ChatSession, turn.session_id)
             emit_diagnostic(
                 "info",
                 "chat",
@@ -7303,7 +7326,7 @@ def create_app(
                 session_id=chat_session.id if chat_session else None,
             )
             try:
-                async for event, payload in service.stream(prepared):
+                async for event, payload in service.follow_provider_turn(turn_id):
                     event_count += 1
                     yield _server_sent_event(event, payload)
             except asyncio.CancelledError as caught_error:
@@ -7377,7 +7400,7 @@ def create_app(
                 turn.harness_turn_id, reason="Stopped by operator"
             )
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
-        return _chat_turn_summary(chat_service().cancel_turn(turn_id))
+        return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
