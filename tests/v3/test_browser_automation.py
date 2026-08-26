@@ -1,3 +1,6 @@
+import asyncio
+from pathlib import Path
+
 import pytest
 
 from nebula.v3.browser_automation import (
@@ -9,8 +12,10 @@ from nebula.v3.browser_automation import (
     BrowserCommandResultRequest,
     BrowserProxyRuleRequest,
 )
+from nebula.v3.browser_tools import BrowserAutomationBroker, autonomous_browser_specs
 from nebula.v3.domain import AgentRun, BrowserCommandStatus, Engagement, ScopePolicy
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tools import ToolInvocation
 
 
 def _project(store: NebulaStore) -> tuple[Engagement, str]:
@@ -92,6 +97,73 @@ def test_browser_automation_lease_claim_and_finish_are_durable(tmp_path):
     )
     assert finished.status == BrowserCommandStatus.COMPLETE
     assert service.status(project.id, run.id).commands[0].result["page"] == "untrusted"
+
+
+def test_browser_runtime_exposes_backend_neutral_research_tools(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "nebula.db")
+        project, scope_id = _project(store)
+        run = _run(store, project)
+        service = BrowserAutomationService(store)
+        from nebula.v3.domain import BrowserCrawlJob, BrowserIdentity, BrowserSession
+
+        identity = store.create(
+            BrowserIdentity(engagement_id=project.id, name="Test identity")
+        )
+        session = store.create(
+            BrowserSession(
+                engagement_id=project.id,
+                name="Test session",
+                identity_id=identity.id,
+                device_owner="desktop-1",
+            )
+        )
+        service.create_lease(
+            run.id,
+            project.id,
+            BrowserAutonomyRequestModel(
+                session_id=session.id,
+                targets=["https://app.example.test/"],
+            ),
+            "operator",
+        )
+        broker = BrowserAutomationBroker(store, service)
+        scope = store.get(ScopePolicy, scope_id)
+        assert {"target.crawl", "repeater.create", "intruder.create", "analysis.tokens"} <= set(
+            autonomous_browser_specs()
+        )
+
+        result = await broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id=run.id,
+                tool_name="target.crawl",
+                arguments={
+                    "start_url": "https://app.example.test/docs",
+                    "max_requests": 10,
+                },
+                workspace=Path(tmp_path),
+                idempotency_key="crawl-1",
+            ),
+            scope,
+        )
+        assert result.output["status"] == "draft"
+        assert store.count(BrowserCrawlJob) == 1
+
+        decoded = await broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id=run.id,
+                tool_name="analysis.decode",
+                arguments={"operation": "url_decode", "value": "a%2Fb"},
+                workspace=Path(tmp_path),
+                idempotency_key="decode-1",
+            ),
+            scope,
+        )
+        assert decoded.output["result"] == "a/b"
+
+    asyncio.run(scenario())
 
 
 def test_browser_automation_rejects_scope_expansion_and_secret_values(tmp_path):

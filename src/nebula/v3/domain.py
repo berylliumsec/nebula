@@ -932,11 +932,24 @@ class BrowserTrafficExchange(Entity):
     status_code: int | None = Field(default=None, ge=100, le=999)
     request_headers: dict[str, str] = Field(default_factory=dict)
     response_headers: dict[str, str] = Field(default_factory=dict)
+    # Ordered lines preserve duplicate headers for protocol-aware replay while
+    # the maps above remain the backwards-compatible summary representation.
+    request_header_lines: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=200
+    )
+    response_header_lines: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=200
+    )
+    http2_pseudo_headers: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=16
+    )
     request_body_artifact_id: str | None = Field(default=None, max_length=200)
     response_body_artifact_id: str | None = Field(default=None, max_length=200)
     request_bytes: int | None = Field(default=None, ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
+    timing: dict[str, int] = Field(default_factory=dict)
+    rule_effect_ids: list[str] = Field(default_factory=list, max_length=200)
     scope_state: Literal["in_scope", "out_of_scope", "inactive", "unconfigured"]
     scope_policy_id: str = Field(min_length=1, max_length=200)
     scope_policy_revision: int = Field(ge=1)
@@ -1208,6 +1221,224 @@ class BrowserProxyRule(Entity):
         if self.expires_at <= self.created_at:
             raise ValueError("browser proxy rule expiry must follow creation")
         return self
+
+
+class BrowserSiteNode(Entity):
+    """One normalized target-map location discovered by browser research."""
+
+    entity_kind: ClassVar[str] = "browser_site_nodes"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=16_384)
+    method: str = Field(default="GET", pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    kind: Literal["page", "api", "form", "resource", "websocket"] = "page"
+    discovery_source: Literal[
+        "browser", "proxy", "crawl", "repeater", "intruder", "har", "automation"
+    ] = "proxy"
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    parameter_names: list[str] = Field(default_factory=list, max_length=256)
+    content_type: str | None = Field(default=None, max_length=500)
+    scope_policy_id: str = Field(min_length=1, max_length=200)
+    scope_policy_revision: int = Field(ge=1)
+    last_exchange_id: str | None = Field(default=None, max_length=200)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    first_seen_at: datetime = Field(default_factory=utc_now)
+    last_seen_at: datetime = Field(default_factory=utc_now)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("url")
+    @classmethod
+    def browser_site_url_is_network_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() not in {"http", "https", "ws", "wss"}
+            or not parsed.hostname
+        ):
+            raise ValueError("browser site-map URLs must use HTTP(S) or WebSocket")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("browser site-map URLs cannot contain credentials")
+        return value
+
+
+class BrowserSiteEdge(Entity):
+    entity_kind: ClassVar[str] = "browser_site_edges"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    source_node_id: str = Field(min_length=1, max_length=200)
+    target_node_id: str = Field(min_length=1, max_length=200)
+    relation: Literal["navigation", "link", "form", "redirect", "request"]
+    discovered_by: Literal["browser", "crawl", "har", "automation"] = "browser"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserCrawlJob(Entity):
+    """Bounded crawl intent and acknowledged native-worker progress."""
+
+    entity_kind: ClassVar[str] = "browser_crawl_jobs"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    start_url: str = Field(min_length=1, max_length=16_384)
+    state: Literal[
+        "draft", "queued", "running", "paused", "complete", "cancelled", "failed"
+    ] = "draft"
+    max_depth: int = Field(default=2, ge=0, le=10)
+    max_requests: int = Field(default=100, ge=1, le=10_000)
+    max_concurrency: int = Field(default=2, ge=1, le=16)
+    max_duration_seconds: int = Field(default=300, ge=1, le=3_600)
+    max_body_bytes: int = Field(default=1_048_576, ge=0, le=16_777_216)
+    requests_completed: int = Field(default=0, ge=0)
+    nodes_discovered: int = Field(default=0, ge=0)
+    checkpoint: int = Field(default=0, ge=0)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("start_url")
+    @classmethod
+    def browser_crawl_url_is_network_only(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("crawl URLs must use HTTP(S)")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("crawl URLs cannot contain credentials")
+        return value
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def browser_crawl_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser crawl timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class BrowserInterceptItem(Entity):
+    """Durable receipt for a native request/response paused at a breakpoint."""
+
+    entity_kind: ClassVar[str] = "browser_intercepts"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    tab_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    transaction_id: str = Field(min_length=1, max_length=300)
+    phase: Literal["request", "response"]
+    method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    url: str = Field(min_length=1, max_length=16_384)
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    body_artifact_id: str | None = Field(default=None, max_length=200)
+    state: Literal["paused", "forwarded", "dropped", "interrupted", "expired"] = (
+        "paused"
+    )
+    decision: Literal["forward", "drop"] | None = None
+    decided_by: str | None = Field(default=None, max_length=200)
+    decided_at: datetime | None = None
+    expires_at: datetime
+    edited_method: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    edited_url: str | None = Field(default=None, max_length=16_384)
+    edited_headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    edited_body_artifact_id: str | None = Field(default=None, max_length=200)
+    error: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("expires_at", "decided_at")
+    @classmethod
+    def browser_intercept_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser intercept timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class BrowserRepeaterTab(Entity):
+    entity_kind: ClassVar[str] = "browser_repeater_tabs"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    group: str = Field(default="Ungrouped", max_length=200)
+    notes: str = Field(default="", max_length=20_000)
+    protocol: Literal["http", "websocket"] = "http"
+    method: str = Field(default="GET", pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    url: str = Field(min_length=1, max_length=16_384)
+    headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    body_artifact_id: str | None = Field(default=None, max_length=200)
+    source_exchange_id: str | None = Field(default=None, max_length=200)
+    history_exchange_ids: list[str] = Field(default_factory=list, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserAttack(Entity):
+    """Durable, resumable Intruder-style attack definition and progress."""
+
+    entity_kind: ClassVar[str] = "browser_attacks"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    strategy: Literal["sniper", "battering_ram", "pitchfork", "cluster_bomb"]
+    method: str = Field(pattern=r"^[A-Z][A-Z0-9_-]{0,31}$")
+    url_template: str = Field(min_length=1, max_length=16_384)
+    headers_template: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=200
+    )
+    body_template: str = Field(default="", max_length=65_536)
+    positions: list[str] = Field(min_length=1, max_length=32)
+    payload_sets: list[dict[str, Any]] = Field(min_length=1, max_length=32)
+    transforms: list[str] = Field(default_factory=list, max_length=16)
+    state: Literal[
+        "draft", "queued", "running", "paused", "complete", "cancelled", "failed"
+    ] = "draft"
+    max_requests: int = Field(default=100, ge=1, le=100_000)
+    max_concurrency: int = Field(default=1, ge=1, le=32)
+    requests_per_second: float = Field(default=2.0, gt=0, le=100.0)
+    request_count: int = Field(default=0, ge=0)
+    error_count: int = Field(default=0, ge=0)
+    baseline_exchange_id: str | None = Field(default=None, max_length=200)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = Field(default=None, max_length=4_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def browser_attack_time_is_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("browser attack timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+
+class BrowserAttackResult(Entity):
+    entity_kind: ClassVar[str] = "browser_attack_results"
+    engagement_id: str
+    attack_id: str = Field(min_length=1, max_length=200)
+    sequence: int = Field(ge=0)
+    payloads: list[str] = Field(default_factory=list, max_length=32)
+    exchange_id: str | None = Field(default=None, max_length=200)
+    status_code: int | None = Field(default=None, ge=100, le=999)
+    response_bytes: int | None = Field(default=None, ge=0)
+    duration_ms: int | None = Field(default=None, ge=0)
+    error: str | None = Field(default=None, max_length=4_000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class BrowserTokenAnalysis(Entity):
+    entity_kind: ClassVar[str] = "browser_token_analyses"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+    sample_count: int = Field(ge=1, le=100_000)
+    token_length_min: int = Field(ge=0)
+    token_length_max: int = Field(ge=0)
+    unique_count: int = Field(ge=0)
+    collision_count: int = Field(ge=0)
+    shannon_bits_per_character: float = Field(ge=0)
+    character_frequencies: dict[str, int] = Field(default_factory=dict)
+    source_exchange_ids: list[str] = Field(default_factory=list, max_length=1_000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class BrowserHandoff(Entity):
@@ -2912,6 +3143,14 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     BrowserAutomationLease,
     BrowserCommand,
     BrowserProxyRule,
+    BrowserCrawlJob,
+    BrowserSiteNode,
+    BrowserSiteEdge,
+    BrowserInterceptItem,
+    BrowserRepeaterTab,
+    BrowserAttack,
+    BrowserAttackResult,
+    BrowserTokenAnalysis,
     BrowserHandoff,
     SoftwareComponent,
     Observation,

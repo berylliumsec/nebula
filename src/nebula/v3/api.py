@@ -89,6 +89,27 @@ from .browser_security import (
     BrowserWebSocketFrameRecordRequest,
     BrowserWorkspace,
 )
+from .browser_research import (
+    AttackCreateRequest,
+    AttackResultRequest,
+    AttackStateRequest,
+    BrowserResearchService,
+    BrowserResearchWorkspace,
+    CompareRequest,
+    CrawlCreateRequest,
+    CrawlStateRequest,
+    DecoderRequest,
+    FindingPromotionRequest,
+    HarImportRequest,
+    InterceptCreateRequest,
+    InterceptDecisionRequest,
+    RepeaterResultRequest,
+    RepeaterTabCreateRequest,
+    RepeaterTabUpdateRequest,
+    SiteEdgeRecordRequest,
+    SiteNodeRecordRequest,
+    TokenAnalysisRequest,
+)
 from .api_validation import ApiEntityValidator
 from .chat import (
     ChatCompletionRequest,
@@ -416,6 +437,14 @@ CUSTOM_RESOURCES = {
     "browser_sessions",
     "browser_traffic",
     "browser_websocket_frames",
+    "browser_site_nodes",
+    "browser_site_edges",
+    "browser_crawl_jobs",
+    "browser_intercepts",
+    "browser_repeater_tabs",
+    "browser_attacks",
+    "browser_attack_results",
+    "browser_token_analyses",
 }
 
 API_PREFIX = "/api/v1"
@@ -755,8 +784,6 @@ class MissionStartRequest(NebulaModel):
             raise ValueError(
                 "harness missions require harness_profile_id and no provider_id"
             )
-        if self.browser_autonomy is not None and self.backend != RunBackend.NATIVE:
-            raise ValueError("browser autonomy is available only to native missions")
         return self
 
 
@@ -1165,6 +1192,7 @@ def create_app(
         artifact_store=artifact_store,
         tool_platform=tool_platform,
         automation_tool_platform=automation_tool_platform,
+        browser_automation_platform=browser_automation_platform,
     )
     if harness_runtime.store is not store:
         raise ValueError("harness_runtime_service must use the API store")
@@ -1172,6 +1200,7 @@ def create_app(
         harness_runtime.bind_tool_platform(tool_platform)
     if automation_tool_platform is not None:
         harness_runtime.bind_automation_tool_platform(automation_tool_platform)
+    harness_runtime.bind_browser_automation_platform(browser_automation_platform)
     mcp_probes = McpProbeService(
         store,
         credential_store=credentials,
@@ -6125,6 +6154,7 @@ def create_app(
                 mcp_server_ids=request.mcp_server_ids,
                 actor_id=operator_id,
                 allow_remote_mcp=request.allow_cloud_tool_results,
+                browser_autonomy=request.browser_autonomy,
             )
         return await missions.start_mission(
             engagement_id=request.engagement_id,
@@ -6207,6 +6237,13 @@ def create_app(
                 mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
                 actor_id=operator_id,
                 allow_remote_mcp=request.allow_cloud_tool_results,
+                browser_autonomy=(
+                    BrowserAutonomyRequestModel.model_validate(
+                        prior.metadata["browser_autonomy"]
+                    )
+                    if isinstance(prior.metadata.get("browser_autonomy"), dict)
+                    else None
+                ),
             )
         else:
             created = await missions.start_mission(
@@ -7952,6 +7989,7 @@ def create_app(
             )
 
     browser_security = BrowserSecurityService(store, artifact_store)
+    browser_research = BrowserResearchService(store, browser_security, artifact_store)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-automation",
@@ -8058,6 +8096,243 @@ def create_app(
     )
     async def browser_workspace(engagement_id: str) -> BrowserWorkspace:
         return browser_security.workspace(engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-research",
+        response_model=BrowserResearchWorkspace,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_research_workspace(
+        engagement_id: str,
+    ) -> BrowserResearchWorkspace:
+        browser_research.interrupt_stale_intercepts(engagement_id)
+        return browser_research.workspace(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-site-nodes",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def record_browser_site_node(
+        engagement_id: str,
+        request: SiteNodeRecordRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.record_site_node(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-site-edges",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def record_browser_site_edge(
+        engagement_id: str,
+        request: SiteEdgeRecordRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.record_site_edge(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-crawls",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_crawl(
+        engagement_id: str,
+        request: CrawlCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.create_crawl(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-crawls/{{crawl_id}}/state",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transition_browser_crawl(
+        crawl_id: str, request: CrawlStateRequest
+    ) -> Any:
+        return browser_research.transition_crawl(crawl_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-sessions/{{session_id}}/intercepts",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def pause_browser_intercept(
+        session_id: str,
+        request: InterceptCreateRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> Any:
+        return browser_research.pause_intercept(session_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-intercepts/{{intercept_id}}/decision",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def decide_browser_intercept(
+        intercept_id: str, request: InterceptDecisionRequest
+    ) -> Any:
+        return browser_research.decide_intercept(intercept_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-repeater-tabs",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_repeater_tab(
+        engagement_id: str,
+        request: RepeaterTabCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.create_repeater_tab(request, x_nebula_actor)
+
+    @app.put(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_browser_repeater_tab(
+        tab_id: str,
+        request: RepeaterTabUpdateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        return browser_research.update_repeater_tab(tab_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/results",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def record_browser_repeater_result(
+        tab_id: str, request: RepeaterResultRequest
+    ) -> Any:
+        return browser_research.record_repeater_result(tab_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-attacks",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_attack(
+        engagement_id: str,
+        request: AttackCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.create_attack(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-attacks/{{attack_id}}/state",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transition_browser_attack(
+        attack_id: str, request: AttackStateRequest
+    ) -> Any:
+        return browser_research.transition_attack(attack_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-attacks/{{attack_id}}/results",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def add_browser_attack_result(
+        attack_id: str,
+        request: AttackResultRequest,
+        x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
+    ) -> Any:
+        return browser_research.add_attack_result(attack_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-utilities/decode",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_decode(request: DecoderRequest) -> dict[str, Any]:
+        return browser_research.decode(request)
+
+    @app.post(
+        f"{API_PREFIX}/browser-utilities/compare",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_compare(request: CompareRequest) -> dict[str, Any]:
+        return browser_research.compare(request)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-token-analyses",
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_token_analysis(
+        engagement_id: str,
+        request: TokenAnalysisRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        session = store.get(BrowserSession, request.session_id)
+        if session.engagement_id != engagement_id:
+            raise HTTPException(status_code=404, detail="browser session not found")
+        return browser_research.analyze_tokens(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-findings",
+        status_code=201,
+        tags=["security-browser", "findings"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def promote_browser_finding(
+        engagement_id: str,
+        request: FindingPromotionRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> Any:
+        return browser_research.promote_finding(engagement_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-har/import",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_browser_har(
+        engagement_id: str,
+        request: HarImportRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> dict[str, Any]:
+        return browser_research.import_har(engagement_id, request, x_nebula_actor)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-har/export",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_browser_har(
+        engagement_id: str, session_id: str = Query(min_length=1, max_length=200)
+    ) -> dict[str, Any]:
+        return browser_research.export_har(engagement_id, session_id)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-identities",

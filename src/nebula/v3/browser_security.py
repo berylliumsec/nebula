@@ -149,11 +149,22 @@ class BrowserTrafficRecordRequest(NebulaModel):
     status_code: int | None = Field(default=None, ge=100, le=999)
     request_headers: dict[str, str] = Field(default_factory=dict)
     response_headers: dict[str, str] = Field(default_factory=dict)
+    request_header_lines: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=MAX_HEADERS
+    )
+    response_header_lines: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=MAX_HEADERS
+    )
+    http2_pseudo_headers: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=16
+    )
     request_body_artifact_id: str | None = Field(default=None, max_length=200)
     response_body_artifact_id: str | None = Field(default=None, max_length=200)
     request_bytes: int | None = Field(default=None, ge=0)
     response_bytes: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
+    timing: dict[str, int] = Field(default_factory=dict)
+    rule_effect_ids: list[str] = Field(default_factory=list, max_length=200)
     replay_of_exchange_id: str | None = Field(default=None, max_length=200)
     error: str | None = Field(default=None, max_length=4_000)
     blocked: bool = False
@@ -170,6 +181,28 @@ class BrowserTrafficRecordRequest(NebulaModel):
             for name, item in value.items()
         ):
             raise ValueError("browser traffic header name or value is too large")
+        return value
+
+    @field_validator(
+        "request_header_lines", "response_header_lines", "http2_pseudo_headers"
+    )
+    @classmethod
+    def ordered_headers_are_bounded(
+        cls, value: list[tuple[str, str]]
+    ) -> list[tuple[str, str]]:
+        if any(
+            len(name) > MAX_HEADER_NAME or len(item) > MAX_HEADER_VALUE
+            for name, item in value
+        ):
+            raise ValueError("browser traffic header name or value is too large")
+        return value
+
+    @field_validator("timing")
+    @classmethod
+    def timing_is_bounded(cls, value: dict[str, int]) -> dict[str, int]:
+        allowed = {"dns_ms", "connect_ms", "tls_ms", "send_ms", "wait_ms", "receive_ms"}
+        if set(value) - allowed or any(item < 0 for item in value.values()):
+            raise ValueError("browser traffic timing contains an invalid phase")
         return value
 
 
@@ -668,11 +701,43 @@ class BrowserSecurityService:
             scope_policy_revision=scope.revision,
             request_headers=redact_browser_headers(request.request_headers),
             response_headers=redact_browser_headers(request.response_headers),
+            request_header_lines=[
+                (name, redact_browser_headers({name: value})[name])
+                for name, value in (
+                    request.request_header_lines or list(request.request_headers.items())
+                )
+            ],
+            response_header_lines=[
+                (name, redact_browser_headers({name: value})[name])
+                for name, value in (
+                    request.response_header_lines or list(request.response_headers.items())
+                )
+            ],
+            http2_pseudo_headers=[
+                (name, redact_browser_headers({name: value})[name])
+                for name, value in request.http2_pseudo_headers
+            ],
             **request.model_dump(
-                exclude={"tab_id", "request_headers", "response_headers"}
+                exclude={
+                    "tab_id",
+                    "request_headers",
+                    "response_headers",
+                    "request_header_lines",
+                    "response_header_lines",
+                    "http2_pseudo_headers",
+                }
             ),
         )
-        return self._create(exchange, "browser_traffic.recorded", actor_id)
+        created = self._create(exchange, "browser_traffic.recorded", actor_id)
+        # Keep Target authoritative without making the native worker duplicate
+        # site-map writes. A blocked/out-of-scope exchange remains traffic
+        # evidence but is deliberately excluded from the in-scope map.
+        from .browser_research import BrowserResearchService
+
+        BrowserResearchService(self.store, self, self.artifact_store).record_exchange(
+            created, actor_id
+        )
+        return created
 
     def record_websocket_frame(
         self,
@@ -1017,7 +1082,13 @@ class BrowserSecurityService:
         return scope
 
     def _require_in_scope(
-        self, scope: ScopePolicy, target: str, action: str, risk: RiskClass
+        self,
+        scope: ScopePolicy,
+        target: str,
+        action: str,
+        risk: RiskClass,
+        *,
+        native_scope_authority: bool = False,
     ) -> None:
         decision = self.policy.evaluate(
             scope,
@@ -1026,6 +1097,7 @@ class BrowserSecurityService:
                 risk_class=risk,
                 target=target,
                 action=action,
+                native_scope_authority=native_scope_authority,
             ),
         )
         if decision.effect == PolicyEffect.DENY:
