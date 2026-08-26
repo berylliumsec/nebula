@@ -1081,7 +1081,12 @@ class BrowserResearchService:
                     actor_id,
                 )
                 imported += 1
-            except (KeyError, TypeError, ValueError, BrowserWorkflowError):
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                BrowserWorkflowError,
+            ):  # diagnostic-expected: malformed HAR entries are counted and skipped.
                 skipped += 1
         return {
             "session_id": session.id,
