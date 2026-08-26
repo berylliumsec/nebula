@@ -967,7 +967,7 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
             objective="Block mission until stopped",
             profile_id=profile.id,
             model=None,
-            budget=RunBudget(max_duration_seconds=5),
+            budget=RunBudget(),
         )
         mission_task = runtime._mission_tasks[run.id]
         mission_turn = next(
@@ -994,6 +994,7 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
 
         assert stopped_mission.status == HarnessTurnStatus.CANCELLED
         assert store.get(AgentRun, run.id).status == RunStatus.CANCELLED
+        assert store.get(AgentRun, run.id).budget.max_duration_seconds is None
         assert any(
             event.event_type == "run.cancelled" for event in store.replay_events(run.id)
         )
@@ -2385,10 +2386,11 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         handoff = client.post(
             f"/api/v1/chat/sessions/{body['session_id']}/continue-as-mission",
             headers=headers,
-            json={"objective": "API mission", "max_duration_seconds": 5},
+            json={"objective": "API mission"},
         )
         assert handoff.status_code == 202, handoff.text
         run_id = handoff.json()["id"]
+        assert handoff.json()["budget"]["max_duration_seconds"] is None
         for _ in range(100):
             if store.get(AgentRun, run_id).status == RunStatus.COMPLETE:
                 break

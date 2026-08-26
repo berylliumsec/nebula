@@ -121,10 +121,39 @@ async function startLocalModelStub(options: { fail?: boolean } = {}): Promise<Lo
     if (request.method === "POST" && request.url === "/v1/chat/completions") {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      requests.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
+      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      requests.push(body);
       if (stub.fail) {
         response.statusCode = 503;
         response.end(JSON.stringify({ error: { message: "deliberate acceptance failure" } }));
+        return;
+      }
+      const tools = Array.isArray(body.tools) ? body.tools as Array<{
+        function?: { name?: string; parameters?: { properties?: { nonce?: { enum?: string[] } } } };
+      }> : [];
+      const capabilityProbe = tools.find((tool) => tool.function?.name === "nebula_capability_probe");
+      const nonce = capabilityProbe?.function?.parameters?.properties?.nonce?.enum?.[0];
+      if (nonce) {
+        response.end(JSON.stringify({
+          id: "chatcmpl-real-core-probe",
+          object: "chat.completion",
+          created: 1,
+          model: "security-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call-real-core-probe",
+                type: "function",
+                function: { name: "nebula_capability_probe", arguments: JSON.stringify({ nonce }) },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+        }));
         return;
       }
       response.end(JSON.stringify({
@@ -160,6 +189,73 @@ async function stopLocalModelStub(stub: LocalModelStub): Promise<void> {
     stub.server.close((error) => error ? reject(error) : resolve());
   });
 }
+
+test("production mission defaults to unlimited duration through real Core", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Unlimited mission model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    const verificationResponse = await api.post(
+      `providers/${encodeURIComponent(provider.id)}/capabilities/verify`,
+      { data: { model: "security-model", expected_revision: provider.revision } },
+    );
+    expect(verificationResponse.ok(), await verificationResponse.text()).toBe(true);
+    expect(await verificationResponse.json()).toMatchObject({
+      verification: { model: "security-model", status: "verified" },
+    });
+
+    await page.goto(`${core.origin}/?view=missions#token=${encodeURIComponent(core.token)}`);
+    const controls = page.getByRole("region", { name: "Mission controls" });
+    await controls.getByRole("button", { name: "Automate task" }).click();
+    const dialog = page.getByRole("dialog", { name: "Automate task" });
+    await dialog.getByLabel("Mission name").fill("Unlimited production mission");
+    await dialog.getByLabel("Objective", { exact: true }).first().fill("Confirm the unlimited mission default");
+    await dialog.getByText("Advanced", { exact: true }).click();
+    await expect(dialog.getByLabel("Duration (minutes)")).toHaveValue("");
+    await expect(dialog.getByLabel("Duration (minutes)")).toHaveAttribute("placeholder", "Unlimited");
+    await dialog.getByRole("button", { name: "Automate task" }).click();
+
+    await expect.poll(async () => {
+      const response = await api.get("runs", { params: { engagement_id: projectId } });
+      expect(response.ok(), await response.text()).toBe(true);
+      const runs = await response.json() as Array<{
+        metadata?: { name?: string };
+        status: string;
+        budget: { max_duration_seconds: number | null };
+      }>;
+      const run = runs.find((item) => item.metadata?.name === "Unlimited production mission");
+      return run ? { status: run.status, duration: run.budget.max_duration_seconds } : undefined;
+    }, { timeout: 20_000 }).toEqual({ status: "complete", duration: null });
+    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Unlimited production mission")).toBeVisible();
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
 
 test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
   test.setTimeout(60_000);

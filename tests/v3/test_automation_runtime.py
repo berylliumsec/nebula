@@ -31,6 +31,7 @@ from nebula.v3.domain import (
     CommandExecution,
     CommandExecutionStatus,
     Engagement,
+    ProviderProfile,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
@@ -733,6 +734,48 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             for path in paths
             for marker in ("tool-packs", "tool-catalog", "tool-assignment")
         )
+
+
+def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(
+    tmp_path,
+):
+    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+    manager.runtime_image = ""
+    manager.runtime_digest = ""
+    provider = store.create(
+        ProviderProfile(
+            name="Local analysis model",
+            provider_type="vllm",
+            endpoint="http://127.0.0.1:9/v1",
+            is_local=True,
+            model_allowlist=["security-model"],
+        )
+    )
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="runtime-test-token",
+        automation_runtime=manager,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/missions",
+            headers={"Authorization": "Bearer runtime-test-token"},
+            json={
+                "engagement_id": engagement.id,
+                "name": "Analysis without command runtime",
+                "objective": "Review the bounded scope",
+                "provider_id": provider.id,
+                "model": "security-model",
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    payload = response.json()
+    assert payload["metadata"]["analysis_only"] is True
+    assert payload["budget"]["max_duration_seconds"] is None
+    assert payload["budget"]["max_tool_calls"] is None
 
 
 def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):

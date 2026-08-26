@@ -531,6 +531,34 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         )
 
 
+def test_api_mission_defaults_to_unlimited_duration(tmp_path):
+    store = NebulaStore(tmp_path / "unlimited.db")
+    engagement = store.create(Engagement(name="Unlimited mission"))
+    profile = _profile(store)
+    provider = RecordingProvider(profile)
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "unlimited-checkpoints.db",
+        provider_factory=lambda selected: provider,
+    )
+    payload = _start_payload(engagement, profile)
+    payload.pop("max_duration_seconds")
+
+    with TestClient(
+        create_app(store, auth_token="test-token", mission_service=service)
+    ) as client:
+        response = client.post("/api/v1/missions", headers=_auth(), json=payload)
+        assert response.status_code == 202, response.text
+        queued = response.json()
+        assert queued["budget"]["max_duration_seconds"] is None
+        assert _wait_for_status(client, queued["id"], "complete")["status"] == (
+            "complete"
+        )
+
+    persisted = store.get(AgentRun, queued["id"])
+    assert persisted.budget.max_duration_seconds is None
+
+
 def test_api_retry_creates_a_new_audited_run_with_frozen_runtime(tmp_path):
     store = NebulaStore(tmp_path / "retry.db")
     engagement = store.create(Engagement(name="Mission retry"))

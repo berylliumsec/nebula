@@ -6095,8 +6095,19 @@ def create_app(
                 )
             except Exception as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
+        default_command_runtime_ready = False
+        if (
+            request.backend == RunBackend.NATIVE
+            and request.max_tool_calls is None
+            and automation_runtime is not None
+        ):
+            default_command_runtime_ready = (
+                await automation_runtime.runtime_info()
+            ).ready
         wants_command_tools = (
-            request.max_tool_calls is None or request.max_tool_calls > 0
+            default_command_runtime_ready
+            if request.max_tool_calls is None
+            else request.max_tool_calls > 0
         )
         command_tools = (
             [RUN_COMMAND_NAME, PROCESS_IO_NAME]
