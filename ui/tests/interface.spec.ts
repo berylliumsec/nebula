@@ -2912,6 +2912,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const planGeometry = await page.locator(".harness-status-rail").evaluate((element) => ({
     left: element.getBoundingClientRect().left,
     right: element.getBoundingClientRect().right,
+    width: element.getBoundingClientRect().width,
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
@@ -2919,6 +2920,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   expect(planGeometry.left).toBeGreaterThanOrEqual(0);
   expect(planGeometry.right).toBeLessThanOrEqual(planGeometry.viewportWidth + 1);
   expect(planGeometry.scrollWidth).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
+  if ((page.viewportSize()?.width ?? 0) >= 1024) expect(planGeometry.width).toBeLessThanOrEqual(841);
   if (testInfo.project.name.startsWith("mobile-")) {
     const planToggleBounds = await collapsePlan.boundingBox();
     expect(planToggleBounds?.height).toBeGreaterThanOrEqual(44);
@@ -2934,6 +2936,17 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("Completed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
+  const transcriptGeometry = await page.locator(".chat-message.assistant").last().evaluate((element) => {
+    const markdown = element.querySelector<HTMLElement>(".assistant-markdown");
+    return {
+      width: element.getBoundingClientRect().width,
+      marginBottom: Number.parseFloat(getComputedStyle(element).marginBottom),
+      lineHeight: markdown ? Number.parseFloat(getComputedStyle(markdown).lineHeight) : 0,
+    };
+  });
+  if ((page.viewportSize()?.width ?? 0) >= 1024) expect(transcriptGeometry.width).toBeGreaterThanOrEqual(800);
+  expect(transcriptGeometry.marginBottom).toBeGreaterThanOrEqual(28);
+  expect(transcriptGeometry.lineHeight).toBeGreaterThanOrEqual(21);
   await activity.locator(":scope > summary").click();
   await expect(activity).toHaveAttribute("open", "");
   const chatScroll = page.locator(".chat-scroll");
@@ -3050,7 +3063,7 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
   expect((await new AxeBuilder({ page }).include(".assistant-commentary").analyze()).violations).toEqual([]);
 });
 
-test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
+test("the workbench expands to the full viewport with compact chrome and completed harness output geometry", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/?view=chat", "Workbench");
 
@@ -3080,6 +3093,14 @@ test("the workbench expands to the full viewport and restores in place", async (
   expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
   expect(Math.abs(geometry.bottom)).toBeLessThanOrEqual(1);
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
+
+  const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
+  const focusToolbarHeight = await focusToolbar.evaluate((element) => element.getBoundingClientRect().height);
+  expect(focusToolbarHeight).toBeLessThanOrEqual(mobile ? 53 : 55);
+  if (!mobile) {
+    const selectedTabHeight = await page.getByRole("tab", { name: "Analyst chat", exact: true }).evaluate((element) => element.getBoundingClientRect().height);
+    expect(selectedTabHeight).toBeLessThanOrEqual(39);
+  }
 
   const fullScreenViews = [
     ["Terminal", ".persistent-terminal"],

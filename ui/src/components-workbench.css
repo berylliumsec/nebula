@@ -411,10 +411,10 @@ kbd { font-size: 11px; }
 }
 .sessions-page.full-screen > .page-header { display: none; }
 .sessions-page.full-screen > .session-toolbar {
-  min-height: 62px;
+  min-height: 54px;
   flex-wrap: nowrap;
-  gap: 12px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 6px 8px;
   border-radius: var(--radius-dialog) var(--radius-dialog) 0 0;
   background: color-mix(in srgb, var(--surface) 94%, transparent);
 }
@@ -431,10 +431,10 @@ kbd { font-size: 11px; }
 .sessions-page.full-screen .session-tabs button {
   position: relative;
   min-width: max-content;
-  min-height: 44px;
+  min-height: 38px;
   flex: 0 0 auto;
-  gap: 8px;
-  padding: 0 14px;
+  gap: 7px;
+  padding: 0 12px;
   border: 1px solid transparent;
   border-radius: var(--radius-panel);
   font-size: 13px;
@@ -641,7 +641,7 @@ kbd { font-size: 11px; }
 .browser-notice > span { flex: 1; }
 .browser-notice.error { color: var(--red); background: var(--red-muted); }
 .browser-notice :where(button, a) { display: inline-flex; align-items: center; gap: 4px; border: 0; color: var(--blue); background: transparent; text-decoration: none; cursor: pointer; }
-.browser-selection-assistant { display: grid; flex: 0 0 auto; gap: 8px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border)); background: var(--surface-raised); box-shadow: 0 8px 24px rgb(0 0 0 / 10%); }
+.browser-selection-assistant { display: grid; flex: 0 0 auto; gap: 8px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border)); background: var(--surface-raised); box-shadow: none; }
 .browser-selection-assistant > header, .browser-selection-assistant > header > div, .browser-selection-assistant > header span, .browser-selection-assistant > footer { display: flex; align-items: center; }
 .browser-selection-assistant > header { justify-content: space-between; gap: 10px; }
 .browser-selection-assistant > header > div { min-width: 0; gap: 8px; }
@@ -868,10 +868,10 @@ kbd { font-size: 11px; }
 @keyframes assistant-stream-caret { 50% { opacity: .2; } }
 @media (prefers-reduced-motion: reduce) { .assistant-streaming-text::after { animation: none; } }
 .citation-chip { font-size: 11px; }
-.assistant-markdown { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.6; }
+.assistant-markdown { min-width: 0; color: var(--text); font-size: 13px; line-height: 1.68; }
 .assistant-markdown > :first-child, .assistant-markdown > :first-child > :first-child { margin-top: 0; }
 .assistant-markdown > :last-child, .assistant-markdown > :last-child > :last-child { margin-bottom: 0; }
-.assistant-markdown p, .assistant-markdown ul, .assistant-markdown ol, .assistant-markdown blockquote { margin: 8px 0; }
+.assistant-markdown p, .assistant-markdown ul, .assistant-markdown ol, .assistant-markdown blockquote { margin: 10px 0; }
 .assistant-markdown table { width: 100%; margin: 10px 0; border-collapse: collapse; font-size: 12px; }
 .assistant-markdown th, .assistant-markdown td { padding: 6px 8px; border: 1px solid var(--border); text-align: left; }
 .assistant-markdown a { color: var(--blue); text-decoration: underline; text-underline-offset: 2px; }
@@ -1285,7 +1285,8 @@ kbd { font-size: 11px; }
 }
 
 .harness-status-rail {
-  margin: 6px 12px 0;
+  width: min(var(--chat-reading-track), calc(100% - 24px));
+  margin: 4px auto 0;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-control);
   background: var(--surface-muted);
@@ -1298,10 +1299,10 @@ kbd { font-size: 11px; }
 .harness-status-summary {
   display: flex;
   width: 100%;
-  min-height: 44px;
+  min-height: 34px;
   align-items: center;
   gap: 10px;
-  padding: 7px 10px;
+  padding: 5px 10px;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1320,7 +1321,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .harness-plan-steps li:last-child { border-bottom: 0; }
 .harness-plan-steps li > span:last-child { display: grid; min-width: 0; gap: 2px; }
 .harness-plan-steps li strong { overflow-wrap: anywhere; font-size: 12px; line-height: 1.4; }
-.harness-plan-steps li small { color: var(--muted); font-size: 10px; }
+.harness-plan-steps li small { color: var(--muted); font-size: 11px; }
 .harness-plan-marker { display: grid; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; color: var(--muted); }
 .harness-plan-steps .status-in_progress .harness-plan-marker { color: var(--blue); }
 .harness-plan-steps .status-completed .harness-plan-marker { color: var(--green); }
