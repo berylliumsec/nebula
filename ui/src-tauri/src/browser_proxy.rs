@@ -38,7 +38,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_opener::OpenerExt;
-use tokio::{net::TcpListener, sync::oneshot, time::sleep};
+use tokio::{
+    net::TcpListener,
+    sync::oneshot,
+    time::{sleep, timeout},
+};
 use tower_service::Service;
 
 use crate::diagnostics::{DiagnosticLevel, DiagnosticsState};
@@ -54,6 +58,8 @@ pub(crate) struct BrowserProxyHandle {
     scope: Arc<Mutex<Option<NativeProxyScope>>>,
     connector: DynamicConnector,
     capture_bodies: Arc<std::sync::atomic::AtomicBool>,
+    interception_enabled: Arc<std::sync::atomic::AtomicBool>,
+    pending_intercepts: Arc<Mutex<HashMap<String, oneshot::Sender<NativeInterceptDecision>>>>,
 }
 
 impl Clone for BrowserProxyHandle {
@@ -65,6 +71,8 @@ impl Clone for BrowserProxyHandle {
             scope: self.scope.clone(),
             connector: self.connector.clone(),
             capture_bodies: self.capture_bodies.clone(),
+            interception_enabled: self.interception_enabled.clone(),
+            pending_intercepts: self.pending_intercepts.clone(),
         }
     }
 }
@@ -496,11 +504,43 @@ impl BrowserProxyHandle {
         &self,
         config: Option<NativeUpstreamProxyConfig>,
         capture_bodies: bool,
+        interception_enabled: bool,
     ) -> Result<(), String> {
         self.connector.configure(config)?;
         self.capture_bodies.store(capture_bodies, Ordering::Relaxed);
+        self.interception_enabled
+            .store(interception_enabled, Ordering::Relaxed);
         Ok(())
     }
+
+    pub(crate) fn decide_intercept(
+        &self,
+        transaction_id: &str,
+        decision: NativeInterceptDecision,
+    ) -> Result<(), String> {
+        resolve_pending_intercept(&self.pending_intercepts, transaction_id, decision)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum NativeInterceptDecision {
+    Forward,
+    Drop,
+}
+
+fn resolve_pending_intercept(
+    pending: &Arc<Mutex<HashMap<String, oneshot::Sender<NativeInterceptDecision>>>>,
+    transaction_id: &str,
+    decision: NativeInterceptDecision,
+) -> Result<(), String> {
+    let sender = pending
+        .lock()
+        .map_err(|_| "The native intercept registry is unavailable.".to_string())?
+        .remove(transaction_id)
+        .ok_or_else(|| "The native transaction is no longer paused.".to_string())?;
+    sender
+        .send(decision)
+        .map_err(|_| "The native transaction expired before the decision arrived.".to_string())
 }
 
 impl BrowserProxyHandle {
@@ -562,6 +602,7 @@ struct CapturedBody {
 
 struct CaptureHandler {
     app: AppHandle,
+    project_id: String,
     session_id: String,
     tab_id: String,
     pending: Mutex<HashMap<u64, PendingRequest>>,
@@ -569,12 +610,15 @@ struct CaptureHandler {
     rules: Arc<Mutex<Vec<NativeProxyRule>>>,
     scope: Arc<Mutex<Option<NativeProxyScope>>>,
     capture_bodies: Arc<std::sync::atomic::AtomicBool>,
+    interception_enabled: Arc<std::sync::atomic::AtomicBool>,
+    pending_intercepts: Arc<Mutex<HashMap<String, oneshot::Sender<NativeInterceptDecision>>>>,
 }
 
 impl Clone for CaptureHandler {
     fn clone(&self) -> Self {
         Self {
             app: self.app.clone(),
+            project_id: self.project_id.clone(),
             session_id: self.session_id.clone(),
             tab_id: self.tab_id.clone(),
             // Hudsucker clones a handler for each proxied request. Keep the
@@ -585,6 +629,8 @@ impl Clone for CaptureHandler {
             rules: self.rules.clone(),
             scope: self.scope.clone(),
             capture_bodies: self.capture_bodies.clone(),
+            interception_enabled: self.interception_enabled.clone(),
+            pending_intercepts: self.pending_intercepts.clone(),
         }
     }
 }
@@ -608,6 +654,21 @@ struct TrafficEvent {
     blocked: bool,
     request_body: Option<CapturedBody>,
     response_body: Option<CapturedBody>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InterceptEvent {
+    project_id: String,
+    session_id: String,
+    tab_id: String,
+    transaction_id: String,
+    phase: &'static str,
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    status_code: Option<u16>,
+    timeout_seconds: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -1367,6 +1428,75 @@ impl HttpHandler for CaptureHandler {
             // requests are checked and captured by their own handler clones.
             return request.into();
         }
+        if self.interception_enabled.load(Ordering::Relaxed) {
+            let transaction_id = format!("{}-{}-{request_id}", self.session_id, self.tab_id);
+            let (sender, receiver) = oneshot::channel();
+            let registered = match self.pending_intercepts.lock() {
+                Ok(mut pending) => {
+                    pending.insert(transaction_id.clone(), sender);
+                    true
+                }
+                Err(_) => false,
+            };
+            if !registered {
+                return self
+                    .blocked_request(
+                        request_id,
+                        &request,
+                        "the native intercept registry is unavailable".to_string(),
+                    )
+                    .into();
+            }
+            let event = InterceptEvent {
+                project_id: self.project_id.clone(),
+                session_id: self.session_id.clone(),
+                tab_id: self.tab_id.clone(),
+                transaction_id: transaction_id.clone(),
+                phase: "request",
+                method: original_method.clone(),
+                url: scope_uri.as_ref().unwrap_or(request.uri()).to_string(),
+                headers: original_headers
+                    .iter()
+                    .map(|(name, value)| (name.clone(), value.clone()))
+                    .collect(),
+                status_code: None,
+                timeout_seconds: 60,
+            };
+            if self.app.emit("nebula-browser-intercept", event).is_err() {
+                if let Ok(mut pending) = self.pending_intercepts.lock() {
+                    pending.remove(&transaction_id);
+                }
+                return self
+                    .blocked_request(
+                        request_id,
+                        &request,
+                        "the paused transaction could not be delivered to Core".to_string(),
+                    )
+                    .into();
+            }
+            match timeout(Duration::from_secs(60), receiver).await {
+                Ok(Ok(NativeInterceptDecision::Forward)) => {}
+                Ok(Ok(NativeInterceptDecision::Drop)) => {
+                    return local_response(
+                        hudsucker::hyper::StatusCode::FORBIDDEN,
+                        "Nebula dropped this intercepted browser request.",
+                    )
+                    .into();
+                }
+                _ => {
+                    if let Ok(mut pending) = self.pending_intercepts.lock() {
+                        pending.remove(&transaction_id);
+                    }
+                    return self
+                        .blocked_request(
+                            request_id,
+                            &request,
+                            "the paused browser transaction expired without a decision".to_string(),
+                        )
+                        .into();
+                }
+            }
+        }
         let rules = snapshot_rules(&self.rules);
         let (mut request, matched_rules) = match mutate_request(request, &rules).await {
             Ok(value) => value,
@@ -1506,6 +1636,58 @@ impl HttpHandler for CaptureHandler {
         };
         if let Some(request) = pending {
             let request_id = request.request_id;
+            if self.interception_enabled.load(Ordering::Relaxed) {
+                let transaction_id =
+                    format!("{}-{}-{request_id}-response", self.session_id, self.tab_id);
+                let (sender, receiver) = oneshot::channel();
+                if let Ok(mut pending) = self.pending_intercepts.lock() {
+                    pending.insert(transaction_id.clone(), sender);
+                } else {
+                    return local_response(
+                        hudsucker::hyper::StatusCode::BAD_GATEWAY,
+                        "Nebula failed closed because the response intercept registry is unavailable.",
+                    );
+                }
+                let event = InterceptEvent {
+                    project_id: self.project_id.clone(),
+                    session_id: self.session_id.clone(),
+                    tab_id: self.tab_id.clone(),
+                    transaction_id: transaction_id.clone(),
+                    phase: "response",
+                    method: request.method.clone(),
+                    url: request.url.clone(),
+                    headers: redacted_headers(response.headers()).into_iter().collect(),
+                    status_code: Some(response.status().as_u16()),
+                    timeout_seconds: 60,
+                };
+                if self.app.emit("nebula-browser-intercept", event).is_err() {
+                    if let Ok(mut pending) = self.pending_intercepts.lock() {
+                        pending.remove(&transaction_id);
+                    }
+                    return local_response(
+                        hudsucker::hyper::StatusCode::BAD_GATEWAY,
+                        "Nebula failed closed because the paused response could not be persisted.",
+                    );
+                }
+                match timeout(Duration::from_secs(60), receiver).await {
+                    Ok(Ok(NativeInterceptDecision::Forward)) => {}
+                    Ok(Ok(NativeInterceptDecision::Drop)) => {
+                        return local_response(
+                            hudsucker::hyper::StatusCode::FORBIDDEN,
+                            "Nebula dropped this intercepted browser response.",
+                        );
+                    }
+                    _ => {
+                        if let Ok(mut pending) = self.pending_intercepts.lock() {
+                            pending.remove(&transaction_id);
+                        }
+                        return local_response(
+                            hudsucker::hyper::StatusCode::GATEWAY_TIMEOUT,
+                            "Nebula failed closed because the paused response expired.",
+                        );
+                    }
+                }
+            }
             let response = match mutate_response(response, &request.rules).await {
                 Ok(value) => value,
                 Err(value) => value,
@@ -2032,10 +2214,12 @@ fn ensure_ca(app: &AppHandle, project_key: &str) -> Result<(String, String, Path
 pub(crate) fn start(
     app: &AppHandle,
     project_key: &str,
+    project_id: &str,
     session_id: &str,
     tab_id: &str,
     upstream: Option<NativeUpstreamProxyConfig>,
     capture_bodies: bool,
+    interception_enabled: bool,
 ) -> Result<BrowserProxyHandle, String> {
     let (certificate, key, _) = ensure_ca(app, project_key)?;
     let key =
@@ -2045,6 +2229,8 @@ pub(crate) fn start(
     let authority = RcgenAuthority::new(issuer, 1_000, aws_lc_rs::default_provider());
     let connector = DynamicConnector::new(upstream)?;
     let capture_bodies = Arc::new(std::sync::atomic::AtomicBool::new(capture_bodies));
+    let interception_enabled = Arc::new(std::sync::atomic::AtomicBool::new(interception_enabled));
+    let pending_intercepts = Arc::new(Mutex::new(HashMap::new()));
     let listener = tauri::async_runtime::block_on(TcpListener::bind(("127.0.0.1", 0)))
         .map_err(|error| format!("cannot bind the local browser proxy: {error}"))?;
     let address = listener
@@ -2052,6 +2238,7 @@ pub(crate) fn start(
         .map_err(|error| format!("cannot read the local browser proxy address: {error}"))?;
     let handler = CaptureHandler {
         app: app.clone(),
+        project_id: project_id.to_string(),
         session_id: session_id.to_string(),
         tab_id: tab_id.to_string(),
         pending: Mutex::new(HashMap::new()),
@@ -2059,6 +2246,8 @@ pub(crate) fn start(
         rules: Arc::new(Mutex::new(Vec::new())),
         scope: Arc::new(Mutex::new(None)),
         capture_bodies: capture_bodies.clone(),
+        interception_enabled: interception_enabled.clone(),
+        pending_intercepts: pending_intercepts.clone(),
     };
     let rules = handler.rules.clone();
     let scope = handler.scope.clone();
@@ -2097,6 +2286,8 @@ pub(crate) fn start(
         scope,
         connector,
         capture_bodies,
+        interception_enabled,
+        pending_intercepts,
     })
 }
 
@@ -2332,6 +2523,24 @@ mod tests {
     fn browser_proxy_reports_http2_without_flattening_it_to_http1() {
         assert_eq!(protocol(Version::HTTP_2), "h2");
         assert_eq!(protocol(Version::HTTP_11), "http/1.1");
+    }
+
+    #[tokio::test]
+    async fn native_intercepts_are_single_use_and_deliver_the_operator_decision() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let (sender, receiver) = oneshot::channel();
+        pending
+            .lock()
+            .unwrap()
+            .insert("transaction-1".to_string(), sender);
+
+        resolve_pending_intercept(&pending, "transaction-1", NativeInterceptDecision::Drop)
+            .expect("decision resolves");
+        assert!(matches!(receiver.await, Ok(NativeInterceptDecision::Drop)));
+        assert!(
+            resolve_pending_intercept(&pending, "transaction-1", NativeInterceptDecision::Forward,)
+                .is_err()
+        );
     }
 
     #[test]

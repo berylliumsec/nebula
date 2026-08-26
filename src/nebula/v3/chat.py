@@ -325,6 +325,17 @@ class PreparedChat:
     inputs_persisted: bool = False
 
 
+@dataclass
+class _ActiveProviderTurn:
+    events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    condition: asyncio.Condition = field(default_factory=asyncio.Condition)
+    task: asyncio.Task[None] | None = None
+    cleanup_task: asyncio.Task[None] | None = None
+    followers: int = 0
+    done: bool = False
+    error: BaseException | None = None
+
+
 def _content_with_selected_context(
     content: str, attachments: list[ChatContextAttachment]
 ) -> str:
@@ -517,6 +528,140 @@ class ChatService:
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
         self.artifact_store = artifact_store
+        self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
+
+    async def startup(self) -> None:
+        """Provider turns are attached lazily when the first request arrives."""
+
+    def start_provider_turn(self, prepared: PreparedChat) -> str:
+        turn = prepared.turn
+        if turn is None:
+            raise ChatError("provider chat is missing its durable turn")
+        if turn.id in self._active_provider_turns:
+            raise ChatHistoryConflict("chat turn already has active work")
+        runtime = _ActiveProviderTurn()
+        self._active_provider_turns[turn.id] = runtime
+        runtime.task = asyncio.create_task(
+            self._produce_provider_turn(prepared, runtime),
+            name=f"nebula-provider-chat-{turn.id}",
+        )
+        return turn.id
+
+    def has_active_provider_turn(self, turn_id: str) -> bool:
+        runtime = self._active_provider_turns.get(turn_id)
+        return runtime is not None and not runtime.done
+
+    async def follow_provider_turn(
+        self, turn_id: str
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        runtime = self._active_provider_turns.get(turn_id)
+        if runtime is None:
+            raise ChatHistoryConflict("provider chat turn is not active")
+        runtime.followers += 1
+        cleanup_task = runtime.cleanup_task
+        if cleanup_task is not None:
+            cleanup_task.cancel()
+            runtime.cleanup_task = None
+            await asyncio.gather(cleanup_task, return_exceptions=True)
+        index = 0
+        try:
+            while True:
+                async with runtime.condition:
+                    await runtime.condition.wait_for(
+                        lambda: index < len(runtime.events) or runtime.done
+                    )
+                    batch = runtime.events[index:]
+                    index = len(runtime.events)
+                    done = runtime.done
+                    error = runtime.error
+                for event in batch:
+                    yield event
+                if done and index >= len(runtime.events):
+                    if error is not None:
+                        raise error
+                    return
+        finally:
+            runtime.followers -= 1
+            if runtime.done and runtime.followers == 0:
+                self._active_provider_turns.pop(turn_id, None)
+
+    async def stop_provider_turn(self, turn_id: str) -> ChatTurn:
+        runtime = self._active_provider_turns.get(turn_id)
+        if runtime is not None and runtime.task is not None and not runtime.task.done():
+            runtime.task.cancel()
+            try:
+                await runtime.task
+            except asyncio.CancelledError:
+                pass
+        return self.cancel_turn(turn_id)
+
+    async def shutdown(self) -> None:
+        tasks = [
+            task
+            for runtime in self._active_provider_turns.values()
+            for task in (runtime.task, runtime.cleanup_task)
+            if task is not None and not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._active_provider_turns.clear()
+
+    async def _produce_provider_turn(
+        self, prepared: PreparedChat, runtime: _ActiveProviderTurn
+    ) -> None:
+        try:
+            async for event in self.stream(prepared):
+                async with runtime.condition:
+                    runtime.events.append(event)
+                    runtime.condition.notify_all()
+        except asyncio.CancelledError as exc:
+            runtime.error = exc
+        except BaseException as exc:
+            runtime.error = exc
+        finally:
+            async with runtime.condition:
+                runtime.done = True
+                runtime.condition.notify_all()
+            turn = prepared.turn
+            if turn is not None and runtime.error is not None:
+                latest = self.store.get(ChatTurn, turn.id)
+                if latest.status not in {
+                    ChatTurnStatus.COMPLETE,
+                    ChatTurnStatus.CANCELLED,
+                    ChatTurnStatus.WAITING_APPROVAL,
+                }:
+                    status = (
+                        ChatTurnStatus.CANCELLED
+                        if isinstance(runtime.error, asyncio.CancelledError)
+                        else ChatTurnStatus.FAILED
+                    )
+                    self.store.update(
+                        ChatTurn,
+                        latest.id,
+                        {
+                            "status": status,
+                            "error": (
+                                "response stopped"
+                                if status == ChatTurnStatus.CANCELLED
+                                else str(runtime.error)[:1_000]
+                            ),
+                        },
+                        expected_revision=latest.revision,
+                    )
+            if runtime.followers == 0:
+                runtime.cleanup_task = asyncio.create_task(
+                    self._expire_provider_turn(turn.id if turn else "", runtime),
+                    name=f"nebula-provider-chat-cleanup-{turn.id if turn else 'unknown'}",
+                )
+
+    async def _expire_provider_turn(
+        self, turn_id: str, runtime: _ActiveProviderTurn
+    ) -> None:
+        await asyncio.sleep(60)
+        if runtime.done and runtime.followers == 0:
+            self._active_provider_turns.pop(turn_id, None)
 
     def _model_content(
         self, message: ChatRequestMessage, engagement_id: str | None
@@ -989,6 +1134,28 @@ class ChatService:
                     ),
                 },
             )
+        elif engagement_id is not None and request.stream:
+            session_id = (
+                session.id
+                if session is not None
+                else pending_session.id
+                if pending_session is not None
+                else ""
+            )
+            turn = ChatTurn(
+                id=str(uuid4()),
+                engagement_id=engagement_id,
+                session_id=session_id,
+                provider_profile_id=profile.id,
+                model=selected_model,
+                tools_enabled=False,
+                request_snapshot={
+                    "model_request": model_request.model_dump(mode="json"),
+                    "citations": [item.model_dump(mode="json") for item in citations],
+                    "context_usage": context_usage.model_dump(mode="json"),
+                    "include_oci_tools": False,
+                },
+            )
         try:
             resolved_model = provider.require(model_request)
         except Exception as exc:
@@ -1019,7 +1186,7 @@ class ChatService:
             turn=turn,
         )
         if turn is not None:
-            self._persist_tool_turn_inputs(prepared)
+            self._persist_turn_inputs(prepared)
         return prepared
 
     async def complete(self, prepared: PreparedChat) -> ChatCompletionResponse:
@@ -1038,6 +1205,7 @@ class ChatService:
         response = await prepared.provider.complete(prepared.model_request)
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
+        self._complete_turn(prepared, completion)
         return completion
 
     async def stream(
@@ -1083,6 +1251,7 @@ class ChatService:
                     raise ChatError("provider stream completed without a response")
                 completion = self._completion(prepared, event.response)
                 self._persist(prepared, completion)
+                self._complete_turn(prepared, completion)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
                 yield "done", payload
@@ -1749,7 +1918,36 @@ class ChatService:
         if turn.provider_profile_id is None:
             raise ChatConfigurationError("chat turn no longer identifies a provider")
         profile = self.store.get(ProviderProfile, turn.provider_profile_id)
-        if not profile.enabled or not profile.tools_verified_for(turn.model):
+        if not profile.enabled:
+            raise ChatConfigurationError("the chat provider is no longer enabled")
+        provider = self.provider_factory(profile)
+        model_request = ModelRequest.model_validate(
+            turn.request_snapshot.get("model_request")
+        )
+        citations = [
+            ChatCitation.model_validate(item)
+            for item in turn.request_snapshot.get("citations", [])
+        ]
+        if not turn.tools_enabled:
+            return PreparedChat(
+                provider=provider,
+                provider_profile=profile,
+                model_request=model_request,
+                resolved_model=provider.require(model_request),
+                citations=citations,
+                engagement_id=turn.engagement_id,
+                session=session,
+                pending_session=None,
+                stored_messages=self._session_messages(session),
+                new_messages=[],
+                context_usage=ChatTokenUsage.model_validate(
+                    turn.request_snapshot.get("context_usage", {})
+                ),
+                tools_enabled=False,
+                turn=turn,
+                inputs_persisted=True,
+            )
+        if not profile.tools_verified_for(turn.model):
             raise ChatConfigurationError(
                 "the exact chat model is no longer verified for command use"
             )
@@ -1758,7 +1956,6 @@ class ChatService:
             and self.automation_tool_platform is None
         ):
             raise ChatConfigurationError("automation command runtime is unavailable")
-        provider = self.provider_factory(profile)
         try:
             mcp_profiles = tuple(
                 McpServerProfile.model_validate(item)
@@ -1809,13 +2006,6 @@ class ChatService:
             raise ChatHistoryConflict(
                 "automation runtime or scope changed while the response was paused"
             )
-        model_request = ModelRequest.model_validate(
-            turn.request_snapshot.get("model_request")
-        )
-        citations = [
-            ChatCitation.model_validate(item)
-            for item in turn.request_snapshot.get("citations", [])
-        ]
         return PreparedChat(
             provider=provider,
             provider_profile=profile,
@@ -2688,7 +2878,7 @@ class ChatService:
             message=ChatResponseMessage(content=content),
             usage=(
                 prepared.turn.usage
-                if prepared.turn is not None
+                if prepared.turn is not None and prepared.tools_enabled
                 else ChatTokenUsage.model_validate(response.usage.model_dump())
             ),
             context_usage=(
@@ -2701,7 +2891,7 @@ class ChatService:
             citations=prepared.citations,
         )
 
-    def _persist_tool_turn_inputs(self, prepared: PreparedChat) -> None:
+    def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
         turn = prepared.turn
         if turn is None or not prepared.engagement_id:
             return
@@ -2723,7 +2913,7 @@ class ChatService:
             raise ChatHistoryConflict("chat session already has an active response")
         session = prepared.session or prepared.pending_session
         if session is None:
-            raise ChatError("command-runtime chat is missing its durable session")
+            raise ChatError("provider chat is missing its durable session")
         start = len(prepared.stored_messages) + 1
         messages = [
             ChatMessage(
@@ -2744,7 +2934,7 @@ class ChatService:
         last_sequence = messages[-1].sequence if messages else start - 1
         metadata = {
             **session.metadata,
-            "tools_enabled": True,
+            "tools_enabled": prepared.tools_enabled,
             "message_count": last_sequence,
             "last_sequence": last_sequence,
         }
@@ -2765,6 +2955,27 @@ class ChatService:
         prepared.inputs_persisted = True
         prepared.stored_messages.extend(messages)
         prepared.new_messages = []
+
+    def _complete_turn(
+        self, prepared: PreparedChat, completion: ChatCompletionResponse
+    ) -> None:
+        if prepared.turn is None or completion.message.id is None:
+            return
+        latest = self.store.get(ChatTurn, prepared.turn.id)
+        if latest.status == ChatTurnStatus.COMPLETE:
+            prepared.turn = latest
+            return
+        prepared.turn = self.store.update(
+            ChatTurn,
+            latest.id,
+            {
+                "status": ChatTurnStatus.COMPLETE,
+                "final_message_id": completion.message.id,
+                "usage": completion.usage,
+                "error": None,
+            },
+            expected_revision=latest.revision,
+        )
 
     def _persist(
         self, prepared: PreparedChat, completion: ChatCompletionResponse

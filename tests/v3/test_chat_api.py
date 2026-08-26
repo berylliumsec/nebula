@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from io import BytesIO
 
@@ -7,7 +8,7 @@ from PIL import Image
 import nebula.v3.chat as chat_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.chat import ChatCompactionError, ChatService
+from nebula.v3.chat import ChatCompactionError, ChatCompletionRequest, ChatService
 from nebula.v3.domain import (
     AgentRun,
     ContextMemory,
@@ -27,10 +28,12 @@ from nebula.v3.providers import (
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ModelUsage,
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
+    StreamEventType,
 )
 from nebula.v3.storage import NebulaStore
 
@@ -63,8 +66,161 @@ class ApiChatProvider(ModelProvider):
         return ProviderHealth(provider_id=self.config.id, healthy=True)
 
 
+class DetachedChatProvider(ApiChatProvider):
+    def __init__(self, provider_id: str) -> None:
+        super().__init__(provider_id)
+        self.release = asyncio.Event()
+
+    async def stream(self, request: ModelRequest):
+        yield ModelStreamEvent(type=StreamEventType.STARTED)
+        yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta="Still working. ")
+        await self.release.wait()
+        yield ModelStreamEvent(
+            type=StreamEventType.COMPLETED,
+            response=ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="Still working. Finished safely.",
+                usage=ModelUsage(input_tokens=2, output_tokens=4, total_tokens=6),
+                finish_reason="stop",
+                provider_request_id="request-detached",
+            ),
+        )
+
+
 def _auth() -> dict[str, str]:
     return {"Authorization": "Bearer test-token"}
+
+
+def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "detached-provider.db")
+        engagement = store.create(Engagement(id="project-a", name="Project A"))
+        profile = store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                privacy={"local_only": True},
+                metadata={"default_model": "model-a"},
+            )
+        )
+        provider = DetachedChatProvider(profile.id)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                engagement_id=engagement.id,
+                provider_id=profile.id,
+                messages=[{"role": "user", "content": "Keep going"}],
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "started"
+        assert (await anext(follower))[0] == "delta"
+        await follower.aclose()
+
+        assert service.has_active_provider_turn(turn_id) is True
+        provider.release.set()
+        for _ in range(100):
+            if store.get(ChatTurn, turn_id).status.value == "complete":
+                break
+            await asyncio.sleep(0.01)
+
+        turn = store.get(ChatTurn, turn_id)
+        assert turn.status.value == "complete"
+        assert turn.final_message_id
+        assert [message.content for message in service.session_messages(turn.session_id)] == [
+            "Keep going",
+            "Still working. Finished safely.",
+        ]
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "stopped-provider.db")
+        engagement = store.create(Engagement(id="project-a", name="Project A"))
+        profile = store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                privacy={"local_only": True},
+                metadata={"default_model": "model-a"},
+            )
+        )
+        provider = DetachedChatProvider(profile.id)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                engagement_id=engagement.id,
+                provider_id=profile.id,
+                messages=[{"role": "user", "content": "Stop when asked"}],
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "started"
+        assert (await anext(follower))[0] == "delta"
+
+        stopped = await service.stop_provider_turn(turn_id)
+
+        assert stopped.status.value == "cancelled"
+        assert store.get(ChatTurn, turn_id).status.value == "cancelled"
+        await follower.aclose()
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "late-provider-follower.db")
+        engagement = store.create(Engagement(id="project-a", name="Project A"))
+        profile = store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                privacy={"local_only": True},
+                metadata={"default_model": "model-a"},
+            )
+        )
+        provider = DetachedChatProvider(profile.id)
+        provider.release.set()
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                engagement_id=engagement.id,
+                provider_id=profile.id,
+                messages=[{"role": "user", "content": "Finish immediately"}],
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        for _ in range(100):
+            if store.get(ChatTurn, turn_id).status.value == "complete":
+                break
+            await asyncio.sleep(0.01)
+
+        events = [event async for event in service.follow_provider_turn(turn_id)]
+
+        assert [event for event, _ in events] == ["started", "delta", "done"]
+        assert turn_id not in service._active_provider_turns
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypatch):

@@ -1126,6 +1126,7 @@ pub(crate) fn browser_create_tab(
     upstream_proxy_url: Option<String>,
     upstream_proxy_credential_ref: Option<String>,
     capture_bodies: bool,
+    interception_enabled: bool,
 ) -> Result<(), String> {
     if !valid_identifier(&tab_id)
         || !valid_identifier(&project_id)
@@ -1206,10 +1207,12 @@ pub(crate) fn browser_create_tab(
             let created = crate::browser_proxy::start(
                 &app,
                 &project_key_hex(&project_id),
+                &project_id,
                 &session_id,
                 &tab_id,
                 upstream,
                 capture_bodies,
+                interception_enabled,
             )?;
             proxies.insert(session_id.clone(), created.clone());
             Some(created)
@@ -1611,6 +1614,7 @@ pub(crate) fn browser_configure_session_proxy(
     upstream_proxy_url: Option<String>,
     upstream_proxy_credential_ref: Option<String>,
     capture_bodies: bool,
+    interception_enabled: bool,
 ) -> Result<(), String> {
     if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
         return Err("The Project or session identifier is invalid.".to_string());
@@ -1639,7 +1643,37 @@ pub(crate) fn browser_configure_session_proxy(
         upstream_proxy_url,
         upstream_proxy_credential_ref,
     )?;
-    proxy.configure_upstream(upstream, capture_bodies)
+    proxy.configure_upstream(upstream, capture_bodies, interception_enabled)
+}
+
+#[tauri::command]
+pub(crate) fn browser_decide_session_intercept(
+    state: State<'_, BrowserState>,
+    project_id: String,
+    session_id: String,
+    transaction_id: String,
+    decision: String,
+) -> Result<(), String> {
+    if !valid_identifier(&project_id)
+        || !valid_identifier(&session_id)
+        || transaction_id.is_empty()
+        || transaction_id.len() > 300
+    {
+        return Err("The Project, session, or transaction identifier is invalid.".to_string());
+    }
+    let proxy = state
+        .session_proxies
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .get(&session_id)
+        .cloned()
+        .ok_or_else(|| "The live session proxy is no longer running.".to_string())?;
+    let decision = match decision.as_str() {
+        "forward" => crate::browser_proxy::NativeInterceptDecision::Forward,
+        "drop" => crate::browser_proxy::NativeInterceptDecision::Drop,
+        _ => return Err("The intercept decision must be forward or drop.".to_string()),
+    };
+    proxy.decide_intercept(&transaction_id, decision)
 }
 
 #[tauri::command]
@@ -1812,7 +1846,14 @@ pub(crate) fn browser_execute_action(
     }
     validated_url(&request.page_url)?;
     let allowed_kinds = [
-        "navigate", "click", "fill", "select", "press", "extract", "replay",
+        "navigate",
+        "click",
+        "fill",
+        "select",
+        "press",
+        "extract",
+        "replay",
+        "research_request",
     ];
     if !allowed_kinds.contains(&request.kind.as_str()) {
         return Err(
@@ -1827,7 +1868,7 @@ pub(crate) fn browser_execute_action(
             .ok_or_else(|| "Navigate actions require a URL argument.".to_string())?;
         validated_url(target)?;
     }
-    if request.kind == "replay" {
+    if request.kind == "replay" || request.kind == "research_request" {
         let target = request
             .arguments
             .get("url")
@@ -1853,7 +1894,7 @@ pub(crate) fn browser_execute_action(
       try {{
         if (String(location.href) !== expectedUrl) return fail("The page changed after approval.");
         if (kind === "navigate") {{ location.assign(String(args.url)); return {{ ok: true, kind, pageUrl: expectedUrl, navigation: String(args.url).slice(0, 4096) }}; }}
-        if (kind === "replay") {{
+        if (kind === "replay" || kind === "research_request") {{
           const target = new URL(String(args.url), location.href);
           const requestHeaders = args.headers && typeof args.headers === "object" ? args.headers : {{}};
           const forbidden = /authorization|cookie|csrf|xsrf|api[-_]?key|token/i;
@@ -1862,11 +1903,22 @@ pub(crate) fn browser_execute_action(
           xhr.open(String(args.method || "GET").toUpperCase(), target.href, false);
           xhr.withCredentials = true;
           for (const [name, value] of Object.entries(requestHeaders)) xhr.setRequestHeader(String(name), String(value));
+          const startedAt = Date.now();
           xhr.send(args.body === undefined || args.body === "" ? null : String(args.body).slice(0, 65536));
           const responseSecret = /authorization|proxy[-_]?authorization|cookie|set[-_]?cookie|csrf|xsrf|api[-_]?key|token/i;
           const responseHeaders = Object.fromEntries(String(xhr.getAllResponseHeaders()).trim().split(/[\r\n]+/).filter(Boolean).map((line) => {{ const index = line.indexOf(":"); if (index <= 0) return [line, ""]; const name = line.slice(0, index).trim(); const value = responseSecret.test(name) ? "<redacted>" : line.slice(index + 1).trim().slice(0, 8192); return [name, value]; }}));
           const responseText = String(xhr.responseText || "");
-          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responseBytes: responseText.length, untrusted_response_body: true }};
+          if (kind === "replay") return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 4096), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responseBytes: responseText.length, durationMs: Date.now() - startedAt, untrusted_response_body: true }};
+          const contentType = String(xhr.getResponseHeader("content-type") || "").slice(0, 500);
+          let links = [];
+          if (/text\/html|application\/xhtml\+xml/i.test(contentType)) {{
+            const documentValue = new DOMParser().parseFromString(responseText.slice(0, 1048576), "text/html");
+            links = Array.from(documentValue.querySelectorAll("a[href],form[action]"), (element) => {{
+              const raw = element.getAttribute(element.tagName === "FORM" ? "action" : "href") || "";
+              try {{ return new URL(raw, target.href).href.slice(0, 16384); }} catch {{ return ""; }}
+            }}).filter(Boolean).slice(0, 500);
+          }}
+          return {{ ok: true, kind, pageUrl: expectedUrl, requestUrl: target.href.slice(0, 16384), method: String(args.method || "GET").toUpperCase(), status: xhr.status, responseHeaders, responseBytes: responseText.length, responseText: responseText.slice(0, 65536), responseTruncated: responseText.length > 65536, contentType, links, durationMs: Date.now() - startedAt, untrusted_response_body: true }};
         }}
         let candidates = [];
         if (locator.css) candidates = Array.from(document.querySelectorAll(String(locator.css)));

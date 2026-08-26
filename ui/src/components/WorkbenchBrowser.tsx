@@ -404,6 +404,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
             credentialRef: persistedSession.upstreamProxyCredentialRef,
           },
           persistedSession.captureMode === "bodies",
+          persistedSession.interceptionEnabled,
         );
         updateTab(id, { created: true });
       }
@@ -1301,7 +1302,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           enabled: updated.upstreamProxyEnabled,
           url: updated.upstreamProxyUrl,
           credentialRef: updated.upstreamProxyCredentialRef,
-        }, updated.captureMode === "bodies");
+        }, updated.captureMode === "bodies", updated.interceptionEnabled);
       }
       setWorkspace((current) => current ? {
         ...current,
@@ -1331,7 +1332,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           enabled: updated.upstreamProxyEnabled,
           url: updated.upstreamProxyUrl,
           credentialRef: updated.upstreamProxyCredentialRef,
-        }, updated.captureMode === "bodies");
+        }, updated.captureMode === "bodies", updated.interceptionEnabled);
       }
       setWorkspace((current) => current ? {
         ...current,
@@ -1341,6 +1342,44 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.upstream_proxy_update_failed", "The upstream proxy configuration could not be applied.", caught, "workbench_browser");
       setWorkspaceError(`${errorMessage(caught)} No upstream credentials were returned to the UI or AI.`);
+    }
+  };
+
+  const setInterceptionEnabled = async (interceptionEnabled: boolean) => {
+    if (!activeSession?.proxyEnabled) return;
+    if (interceptionEnabled) {
+      const approved = await confirm({
+        title: "Pause every in-scope request?",
+        message: "The native proxy will pause each non-CONNECT request for up to 60 seconds. A timeout, disconnect, or missing durable receipt fails closed. Keep Intercept open on this or a paired device to forward or drop requests.",
+        confirmLabel: "Enable interception",
+        tone: "danger",
+      });
+      if (!approved) return;
+    }
+    setWorkspaceError(undefined);
+    try {
+      const updated = await api.updateSecurityBrowserCapture(activeSession, {
+        captureMode: activeSession.captureMode,
+        proxyEnabled: activeSession.proxyEnabled,
+        trustAcknowledged: activeSession.proxyTrustAcknowledged,
+        interceptionEnabled,
+        upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
+        upstreamProxyUrl: activeSession.upstreamProxyUrl,
+        upstreamProxyCredentialRef: activeSession.upstreamProxyCredentialRef,
+      });
+      await workbenchBrowser.configureProxy(projectId, updated.id, {
+        enabled: updated.upstreamProxyEnabled,
+        url: updated.upstreamProxyUrl,
+        credentialRef: updated.upstreamProxyCredentialRef,
+      }, updated.captureMode === "bodies", updated.interceptionEnabled);
+      setWorkspace((current) => current ? {
+        ...current,
+        sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
+      } : current);
+      setNotice({ kind: "info", message: interceptionEnabled ? "Interception enabled. In-scope requests now pause durably for up to 60 seconds." : "Interception disabled. New requests pass through the capture proxy without pausing." });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.interception_update_failed", "Browser interception could not be updated.", caught, "workbench_browser");
+      setWorkspaceError(`${errorMessage(caught)} The previous interception setting remains authoritative.`);
     }
   };
 
@@ -1367,7 +1406,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         captureMode: activeSession.captureMode,
         proxyEnabled,
         trustAcknowledged: proxyEnabled,
-        interceptionEnabled: activeSession.interceptionEnabled,
+        interceptionEnabled: proxyEnabled ? activeSession.interceptionEnabled : false,
         upstreamProxyEnabled: activeSession.upstreamProxyEnabled,
         upstreamProxyUrl: activeSession.upstreamProxyUrl,
         upstreamProxyCredentialRef: activeSession.upstreamProxyCredentialRef,
@@ -1383,7 +1422,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         ...current,
         sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
       } : current);
-      setNotice({ kind: "info", message: proxyEnabled ? "Capture proxy enabled. Reopen the tab to begin HTTP/2 and WebSocket capture." : "Capture proxy disabled. Reopen the tab to browse directly." });
+      setNotice({ kind: "info", message: proxyEnabled ? "Capture proxy enabled. Reopen the tab to begin HTTP/2 and WebSocket capture." : "Capture proxy and interception disabled. Reopen the tab to browse directly." });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.proxy_update_failed", "The browser capture proxy setting could not be updated.", caught, "workbench_browser");
       setWorkspaceError(errorMessage(caught));
@@ -1489,6 +1528,30 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     setReplayBody("");
   };
 
+  const saveExchangeToRepeater = async (exchange: SecurityBrowserExchange) => {
+    if (!activeSession || !activeIdentity) return;
+    setWorkspaceError(undefined);
+    try {
+      const forbidden = /authorization|proxy-authorization|cookie|set-cookie|csrf|xsrf|api[-_]?key|token/i;
+      const headers = Object.entries(exchange.requestHeaders)
+        .filter(([name, value]) => !forbidden.test(name) && !String(value).startsWith("<redacted:sha256:"));
+      await api.createSecurityBrowserRepeaterTab(projectId, {
+        sessionId: activeSession.id,
+        identityId: activeIdentity.id,
+        name: `${exchange.method} ${new URL(exchange.url).pathname || "/"}`.slice(0, 200),
+        method: exchange.method,
+        url: exchange.url,
+        headers,
+        sourceExchangeId: exchange.id,
+      });
+      setResearchView("repeater");
+      setNotice({ kind: "info", message: "The captured request is now a durable Repeater request. Secret headers were excluded; the native identity retains cookies." });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.repeater_import_failed", "A captured request could not be saved to Repeater.", caught, "workbench_browser");
+      setWorkspaceError(`${errorMessage(caught)} The captured exchange was not changed.`);
+    }
+  };
+
   const proposeReplay = async (event: FormEvent) => {
     event.preventDefault();
     if (!activeSession || !activeTab?.created || !activeTab.url || !replayExchange || replayBusy) return;
@@ -1556,7 +1619,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       {comparison && <div className="browser-exchange-diff"><strong>Authorization response diff</strong><span>Status: {comparison.status}</span><span>Bytes: {comparison.bytes}</span><span>{comparison.changedHeaders.length ? `${comparison.changedHeaders.length} response headers changed: ${comparison.changedHeaders.join(", ")}` : "Response headers are identical."}</span></div>}
       {sessionTraffic.length ? <ol className="browser-traffic-list">{[...sessionTraffic].reverse().map((exchange) => <li key={exchange.id} className={selectedExchangeIds.includes(exchange.id) ? "selected" : ""}>
         <label><input type="checkbox" checked={selectedExchangeIds.includes(exchange.id)} onChange={(event) => setSelectedExchangeIds((current) => event.target.checked ? [...current.filter((id) => id !== exchange.id), exchange.id].slice(-2) : current.filter((id) => id !== exchange.id))} /><span className={`browser-method method-${exchange.method.toLowerCase()}`}>{exchange.method}</span><code>{exchange.blocked ? "BLOCKED" : exchange.statusCode ?? "…"}</code><span title={exchange.url}>{exchange.url}</span><small>{exchange.blocked ? (exchange.error ?? "Rejected by Project scope or proxy rule") : `${exchange.protocol} · ${exchange.durationMs === undefined ? "—" : `${exchange.durationMs} ms`}`}</small></label>
-        <details><summary>Request and response</summary><section><strong>Request headers</strong><pre>{JSON.stringify(exchange.requestHeaders, null, 2)}</pre><strong>Response headers</strong><pre>{JSON.stringify(exchange.responseHeaders, null, 2)}</pre><button className="button secondary" type="button" disabled={!desktop || !activeTab?.created} onClick={() => beginReplay(exchange)}>Edit and replay with {activeIdentity?.name ?? "active identity"}</button></section></details>
+        <details><summary>Request and response</summary><section><strong>Request headers</strong><pre>{JSON.stringify(exchange.requestHeaders, null, 2)}</pre><strong>Response headers</strong><pre>{JSON.stringify(exchange.responseHeaders, null, 2)}</pre><span className="browser-suite-actions"><button className="button secondary" type="button" disabled={!desktop || !activeTab?.created} onClick={() => beginReplay(exchange)}>Edit and replay with {activeIdentity?.name ?? "active identity"}</button><button className="button secondary" type="button" onClick={() => void saveExchangeToRepeater(exchange)}>Send to Repeater</button></span></section></details>
       </li>)}</ol> : <div className="browser-research-empty"><Network size={20} /><strong>No captured traffic</strong><span>Traffic appears here when the native interception proxy is available and capture is enabled.</span></div>}
       {replayExchange && <form className="browser-replay-editor" onSubmit={proposeReplay}><header><strong>Edit request · no request sent yet</strong><button type="button" aria-label="Close request editor" onClick={() => setReplayExchange(undefined)}><X size={14} /></button></header><label>Method<input value={replayMethod} maxLength={16} onChange={(event) => setReplayMethod(event.target.value.toUpperCase())} /></label><label>URL<input value={replayUrl} maxLength={16384} onChange={(event) => setReplayUrl(event.target.value)} /></label><label>Headers JSON<textarea value={replayHeaders} rows={5} onChange={(event) => setReplayHeaders(event.target.value)} /></label><label>Body<textarea value={replayBody} rows={5} maxLength={65536} onChange={(event) => setReplayBody(event.target.value)} /></label><p>Cookies remain inside the selected identity and are attached by the system webview. Reusable secret headers are never copied into this editor.</p><button className="button primary" type="submit" disabled={replayBusy || !replayUrl.trim()}>{replayBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} Create approval proposal</button></form>}
     </div> : researchView === "actions" ? <div className="browser-action-list">
@@ -1587,7 +1650,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           <div className="browser-proxy-controls"><button className="button secondary" type="button" onClick={() => void revealProjectCa()}>Reveal certificate</button><button className="button secondary" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void rotateProjectCa()}>Rotate</button><button className="button quiet danger" type="button" disabled={!caStatus || caStatus.state === "revoked"} onClick={() => void revokeProjectCa()}>Revoke</button></div>
           {caTrustAcknowledged && <small role="status">Trust acknowledgement recorded for this Nebula session. The operating-system trust store remains under your control.</small>}
         </section>
-        <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "I trust the CA · enable capture proxy"}</button></div>
+        <div className="browser-proxy-controls"><button className={activeSession?.proxyEnabled ? "button danger" : "button primary"} type="button" onClick={() => void setProxyEnabled(!activeSession?.proxyEnabled)}>{activeSession?.proxyEnabled ? "Disable capture proxy" : "I trust the CA · enable capture proxy"}</button>{activeSession?.proxyEnabled && <button className={activeSession.interceptionEnabled ? "button danger" : "button secondary"} type="button" onClick={() => void setInterceptionEnabled(!activeSession.interceptionEnabled)}>{activeSession.interceptionEnabled ? "Disable interception" : "Enable interception"}</button>}</div>
       </>}
       <section className="browser-automation-card" aria-labelledby="browser-automation-title">
         <header><div><strong id="browser-automation-title">Autonomous web test</strong><small>Run-owned browser and proxy control inside the frozen Project scope.</small></div>{activeAutomationLease && <span className="browser-action-status executing">{activeAutomationLease.status}</span>}</header>

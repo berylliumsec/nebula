@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { detachHarnessStream } from "./chatStreamLifecycle";
+import { detachChatStream } from "./chatStreamLifecycle";
 
-describe("detachHarnessStream", () => {
+describe("detachChatStream", () => {
   it("aborts only the viewer transport and records a harness detachment", () => {
     const controller = new AbortController();
     const detached = new WeakSet<AbortController>();
 
-    expect(detachHarnessStream(controller, "harness", detached)).toBe(true);
+    expect(detachChatStream(controller, "harness", detached)).toBe(true);
     expect(controller.signal.aborted).toBe(true);
     expect(detached.has(controller)).toBe(true);
   });
 
-  it("does not detach provider streams", () => {
+  it("detaches provider viewer streams without treating them as operator stops", () => {
     const controller = new AbortController();
     const detached = new WeakSet<AbortController>();
 
-    expect(detachHarnessStream(controller, "provider", detached)).toBe(false);
-    expect(controller.signal.aborted).toBe(false);
-    expect(detached.has(controller)).toBe(false);
+    expect(detachChatStream(controller, "provider", detached)).toBe(true);
+    expect(controller.signal.aborted).toBe(true);
+    expect(detached.has(controller)).toBe(true);
   });
 });

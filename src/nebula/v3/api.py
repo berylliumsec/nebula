@@ -104,6 +104,7 @@ from .browser_research import (
     InterceptCreateRequest,
     InterceptDecisionRequest,
     RepeaterResultRequest,
+    RepeaterStateRequest,
     RepeaterTabCreateRequest,
     RepeaterTabUpdateRequest,
     SiteEdgeRecordRequest,
@@ -442,6 +443,7 @@ CUSTOM_RESOURCES = {
     "browser_crawl_jobs",
     "browser_intercepts",
     "browser_repeater_tabs",
+    "browser_repeater_results",
     "browser_attacks",
     "browser_attack_results",
     "browser_token_analyses",
@@ -1254,16 +1256,24 @@ def create_app(
     entity_validator = ApiEntityValidator(store)
     operators = OperatorProfileService(store)
 
+    def active_operator_id() -> str:
+        active = operators.active_profile_or_none()
+        # Work can begin before the user chooses a display name. Attribute that
+        # technical activity to the system rather than inventing a human actor.
+        return active.id if active is not None else "system"
+
+    provider_chat = ChatService(
+        store,
+        tool_platform=tool_platform,
+        automation_tool_platform=automation_tool_platform,
+        provider_factory=chat_provider_factory,
+        operator_id=active_operator_id,
+        knowledge_index=knowledge_index,
+        artifact_store=artifact_store,
+    )
+
     def chat_service() -> ChatService:
-        return ChatService(
-            store,
-            tool_platform=tool_platform,
-            automation_tool_platform=automation_tool_platform,
-            provider_factory=chat_provider_factory,
-            operator_id=active_operator_id,
-            knowledge_index=knowledge_index,
-            artifact_store=artifact_store,
-        )
+        return provider_chat
 
     if harness_runtime.knowledge_retriever is None:
         harness_runtime.bind_knowledge_retriever(
@@ -1276,12 +1286,6 @@ def create_app(
                 )
             )
         )
-
-    def active_operator_id() -> str:
-        active = operators.active_profile_or_none()
-        # Work can begin before the user chooses a display name. Attribute that
-        # technical activity to the system rather than inventing a human actor.
-        return active.id if active is not None else "system"
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -1516,6 +1520,9 @@ def create_app(
                     execution_ai.startup,
                     execution_ai.shutdown,
                 )
+            await start_component(
+                "chat", "provider-runtime", provider_chat.startup, provider_chat.shutdown
+            )
             await start_component(
                 "harnesses",
                 "runtime",
@@ -7195,6 +7202,12 @@ def create_app(
         if not request.stream:
             return await service.complete(prepared)
 
+        turn_id = (
+            service.start_provider_turn(prepared)
+            if prepared.turn is not None
+            else None
+        )
+
         async def event_stream() -> Any:
             started_at = time.monotonic()
             event_count = 0
@@ -7210,7 +7223,12 @@ def create_app(
                 session_id=chat_session.id if chat_session else None,
             )
             try:
-                async for event, payload in service.stream(prepared):
+                source = (
+                    service.follow_provider_turn(turn_id)
+                    if turn_id is not None
+                    else service.stream(prepared)
+                )
+                async for event, payload in source:
                     event_count += 1
                     yield _server_sent_event(event, payload)
             except asyncio.CancelledError as caught_error:
@@ -7284,13 +7302,20 @@ def create_app(
     )
     async def resume_chat_turn(turn_id: str) -> StreamingResponse:
         service = chat_service()
-        prepared = service.prepare_resume(turn_id)
+        prepared = (
+            None
+            if service.has_active_provider_turn(turn_id)
+            else service.prepare_resume(turn_id)
+        )
+        if prepared is not None:
+            service.start_provider_turn(prepared)
 
         async def event_stream() -> Any:
             started_at = time.monotonic()
             event_count = 0
             outcome = "success"
-            chat_session = prepared.session or prepared.pending_session
+            turn = store.get(ChatTurn, turn_id)
+            chat_session = store.get(ChatSession, turn.session_id)
             emit_diagnostic(
                 "info",
                 "chat",
@@ -7301,7 +7326,7 @@ def create_app(
                 session_id=chat_session.id if chat_session else None,
             )
             try:
-                async for event, payload in service.stream(prepared):
+                async for event, payload in service.follow_provider_turn(turn_id):
                     event_count += 1
                     yield _server_sent_event(event, payload)
             except asyncio.CancelledError as caught_error:
@@ -7375,7 +7400,7 @@ def create_app(
                 turn.harness_turn_id, reason="Stopped by operator"
             )
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
-        return _chat_turn_summary(chat_service().cancel_turn(turn_id))
+        return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
@@ -8178,6 +8203,18 @@ def create_app(
     ) -> Any:
         return browser_research.transition_crawl(crawl_id, request)
 
+    @app.delete(
+        f"{API_PREFIX}/browser-crawls/{{crawl_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_crawl(
+        crawl_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_crawl(crawl_id, expected_revision)
+        return Response(status_code=204)
+
     @app.post(
         f"{API_PREFIX}/browser-sessions/{{session_id}}/intercepts",
         status_code=201,
@@ -8230,6 +8267,16 @@ def create_app(
         return browser_research.update_repeater_tab(tab_id, request, x_nebula_actor)
 
     @app.post(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/state",
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transition_browser_repeater_tab(
+        tab_id: str, request: RepeaterStateRequest
+    ) -> Any:
+        return browser_research.transition_repeater_tab(tab_id, request)
+
+    @app.post(
         f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}/results",
         tags=["security-browser"],
         dependencies=[Depends(require_auth)],
@@ -8238,6 +8285,18 @@ def create_app(
         tab_id: str, request: RepeaterResultRequest
     ) -> Any:
         return browser_research.record_repeater_result(tab_id, request)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-repeater-tabs/{{tab_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_repeater_tab(
+        tab_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_repeater_tab(tab_id, expected_revision)
+        return Response(status_code=204)
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-attacks",
@@ -8277,6 +8336,18 @@ def create_app(
         x_nebula_actor: str = Header(default="native-browser", alias="X-Nebula-Actor"),
     ) -> Any:
         return browser_research.add_attack_result(attack_id, request, x_nebula_actor)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-attacks/{{attack_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_attack(
+        attack_id: str, expected_revision: int = Query(ge=1)
+    ) -> Response:
+        browser_research.delete_attack(attack_id, expected_revision)
+        return Response(status_code=204)
 
     @app.post(
         f"{API_PREFIX}/browser-utilities/decode",

@@ -10,6 +10,7 @@ from nebula.v3.domain import (
     BrowserCrawlJob,
     BrowserInterceptItem,
     BrowserRepeaterTab,
+    BrowserRepeaterResult,
     BrowserSiteNode,
     BrowserTokenAnalysis,
     Engagement,
@@ -271,6 +272,41 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     )
     assert repeater.status_code == 201, repeater.text
     assert store.count(BrowserRepeaterTab) == 1
+    current_repeater = repeater.json()
+    for action in ("queue", "start"):
+        moved = client.post(
+            f"/api/v1/browser-repeater-tabs/{current_repeater['id']}/state",
+            headers=_auth(),
+            json={
+                "expected_revision": current_repeater["revision"],
+                "action": action,
+                "actor_id": "operator-1",
+            },
+        )
+        assert moved.status_code == 200, moved.text
+        current_repeater = moved.json()
+    result = client.post(
+        f"/api/v1/browser-repeater-tabs/{current_repeater['id']}/results",
+        headers=_auth(),
+        json={
+            "expected_revision": current_repeater["revision"],
+            "status_code": 200,
+            "response_headers": [["Set-Cookie", "session=secret"], ["Content-Type", "application/json"]],
+            "response_bytes": 42,
+            "duration_ms": 8,
+            "actor_id": "native-browser",
+        },
+    )
+    assert result.status_code == 200, result.text
+    assert result.json()["response_headers"][0][1].startswith("<redacted:sha256:")
+    assert store.count(BrowserRepeaterResult) == 1
+    workspace = client.get(
+        f"/api/v1/engagements/{project.id}/browser-research", headers=_auth()
+    ).json()
+    saved_repeater = workspace["repeater_tabs"][0]
+    assert saved_repeater["state"] == "ready"
+    assert saved_repeater["request_count"] == 1
+    assert saved_repeater["history_exchange_ids"] == [result.json()["id"]]
 
     attack = client.post(
         f"/api/v1/engagements/{project.id}/browser-attacks",
@@ -322,6 +358,42 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     assert exhausted.status_code == 422
     assert store.count(BrowserAttack) == 1
     assert store.count(BrowserAttackResult) == 2
+    saved_attack = store.get(BrowserAttack, current["id"])
+    assert saved_attack.state == "complete"
+
+
+def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_path):
+    _, client, project, identity, session = _setup(tmp_path)
+    base = {
+        "session_id": session["id"],
+        "identity_id": identity["id"],
+        "name": "Invalid attack",
+        "strategy": "sniper",
+        "method": "GET",
+        "url_template": "https://app.example.test/api/users/static",
+        "positions": ["id"],
+        "payload_sets": [{"kind": "list", "values": ["1"]}],
+    }
+    missing = client.post(
+        f"/api/v1/engagements/{project.id}/browser-attacks",
+        headers=_auth(),
+        json=base,
+    )
+    assert missing.status_code == 422
+    assert "missing position markers" in missing.text
+
+    wrong_sets = client.post(
+        f"/api/v1/engagements/{project.id}/browser-attacks",
+        headers=_auth(),
+        json={
+            **base,
+            "strategy": "pitchfork",
+            "url_template": "https://app.example.test/api/§id§/§role§",
+            "positions": ["id", "role"],
+        },
+    )
+    assert wrong_sets.status_code == 422
+    assert "requires 2 payload set" in wrong_sets.text
 
 
 def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):

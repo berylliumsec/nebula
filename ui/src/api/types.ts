@@ -471,6 +471,8 @@ export interface SecurityBrowserCrawlJob {
   requestsCompleted: number;
   nodesDiscovered: number;
   checkpoint: number;
+  frontier: Array<[string, number]>;
+  visitedUrls: string[];
   error?: string;
 }
 
@@ -486,9 +488,28 @@ export interface SecurityBrowserRepeaterTab {
   method: string;
   url: string;
   headers: Array<[string, string]>;
+  bodyTemplate: string;
   sourceExchangeId?: Identifier;
   historyExchangeIds: Identifier[];
   evidenceIds: Identifier[];
+  state: "draft" | "queued" | "running" | "ready" | "cancelled" | "failed";
+  requestCount: number;
+  error?: string;
+}
+
+export interface SecurityBrowserRepeaterResult {
+  id: Identifier;
+  revision: number;
+  tabId: Identifier;
+  sequence: number;
+  exchangeId?: Identifier;
+  statusCode?: number;
+  responseHeaders: Array<[string, string]>;
+  responseBytes?: number;
+  durationMs?: number;
+  responseBodyArtifactId?: Identifier;
+  error?: string;
+  createdAt: string;
 }
 
 export interface SecurityBrowserAttack {
@@ -500,6 +521,8 @@ export interface SecurityBrowserAttack {
   strategy: "sniper" | "battering_ram" | "pitchfork" | "cluster_bomb";
   method: string;
   urlTemplate: string;
+  headersTemplate: Array<[string, string]>;
+  bodyTemplate: string;
   positions: string[];
   payloadSets: Array<Record<string, unknown>>;
   transforms: string[];
@@ -543,6 +566,7 @@ export interface SecurityBrowserResearchWorkspace {
   crawlJobs: SecurityBrowserCrawlJob[];
   intercepts: SecurityBrowserIntercept[];
   repeaterTabs: SecurityBrowserRepeaterTab[];
+  repeaterResults: SecurityBrowserRepeaterResult[];
   attacks: SecurityBrowserAttack[];
   attackResults: SecurityBrowserAttackResult[];
   tokenAnalyses: SecurityBrowserTokenAnalysis[];
