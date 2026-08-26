@@ -1,27 +1,27 @@
 /* Theme variants are deliberately chromatic only. */
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) body {
   background:
     radial-gradient(900px 520px at 78% -12%, rgb(83 132 186 / 8%), transparent 68%),
     linear-gradient(115deg, transparent 0 58%, rgb(117 174 232 / 2%) 100%),
     var(--canvas);
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body::after { display: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.panel, .button, .icon-button, .nav-item, .project-tabs, .settings-tabs, .session-tabs) {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) body::after { display: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.panel, .button, .icon-button, .nav-item, .project-tabs, .settings-tabs, .session-tabs) {
   filter: none;
   text-shadow: none;
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button, .icon-button, .nav-item, .project-tabs button, .settings-tabs a, .session-tabs button)::after { display: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(button, .button, .nav-item, .settings-tabs a):active { filter: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.primary {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.button, .icon-button, .nav-item, .project-tabs button, .settings-tabs a, .session-tabs button)::after { display: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(button, .button, .nav-item, .settings-tabs a):active { filter: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .button.primary {
   color: var(--action-primary-text);
   border-color: transparent;
   background: var(--action-primary);
   box-shadow: none;
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :focus-visible { box-shadow: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.assistant,
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.operator { border-color: transparent; background: transparent; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.command-palette, .modal-surface, .provider-dialog, .engagement-menu, .activity-center) {
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :focus-visible { box-shadow: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: none; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.assistant,
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.operator { border-color: transparent; background: transparent; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.command-palette, .modal-surface, .provider-dialog, .engagement-menu, .activity-center) {
   animation: none;
 }

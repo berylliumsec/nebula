@@ -91,7 +91,7 @@
   --radius: var(--radius-panel);
 }
 
-:root[data-theme="zero-light"] {
+:root[data-theme="light"] {
   color-scheme: light;
   --canvas: #eef3f8;
   --surface: #f9fbfd;

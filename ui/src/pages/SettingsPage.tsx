@@ -20,8 +20,9 @@ import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/
 import { isTauriRuntime } from "../api/runtime";
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
   { value: "zero-dark", label: "Zero Dark", icon: Moon },
-  { value: "zero-light", label: "Zero Light", icon: Sun },
 ];
 
 const settingsSections = [
@@ -681,7 +682,7 @@ export function SettingsPage() {
               <button key={value} type="button" aria-pressed={preference === value} onClick={() => setPreference(value)}><span><Icon size={18} /></span><strong>{label}</strong>{preference === value && <small>Active</small>}</button>
             ))}
           </div>
-          <p className="appearance-help">Choose Zero Dark or Zero Light for this device.</p>
+          <p className="appearance-help">Choose Light, Dark, or Zero Dark for this device.</p>
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
