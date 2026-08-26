@@ -5,7 +5,7 @@ import {
   type ActivityLedgerEntry,
   type ActivityLedgerStatus,
   type ActivityLedgerViewModel,
-} from "./activityLedger";
+} from "./activityLedgerModel";
 
 function durationLabel(durationMs: number | undefined): string | undefined {
   if (!durationMs) return undefined;

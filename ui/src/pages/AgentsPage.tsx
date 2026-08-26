@@ -23,7 +23,7 @@ import { useChrome } from "../state/ChromeContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { MissionPromotionDialog } from "../components/MissionPromotionDialog";
 import { ActivityLedger } from "../components/ActivityLedger";
-import { activityLedgerFromMission, type ActivityLedgerEntry } from "../components/activityLedger";
+import { activityLedgerFromMission, type ActivityLedgerEntry } from "../components/activityLedgerModel";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },

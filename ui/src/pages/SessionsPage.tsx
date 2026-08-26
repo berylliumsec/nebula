@@ -71,7 +71,7 @@ import {
   activityLedgerFromNative,
   type ActivityLedgerEntry,
   type NativeActivitySource,
-} from "../components/activityLedger";
+} from "../components/activityLedgerModel";
 import { sha256 } from "../components/assistantCode";
 import { ExecutionHistory } from "../components/ExecutionHistory";
 import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";

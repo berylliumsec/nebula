@@ -7,7 +7,7 @@ import {
   activityLedgerFromNative,
   missionLedgerEntries,
   normalizeActivityStatus,
-} from "./activityLedger";
+} from "./activityLedgerModel";
 
 function harnessItem(overrides: Partial<HarnessActivityItem>): HarnessActivityItem {
   return {

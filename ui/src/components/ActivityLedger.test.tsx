@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { ActivityLedger } from "./ActivityLedger";
-import type { ActivityLedgerViewModel } from "./activityLedger";
+import type { ActivityLedgerViewModel } from "./activityLedgerModel";
 
 function model(overrides: Partial<ActivityLedgerViewModel> = {}): ActivityLedgerViewModel {
   return {
