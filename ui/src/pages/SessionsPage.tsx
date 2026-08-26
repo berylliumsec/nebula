@@ -2372,6 +2372,66 @@ export function SessionsPage() {
   };
 
   submitMessageRef.current = (queuedFollowUp) => submit(undefined, queuedFollowUp);
+
+  const askBrowserSelection = async (
+    request: { question: string; context: { text: string; sourceKind: string; sourceId?: string; sourceLabel: string; truncated?: boolean } },
+    signal: AbortSignal,
+    onDelta: (answer: string) => void,
+  ): Promise<{ sessionId: string; answer: string }> => {
+    if (!api || coreState !== "online" || !engagement) {
+      throw new Error("Core is offline, so this selection cannot be saved as a conversation.");
+    }
+    const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
+    const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
+    if ((!providerRuntime && !harnessRuntime) || !model.trim()) {
+      throw new Error("Choose an enabled Assistant runtime and model first.");
+    }
+    const attachment = await createHashedSelectionAttachment({
+      text: request.context.text,
+      originalLength: request.context.text.length,
+      truncated: request.context.truncated ?? false,
+      source: {
+        kind: request.context.sourceKind,
+        id: request.context.sourceId,
+        label: request.context.sourceLabel,
+      },
+      anchor: { left: 0, top: 0, right: 0, bottom: 0 },
+    });
+    let answer = "";
+    let returnedSessionId = "";
+    const response = await api.streamChat({
+      backend: runtimeKind,
+      providerId: providerRuntime?.id,
+      harnessProfileId: harnessRuntime?.id,
+      engagementId: engagement.id,
+      model: model.trim(),
+      messages: [{ role: "user", content: request.question }],
+      contextAttachments: [attachment],
+      includeKnowledge: false,
+      toolsEnabled: false,
+      maxOutputTokens: 1_200,
+      harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
+      harnessReasoningEffort: runtimeKind === "harness" ? harnessReasoningEffort || undefined : undefined,
+      harnessServiceTier: runtimeKind === "harness" ? harnessServiceTier || undefined : undefined,
+    }, (streamEvent) => {
+      if (streamEvent.type === "started" && streamEvent.sessionId) returnedSessionId = streamEvent.sessionId;
+      if (streamEvent.type === "delta" || streamEvent.type === "message_delta") {
+        answer += streamEvent.delta;
+        onDelta(answer);
+      }
+      if (streamEvent.type === "done") {
+        returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
+        answer = streamEvent.message.content || answer;
+        onDelta(answer);
+      }
+    }, signal);
+    returnedSessionId = response?.sessionId ?? returnedSessionId;
+    answer = response?.message.content || answer;
+    if (!returnedSessionId) throw new Error("Core completed the response without returning its durable conversation.");
+    if (!answer.trim()) throw new Error("The Assistant returned an empty response.");
+    return { sessionId: returnedSessionId, answer };
+  };
+
   useEffect(() => {
     const next = queuedFollowUps[0];
     if (!followUpAutoDrainRef.current
@@ -3013,6 +3073,9 @@ export function SessionsPage() {
               scopeLoading={browserScopeLoading}
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
               onAskNebula={requestNebulaDraft}
+              assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined}
+              onAskSelection={runtimeReady && model.trim() ? askBrowserSelection : undefined}
+              onContinueConversation={(id) => void openAttachedChat(id)}
               onOpenFiles={() => setView("workspace")}
               onScopeUpdated={setBrowserScope}
               onUploadEvidence={uploadEvidence}

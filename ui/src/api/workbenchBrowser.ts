@@ -34,6 +34,11 @@ export interface BrowserScopeRequestEvent {
   state: "ready" | "failed";
   detail?: string;
 }
+export interface BrowserSelectionRequestEvent {
+  tabId: string;
+  projectId: string;
+  url: string;
+}
 export interface BrowserDownloadEvent {
   tabId: string;
   downloadId?: string;

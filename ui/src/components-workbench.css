@@ -641,6 +641,22 @@ kbd { font-size: 11px; }
 .browser-notice > span { flex: 1; }
 .browser-notice.error { color: var(--red); background: var(--red-muted); }
 .browser-notice :where(button, a) { display: inline-flex; align-items: center; gap: 4px; border: 0; color: var(--blue); background: transparent; text-decoration: none; cursor: pointer; }
+.browser-selection-assistant { display: grid; flex: 0 0 auto; gap: 8px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border)); background: var(--surface-raised); box-shadow: 0 8px 24px rgb(0 0 0 / 10%); }
+.browser-selection-assistant > header, .browser-selection-assistant > header > div, .browser-selection-assistant > header span, .browser-selection-assistant > footer { display: flex; align-items: center; }
+.browser-selection-assistant > header { justify-content: space-between; gap: 10px; }
+.browser-selection-assistant > header > div { min-width: 0; gap: 8px; }
+.browser-selection-assistant > header span { min-width: 0; align-items: baseline; gap: 7px; }
+.browser-selection-assistant h3 { margin: 0; font-size: 13px; }
+.browser-selection-assistant > header small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.browser-selection-assistant > header > button { display: inline-grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; cursor: pointer; }
+.browser-selection-assistant blockquote { max-height: 54px; margin: 0; overflow: hidden; padding: 7px 9px; border-left: 2px solid var(--blue); color: var(--muted); background: var(--canvas); font: 11px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.browser-selection-assistant form { display: grid; grid-template-columns: minmax(0, 1fr) 36px; gap: 7px; align-items: end; }
+.browser-selection-assistant textarea { width: 100%; min-height: 38px; max-height: 100px; resize: vertical; padding: 8px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--canvas); font: 12px/1.45 var(--font-sans); }
+.browser-selection-assistant .square { width: 36px; height: 36px; padding: 0; }
+.browser-selection-progress { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.browser-selection-answer { max-height: 180px; overflow: auto; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--canvas); font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.browser-selection-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--red); font-size: 11px; line-height: 1.45; }
+.browser-selection-assistant > footer { justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; }
 .browser-unavailable { min-height: 590px; }
 .workbench-browser.research-open > .browser-surface { margin-right: min(430px, 42vw); }
 .browser-research-panel { position: absolute; z-index: 6; top: 86px; right: 0; bottom: 0; display: flex; width: min(430px, 42vw); min-width: 340px; flex-direction: column; overflow: hidden; border-left: 1px solid var(--border); color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-lg); }
@@ -756,6 +772,9 @@ kbd { font-size: 11px; }
 .web-browser-fallback .browser-research-panel { top: 45px; width: min(430px, 100%); }
 .web-browser-fallback.research-open > .browser-surface { margin-right: min(430px, 42vw); }
 @media (max-width: 760px) {
+  .browser-selection-assistant > header span { display: grid; gap: 2px; }
+  .browser-selection-assistant > footer { align-items: stretch; flex-direction: column; }
+  .browser-selection-assistant > footer .button { min-height: 44px; justify-content: center; }
   .workbench-browser.research-open > .browser-surface, .web-browser-fallback.research-open > .browser-surface { margin-right: 0; visibility: hidden; }
   .browser-research-panel { top: 86px; width: 100%; min-width: 0; border-left: 0; }
   .web-browser-fallback .browser-research-panel { top: 45px; }
