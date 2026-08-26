@@ -1384,7 +1384,9 @@ class BrowserRepeaterResult(Entity):
     sequence: int = Field(ge=0)
     exchange_id: str | None = Field(default=None, max_length=200)
     status_code: int | None = Field(default=None, ge=100, le=999)
-    response_headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    response_headers: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=200
+    )
     response_bytes: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
     response_body_artifact_id: str | None = Field(default=None, max_length=200)

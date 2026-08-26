@@ -541,6 +541,7 @@ class ChatService:
             raise ChatHistoryConflict("chat turn already has active work")
         runtime = _ActiveProviderTurn()
         self._active_provider_turns[turn.id] = runtime
+        # diagnostic-expected: the runtime registry owns, reports, and cancels this task.
         runtime.task = asyncio.create_task(
             self._produce_provider_turn(prepared, runtime),
             name=f"nebula-provider-chat-{turn.id}",
@@ -592,6 +593,7 @@ class ChatService:
             try:
                 await runtime.task
             except asyncio.CancelledError:
+                # diagnostic-expected: explicit stop requested this cancellation.
                 pass
         return self.cancel_turn(turn_id)
 
@@ -617,8 +619,10 @@ class ChatService:
                     runtime.events.append(event)
                     runtime.condition.notify_all()
         except asyncio.CancelledError as exc:
+            # diagnostic-expected: followers and the durable turn consume runtime.error below.
             runtime.error = exc
         except BaseException as exc:
+            # diagnostic-expected: followers and the durable turn consume runtime.error below.
             runtime.error = exc
         finally:
             async with runtime.condition:
@@ -651,6 +655,7 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
             if runtime.followers == 0:
+                # diagnostic-expected: the runtime registry owns and cancels this expiry task.
                 runtime.cleanup_task = asyncio.create_task(
                     self._expire_provider_turn(turn.id if turn else "", runtime),
                     name=f"nebula-provider-chat-cleanup-{turn.id if turn else 'unknown'}",

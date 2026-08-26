@@ -1521,7 +1521,10 @@ def create_app(
                     execution_ai.shutdown,
                 )
             await start_component(
-                "chat", "provider-runtime", provider_chat.startup, provider_chat.shutdown
+                "chat",
+                "provider-runtime",
+                provider_chat.startup,
+                provider_chat.shutdown,
             )
             await start_component(
                 "harnesses",
@@ -7203,9 +7206,7 @@ def create_app(
             return await service.complete(prepared)
 
         turn_id = (
-            service.start_provider_turn(prepared)
-            if prepared.turn is not None
-            else None
+            service.start_provider_turn(prepared) if prepared.turn is not None else None
         )
 
         async def event_stream() -> Any:
