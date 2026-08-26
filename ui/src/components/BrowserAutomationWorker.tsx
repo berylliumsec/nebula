@@ -61,11 +61,11 @@ function payloadValues(payloadSet: Record<string, unknown>): string[] {
 function transformPayload(value: string, transforms: string[]): string {
   return transforms.reduce((current, transform) => {
     if (transform === "url_encode") return encodeURIComponent(current);
-    if (transform === "url_decode") { try { return decodeURIComponent(current); } catch { return current; } }
+    if (transform === "url_decode") { try { return decodeURIComponent(current); } catch { /* diagnostic-expected: invalid optional transforms preserve the reviewed input. */ return current; } }
     if (transform === "base64_encode") return btoa(unescape(encodeURIComponent(current)));
-    if (transform === "base64_decode") { try { return decodeURIComponent(escape(atob(current))); } catch { return current; } }
+    if (transform === "base64_decode") { try { return decodeURIComponent(escape(atob(current))); } catch { /* diagnostic-expected: invalid optional transforms preserve the reviewed input. */ return current; } }
     if (transform === "hex_encode") return Array.from(new TextEncoder().encode(current), (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (transform === "hex_decode") { try { return new TextDecoder().decode(Uint8Array.from(current.match(/.{1,2}/g) ?? [], (item) => Number.parseInt(item, 16))); } catch { return current; } }
+    if (transform === "hex_decode") { try { return new TextDecoder().decode(Uint8Array.from(current.match(/.{1,2}/g) ?? [], (item) => Number.parseInt(item, 16))); } catch { /* diagnostic-expected: invalid optional transforms preserve the reviewed input. */ return current; } }
     if (transform === "html_encode") return current.replace(/[&<>"']/g, (character) => `&#${character.charCodeAt(0)};`);
     if (transform === "html_decode") { const element = document.createElement("textarea"); element.innerHTML = current; return element.value; }
     if (transform === "lowercase") return current.toLowerCase();
@@ -417,7 +417,9 @@ export function BrowserAutomationWorker() {
       const interceptStop = await listen<BrowserInterceptEvent>("nebula-browser-intercept", ({ payload }) => {
         const currentApi = apiRef.current;
         if (!currentApi) {
-          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch(() => undefined);
+          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch((caught) => {
+            void logCaughtDiagnostic("interface.security_browser.intercept_fail_closed_failed", "A paused native request could not be dropped after Core became unavailable.", caught, "browser-automation-worker");
+          });
           return;
         }
         void currentApi.createSecurityBrowserIntercept(payload.sessionId, payload).catch((caught) => {
@@ -427,7 +429,9 @@ export function BrowserAutomationWorker() {
             caught,
             "browser-automation-worker",
           );
-          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch(() => undefined);
+          void workbenchBrowser.decideProxyIntercept(payload.projectId, payload.sessionId, payload.transactionId, "drop").catch((dropCaught) => {
+            void logCaughtDiagnostic("interface.security_browser.intercept_fail_closed_failed", "A paused native request could not be dropped after its durable receipt failed.", dropCaught, "browser-automation-worker");
+          });
         });
       });
       if (disposed) {
@@ -579,7 +583,9 @@ export function BrowserAutomationWorker() {
                 "fail",
                 "desktop-browser-worker",
                 "The desktop restarted before the request receipt was saved. Retry explicitly to avoid an ambiguous duplicate request.",
-              ).catch(() => undefined);
+              ).catch((caught) => {
+                void logCaughtDiagnostic("interface.security_browser.repeater_recovery_failed", "An interrupted Repeater request could not be marked failed during desktop recovery.", caught, "browser-automation-worker");
+              });
               continue;
             }
             if (tab.state !== "queued") continue;
@@ -601,7 +607,10 @@ export function BrowserAutomationWorker() {
               });
             } catch (caught) {
               researchPending.current.forEach((entry, id) => { if (entry.kind === "repeater" && entry.tab.id === tab.id) researchPending.current.delete(id); });
-              await currentApi.transitionSecurityBrowserRepeaterTab(tab, "fail", "desktop-browser-worker", errorMessage(caught)).catch(() => undefined);
+              await currentApi.transitionSecurityBrowserRepeaterTab(tab, "fail", "desktop-browser-worker", errorMessage(caught)).catch((transitionCaught) => {
+                void logCaughtDiagnostic("interface.security_browser.repeater_failure_receipt_failed", "A failed Repeater request could not save its terminal state.", transitionCaught, "browser-automation-worker");
+              });
+              void logCaughtDiagnostic("interface.security_browser.repeater_execution_failed", "A reviewed Repeater request could not execute.", caught, "browser-automation-worker");
             }
           }
           for (const durableAttack of research.attacks) {
@@ -637,7 +646,9 @@ export function BrowserAutomationWorker() {
               });
             } catch (caught) {
               researchPending.current.forEach((entry, id) => { if (entry.kind === "attack" && entry.attack.id === attack.id) researchPending.current.delete(id); });
-              await currentApi.transitionSecurityBrowserAttack(attack, "fail", "desktop-browser-worker", errorMessage(caught)).catch(() => undefined);
+              await currentApi.transitionSecurityBrowserAttack(attack, "fail", "desktop-browser-worker", errorMessage(caught)).catch((transitionCaught) => {
+                void logCaughtDiagnostic("interface.security_browser.attack_failure_receipt_failed", "A failed Intruder request could not save its terminal state.", transitionCaught, "browser-automation-worker");
+              });
               void logCaughtDiagnostic("interface.security_browser.attack_execution_failed", "A bounded Intruder request could not execute.", caught, "browser-automation-worker");
             }
           }
@@ -667,7 +678,10 @@ export function BrowserAutomationWorker() {
               });
             } catch (caught) {
               researchPending.current.forEach((entry, id) => { if (entry.kind === "crawl" && entry.crawl.id === crawl.id) researchPending.current.delete(id); });
-              await currentApi.transitionSecurityBrowserCrawl(crawl, "fail", "desktop-browser-worker", { error: errorMessage(caught) }).catch(() => undefined);
+              await currentApi.transitionSecurityBrowserCrawl(crawl, "fail", "desktop-browser-worker", { error: errorMessage(caught) }).catch((transitionCaught) => {
+                void logCaughtDiagnostic("interface.security_browser.crawl_failure_receipt_failed", "A failed crawl request could not save its terminal state.", transitionCaught, "browser-automation-worker");
+              });
+              void logCaughtDiagnostic("interface.security_browser.crawl_execution_failed", "A bounded crawl request could not execute.", caught, "browser-automation-worker");
             }
           }
           for (const lease of status.leases) {
