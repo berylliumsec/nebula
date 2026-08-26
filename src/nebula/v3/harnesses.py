@@ -99,6 +99,7 @@ from .domain import (
     utc_now,
 )
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
+from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
 from .mcp import (
@@ -124,6 +125,8 @@ from .tools import (
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
+    from .browser_automation import BrowserAutonomyRequestModel
+    from .browser_tools import BrowserAutomationToolPlatform
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
 
 MAX_NORMALIZED_TEXT = 200_000
@@ -4807,6 +4810,7 @@ class HarnessRuntimeService:
         artifact_store: ArtifactStore | None = None,
         tool_platform: RuntimePlatform | None = None,
         automation_tool_platform: AutomationToolPlatform | None = None,
+        browser_automation_platform: BrowserAutomationToolPlatform | None = None,
         knowledge_retriever: KnowledgeRetriever | None = None,
         adapter_factory: AdapterFactory | None = None,
         shutdown_timeout_seconds: float = 5.0,
@@ -4825,6 +4829,7 @@ class HarnessRuntimeService:
         self.evidence_recorder = StoreToolEvidenceRecorder(store, self.artifact_store)
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
+        self.browser_automation_platform = browser_automation_platform
         self.knowledge_retriever = knowledge_retriever
         if tool_platform is not None and tool_platform.store is not store:
             raise ValueError("tool platform must use the harness runtime store")
@@ -4885,6 +4890,22 @@ class HarnessRuntimeService:
                 "harness runtime is already bound to an automation platform"
             )
         self.automation_tool_platform = platform
+
+    def bind_browser_automation_platform(
+        self, platform: BrowserAutomationToolPlatform
+    ) -> None:
+        if platform.store is not self.store:
+            raise ValueError(
+                "browser automation platform must use the harness runtime store"
+            )
+        if (
+            self.browser_automation_platform is not None
+            and self.browser_automation_platform is not platform
+        ):
+            raise ValueError(
+                "harness runtime is already bound to a browser automation platform"
+            )
+        self.browser_automation_platform = platform
 
     @staticmethod
     def _default_adapter(kind: HarnessKind) -> HarnessAdapter:
@@ -5231,11 +5252,15 @@ class HarnessRuntimeService:
         engagement_id: str,
         model: str,
         snapshot: dict[str, Any] | None = None,
+        include_browser: bool = False,
     ) -> tuple[
         RuntimeToolComponents | AutomationToolComponents | None,
         dict[str, Any] | None,
     ]:
-        if self.automation_tool_platform is None:
+        include_browser = include_browser or bool(
+            snapshot and snapshot.get("browser_runtime_enabled") is True
+        )
+        if self.automation_tool_platform is None and not include_browser:
             return None, None
         if snapshot is not None:
             if snapshot.get("schema") != "nebula.harness-command-runtime/v1":
@@ -5250,9 +5275,25 @@ class HarnessRuntimeService:
                     "harness command-runtime snapshot has invalid tool names"
                 )
         try:
-            components = self.automation_tool_platform.chat_components(
-                engagement_id=engagement_id,
+            components: RuntimeToolComponents | AutomationToolComponents | None = (
+                self.automation_tool_platform.chat_components(
+                    engagement_id=engagement_id,
+                )
+                if self.automation_tool_platform is not None
+                else None
             )
+            if include_browser:
+                if self.browser_automation_platform is None:
+                    raise HarnessConfigurationError(
+                        "browser automation runtime is unavailable"
+                    )
+                browser_components = (
+                    self.browser_automation_platform.runtime_components(engagement_id)
+                )
+                if components is None:
+                    components = browser_components
+                else:
+                    components = combine_tool_components(components, browser_components)
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
                 return None, None
@@ -5266,7 +5307,11 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(
                 "could not resolve the harness command runtime: " + _safe_error(exc)
             ) from exc
+        if components is None:
+            raise HarnessConfigurationError("harness command runtime is unavailable")
         resolved = self._oci_snapshot(components)
+        if include_browser:
+            resolved["browser_runtime_enabled"] = True
         if snapshot is not None and resolved != snapshot:
             raise HarnessConfigurationError(
                 "the immutable harness command-runtime snapshot no longer matches"
@@ -5287,6 +5332,7 @@ class HarnessRuntimeService:
             engagement_id=session.engagement_id,
             model=session.model,
             snapshot=snapshot,
+            include_browser=session.metadata.get("browser_runtime_enabled") is True,
         )
         if components is None:
             return None
@@ -6420,6 +6466,7 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str] | None = None,
         actor_id: str = "system",
         allow_remote_mcp: bool = False,
+        browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
         profile = self.store.get(HarnessProfile, profile_id)
         if harness_session_id:
@@ -6448,6 +6495,13 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "MCP selection is frozen for an existing harness session"
                 )
+            if (
+                browser_autonomy is not None
+                and session.metadata.get("browser_runtime_enabled") is not True
+            ):
+                raise HarnessConfigurationError(
+                    "browser investigations require a new dedicated harness session"
+                )
         else:
             self._validate_harness_privacy(
                 engagement_id,
@@ -6463,11 +6517,28 @@ class HarnessRuntimeService:
                 reasoning_effort=reasoning_effort,
                 service_tier=service_tier,
             )
+            if browser_autonomy is not None:
+                session = self.store.update(
+                    HarnessSession,
+                    session.id,
+                    {
+                        "metadata": {
+                            **session.metadata,
+                            "browser_runtime_enabled": True,
+                            "command_runtime_enabled": True,
+                        }
+                    },
+                    expected_revision=session.revision,
+                )
         forked_from_session_id: str | None = None
         if self.session_activity(session.id).busy:
             forked_from_session_id = session.id
             session = self._fork_session(session, reason="parallel mission requested")
         oci_components = self._ensure_oci_components(session)
+        # _ensure_oci_components persists the first immutable browser gateway
+        # snapshot. Reload so this run freezes that authoritative value rather
+        # than the pre-gateway session metadata held by the caller.
+        session = self.store.get(HarnessSession, session.id)
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -6540,6 +6611,14 @@ class HarnessRuntimeService:
                 **({"series_id": series_id} if series_id else {}),
                 "total_tasks": len(stage_prompts),
                 "completed_tasks": 0,
+                **(
+                    {
+                        "browser_autonomy": browser_autonomy.model_dump(mode="json"),
+                        "tool_names": list(AUTONOMOUS_BROWSER_TOOLS),
+                    }
+                    if browser_autonomy is not None
+                    else {}
+                ),
             },
         )
         turns = [
@@ -6577,6 +6656,36 @@ class HarnessRuntimeService:
             transaction.add(run)
             for turn in turns:
                 transaction.add(turn)
+        if browser_autonomy is not None:
+            if self.browser_automation_platform is None:
+                latest = self.store.get(AgentRun, run.id)
+                self.store.update(
+                    AgentRun,
+                    latest.id,
+                    {"status": RunStatus.FAILED, "completed_at": utc_now()},
+                    expected_revision=latest.revision,
+                )
+                raise HarnessConfigurationError(
+                    "browser automation runtime is unavailable"
+                )
+            try:
+                self.browser_automation_platform.automation.create_lease(
+                    run.id,
+                    engagement_id,
+                    browser_autonomy,
+                    actor_id,
+                )
+            except Exception as exc:
+                latest = self.store.get(AgentRun, run.id)
+                self.store.update(
+                    AgentRun,
+                    latest.id,
+                    {"status": RunStatus.FAILED, "completed_at": utc_now()},
+                    expected_revision=latest.revision,
+                )
+                raise HarnessConfigurationError(
+                    f"browser automation lease could not be created: {_safe_error(exc)}"
+                ) from exc
         for chat in self._attached_chats(session.id):
             self._append_chat_handoff(
                 chat,

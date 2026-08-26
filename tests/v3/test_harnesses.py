@@ -19,6 +19,14 @@ from pydantic import SecretStr
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.browser_automation import (
+    BrowserAutomationService,
+    BrowserAutonomyRequestModel,
+)
+from nebula.v3.browser_tools import (
+    AUTONOMOUS_BROWSER_TOOLS,
+    BrowserAutomationToolPlatform,
+)
 from nebula.v3.chat import ChatService
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
@@ -31,6 +39,8 @@ from nebula.v3.domain import (
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
+    BrowserIdentity,
+    BrowserSession,
     Engagement,
     HarnessCapabilities,
     HarnessDetailedUsage,
@@ -58,6 +68,7 @@ from nebula.v3.domain import (
     RiskClass,
     RunBudget,
     RunStatus,
+    ScopePolicy,
     ToolCall,
     ToolCallStatus,
     utc_now,
@@ -665,6 +676,65 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         ]
         await runtime.shutdown()
         assert adapter.connections[0].closed is True
+
+    asyncio.run(scenario())
+
+
+def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+        scope = store.create(
+            ScopePolicy(
+                engagement_id=engagement.id,
+                allowed_domains=["app.example.test"],
+                allowed_ports=[443],
+            )
+        )
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Harness identity")
+        )
+        session = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Harness browser",
+                device_owner="desktop-1",
+            )
+        )
+        platform = BrowserAutomationToolPlatform(store, BrowserAutomationService(store))
+        runtime.bind_browser_automation_platform(platform)
+
+        run = await runtime.start_mission(
+            engagement_id=engagement.id,
+            objective="Inspect the bounded browser target",
+            profile_id=profile.id,
+            model="test-model",
+            budget=RunBudget(max_duration_seconds=5),
+            actor_id="operator",
+            browser_autonomy=BrowserAutonomyRequestModel(
+                session_id=session.id,
+                targets=["https://app.example.test/"],
+                max_commands=20,
+                max_requests=50,
+            ),
+        )
+        assert run.backend.value == "harness"
+        assert run.metadata["browser_autonomy"]["session_id"] == session.id
+        assert set(run.metadata["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
+        frozen = run.runtime_snapshot["command_runtime_snapshot"]
+        assert frozen["browser_runtime_enabled"] is True
+        assert set(frozen["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
+        status = platform.automation.status(engagement.id, run_id=run.id)
+        assert status.leases[0].session_id == session.id
+        assert status.leases[0].scope_policy_revision == scope.revision
+        await runtime._mission_tasks[run.id]
+        await runtime.shutdown()
 
     asyncio.run(scenario())
 

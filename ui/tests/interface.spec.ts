@@ -461,7 +461,14 @@ async function openWorkspace(page: Page, route: string, heading: string) {
       }
     }, route);
   }
-  await expect.poll(() => page.evaluate(() => `${location.pathname}${location.search}${location.hash}`)).toBe(route);
+  if (route === "/?view=browser") {
+    await expect.poll(() => page.evaluate(() => ({
+      pathname: location.pathname,
+      view: new URLSearchParams(location.search).get("view"),
+    }))).toEqual({ pathname: "/", view: "browser" });
+  } else {
+    await expect.poll(() => page.evaluate(() => `${location.pathname}${location.search}${location.hash}`)).toBe(route);
+  }
   if (heading === "Workbench") {
     if ((page.viewportSize()?.width ?? 1_000) <= 760) {
       await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
