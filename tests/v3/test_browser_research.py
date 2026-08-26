@@ -94,7 +94,10 @@ def test_proxy_capture_populates_durable_target_map_without_secrets(tmp_path):
                 ["X-Trace", "second"],
                 ["Cookie", "session=secret"],
             ],
-            "http2_pseudo_headers": [[":method", "GET"], [":path", "/api/users?page=1"]],
+            "http2_pseudo_headers": [
+                [":method", "GET"],
+                [":path", "/api/users?page=1"],
+            ],
             "timing": {"connect_ms": 4, "wait_ms": 8},
             "rule_effect_ids": ["rule-1"],
         },
@@ -304,7 +307,11 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
         result = client.post(
             f"/api/v1/browser-attacks/{current['id']}/results",
             headers=_auth(),
-            json={"sequence": sequence, "payloads": [str(sequence)], "status_code": 200},
+            json={
+                "sequence": sequence,
+                "payloads": [str(sequence)],
+                "status_code": 200,
+            },
         )
         assert result.status_code == 201, result.text
     exhausted = client.post(
@@ -364,7 +371,9 @@ def test_decoder_comparer_sequencer_har_and_finding_promotion(tmp_path):
                             },
                             "response": {
                                 "status": 200,
-                                "headers": [{"name": "Content-Type", "value": "text/html"}],
+                                "headers": [
+                                    {"name": "Content-Type", "value": "text/html"}
+                                ],
                             },
                         }
                     ]

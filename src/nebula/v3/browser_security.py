@@ -704,13 +704,15 @@ class BrowserSecurityService:
             request_header_lines=[
                 (name, redact_browser_headers({name: value})[name])
                 for name, value in (
-                    request.request_header_lines or list(request.request_headers.items())
+                    request.request_header_lines
+                    or list(request.request_headers.items())
                 )
             ],
             response_header_lines=[
                 (name, redact_browser_headers({name: value})[name])
                 for name, value in (
-                    request.response_header_lines or list(request.response_headers.items())
+                    request.response_header_lines
+                    or list(request.response_headers.items())
                 )
             ],
             http2_pseudo_headers=[

@@ -19,8 +19,14 @@ from pydantic import SecretStr
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.browser_automation import BrowserAutomationService, BrowserAutonomyRequestModel
-from nebula.v3.browser_tools import AUTONOMOUS_BROWSER_TOOLS, BrowserAutomationToolPlatform
+from nebula.v3.browser_automation import (
+    BrowserAutomationService,
+    BrowserAutonomyRequestModel,
+)
+from nebula.v3.browser_tools import (
+    AUTONOMOUS_BROWSER_TOOLS,
+    BrowserAutomationToolPlatform,
+)
 from nebula.v3.chat import ChatService
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
@@ -701,9 +707,7 @@ def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
                 device_owner="desktop-1",
             )
         )
-        platform = BrowserAutomationToolPlatform(
-            store, BrowserAutomationService(store)
-        )
+        platform = BrowserAutomationToolPlatform(store, BrowserAutomationService(store))
         runtime.bind_browser_automation_platform(platform)
 
         run = await runtime.start_mission(

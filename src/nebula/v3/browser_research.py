@@ -339,7 +339,9 @@ class BrowserResearchService:
             ),
         )
 
-    def create_crawl(self, request: CrawlCreateRequest, actor_id: str) -> BrowserCrawlJob:
+    def create_crawl(
+        self, request: CrawlCreateRequest, actor_id: str
+    ) -> BrowserCrawlJob:
         session = self.store.get(BrowserSession, request.session_id)
         if session.identity_id != request.identity_id:
             raise BrowserWorkflowError("crawl identity must match the selected session")
@@ -351,7 +353,9 @@ class BrowserResearchService:
             native_scope_authority=True,
         )
         return self._create(
-            BrowserCrawlJob(engagement_id=session.engagement_id, **request.model_dump()),
+            BrowserCrawlJob(
+                engagement_id=session.engagement_id, **request.model_dump()
+            ),
             "browser_crawl.created",
             actor_id,
         )
@@ -363,7 +367,12 @@ class BrowserResearchService:
         transitions = {
             "draft": {"queue": "queued", "cancel": "cancelled"},
             "queued": {"start": "running", "cancel": "cancelled", "fail": "failed"},
-            "running": {"pause": "paused", "complete": "complete", "cancel": "cancelled", "fail": "failed"},
+            "running": {
+                "pause": "paused",
+                "complete": "complete",
+                "cancel": "cancelled",
+                "fail": "failed",
+            },
             "paused": {"resume": "running", "cancel": "cancelled", "fail": "failed"},
         }
         next_state = transitions.get(crawl.state, {}).get(request.action)
@@ -376,7 +385,10 @@ class BrowserResearchService:
             value = getattr(request, field)
             if value is not None:
                 changes[field] = value
-        if changes.get("requests_completed", crawl.requests_completed) > crawl.max_requests:
+        if (
+            changes.get("requests_completed", crawl.requests_completed)
+            > crawl.max_requests
+        ):
             raise BrowserWorkflowError("crawl request budget is exhausted")
         if next_state == "running" and crawl.started_at is None:
             changes["started_at"] = utc_now()

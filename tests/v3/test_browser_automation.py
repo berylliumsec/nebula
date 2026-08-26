@@ -129,9 +129,12 @@ def test_browser_runtime_exposes_backend_neutral_research_tools(tmp_path):
         )
         broker = BrowserAutomationBroker(store, service)
         scope = store.get(ScopePolicy, scope_id)
-        assert {"target.crawl", "repeater.create", "intruder.create", "analysis.tokens"} <= set(
-            autonomous_browser_specs()
-        )
+        assert {
+            "target.crawl",
+            "repeater.create",
+            "intruder.create",
+            "analysis.tokens",
+        } <= set(autonomous_browser_specs())
 
         result = await broker.execute(
             ToolInvocation(
