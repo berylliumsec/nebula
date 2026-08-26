@@ -135,6 +135,14 @@ struct BrowserScopeRequestEvent {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+struct BrowserSelectionRequestEvent {
+    tab_id: String,
+    project_id: String,
+    url: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct BrowserDownloadEvent {
     tab_id: String,
     download_id: Option<String>,
@@ -382,17 +390,95 @@ fn native_upstream_proxy_config(
 fn browser_context_menu_script(token: &str) -> Result<String, String> {
     let endpoint = serde_json::to_string(&format!("{BROWSER_CONTEXT_SCHEME}://menu/{token}?url="))
         .map_err(|error| format!("cannot prepare browser context menu: {error}"))?;
+    let selection_endpoint = serde_json::to_string(&format!(
+        "{BROWSER_CONTEXT_SCHEME}://selection/{token}?url="
+    ))
+    .map_err(|error| format!("cannot prepare browser selection actions: {error}"))?;
     Ok(format!(
-        r#"(() => {{
+        r##"(() => {{
           const endpoint = {endpoint};
+          const selectionEndpoint = {selection_endpoint};
+          const host = document.createElement("div");
+          host.setAttribute("data-nebula-selection-actions", "");
+          const shadow = host.attachShadow({{ mode: "closed" }});
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Ask Nebula";
+          button.setAttribute("aria-label", "Ask Nebula about selected text");
+          Object.assign(button.style, {{
+            position: "fixed", zIndex: "2147483647", display: "none",
+            minHeight: "34px", padding: "6px 10px", border: "1px solid rgba(255,255,255,.28)",
+            borderRadius: "8px", color: "#fff", background: "#20242b",
+            boxShadow: "0 8px 24px rgba(0,0,0,.32)", font: "600 13px system-ui, sans-serif",
+            cursor: "pointer"
+          }});
+          shadow.append(button);
+          const mount = () => {{ if (!host.isConnected) document.documentElement?.append(host); }};
+          mount();
+          let selectionTimer;
+          const hide = () => {{ button.style.display = "none"; }};
+          const showForSelection = () => {{
+            const selection = window.getSelection?.();
+            if (!selection || selection.isCollapsed || !selection.toString().trim() || selection.rangeCount !== 1) {{ hide(); return; }}
+            const rect = selection.getRangeAt(0).getBoundingClientRect();
+            if (!rect || (!rect.width && !rect.height)) {{ hide(); return; }}
+            mount();
+            const left = Math.max(8, Math.min(innerWidth - 112, rect.left + rect.width / 2 - 52));
+            const top = rect.bottom + 44 < innerHeight ? rect.bottom + 8 : Math.max(8, rect.top - 42);
+            button.style.left = `${{left}}px`;
+            button.style.top = `${{top}}px`;
+            button.style.display = "block";
+          }};
+          button.addEventListener("pointerdown", (event) => event.preventDefault());
+          button.addEventListener("click", (event) => {{
+            if (!event.isTrusted) return;
+            const selection = window.getSelection?.();
+            if (!selection || selection.isCollapsed || !selection.toString().trim()) {{ hide(); return; }}
+            const target = String(location.href ?? "").slice(0, 4096);
+            hide();
+            location.assign(selectionEndpoint + encodeURIComponent(target));
+          }});
+          document.addEventListener("pointerup", (event) => {{
+            if (event.composedPath?.().includes(host)) return;
+            setTimeout(showForSelection, 0);
+          }}, true);
+          document.addEventListener("keyup", (event) => {{
+            if (event.key === "Escape") hide(); else setTimeout(showForSelection, 0);
+          }}, true);
+          document.addEventListener("selectionchange", () => {{
+            clearTimeout(selectionTimer);
+            selectionTimer = setTimeout(showForSelection, 120);
+          }}, true);
+          document.addEventListener("pointerdown", (event) => {{
+            if (!event.composedPath?.().includes(host)) hide();
+          }}, true);
+          addEventListener("scroll", hide, true);
+          addEventListener("resize", hide);
           document.addEventListener("contextmenu", (event) => {{
             if (!event.isTrusted) return;
             event.preventDefault();
             const target = String(location.href ?? "").slice(0, 4096);
             location.assign(endpoint + encodeURIComponent(target));
           }}, true);
-        }})()"#
+        }})()"##
     ))
+}
+
+fn selection_request_target(next: &Url, token: &str) -> Result<Option<String>, String> {
+    if next.scheme() != BROWSER_CONTEXT_SCHEME || next.host_str() != Some("selection") {
+        return Ok(None);
+    }
+    if next.path() != format!("/{token}") {
+        return Err("The browser selection request was not authentic.".to_string());
+    }
+    let value = next
+        .query_pairs()
+        .find_map(|(key, value)| (key == "url").then(|| value.into_owned()))
+        .ok_or_else(|| "The browser selection target is missing.".to_string())?;
+    if value.len() > 4096 {
+        return Err("The browser selection target is too long.".to_string());
+    }
+    Ok(Some(validated_url(&value)?.to_string()))
 }
 
 fn context_menu_target(next: &Url, token: &str) -> Result<Option<String>, String> {
@@ -1135,6 +1221,40 @@ pub(crate) fn browser_create_tab(
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .initialization_script(context_script)
         .on_navigation(move |next| {
+            match selection_request_target(next, &navigation_token) {
+                Ok(Some(target)) => {
+                    if navigation_app
+                        .emit_to(
+                            "main",
+                            "nebula-browser-selection-request",
+                            BrowserSelectionRequestEvent {
+                                tab_id: navigation_tab.clone(),
+                                project_id: navigation_project.clone(),
+                                url: target,
+                            },
+                        )
+                        .is_err()
+                    {
+                        record_browser_failure(
+                            &navigation_app,
+                            "desktop.browser.selection_event_delivery_failed",
+                            "A browser selection request could not be delivered to the interface.",
+                            "event-delivery",
+                        );
+                    }
+                    return false;
+                }
+                Err(_) => {
+                    record_browser_failure(
+                        &navigation_app,
+                        "desktop.browser.selection_request_rejected",
+                        "An invalid browser selection request was rejected.",
+                        "selection-actions",
+                    );
+                    return false;
+                }
+                Ok(None) => {}
+            }
             match context_menu_target(next, &navigation_token) {
                 Ok(Some(target)) => {
                     if show_browser_context_menu(
@@ -2390,8 +2510,33 @@ mod tests {
         assert!(script.contains("contextmenu"));
         assert!(script.contains("event.isTrusted"));
         assert!(script.contains("nebula-browser-context://menu/context-safe?url="));
+        assert!(script.contains("nebula-browser-context://selection/context-safe?url="));
+        assert!(script.contains("Ask Nebula"));
         assert!(!script.contains("__TAURI"));
         assert!(!script.contains("ipc.postMessage"));
+    }
+
+    #[test]
+    fn selection_navigation_requires_the_per_tab_token_and_a_safe_target() {
+        let token = "context-0123456789abcdef";
+        let mut request =
+            Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://selection/{token}")).unwrap();
+        request
+            .query_pairs_mut()
+            .append_pair("url", "https://example.test/report");
+        assert_eq!(
+            selection_request_target(&request, token)
+                .unwrap()
+                .as_deref(),
+            Some("https://example.test/report")
+        );
+        assert!(selection_request_target(&request, "context-other").is_err());
+        let mut unsafe_request =
+            Url::parse(&format!("{BROWSER_CONTEXT_SCHEME}://selection/{token}")).unwrap();
+        unsafe_request
+            .query_pairs_mut()
+            .append_pair("url", "file:///etc/passwd");
+        assert!(selection_request_target(&unsafe_request, token).is_err());
     }
 
     #[test]
