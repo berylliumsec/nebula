@@ -2211,6 +2211,9 @@ fn ensure_ca(app: &AppHandle, project_key: &str) -> Result<(String, String, Path
     })
 }
 
+// This constructor keeps the browser-session identity and the independently
+// mutable proxy controls explicit at its single call boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     app: &AppHandle,
     project_key: &str,
