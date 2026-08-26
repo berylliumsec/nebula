@@ -569,6 +569,7 @@ class BrowserAutomationBroker(ToolBroker):
             )
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         evidence_ids: list[str] = []
+        output: dict[str, Any]
         try:
             lease = self.automation.active_lease_for_run(invocation.run_id)
             lease_id = lease.id

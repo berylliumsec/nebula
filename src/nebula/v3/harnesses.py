@@ -5275,7 +5275,7 @@ class HarnessRuntimeService:
                     "harness command-runtime snapshot has invalid tool names"
                 )
         try:
-            components = (
+            components: RuntimeToolComponents | AutomationToolComponents | None = (
                 self.automation_tool_platform.chat_components(
                     engagement_id=engagement_id,
                 )
@@ -5307,6 +5307,8 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(
                 "could not resolve the harness command runtime: " + _safe_error(exc)
             ) from exc
+        if components is None:
+            raise HarnessConfigurationError("harness command runtime is unavailable")
         resolved = self._oci_snapshot(components)
         if include_browser:
             resolved["browser_runtime_enabled"] = True
