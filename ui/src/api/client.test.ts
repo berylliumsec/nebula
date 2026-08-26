@@ -1654,6 +1654,28 @@ describe("ApiClient", () => {
     );
   });
 
+  it("requests and maps a later host-folder page", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      path: "/projects",
+      parent: "/",
+      directories: [{ name: "project-500", path: "/projects/project-500" }],
+      truncated: false,
+      next_offset: null,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listHostWorkspaceFolders("/projects", 500)).resolves.toEqual({
+      path: "/projects",
+      parent: "/",
+      directories: [{ name: "project-500", path: "/projects/project-500" }],
+      truncated: false,
+      nextOffset: undefined,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/workspace-folders?path=%2Fprojects&offset=500",
+    );
+  });
+
   it("maps bounded VS Code launch profiles and preserves disabled reasons", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       engagement_id: "project/one",

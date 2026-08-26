@@ -250,14 +250,19 @@ async function installTruthfulCore(page: Page) {
         body = { path: `${create.parent_path}/${create.name}`, parent: create.parent_path, directories: [], truncated: false };
       } else {
         const requested = url.searchParams.get("path") ?? "/home/agent";
+        const offset = Number(url.searchParams.get("offset") ?? "0");
         body = {
           path: requested,
           parent: requested === "/home/agent" ? "/home" : "/home/agent",
-          directories: requested === "/home/agent" ? [{
+          directories: requested === "/home/agent" && offset === 0 ? [{
             name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
             path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+          }] : requested === "/home/agent" ? [{
+            name: "z-folder-loaded-from-the-next-page",
+            path: "/home/agent/z-folder-loaded-from-the-next-page",
           }] : [],
-          truncated: false,
+          truncated: requested === "/home/agent" && offset === 0,
+          next_offset: requested === "/home/agent" && offset === 0 ? 1 : null,
         };
       }
     } else if (path.endsWith("/engagements/scratch-project/scope")) {
@@ -1859,6 +1864,12 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   await expect(dialog.getByText("/home/agent/fresh-assessment", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Select folder" })).toBeFocused();
   await dialog.getByRole("button", { name: "Up one level" }).click();
+
+  const loadMore = dialog.getByRole("button", { name: "Load more folders" });
+  await expect(loadMore).toBeVisible();
+  await loadMore.click();
+  await expect(dialog.getByRole("button", { name: "z-folder-loaded-from-the-next-page" })).toBeVisible();
+  await expect(loadMore).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog" }).click();
   await expect(dialog.getByText("/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog", { exact: true })).toBeVisible();

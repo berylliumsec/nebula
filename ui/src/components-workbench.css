@@ -1942,7 +1942,10 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .host-folder-state { display: grid; min-height: 180px; place-items: center; align-content: center; gap: 9px; padding: 22px; color: var(--muted); text-align: center; }
 .host-folder-state.error { color: var(--red); }
 .host-folder-state.error span { max-width: 440px; color: var(--muted); overflow-wrap: anywhere; }
-.host-folder-truncated { padding: 0 22px 8px; color: var(--muted); }
+.host-folder-truncated { display: flex; min-width: 0; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 16px 8px 22px; color: var(--muted); font-size: 11px; }
+.host-folder-truncated > span { min-width: 0; overflow-wrap: anywhere; }
+.host-folder-truncated.error > span { color: var(--red); }
+.host-folder-truncated .button { flex: 0 0 auto; min-height: 36px; }
 .host-folder-dialog > footer { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 13px 16px; border-top: 1px solid var(--border-soft); background: var(--surface-raised); }
 .host-folder-dialog > footer > span { min-width: 0; color: var(--muted); font-size: 11px; text-align: right; }
 .confirmation-dialog > header { display: grid; grid-template-columns: 38px 1fr 32px; gap: 12px; align-items: start; padding: 22px; }
@@ -2089,6 +2092,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .host-folder-create .button { min-height: 44px; justify-content: center; }
   .host-folder-list { padding: 6px; }
   .host-folder-list > button { min-height: 48px; padding-inline: 10px; }
+  .host-folder-truncated { min-height: 48px; padding: 4px 10px 6px 16px; }
+  .host-folder-truncated .button { min-height: 44px; }
   .host-folder-dialog > footer { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
   .host-folder-dialog > footer > span { display: none; }
   .host-folder-dialog > footer .button { min-width: 0; width: 100%; min-height: 48px; justify-content: center; padding-inline: 8px; }

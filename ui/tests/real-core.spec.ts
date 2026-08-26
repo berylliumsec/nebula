@@ -1175,6 +1175,8 @@ test("real Core persists a project folder chosen through the host browser", asyn
   const core = await startRealCore(lanAddress ? { bindHost: "0.0.0.0", browserHost: lanAddress } : {});
   const folderParent = await mkdtemp(path.join(homedir(), ".nebula-folder-picker-"));
   const selectedFolder = path.join(folderParent, "fresh-project");
+  const paginatedFolder = path.join(folderParent, "project-502");
+  await Promise.all(Array.from({ length: 503 }, (_, index) => mkdir(path.join(folderParent, `project-${index.toString().padStart(3, "0")}`))));
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -1198,8 +1200,13 @@ test("real Core persists a project folder chosen through the host browser", asyn
     await browser.getByRole("button", { name: "Create folder" }).click();
     await expect(browser.getByText(selectedFolder, { exact: true })).toBeVisible();
     expect(existsSync(selectedFolder)).toBe(true);
+    await browser.getByRole("button", { name: "Up one level" }).click();
+    await expect(browser.getByRole("button", { name: "project-498", exact: true })).toBeVisible();
+    await browser.getByRole("button", { name: "Load more folders" }).click();
+    await browser.getByRole("button", { name: "project-502", exact: true }).click();
+    await expect(browser.getByText(paginatedFolder, { exact: true })).toBeVisible();
     await browser.getByRole("button", { name: "Select folder" }).click();
-    await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(selectedFolder);
+    await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(paginatedFolder);
     await switcher.getByRole("button", { name: "Create" }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance");
 
@@ -1207,7 +1214,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     expect(response.ok()).toBe(true);
     const projects = await response.json() as Array<{ name: string; workspace_path?: string }>;
     expect(projects.find((project) => project.name === "Linked Folder Acceptance")).toMatchObject({
-      workspace_path: selectedFolder,
+      workspace_path: paginatedFolder,
     });
 
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
