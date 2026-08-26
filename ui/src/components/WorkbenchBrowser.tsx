@@ -165,6 +165,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   useEffect(() => {
     if (!active) return;
     const next = new URLSearchParams(searchParams);
+    // The mounted browser owns these URL fields while active. Keep the parent
+    // Workbench view in the same atomic update so a stale child render cannot
+    // restore the previously selected view during mobile navigation.
+    next.set("view", "browser");
     next.set("browserTool", researchView);
     if (sessionId) next.set("browserSession", sessionId); else next.delete("browserSession");
     if (activeId) next.set("browserTab", activeId); else next.delete("browserTab");
