@@ -2211,6 +2211,8 @@ fn ensure_ca(app: &AppHandle, project_key: &str) -> Result<(String, String, Path
     })
 }
 
+// Keep the security-relevant proxy inputs explicit at the native construction boundary.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     app: &AppHandle,
     project_key: &str,

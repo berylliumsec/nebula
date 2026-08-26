@@ -291,7 +291,10 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
         json={
             "expected_revision": current_repeater["revision"],
             "status_code": 200,
-            "response_headers": [["Set-Cookie", "session=secret"], ["Content-Type", "application/json"]],
+            "response_headers": [
+                ["Set-Cookie", "session=secret"],
+                ["Content-Type", "application/json"],
+            ],
             "response_bytes": 42,
             "duration_ms": 8,
             "actor_id": "native-browser",

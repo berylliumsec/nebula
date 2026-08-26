@@ -1606,6 +1606,8 @@ pub(crate) fn browser_stop_session_proxy(
 }
 
 #[tauri::command]
+// The flat argument list is the stable Tauri command boundary consumed by the UI.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn browser_configure_session_proxy(
     state: State<'_, BrowserState>,
     project_id: String,

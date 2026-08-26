@@ -169,6 +169,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Crawl and its pending frontier were deleted. Discovered target-map entries were retained.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.crawl_delete_failed", "The browser crawl could not be deleted.", caught, "browser_research_suite");
       setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
@@ -235,6 +236,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
         : "Repeater request cancelled.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.repeater_transition_failed", "The Repeater request state could not be changed.", caught, "browser_research_suite");
       setError(`${message(caught)} Refresh the durable request and retry.`);
     } finally {
       setBusy(false);
@@ -251,6 +253,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Repeater request and its retained result history were deleted.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.repeater_delete_failed", "The Repeater request could not be deleted.", caught, "browser_research_suite");
       setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
@@ -265,6 +268,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       const body = (await blob.text()).slice(0, 1_048_576);
       setBodyPreviews((current) => ({ ...current, [artifactId]: body }));
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.repeater_body_load_failed", "The retained Repeater response body could not be loaded.", caught, "browser_research_suite");
       setError(`${message(caught)} The response metadata remains available; retry the body preview.`);
     } finally {
       setBusy(false);
@@ -342,6 +346,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Intruder attack and its results were deleted.");
       await refresh();
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.attack_delete_failed", "The Intruder attack could not be deleted.", caught, "browser_research_suite");
       setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
