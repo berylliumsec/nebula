@@ -1606,8 +1606,7 @@ pub(crate) fn browser_stop_session_proxy(
 }
 
 #[tauri::command]
-// Tauri derives this flat named-argument IPC contract; grouping the fields
-// would break the invoke payload shared with the browser interface.
+// The flat argument list is the stable Tauri command boundary consumed by the UI.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn browser_configure_session_proxy(
     state: State<'_, BrowserState>,

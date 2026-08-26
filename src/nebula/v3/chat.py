@@ -6,7 +6,11 @@ but can never supply or broaden capabilities.
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception, record_diagnostic
+from .diagnostics import (
+    create_diagnostic_task,
+    record_caught_exception,
+    record_diagnostic,
+)
 
 import asyncio
 import base64
@@ -541,9 +545,11 @@ class ChatService:
             raise ChatHistoryConflict("chat turn already has active work")
         runtime = _ActiveProviderTurn()
         self._active_provider_turns[turn.id] = runtime
-        # diagnostic-expected: the runtime registry owns, reports, and cancels this task.
-        runtime.task = asyncio.create_task(
+        runtime.task = create_diagnostic_task(
             self._produce_provider_turn(prepared, runtime),
+            feature="chat",
+            event_code="chat.provider_turn",
+            failure_message="A provider chat turn stopped unexpectedly.",
             name=f"nebula-provider-chat-{turn.id}",
         )
         return turn.id
@@ -592,9 +598,14 @@ class ChatService:
             runtime.task.cancel()
             try:
                 await runtime.task
-            except asyncio.CancelledError:
-                # diagnostic-expected: explicit stop requested this cancellation.
-                pass
+            except asyncio.CancelledError as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.provider_turn.cancelled_before_start",
+                    "A provider chat turn was cancelled before it started.",
+                    exc,
+                    stage="provider-turn-stop",
+                )
         return self.cancel_turn(turn_id)
 
     async def shutdown(self) -> None:
@@ -619,10 +630,22 @@ class ChatService:
                     runtime.events.append(event)
                     runtime.condition.notify_all()
         except asyncio.CancelledError as exc:
-            # diagnostic-expected: followers and the durable turn consume runtime.error below.
+            record_caught_exception(
+                "chat",
+                "chat.provider_turn.cancelled",
+                "A provider chat turn was cancelled.",
+                exc,
+                stage="provider-turn-stream",
+            )
             runtime.error = exc
         except BaseException as exc:
-            # diagnostic-expected: followers and the durable turn consume runtime.error below.
+            record_caught_exception(
+                "chat",
+                "chat.provider_turn.failed",
+                "A provider chat turn failed while streaming.",
+                exc,
+                stage="provider-turn-stream",
+            )
             runtime.error = exc
         finally:
             async with runtime.condition:
@@ -655,9 +678,11 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
             if runtime.followers == 0:
-                # diagnostic-expected: the runtime registry owns and cancels this expiry task.
-                runtime.cleanup_task = asyncio.create_task(
+                runtime.cleanup_task = create_diagnostic_task(
                     self._expire_provider_turn(turn.id if turn else "", runtime),
+                    feature="chat",
+                    event_code="chat.provider_turn_cleanup",
+                    failure_message="A completed provider turn could not be expired.",
                     name=f"nebula-provider-chat-cleanup-{turn.id if turn else 'unknown'}",
                 )
 

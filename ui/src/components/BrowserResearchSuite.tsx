@@ -169,7 +169,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Crawl and its pending frontier were deleted. Discovered target-map entries were retained.");
       await refresh();
     } catch (caught) {
-      void logCaughtDiagnostic("interface.security_browser.crawl_delete_failed", "The bounded browser crawl could not be deleted.", caught, "browser_research_suite");
+      void logCaughtDiagnostic("interface.security_browser.crawl_delete_failed", "The browser crawl could not be deleted.", caught, "browser_research_suite");
       setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
@@ -346,7 +346,7 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setNotice("Intruder attack and its results were deleted.");
       await refresh();
     } catch (caught) {
-      void logCaughtDiagnostic("interface.security_browser.attack_delete_failed", "The bounded Intruder attack could not be deleted.", caught, "browser_research_suite");
+      void logCaughtDiagnostic("interface.security_browser.attack_delete_failed", "The Intruder attack could not be deleted.", caught, "browser_research_suite");
       setError(`${message(caught)} Cancel active work before deleting it.`);
     } finally {
       setBusy(false);
