@@ -164,15 +164,16 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
 
   useEffect(() => {
     if (!active) return;
-    const next = new URLSearchParams(searchParams);
-    // The mounted browser owns these URL fields while active. Keep the parent
-    // Workbench view in the same atomic update so a stale child render cannot
-    // restore the previously selected view during mobile navigation.
-    next.set("view", "browser");
+    const current = new URLSearchParams(window.location.search);
+    // The Browser owns only its nested URL fields. Checking the live location
+    // prevents a stale active render from writing after Workbench has moved to
+    // another view, while avoiding stale-hook races when Browser is entered.
+    if (current.get("view") !== "browser") return;
+    const next = new URLSearchParams(current);
     next.set("browserTool", researchView);
     if (sessionId) next.set("browserSession", sessionId); else next.delete("browserSession");
     if (activeId) next.set("browserTab", activeId); else next.delete("browserTab");
-    if (next.toString() !== searchParams.toString()) setSearchParams(next, { replace: true });
+    if (next.toString() !== current.toString()) setSearchParams(next, { replace: true });
   }, [active, activeId, researchView, searchParams, sessionId, setSearchParams]);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationProviders, setAutomationProviders] = useState<ProviderHealth[]>([]);
