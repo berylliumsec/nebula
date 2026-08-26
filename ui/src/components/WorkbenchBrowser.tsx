@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, Network, Plus, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, UserRound, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { desktopDeviceId, isTauriRuntime } from "../api/runtime";
 import {
   buildBrowserScopeAddition,
@@ -19,13 +19,18 @@ import {
   type BrowserWebSocketFrameEvent,
   type BrowserActionEvent,
 } from "../api/workbenchBrowser";
-import type { EngagementScopePolicy, EvidenceSummary, EvidenceUploadRequest } from "../api/types";
+import type { EngagementScopePolicy, EvidenceSummary, EvidenceUploadRequest, HarnessProfile } from "../api/types";
 import type { ApiClient } from "../api/client";
 import type { ProviderHealth, SecurityBrowserAutomationStatus, SecurityBrowserExchange, SecurityBrowserSession, SecurityBrowserWorkspace } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useChrome } from "../state/ChromeContext";
 import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
 import { useConfirmation, useDialogOpen } from "./DialogSystem";
+import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
+import { BrowserResearchSuite, type BrowserResearchToolView } from "./BrowserResearchSuite";
+
+type ResearchView = "traffic" | "actions" | "identities" | "session" | BrowserResearchToolView;
+const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "intruder", "utilities", "actions", "identities", "session"]);
 
 interface BrowserTab {
   id: string;
@@ -112,6 +117,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
 }
 
 export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
   const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
@@ -133,9 +139,12 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string>();
-  const [sessionId, setSessionId] = useState<string>();
+  const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
-  const [researchView, setResearchView] = useState<"traffic" | "actions" | "identities" | "session">("traffic");
+  const [researchView, setResearchView] = useState<ResearchView>(() => {
+    const requested = searchParams.get("browserTool") as ResearchView | null;
+    return requested && RESEARCH_VIEWS.has(requested) ? requested : "traffic";
+  });
   const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>([]);
   const [identityName, setIdentityName] = useState("");
   const [identityBusy, setIdentityBusy] = useState(false);
@@ -152,9 +161,24 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [caTrustAcknowledged, setCaTrustAcknowledged] = useState(false);
   const [automationStatus, setAutomationStatus] = useState<SecurityBrowserAutomationStatus>();
   const [automationFormOpen, setAutomationFormOpen] = useState(false);
+
+  useEffect(() => {
+    if (!active) return;
+    const current = new URLSearchParams(window.location.search);
+    // The Browser owns only its nested URL fields. Checking the live location
+    // prevents a stale active render from writing after Workbench has moved to
+    // another view, while avoiding stale-hook races when Browser is entered.
+    if (current.get("view") !== "browser") return;
+    const next = new URLSearchParams(current);
+    next.set("browserTool", researchView);
+    if (sessionId) next.set("browserSession", sessionId); else next.delete("browserSession");
+    if (activeId) next.set("browserTab", activeId); else next.delete("browserTab");
+    if (next.toString() !== current.toString()) setSearchParams(next, { replace: true });
+  }, [active, activeId, researchView, searchParams, sessionId, setSearchParams]);
   const [automationBusy, setAutomationBusy] = useState(false);
   const [automationProviders, setAutomationProviders] = useState<ProviderHealth[]>([]);
-  const [automationProviderId, setAutomationProviderId] = useState("");
+  const [automationHarnesses, setAutomationHarnesses] = useState<HarnessProfile[]>([]);
+  const [automationRuntimeKey, setAutomationRuntimeKey] = useState("");
   const [automationModel, setAutomationModel] = useState("");
   const [automationTarget, setAutomationTarget] = useState("");
   const [automationRisks, setAutomationRisks] = useState<string[]>(["passive", "active_scan", "credential_use"]);
@@ -194,6 +218,11 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     ...(scope?.allowedUrls ?? []),
     ...(scope?.allowedDomains ?? []).map((domain) => `https://${domain}/`),
   ].filter(Boolean))), [activeTab?.url, scope]);
+  const automationRuntimes = useMemo(
+    () => aiRuntimeOptions(automationProviders, automationHarnesses),
+    [automationHarnesses, automationProviders],
+  );
+  const selectedAutomationRuntime = automationRuntimes.find((runtime) => runtime.key === automationRuntimeKey);
   const activeAutomationLease = automationStatus?.leases.find((lease) => lease.sessionId === activeSession?.id && lease.status === "active");
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
@@ -461,10 +490,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setWorkspaceError(`The autonomous run was not started because its target is not in Project scope. ${targetDecision.detail}`);
       return;
     }
-    const provider = automationProviders.find((item) => item.id === automationProviderId);
-    const model = automationModel.trim() || provider?.effectiveDefaultModel || provider?.defaultModel || provider?.models[0] || "";
-    if (!provider || !model) {
-      setWorkspaceError("Choose a healthy, enabled model provider and model before starting the autonomous web test.");
+    const runtime = selectedAutomationRuntime;
+    const model = automationModel.trim() || runtime?.defaultModel || runtime?.models[0] || "";
+    if (!runtime || !model) {
+      setWorkspaceError("Choose a healthy provider or harness and model before starting the autonomous web test.");
       return;
     }
     const credentialRefs = automationCredentialRefs.split(",").map((value) => value.trim()).filter(Boolean);
@@ -479,8 +508,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         engagementId: projectId,
         name: "Autonomous browser assessment",
         objective: `Run a bounded web application assessment for ${target}`,
-        backend: "native",
-        providerId: provider.id,
+        backend: runtime.kind === "harness" ? "harness" : "native",
+        providerId: runtime.kind === "provider" ? runtime.id : undefined,
+        harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
         model,
         maxDurationSeconds: automationDuration * 60,
         maxToolCalls: automationMaxCommands,
@@ -514,11 +544,14 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   useEffect(() => {
     if (!desktop || !researchOpen || typeof api.listProviders !== "function") return;
     let disposed = false;
-    void api.listProviders().then((page) => {
+    void Promise.all([api.listProviders(), api.listHarnesses()]).then(([page, harnesses]) => {
       if (disposed) return;
       const available = page.items.filter((provider) => provider.enabled && provider.state !== "offline" && provider.state !== "unconfigured");
       setAutomationProviders(available);
-      setAutomationProviderId((current) => available.some((provider) => provider.id === current) ? current : available[0]?.id ?? "");
+      const availableHarnesses = harnesses.filter((harness) => harness.enabled && harness.models.length > 0);
+      setAutomationHarnesses(availableHarnesses);
+      const options = aiRuntimeOptions(available, availableHarnesses);
+      setAutomationRuntimeKey((current) => options.some((runtime) => runtime.key === current) ? current : options[0]?.key ?? "");
     }).catch((caught) => {
       void logCaughtDiagnostic("interface.security_browser.automation_provider_load_failed", "Model providers could not be loaded for the autonomous browser form.", caught, "workbench_browser");
     });
@@ -526,11 +559,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   }, [api, desktop, researchOpen]);
 
   useEffect(() => {
-    const provider = automationProviders.find((item) => item.id === automationProviderId);
-    if (!provider) return;
-    const defaultModel = provider.effectiveDefaultModel || provider.defaultModel || provider.models[0] || "";
-    if (!automationModel || !provider.models.includes(automationModel)) setAutomationModel(defaultModel);
-  }, [automationModel, automationProviderId, automationProviders]);
+    if (!selectedAutomationRuntime) return;
+    const defaultModel = selectedAutomationRuntime.defaultModel || selectedAutomationRuntime.models[0] || "";
+    if (!automationModel || !selectedAutomationRuntime.models.includes(automationModel)) setAutomationModel(defaultModel);
+  }, [automationModel, selectedAutomationRuntime]);
 
   useEffect(() => {
     setWorkspace(undefined);
@@ -606,11 +638,14 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         }))
       : [blankTab()];
     setTabs(restored);
-    setActiveId(activeSession.activeTabId && restored.some((tab) => tab.id === activeSession.activeTabId)
-      ? activeSession.activeTabId
-      : restored[0].id);
+    const requestedTabId = searchParams.get("browserTab");
+    setActiveId(requestedTabId && restored.some((tab) => tab.id === requestedTabId)
+      ? requestedTabId
+      : activeSession.activeTabId && restored.some((tab) => tab.id === activeSession.activeTabId)
+        ? activeSession.activeTabId
+        : restored[0].id);
     setSessionHydrated(true);
-  }, [activeSession, projectId]);
+  }, [activeSession, projectId, searchParams]);
 
   useEffect(() => {
     const next = blankTab();
@@ -1351,7 +1386,6 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const sessionTraffic = workspace?.traffic.filter((exchange) => exchange.sessionId === activeSession?.id) ?? [];
   const sessionAutomationCommands = automationStatus?.commands.filter((command) => command.sessionId === activeSession?.id) ?? [];
   const sessionAutomationRules = automationStatus?.rules.filter((rule) => rule.sessionId === activeSession?.id) ?? [];
-  const selectedAutomationProvider = automationProviders.find((provider) => provider.id === automationProviderId);
   const selectedExchanges = selectedExchangeIds
     .map((id) => sessionTraffic.find((exchange) => exchange.id === id))
     .filter((exchange): exchange is SecurityBrowserExchange => Boolean(exchange));
@@ -1370,12 +1404,17 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       <button type="button" aria-label="Close research workbench" onClick={() => setResearchOpen(false)}><X size={15} /></button>
     </header>
     <nav aria-label="Research tools">
-      <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
+      <button type="button" className={researchView === "target" ? "active" : ""} onClick={() => setResearchView("target")}>Target</button>
+      <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Proxy <span>{sessionTraffic.length}</span></button>
+      <button type="button" className={researchView === "intercepts" ? "active" : ""} onClick={() => setResearchView("intercepts")}>Intercept</button>
+      <button type="button" className={researchView === "repeater" ? "active" : ""} onClick={() => setResearchView("repeater")}>Repeater</button>
+      <button type="button" className={researchView === "intruder" ? "active" : ""} onClick={() => setResearchView("intruder")}>Intruder</button>
+      <button type="button" className={researchView === "utilities" ? "active" : ""} onClick={() => setResearchView("utilities")}>Decoder · Comparer · Sequencer</button>
       <button type="button" className={researchView === "actions" ? "active" : ""} onClick={() => setResearchView("actions")}><Sparkles size={14} /> Actions <span>{workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0}</span></button>
       <button type="button" className={researchView === "identities" ? "active" : ""} onClick={() => setResearchView("identities")}><UserRound size={14} /> Identities <span>{workspace?.identities.length ?? 0}</span></button>
       <button type="button" className={researchView === "session" ? "active" : ""} onClick={() => setResearchView("session")}><History size={14} /> Session</button>
     </nav>
-    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : researchView === "traffic" ? <div className="browser-traffic-workbench">
+    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : (["target", "intercepts", "repeater", "intruder", "utilities"] as const).includes(researchView as BrowserResearchToolView) ? <BrowserResearchSuite api={api} desktop={desktop} identity={activeIdentity} operatorId={operatorId} projectId={projectId} session={activeSession} view={researchView as BrowserResearchToolView} /> : researchView === "traffic" ? <div className="browser-traffic-workbench">
       <div className="browser-research-toolbar"><span>Metadata and redacted headers</span><button type="button" disabled={selectedExchangeIds.length !== 2} onClick={() => setSelectedExchangeIds([])}><GitCompareArrows size={13} /> {selectedExchangeIds.length === 2 ? "Clear comparison" : "Select two to compare"}</button></div>
       {comparison && <div className="browser-exchange-diff"><strong>Authorization response diff</strong><span>Status: {comparison.status}</span><span>Bytes: {comparison.bytes}</span><span>{comparison.changedHeaders.length ? `${comparison.changedHeaders.length} response headers changed: ${comparison.changedHeaders.join(", ")}` : "Response headers are identical."}</span></div>}
       {sessionTraffic.length ? <ol className="browser-traffic-list">{[...sessionTraffic].reverse().map((exchange) => <li key={exchange.id} className={selectedExchangeIds.includes(exchange.id) ? "selected" : ""}>
@@ -1425,13 +1464,13 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           {!desktop ? <p className="browser-automation-mobile-note">Mobile can observe and stop an existing run. Pair a desktop browser to start or execute native commands.</p> : <button className="button primary" type="button" disabled={!activeTab?.created || scopeDecision.state !== "in_scope"} onClick={() => setAutomationFormOpen((value) => !value)}>{automationFormOpen ? "Hide start form" : "Start autonomous web test"}</button>}
           {automationFormOpen && desktop && <form className="browser-automation-form" onSubmit={startAutonomousRun}>
             <label>Target subset<select value={automationTarget} onChange={(event) => setAutomationTarget(event.target.value)} required><option value="">Choose an authorized target</option>{automationTargetOptions.map((target) => <option value={target} key={target}>{target}</option>)}</select></label>
-            <label>Model provider<select value={automationProviderId} onChange={(event) => setAutomationProviderId(event.target.value)} required><option value="">Choose an enabled provider</option>{automationProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.state}</option>)}</select></label>
-            <label>Model<select value={automationModel} onChange={(event) => setAutomationModel(event.target.value)} required disabled={!selectedAutomationProvider}><option value="">Choose a verified model</option>{selectedAutomationProvider?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
+            <label>Investigation runtime<select value={automationRuntimeKey} onChange={(event) => setAutomationRuntimeKey(event.target.value)} required><option value="">Choose an enabled provider or harness</option>{automationRuntimes.map((runtime) => <option key={runtime.key} value={runtime.key}>{aiRuntimeLabel(runtime)}</option>)}</select></label>
+            <label>Model<select value={automationModel} onChange={(event) => setAutomationModel(event.target.value)} required disabled={!selectedAutomationRuntime}><option value="">Choose a verified model</option>{selectedAutomationRuntime?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
             <fieldset><legend>Allowed risk classes</legend>{[["passive", "Passive observation"], ["active_scan", "Active scan and replay"], ["credential_use", "Credential use by reference"]].map(([value, label]) => <label key={value}><input type="checkbox" checked={automationRisks.includes(value)} onChange={(event) => setAutomationRisks((current) => event.target.checked ? [...current, value] : current.filter((item) => item !== value))} /><span>{label}</span></label>)}</fieldset>
             {automationRisks.includes("credential_use") && <label>Credential references<input value={automationCredentialRefs} placeholder="vault:reference-1, session:reference-2" onChange={(event) => setAutomationCredentialRefs(event.target.value)} /><small>References only. Never paste a password, cookie, token, or API key.</small></label>}
             <div className="resource-form-grid"><label>Duration (minutes)<input type="number" min={1} max={60} value={automationDuration} onChange={(event) => setAutomationDuration(Number(event.target.value))} /></label><label>Tool-call budget<input type="number" min={1} max={100} value={automationMaxCommands} onChange={(event) => setAutomationMaxCommands(Number(event.target.value))} /></label><label>Request budget<input type="number" min={1} max={1000000} value={automationMaxRequests} onChange={(event) => setAutomationMaxRequests(Number(event.target.value))} /></label></div>
             <p>Exploitation, persistence, destructive actions, and scope changes require a separate durable step-up grant and are not enabled by this form.</p>
-            <button className="button primary" type="submit" disabled={automationBusy || !automationProviderId || !automationModel || !automationTarget || !automationRisks.length}>{automationBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} {automationBusy ? "Starting…" : "Approve and start run"}</button>
+            <button className="button primary" type="submit" disabled={automationBusy || !automationRuntimeKey || !automationModel || !automationTarget || !automationRisks.length}>{automationBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} {automationBusy ? "Starting…" : "Approve and start run"}</button>
           </form>}
         </>}
       </section>

@@ -422,6 +422,132 @@ export interface SecurityBrowserWorkspace {
   handoffs: SecurityBrowserHandoff[];
 }
 
+export interface SecurityBrowserSiteNode {
+  id: Identifier;
+  revision: number;
+  sessionId: Identifier;
+  identityId: Identifier;
+  url: string;
+  method: string;
+  kind: "page" | "api" | "form" | "resource" | "websocket";
+  discoverySource: "browser" | "proxy" | "crawl" | "repeater" | "intruder" | "har" | "automation";
+  statusCode?: number;
+  parameterNames: string[];
+  contentType?: string;
+  lastExchangeId?: Identifier;
+  evidenceIds: Identifier[];
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface SecurityBrowserIntercept {
+  id: Identifier;
+  revision: number;
+  sessionId: Identifier;
+  tabId: Identifier;
+  transactionId: string;
+  phase: "request" | "response";
+  method: string;
+  url: string;
+  statusCode?: number;
+  headers: Array<[string, string]>;
+  state: "paused" | "forwarded" | "dropped" | "interrupted" | "expired";
+  expiresAt: string;
+  error?: string;
+}
+
+export interface SecurityBrowserCrawlJob {
+  id: Identifier;
+  revision: number;
+  sessionId: Identifier;
+  identityId: Identifier;
+  startUrl: string;
+  state: "draft" | "queued" | "running" | "paused" | "complete" | "cancelled" | "failed";
+  maxDepth: number;
+  maxRequests: number;
+  maxConcurrency: number;
+  maxDurationSeconds: number;
+  maxBodyBytes: number;
+  requestsCompleted: number;
+  nodesDiscovered: number;
+  checkpoint: number;
+  error?: string;
+}
+
+export interface SecurityBrowserRepeaterTab {
+  id: Identifier;
+  revision: number;
+  sessionId: Identifier;
+  identityId: Identifier;
+  name: string;
+  group: string;
+  notes: string;
+  protocol: "http" | "websocket";
+  method: string;
+  url: string;
+  headers: Array<[string, string]>;
+  sourceExchangeId?: Identifier;
+  historyExchangeIds: Identifier[];
+  evidenceIds: Identifier[];
+}
+
+export interface SecurityBrowserAttack {
+  id: Identifier;
+  revision: number;
+  sessionId: Identifier;
+  identityId: Identifier;
+  name: string;
+  strategy: "sniper" | "battering_ram" | "pitchfork" | "cluster_bomb";
+  method: string;
+  urlTemplate: string;
+  positions: string[];
+  payloadSets: Array<Record<string, unknown>>;
+  transforms: string[];
+  state: "draft" | "queued" | "running" | "paused" | "complete" | "cancelled" | "failed";
+  maxRequests: number;
+  maxConcurrency: number;
+  requestsPerSecond: number;
+  requestCount: number;
+  errorCount: number;
+  error?: string;
+}
+
+export interface SecurityBrowserAttackResult {
+  id: Identifier;
+  attackId: Identifier;
+  sequence: number;
+  payloads: string[];
+  exchangeId?: Identifier;
+  statusCode?: number;
+  responseBytes?: number;
+  durationMs?: number;
+  error?: string;
+  evidenceIds: Identifier[];
+}
+
+export interface SecurityBrowserTokenAnalysis {
+  id: Identifier;
+  sessionId: Identifier;
+  name: string;
+  sampleCount: number;
+  tokenLengthMin: number;
+  tokenLengthMax: number;
+  uniqueCount: number;
+  collisionCount: number;
+  shannonBitsPerCharacter: number;
+  characterFrequencies: Record<string, number>;
+}
+
+export interface SecurityBrowserResearchWorkspace {
+  siteNodes: SecurityBrowserSiteNode[];
+  crawlJobs: SecurityBrowserCrawlJob[];
+  intercepts: SecurityBrowserIntercept[];
+  repeaterTabs: SecurityBrowserRepeaterTab[];
+  attacks: SecurityBrowserAttack[];
+  attackResults: SecurityBrowserAttackResult[];
+  tokenAnalyses: SecurityBrowserTokenAnalysis[];
+}
+
 export interface ScopeImportCandidate {
   id: Identifier;
   targetType: "cidr" | "domain" | "url";

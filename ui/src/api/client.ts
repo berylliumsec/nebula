@@ -51,6 +51,13 @@ import type {
   SecurityBrowserHandoff,
   SecurityBrowserIdentity,
   SecurityBrowserSession,
+  SecurityBrowserResearchWorkspace,
+  SecurityBrowserSiteNode,
+  SecurityBrowserIntercept,
+  SecurityBrowserRepeaterTab,
+  SecurityBrowserAttack,
+  SecurityBrowserCrawlJob,
+  SecurityBrowserTokenAnalysis,
   SecurityBrowserWorkspace,
   SecurityBrowserWebSocketFrame,
   FindingCreateRequest,
@@ -389,6 +396,120 @@ interface WireBrowserAutomationStatus {
   leases: WireBrowserAutomationLease[];
   commands: WireBrowserCommand[];
   rules: WireBrowserProxyRule[];
+}
+
+interface WireBrowserSiteNode extends WireEntity {
+  session_id: string;
+  identity_id: string;
+  url: string;
+  method: string;
+  kind: SecurityBrowserSiteNode["kind"];
+  discovery_source: SecurityBrowserSiteNode["discoverySource"];
+  status_code?: number | null;
+  parameter_names: string[];
+  content_type?: string | null;
+  last_exchange_id?: string | null;
+  evidence_ids: string[];
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+interface WireBrowserIntercept extends WireEntity {
+  session_id: string;
+  tab_id: string;
+  transaction_id: string;
+  phase: SecurityBrowserIntercept["phase"];
+  method: string;
+  url: string;
+  status_code?: number | null;
+  headers: Array<[string, string]>;
+  state: SecurityBrowserIntercept["state"];
+  expires_at: string;
+  error?: string | null;
+}
+
+interface WireBrowserRepeaterTab extends WireEntity {
+  session_id: string;
+  identity_id: string;
+  name: string;
+  group: string;
+  notes: string;
+  protocol: SecurityBrowserRepeaterTab["protocol"];
+  method: string;
+  url: string;
+  headers: Array<[string, string]>;
+  source_exchange_id?: string | null;
+  history_exchange_ids: string[];
+  evidence_ids: string[];
+}
+
+interface WireBrowserCrawlJob extends WireEntity {
+  session_id: string;
+  identity_id: string;
+  start_url: string;
+  state: SecurityBrowserCrawlJob["state"];
+  max_depth: number;
+  max_requests: number;
+  max_concurrency: number;
+  max_duration_seconds: number;
+  max_body_bytes: number;
+  requests_completed: number;
+  nodes_discovered: number;
+  checkpoint: number;
+  error?: string | null;
+}
+
+interface WireBrowserAttack extends WireEntity {
+  session_id: string;
+  identity_id: string;
+  name: string;
+  strategy: SecurityBrowserAttack["strategy"];
+  method: string;
+  url_template: string;
+  positions: string[];
+  payload_sets: Array<Record<string, unknown>>;
+  transforms: string[];
+  state: SecurityBrowserAttack["state"];
+  max_requests: number;
+  max_concurrency: number;
+  requests_per_second: number;
+  request_count: number;
+  error_count: number;
+  error?: string | null;
+}
+
+interface WireBrowserAttackResult extends WireEntity {
+  attack_id: string;
+  sequence: number;
+  payloads: string[];
+  exchange_id?: string | null;
+  status_code?: number | null;
+  response_bytes?: number | null;
+  duration_ms?: number | null;
+  error?: string | null;
+  evidence_ids: string[];
+}
+
+interface WireBrowserTokenAnalysis extends WireEntity {
+  session_id: string;
+  name: string;
+  sample_count: number;
+  token_length_min: number;
+  token_length_max: number;
+  unique_count: number;
+  collision_count: number;
+  shannon_bits_per_character: number;
+  character_frequencies: Record<string, number>;
+}
+
+interface WireBrowserResearchWorkspace {
+  site_nodes: WireBrowserSiteNode[];
+  crawl_jobs?: WireBrowserCrawlJob[];
+  intercepts: WireBrowserIntercept[];
+  repeater_tabs: WireBrowserRepeaterTab[];
+  attacks: WireBrowserAttack[];
+  attack_results: WireBrowserAttackResult[];
+  token_analyses: WireBrowserTokenAnalysis[];
 }
 
 interface WireBrowserWorkspace {
@@ -3304,6 +3425,120 @@ function mapBrowserWorkspace(value: WireBrowserWorkspace): SecurityBrowserWorksp
     frames: value.frames.map(mapBrowserWebSocketFrame),
     actions: value.actions.map(mapBrowserAction),
     handoffs: value.handoffs.map(mapBrowserHandoff),
+  };
+}
+
+function mapBrowserResearchWorkspace(value: WireBrowserResearchWorkspace): SecurityBrowserResearchWorkspace {
+  return {
+    siteNodes: value.site_nodes.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      sessionId: item.session_id,
+      identityId: item.identity_id,
+      url: item.url,
+      method: item.method,
+      kind: item.kind,
+      discoverySource: item.discovery_source,
+      statusCode: item.status_code ?? undefined,
+      parameterNames: item.parameter_names,
+      contentType: item.content_type ?? undefined,
+      lastExchangeId: item.last_exchange_id ?? undefined,
+      evidenceIds: item.evidence_ids,
+      firstSeenAt: item.first_seen_at,
+      lastSeenAt: item.last_seen_at,
+    })),
+    crawlJobs: (value.crawl_jobs ?? []).map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      sessionId: item.session_id,
+      identityId: item.identity_id,
+      startUrl: item.start_url,
+      state: item.state,
+      maxDepth: item.max_depth,
+      maxRequests: item.max_requests,
+      maxConcurrency: item.max_concurrency,
+      maxDurationSeconds: item.max_duration_seconds,
+      maxBodyBytes: item.max_body_bytes,
+      requestsCompleted: item.requests_completed,
+      nodesDiscovered: item.nodes_discovered,
+      checkpoint: item.checkpoint,
+      error: item.error ?? undefined,
+    })),
+    intercepts: value.intercepts.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      sessionId: item.session_id,
+      tabId: item.tab_id,
+      transactionId: item.transaction_id,
+      phase: item.phase,
+      method: item.method,
+      url: item.url,
+      statusCode: item.status_code ?? undefined,
+      headers: item.headers,
+      state: item.state,
+      expiresAt: item.expires_at,
+      error: item.error ?? undefined,
+    })),
+    repeaterTabs: value.repeater_tabs.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      sessionId: item.session_id,
+      identityId: item.identity_id,
+      name: item.name,
+      group: item.group,
+      notes: item.notes,
+      protocol: item.protocol,
+      method: item.method,
+      url: item.url,
+      headers: item.headers,
+      sourceExchangeId: item.source_exchange_id ?? undefined,
+      historyExchangeIds: item.history_exchange_ids,
+      evidenceIds: item.evidence_ids,
+    })),
+    attacks: value.attacks.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      sessionId: item.session_id,
+      identityId: item.identity_id,
+      name: item.name,
+      strategy: item.strategy,
+      method: item.method,
+      urlTemplate: item.url_template,
+      positions: item.positions,
+      payloadSets: item.payload_sets,
+      transforms: item.transforms,
+      state: item.state,
+      maxRequests: item.max_requests,
+      maxConcurrency: item.max_concurrency,
+      requestsPerSecond: item.requests_per_second,
+      requestCount: item.request_count,
+      errorCount: item.error_count,
+      error: item.error ?? undefined,
+    })),
+    attackResults: value.attack_results.map((item) => ({
+      id: item.id,
+      attackId: item.attack_id,
+      sequence: item.sequence,
+      payloads: item.payloads,
+      exchangeId: item.exchange_id ?? undefined,
+      statusCode: item.status_code ?? undefined,
+      responseBytes: item.response_bytes ?? undefined,
+      durationMs: item.duration_ms ?? undefined,
+      error: item.error ?? undefined,
+      evidenceIds: item.evidence_ids,
+    })),
+    tokenAnalyses: value.token_analyses.map((item) => ({
+      id: item.id,
+      sessionId: item.session_id,
+      name: item.name,
+      sampleCount: item.sample_count,
+      tokenLengthMin: item.token_length_min,
+      tokenLengthMax: item.token_length_max,
+      uniqueCount: item.unique_count,
+      collisionCount: item.collision_count,
+      shannonBitsPerCharacter: item.shannon_bits_per_character,
+      characterFrequencies: item.character_frequencies,
+    })),
   };
 }
 
@@ -6683,6 +6918,199 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/browser-workspace`,
       { signal },
     ).then(mapBrowserWorkspace);
+  }
+
+  getSecurityBrowserResearch(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SecurityBrowserResearchWorkspace> {
+    return this.request<WireBrowserResearchWorkspace>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-research`,
+      { signal },
+    ).then(mapBrowserResearchWorkspace);
+  }
+
+  createSecurityBrowserCrawl(
+    engagementId: string,
+    body: {
+      sessionId: string;
+      identityId: string;
+      startUrl: string;
+      maxDepth: number;
+      maxRequests: number;
+      maxConcurrency: number;
+      maxDurationSeconds: number;
+      maxBodyBytes: number;
+    },
+  ): Promise<SecurityBrowserCrawlJob> {
+    return this.request<WireBrowserCrawlJob>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-crawls`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: body.sessionId,
+          identity_id: body.identityId,
+          start_url: body.startUrl,
+          max_depth: body.maxDepth,
+          max_requests: body.maxRequests,
+          max_concurrency: body.maxConcurrency,
+          max_duration_seconds: body.maxDurationSeconds,
+          max_body_bytes: body.maxBodyBytes,
+        }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], crawl_jobs: [value], intercepts: [], repeater_tabs: [], attacks: [], attack_results: [], token_analyses: [],
+    }).crawlJobs[0]);
+  }
+
+  transitionSecurityBrowserCrawl(
+    crawl: SecurityBrowserCrawlJob,
+    action: "queue" | "start" | "pause" | "resume" | "cancel" | "complete" | "fail",
+    operatorId = "operator",
+  ): Promise<SecurityBrowserCrawlJob> {
+    return this.request<WireBrowserCrawlJob>(
+      `browser-crawls/${encodeURIComponent(crawl.id)}/state`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: crawl.revision, action, actor_id: operatorId }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], crawl_jobs: [value], intercepts: [], repeater_tabs: [], attacks: [], attack_results: [], token_analyses: [],
+    }).crawlJobs[0]);
+  }
+
+  decideSecurityBrowserIntercept(
+    intercept: SecurityBrowserIntercept,
+    decision: "forward" | "drop",
+    operatorId = "operator",
+  ): Promise<SecurityBrowserIntercept> {
+    return this.request<WireBrowserIntercept>(
+      `browser-intercepts/${encodeURIComponent(intercept.id)}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: intercept.revision,
+          decision,
+          operator_id: operatorId,
+        }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], intercepts: [value], repeater_tabs: [], attacks: [], attack_results: [], token_analyses: [],
+    }).intercepts[0]);
+  }
+
+  createSecurityBrowserRepeaterTab(
+    engagementId: string,
+    body: {
+      sessionId: string;
+      identityId: string;
+      name: string;
+      method: string;
+      url: string;
+      headers?: Array<[string, string]>;
+      sourceExchangeId?: string;
+    },
+  ): Promise<SecurityBrowserRepeaterTab> {
+    return this.request<WireBrowserRepeaterTab>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-repeater-tabs`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: body.sessionId,
+          identity_id: body.identityId,
+          name: body.name,
+          method: body.method,
+          url: body.url,
+          headers: body.headers ?? [],
+          source_exchange_id: body.sourceExchangeId,
+        }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], intercepts: [], repeater_tabs: [value], attacks: [], attack_results: [], token_analyses: [],
+    }).repeaterTabs[0]);
+  }
+
+  createSecurityBrowserAttack(
+    engagementId: string,
+    body: {
+      sessionId: string;
+      identityId: string;
+      name: string;
+      strategy: SecurityBrowserAttack["strategy"];
+      method: string;
+      urlTemplate: string;
+      positions: string[];
+      payloadValues: string[];
+      transforms?: string[];
+      maxRequests: number;
+      maxConcurrency: number;
+      requestsPerSecond: number;
+    },
+  ): Promise<SecurityBrowserAttack> {
+    return this.request<WireBrowserAttack>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-attacks`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          session_id: body.sessionId,
+          identity_id: body.identityId,
+          name: body.name,
+          strategy: body.strategy,
+          method: body.method,
+          url_template: body.urlTemplate,
+          positions: body.positions,
+          payload_sets: [{ kind: "list", values: body.payloadValues }],
+          transforms: body.transforms ?? [],
+          max_requests: body.maxRequests,
+          max_concurrency: body.maxConcurrency,
+          requests_per_second: body.requestsPerSecond,
+        }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], intercepts: [], repeater_tabs: [], attacks: [value], attack_results: [], token_analyses: [],
+    }).attacks[0]);
+  }
+
+  transitionSecurityBrowserAttack(
+    attack: SecurityBrowserAttack,
+    action: "queue" | "start" | "pause" | "resume" | "cancel" | "complete" | "fail",
+    operatorId = "operator",
+  ): Promise<SecurityBrowserAttack> {
+    return this.request<WireBrowserAttack>(
+      `browser-attacks/${encodeURIComponent(attack.id)}/state`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: attack.revision, action, actor_id: operatorId }),
+      },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], intercepts: [], repeater_tabs: [], attacks: [value], attack_results: [], token_analyses: [],
+    }).attacks[0]);
+  }
+
+  securityBrowserDecode(operation: string, value: string): Promise<{ operation: string; result: unknown; bytes: number }> {
+    return this.request("browser-utilities/decode", {
+      method: "POST",
+      body: JSON.stringify({ operation, value }),
+    });
+  }
+
+  securityBrowserCompare(mode: string, left: string, right: string): Promise<{ mode: string; equal: boolean; similarity?: number; diff?: string[] }> {
+    return this.request("browser-utilities/compare", {
+      method: "POST",
+      body: JSON.stringify({ mode, left, right }),
+    });
+  }
+
+  createSecurityBrowserTokenAnalysis(
+    engagementId: string,
+    body: { sessionId: string; name: string; samples: string[] },
+  ): Promise<SecurityBrowserTokenAnalysis> {
+    return this.request<WireBrowserTokenAnalysis>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-token-analyses`,
+      { method: "POST", body: JSON.stringify({ session_id: body.sessionId, name: body.name, samples: body.samples }) },
+    ).then((value) => mapBrowserResearchWorkspace({
+      site_nodes: [], intercepts: [], repeater_tabs: [], attacks: [], attack_results: [], token_analyses: [value],
+    }).tokenAnalyses[0]);
   }
 
   getSecurityBrowserAutomation(

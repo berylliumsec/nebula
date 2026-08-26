@@ -72,6 +72,15 @@ COMMAND_RISK: dict[str, RiskClass] = {
     "proxy.remove_rule": RiskClass.ACTIVE_SCAN,
     "proxy.replay": RiskClass.ACTIVE_SCAN,
     "proxy.emergency_stop": RiskClass.ACTIVE_SCAN,
+    "target.observe": RiskClass.PASSIVE,
+    "target.crawl": RiskClass.ACTIVE_SCAN,
+    "repeater.create": RiskClass.ACTIVE_SCAN,
+    "intruder.create": RiskClass.ACTIVE_SCAN,
+    "intruder.control": RiskClass.ACTIVE_SCAN,
+    "analysis.decode": RiskClass.PASSIVE,
+    "analysis.compare": RiskClass.PASSIVE,
+    "analysis.tokens": RiskClass.PASSIVE,
+    "finding.propose": RiskClass.PASSIVE,
 }
 CREDENTIAL_CAPABLE_COMMANDS = frozenset(
     {"browser.interact", "browser.replay", "proxy.replay"}
