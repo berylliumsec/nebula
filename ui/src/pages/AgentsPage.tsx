@@ -22,6 +22,8 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { MissionPromotionDialog } from "../components/MissionPromotionDialog";
+import { ActivityLedger } from "../components/ActivityLedger";
+import { activityLedgerFromMission, type ActivityLedgerEntry } from "../components/activityLedger";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
@@ -46,6 +48,17 @@ const missionStatusCopy: Record<string, string> = {
 };
 
 const formatEventKind = (kind: string) => kind.replaceAll(".", " · ").replaceAll("_", " ");
+
+function MissionLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
+  const event = entry.sourceEvent;
+  return <div className="activity-ledger-entry-body">
+    {event?.summary && <AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} />}
+    {entry.outputs.map((output, index) => <div className="harness-output" key={`${output.label}-${index}`}><small>{output.label}</small><pre tabIndex={0}>{output.content}</pre></div>)}
+    {typeof entry.payload.diff === "string" && entry.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{entry.payload.diff}</pre></div>}
+    {Object.keys(entry.payload).length > 0 && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(entry.payload, null, 2)}</pre></details>}
+    {event && <small>{event.actor ?? "Nebula Core"} · #{event.sequence}</small>}
+  </div>;
+}
 
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
@@ -82,11 +95,11 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
     }
   };
   const resultEvent = events.find((event) => event.kind === "run.completed" || event.kind === "run.failed");
-  const harnessEvents = events.filter((event) => event.kind.startsWith("harness."));
   const latestEvent = events[0];
   const progress = run?.totalTasks ? Math.min(100, Math.round((run.completedTasks / run.totalTasks) * 100)) : 0;
   const terminal = Boolean(run && ["complete", "failed", "cancelled", "interrupted"].includes(run.status));
   const selectedApprovals = run ? approvals.filter((approval) => approval.runId === run.id) : [];
+  const missionLedger = run ? activityLedgerFromMission(run, events) : undefined;
   const filteredRuns = useMemo(() => {
     const query = missionQuery.trim().toLocaleLowerCase();
     return [...runs]
@@ -130,21 +143,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>
           <footer><span>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</span>{resultEvent.kind === "run.completed" && run && <MissionPromotionDialog run={run} summary={resultEvent.summary} />}{resultEvent.kind === "run.failed" && <a href="/settings#diagnostics-settings">View diagnostics</a>}</footer>
         </section>}
-        <details className="panel data-panel mission-activity-disclosure"><summary><span><strong>Activity</strong><small>{events.length} event{events.length === 1 ? "" : "s"} · expand for technical timeline</small></span><GitBranch size={19} /></summary><section>
-          <header className="panel-header compact"><div><h2>Activity</h2><p>{harnessEvents.length ? "Replayable harness timeline with newest updates first" : "Full loaded mission timeline with newest updates first"}</p></div><GitBranch size={19} /></header>
-          {harnessEvents.length > 0 ? <div className="harness-timeline" aria-live="polite">{events.map((event) => {
-            const payload = event.payload;
-            const data = payload.payload && typeof payload.payload === "object" && !Array.isArray(payload.payload) ? payload.payload as Record<string, unknown> : {};
-            const kind = typeof payload.item_kind === "string" ? payload.item_kind : "notice";
-            const status = typeof payload.item_status === "string" ? payload.item_status : undefined;
-            const title = typeof payload.title === "string" ? payload.title : event.kind.replace("harness.", "").replaceAll("_", " ");
-            const delta = typeof payload.delta === "string" ? payload.delta : undefined;
-            return <details className={`harness-activity-card kind-${kind}${payload.parent_item_id ? " nested" : ""}`} key={event.id}>
-              <summary><span className={`status-dot ${["complete", "completed", "success"].includes(status ?? "") ? "healthy" : ["failed", "error", "cancelled"].includes(status ?? "") ? "unavailable" : "pending"}`} /><strong>{title}</strong><code>{kind.replaceAll("_", " ")}</code>{status && <span>{status.replaceAll("_", " ")}</span>}</summary>
-              <div className="harness-activity-body"><p>{event.summary}</p>{delta && <div className="harness-output"><small>{typeof payload.stream === "string" ? payload.stream : "output"}</small><pre>{delta}</pre></div>}{typeof data.diff === "string" && data.diff && <div className="harness-output diff"><small>Unified diff</small><pre>{data.diff}</pre></div>}{Object.keys(data).length > 0 && kind !== "reasoning" && <pre className="harness-structured">{JSON.stringify(data, null, 2)}</pre>}<small>#{event.sequence} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(event.occurredAt))}</small></div>
-            </details>;
-          })}</div> : events.length > 0 ? <ol className="event-list mission-event-list">{events.map((event) => <li key={event.id}><span className="event-icon"><Bot size={15} /></span><div className="event-summary"><span className="event-kind">{formatEventKind(event.kind)}</span><AssistantMarkdown content={event.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><small>{event.actor ?? "Nebula Core"} · #{event.sequence} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" }).format(new Date(event.occurredAt))}</small>{Object.keys(event.payload).length > 0 && <details className="mission-event-details"><summary>Technical details</summary><pre>{JSON.stringify(event.payload, null, 2)}</pre></details>}</div></li>)}</ol> : <div className="empty-state compact"><CircleDashed size={23} /><strong>No run events</strong><p>{run ? `Core feed is ${streamState}. The first recorded transition will appear here.` : "Start a mission to create a live execution timeline."}</p></div>}
-        </section></details>
+        {missionLedger && <ActivityLedger model={missionLedger} renderEntryDetails={(entry) => <MissionLedgerEntryDetails entry={entry} />} />}
       </div>
     );
   }

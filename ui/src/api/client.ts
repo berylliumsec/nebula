@@ -2972,6 +2972,24 @@ function mapPersistedChatMessage(
       typeof value.metadata?.harness_turn_id === "string"
         ? value.metadata.harness_turn_id
         : undefined,
+    toolResults: Array.isArray(value.metadata?.tool_results)
+      ? value.metadata.tool_results.flatMap((item) => {
+          if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+          const row = item as JsonObject;
+          if (typeof row.tool_call_id !== "string" || typeof row.capability !== "string") return [];
+          return [{
+            toolCallId: row.tool_call_id,
+            capability: row.capability,
+            status: typeof row.status === "string" ? row.status : "completed",
+            summary: typeof row.summary === "string" ? row.summary : undefined,
+            evidenceIds: Array.isArray(row.evidence_ids)
+              ? row.evidence_ids.filter((id): id is string => typeof id === "string")
+              : [],
+            resultArtifactId: typeof row.result_artifact_id === "string" ? row.result_artifact_id : undefined,
+            receipt: row,
+          }];
+        })
+      : [],
     createdAt: value.created_at,
     updatedAt: value.updated_at,
   };

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AssistantRuntimeProvider,
@@ -65,6 +65,13 @@ import type {
   ToolOutputSearchResult,
 } from "../api/types";
 import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
+import { ActivityLedger } from "../components/ActivityLedger";
+import {
+  activityLedgerFromHarness,
+  activityLedgerFromNative,
+  type ActivityLedgerEntry,
+  type NativeActivitySource,
+} from "../components/activityLedger";
 import { sha256 } from "../components/assistantCode";
 import { ExecutionHistory } from "../components/ExecutionHistory";
 import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
@@ -84,16 +91,12 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { AgentsPage } from "./AgentsPage";
 import {
   harnessCostLabel,
-  harnessActivityItemTier,
-  groupHarnessActivityItems,
   isTimelineActivity,
   isSameHarnessSessionActivity,
   reasoningSummaryState,
   reasoningSummaryText,
   reduceHarnessActivity,
   shouldShowActivityItem,
-  shouldShowActivityKind,
-  summarizeHarnessActivity,
   type HarnessActivityItem,
 } from "./harnessActivity";
 import { detachHarnessStream } from "./chatStreamLifecycle";
@@ -128,16 +131,9 @@ function isReadableContextStatus(value: ContextStatus, expectedOwnerId: string):
     && Number.isFinite(value.compactedThrough);
 }
 
-interface ToolLifecycleCard {
-  assistantId: string;
-  toolCallId: string;
-  capability: string;
-  status: string;
-  summary?: string;
-  evidenceIds: string[];
+interface ToolLifecycleCard extends NativeActivitySource {
   resultArtifactId?: string;
   artifacts: ToolArtifactReference[];
-  receipt?: Record<string, unknown>;
 }
 
 interface ChatScrollTraceWindow extends Window {
@@ -270,90 +266,35 @@ function AuthenticatedChatImage({ api, block }: { api: ApiClient; block: ChatCon
   return <a href={url} target="_blank" rel="noreferrer" title="Open image preview"><img className="chat-content-image" src={url} alt={block.alt ?? "Attached image"} /></a>;
 }
 
-function HarnessActivityDisclosure({
-  children,
-  className,
-  initiallyOpen,
-}: {
-  children: ReactNode;
-  className: string;
-  initiallyOpen: boolean;
-}) {
-  // A completed activity must not force-close content the operator is reading.
-  const [open, setOpen] = useState(initiallyOpen);
-  return <details className={className} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>{children}</details>;
-}
-
-function activityStatusTone(status: string | undefined): string {
-  if (["completed", "complete", "success"].includes(status ?? "")) return "healthy";
-  if (["failed", "error", "cancelled"].includes(status ?? "")) return "unavailable";
-  return "pending";
-}
-
-function HarnessNarrativeGroup({ items }: { items: HarnessActivityItem[] }) {
-  const active = items.some((item) => ["running", "streaming"].includes(item.status ?? ""));
-  const failed = items.some((item) => ["failed", "error", "cancelled"].includes(item.status ?? ""));
-  const hasCommentary = items.some((item) => item.title === "Commentary");
-  const status = active ? "Streaming" : failed ? "Failed" : "Completed";
-  const hasReasoningSummary = items.some((item) => reasoningSummaryState(item));
-  return (
-    <HarnessActivityDisclosure
-      className={`harness-activity-card harness-narrative-card${items[0]?.parentItemId ? " nested" : ""}`}
-      initiallyOpen={active}
-    >
-      <summary>
-        <span className={`status-dot ${active ? "pending" : failed ? "unavailable" : "healthy"}`} />
-        <strong>{hasCommentary ? "Reasoning & commentary" : "Reasoning"}</strong>
-        <span>{items.length} update{items.length === 1 ? "" : "s"} · {status}</span>
-        <ChevronDown className="harness-disclosure-chevron" size={14} aria-hidden="true" />
-      </summary>
-      <div className="harness-activity-body harness-narrative-body">
-        {items.map((item) => {
-          const summaryText = reasoningSummaryText(item);
-          const outputs = Object.entries(item.streams).filter(([stream]) => stream !== "reasoning_summary");
-          return (
-            <section className="harness-narrative-row" key={item.key}>
-              <header><strong>{item.title}</strong>{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</header>
-              {summaryText && <p className="harness-reasoning-summary">{summaryText}</p>}
-              {reasoningSummaryState(item) === "pending" && !summaryText && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
-              {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
-              {!summaryText && outputs.length === 0 && item.summary && <p>{item.summary}</p>}
-              {outputs.map(([stream, output]) => stream === "commentary"
-                ? <p className="harness-commentary-text" key={stream}>{output}</p>
-                : <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
-            </section>
-          );
-        })}
-        {hasReasoningSummary && <small className="harness-reasoning-note">Provider-safe summaries only. Private reasoning traces are not captured or retained.</small>}
-      </div>
-    </HarnessActivityDisclosure>
-  );
-}
-
-function HarnessTurnDetails({ items }: { items: HarnessActivityItem[] }) {
-  if (!items.length) return null;
-  return (
-    <details className="harness-turn-details">
-      <summary>
-        <strong>Turn details</strong>
-        <span>{items.length}</span>
-        <ChevronDown className="harness-disclosure-chevron" size={14} aria-hidden="true" />
-      </summary>
-      <div>
-        {items.map((item) => {
-          const plan = item.plan ?? (Array.isArray(item.payload.plan) ? item.payload.plan : undefined);
-          return <section key={item.key}>
-            <header><strong>{item.title}</strong>{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</header>
-            {item.summary && <p>{item.summary}</p>}
-            {item.mode && <p>Mode: {item.mode}</p>}
-            {item.goal && <p>Goal: {item.goal.objective} · {item.goal.status}{typeof item.goal.progress === "number" ? ` · ${Math.round(item.goal.progress * 100)}%` : ""}</p>}
-            {plan?.length ? <p>{plan.filter((entry) => entry.status === "completed").length}/{plan.length} plan steps completed</p> : null}
-            {item.usage && item.usage.totalTokens > 0 && <p>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{harnessCostLabel(item) ? ` · ${harnessCostLabel(item)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</p>}
-          </section>;
-        })}
-      </div>
-    </details>
-  );
+function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
+  const item = entry.sourceItem;
+  const tool = entry.sourceTool;
+  if (tool) return <div className="activity-ledger-entry-body">
+    {tool.summary && <p>{tool.summary}</p>}
+    {tool.evidenceIds.length > 0 && <div className="scope-chip-list">{tool.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>}
+    {Object.keys(tool.receipt ?? {}).length > 0 && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(tool.receipt, null, 2)}</pre></details>}
+  </div>;
+  if (!item) return null;
+  const summaryText = reasoningSummaryText(item);
+  return <div className="activity-ledger-entry-body">
+    {item.summary && <p>{item.summary}</p>}
+    {summaryText && <p className="harness-reasoning-summary">{summaryText}</p>}
+    {reasoningSummaryState(item) === "pending" && !summaryText && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
+    {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
+    {reasoningSummaryState(item) && <small className="harness-reasoning-note">Provider-safe summary only. Private reasoning traces are not captured or retained.</small>}
+    {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => {
+      if (typeof step === "string") return <li key={index}>{step}</li>;
+      if (!step || typeof step !== "object") return null;
+      const planEntry = step as Record<string, unknown>;
+      return <li className={`status-${String(planEntry.status ?? "pending")}`} key={String(planEntry.id ?? index)}><span className="status-dot" />{String(planEntry.title ?? planEntry.content ?? `Step ${index + 1}`)}<small>{String(planEntry.status ?? "pending").replaceAll("_", " ")}</small></li>;
+    })}</ol>}
+    {item.kind === "file_change" && Array.isArray(item.payload.files) && <ul className="harness-file-list">{item.payload.files.map((file, index) => <li key={index}><FileClock size={13} /> {typeof file === "string" ? file : JSON.stringify(file)}</li>)}</ul>}
+    {entry.outputs.map((output, index) => <div className="harness-output" key={`${output.label}-${index}`}><small>{output.label}</small><pre tabIndex={0}>{output.content}</pre></div>)}
+    {typeof item.payload.diff === "string" && item.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{item.payload.diff}</pre></div>}
+    {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <details className="activity-ledger-technical"><summary>Arguments and result details</summary><pre tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre></details>}
+    {item.usage && item.usage.totalTokens > 0 && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{harnessCostLabel(item) ? ` · ${harnessCostLabel(item)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
+    {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
+  </div>;
 }
 
 function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
@@ -1473,6 +1414,20 @@ export function SessionsPage() {
       if (!selectionIsCurrent()) return;
       setSessionId(id);
       setMessages(history.map(persistedMessage));
+      const restoredToolCards: ToolLifecycleCard[] = history.flatMap((message) => message.role === "assistant"
+        ? (message.toolResults ?? []).map((result) => ({
+            assistantId: message.id,
+            toolCallId: result.toolCallId,
+            capability: result.capability,
+            status: result.status,
+            summary: result.summary,
+            evidenceIds: result.evidenceIds,
+            resultArtifactId: result.resultArtifactId,
+            artifacts: [],
+            receipt: result.receipt,
+          }))
+        : []);
+      setToolCards(restoredToolCards);
       await restoreHarnessActivity(history, selectionIsCurrent);
       if (!selectionIsCurrent()) return;
       if (summary) {
@@ -1503,14 +1458,14 @@ export function SessionsPage() {
           state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "streaming",
           durable: false,
         }]);
-        setToolCards(pendingTurn.toolCallIds.map((toolCallId) => ({
+        setToolCards([...restoredToolCards, ...pendingTurn.toolCallIds.map((toolCallId) => ({
           assistantId,
           toolCallId,
           capability: "Command runtime",
           status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
           evidenceIds: [],
           artifacts: [],
-        })));
+        }))]);
         if (pendingTurn.status === "waiting_approval") {
           setPendingResponse({
             turnId: pendingTurn.id,
@@ -1620,7 +1575,6 @@ export function SessionsPage() {
         setToolCards([]);
       } else {
         setPendingResponse(undefined);
-        setToolCards([]);
         if (summary?.backend === "harness") {
           const assistantTurnIds = new Set(history.filter((message) => message.role === "assistant").map((message) => message.harnessTurnId));
           const dangling = [...history].reverse().find((message) => message.role === "user" && message.harnessTurnId && !assistantTurnIds.has(message.harnessTurnId));
@@ -3071,8 +3025,12 @@ export function SessionsPage() {
                   const message = messagesById.get(threadMessage.id);
                   if (!message) return null;
                   const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));
-                  const transcriptActivityItems = messageActivityItems.filter((item) => harnessActivityItemTier(item) === "transcript");
-                  const turnDetailItems = messageActivityItems.filter((item) => harnessActivityItemTier(item) === "details");
+                  const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
+                  const activityLedger = messageActivityItems.length > 0
+                    ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
+                    : messageToolCards.length > 0
+                      ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
+                      : undefined;
                   return (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
@@ -3087,40 +3045,19 @@ export function SessionsPage() {
                       <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
                       {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p className={message.role === "assistant" && message.state === "streaming" ? "assistant-streaming-text" : undefined}>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
-                      {messageActivityItems.length > 0 && <HarnessActivityDisclosure className="harness-timeline harness-timeline-group" initiallyOpen={message.state === "streaming" || messageActivityItems.some((item) => ["waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? ""))}>
-                        <summary><span className={`status-dot ${message.state === "error" ? "unavailable" : message.state === "complete" ? "healthy" : "pending"}`} /><strong>Work summary</strong><span>{summarizeHarnessActivity(messageActivityItems)}</span><ChevronDown className="harness-disclosure-chevron" size={14} aria-hidden="true" /></summary>
-                        {groupHarnessActivityItems(transcriptActivityItems).map((group) => {
-                          if (group.type === "narrative") return <HarnessNarrativeGroup items={group.items} key={group.key} />;
-                          const item = group.items[0];
-                          if (!item) return null;
-                          return <HarnessActivityDisclosure className={`harness-activity-card kind-${item.kind ?? "notice"}${item.parentItemId ? " nested" : ""}`} initiallyOpen={["waiting_approval", "waiting_input", "failed", "interrupted"].includes(item.status ?? "")} key={group.key}>
-                          <summary><span className={`status-dot ${activityStatusTone(item.status)}`} /><strong>{item.title}</strong>{shouldShowActivityKind(item) && <code>{item.kind?.replaceAll("_", " ")}</code>}{item.status && <span>{item.status.replaceAll("_", " ")}</span>}</summary>
-                          <div className="harness-activity-body">
-                            {item.summary && <p>{item.summary}</p>}
-                            {reasoningSummaryText(item) && <p className="harness-reasoning-summary">{reasoningSummaryText(item)}</p>}
-                            {reasoningSummaryState(item) === "pending" && !reasoningSummaryText(item) && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
-                            {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
-                            {reasoningSummaryState(item) && <small className="harness-reasoning-note">Provider-safe summary only. Private reasoning traces are not captured or retained.</small>}
-                            {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => {
-                              if (typeof step === "string") return <li key={index}>{step}</li>;
-                              if (!step || typeof step !== "object") return null;
-                              const entry = step as Record<string, unknown>;
-                              return <li className={`status-${String(entry.status ?? "pending")}`} key={String(entry.id ?? index)}><span className="status-dot" />{String(entry.title ?? entry.content ?? `Step ${index + 1}`)}<small>{String(entry.status ?? "pending").replaceAll("_", " ")}</small></li>;
-                            })}</ol>}
-                            {item.kind === "file_change" && Array.isArray(item.payload.files) && <ul className="harness-file-list">{item.payload.files.map((file, index) => <li key={index}><FileClock size={13} /> {typeof file === "string" ? file : JSON.stringify(file)}</li>)}</ul>}
-                            {Object.entries(item.streams).filter(([stream]) => stream !== "reasoning_summary").map(([stream, output]) => <div className="harness-output" key={stream}><small>{stream}</small><pre tabIndex={0}>{output}</pre></div>)}
-                            {typeof item.payload.diff === "string" && item.payload.diff && <div className="harness-output diff"><small>Unified diff</small><pre tabIndex={0}>{item.payload.diff}</pre></div>}
-                            {item.kind && ["command", "tool", "web_search", "browser", "image", "skill", "hook", "review", "subagent"].includes(item.kind) && Object.keys(item.payload).length > 0 && <details className="harness-structured-details"><summary>Arguments and result details</summary><pre className="harness-structured" tabIndex={0}>{JSON.stringify(item.payload, null, 2)}</pre></details>}
-                            {item.usage && item.usage.totalTokens > 0 && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{harnessCostLabel(item) ? ` · ${harnessCostLabel(item)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
-                            {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
-                            {item.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}
-                            {item.type === "checkpoint" && selectedHarness?.capabilities?.checkpointRewind && <button className="button quiet" type="button" disabled={harnessControlBusy || (item.sessionId === harnessSessionId && harnessActivity?.busy)} title={item.sessionId === harnessSessionId && harnessActivity?.busy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void rewindCheckpoint(item)}>Rewind files here</button>}
-                          </div>
-                        </HarnessActivityDisclosure>;
-                        })}
-                        <HarnessTurnDetails items={turnDetailItems} />
-                      </HarnessActivityDisclosure>}
-                      {runtimeKind !== "harness" && toolCards.filter((card) => card.assistantId === message.id).map((card) => <div className="chat-tool-card" key={card.toolCallId}><strong>{card.capability}</strong><span>{card.status.replaceAll("_", " ")}</span>{card.summary && <small>{card.summary}</small>}{card.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}{card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}</div>)}
+                      {activityLedger && <ActivityLedger
+                        model={activityLedger}
+                        renderEntryDetails={(entry) => <AssistantLedgerEntryDetails entry={entry} />}
+                        renderEntryActions={(entry) => {
+                          const item = entry.sourceItem;
+                          const card = entry.sourceTool;
+                          return <>
+                            {item?.kind === "subagent" && item.status === "running" && selectedHarness?.capabilities?.subagentControl && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void stopSubagent(item)}>Stop subagent</button>}
+                            {item?.type === "checkpoint" && selectedHarness?.capabilities?.checkpointRewind && <button className="button quiet" type="button" disabled={harnessControlBusy || (item.sessionId === harnessSessionId && harnessActivity?.busy)} title={item.sessionId === harnessSessionId && harnessActivity?.busy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void rewindCheckpoint(item)}>Rewind files here</button>}
+                            {card && card.status !== "running" && <button className="button quiet" type="button" onClick={() => void openArtifacts(card)}><Search size={13} /> Artifacts</button>}
+                          </>;
+                        }}
+                      />}
                       {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" key={interaction.id}>
                         <strong>{interaction.prompt}</strong>
                         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {

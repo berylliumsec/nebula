@@ -54,15 +54,16 @@ describe("mission activity", () => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
 
-    const activity = screen.getByRole("heading", { name: "Activity" }).closest("section");
-    expect(activity).not.toBeNull();
-    expect(within(activity!).getByText("Summary").tagName).toBe("STRONG");
-    expect(within(activity!).getByText("Scan prepared").closest("li")?.parentElement?.tagName).toBe("UL");
-    expect(within(activity!).queryByText(/\*\*Summary\*\*/)).toBeNull();
+    const activity = screen.getByRole("region", { name: "Mission activity" });
+    await user.click(within(activity).getByRole("button", { name: "Show activity" }));
+    expect(within(activity).getByText("Summary").tagName).toBe("STRONG");
+    const markdownListItem = within(activity).getAllByText("Scan prepared").find((element) => element.tagName === "LI");
+    expect(markdownListItem?.parentElement?.tagName).toBe("UL");
+    expect(within(activity).queryByText(/\*\*Summary\*\*/)).toBeNull();
 
-    await user.click(within(activity!).getByRole("button", { name: "Copy exact code" }));
+    await user.click(within(activity).getByRole("button", { name: "Copy exact code" }));
     expect(writeText).toHaveBeenCalledWith("nmap -sV 192.168.1.1\n");
-    expect(within(activity!).queryByRole("button", { name: /Review and run/ })).toBeNull();
+    expect(within(activity).queryByRole("button", { name: /Review and run/ })).toBeNull();
   });
 
   it("steers the active harness turn", async () => {
@@ -85,9 +86,10 @@ describe("mission activity", () => {
     expect(screen.getByRole("button", { name: "Delete mission" })).toBeDisabled();
     expect(screen.getByText("Specialists are actively working through the plan.")).toBeVisible();
     expect(screen.getByLabelText("50% of recorded mission tasks complete")).toBeVisible();
-    expect(screen.getByText(/Full loaded mission timeline/)).not.toBeVisible();
-    await user.click(screen.getByText(/expand for technical timeline/i));
-    expect(screen.getByText(/Full loaded mission timeline/)).toBeVisible();
+    const activity = screen.getByRole("region", { name: "Mission activity" });
+    expect(within(activity).queryByText("Newest first")).toBeNull();
+    await user.click(within(activity).getByRole("button", { name: "Show activity" }));
+    expect(within(activity).getByText("Newest first")).toBeVisible();
   });
 
   it("allows an individual mission to be selected", async () => {

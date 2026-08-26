@@ -1059,6 +1059,9 @@ test("mission workflow freezes harness options, stages, and URL identity", async
   expect(submitted).not.toHaveProperty("max_tool_calls");
   await expect.poll(() => new URL(page.url()).searchParams.get("mission")).toBe("mission-url-authority");
   await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Staged security review")).toBeVisible();
+  const missionLedger = page.getByRole("region", { name: "Mission activity" });
+  await expect(missionLedger.getByRole("list", { name: "Work phases" }).getByText("Verify")).toBeVisible();
+  await expect(missionLedger).not.toContainText("item upsert");
   const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
   expect(accessibility.violations).toEqual([]);
 });
@@ -2277,6 +2280,205 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
   expect(accessibility.violations).toEqual([]);
 });
 
+test("activity ledger groups repeated work into a compact operator receipt", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "compact", "narrow"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by permanent desktop and mobile browser projects.");
+  const turnId = "turn-activity-ledger";
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "chat-activity-ledger",
+        engagement_id: "scratch-project",
+        title: "Activity ledger",
+        backend: "harness",
+        harness_profile_id: "harness-activity-ledger",
+        harness_session_id: "session-activity-ledger",
+        model: "security-model",
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-activity-ledger/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "assistant-activity-ledger",
+        engagement_id: "scratch-project",
+        session_id: "chat-activity-ledger",
+        sequence: 1,
+        role: "assistant",
+        content: "All bounded records were saved.",
+        citations: [],
+        metadata: { harness_turn_id: turnId },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/harness-turns/${turnId}/events`)) {
+      const events = Array.from({ length: 36 }, (_, index) => ({
+        id: `activity-${index + 1}`,
+        type: "item_upsert",
+        schema_version: "nebula.harness-activity/v2",
+        sequence: index + 1,
+        vendor: "codex_app_server",
+        harness_session_id: "session-activity-ledger",
+        harness_turn_id: turnId,
+        item_id: `tool-${index + 1}`,
+        item_kind: "tool",
+        item_status: "completed",
+        title: "item upsert",
+        summary: `Saved bounded record ${index + 1}.`,
+        occurred_at: new Date(Date.UTC(2026, 7, 26, 12, 0, index)).toISOString(),
+        artifact_ids: [],
+        payload: { record: index + 1 },
+      }));
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events, next_sequence: 36 }) });
+      return;
+    }
+    if (path.endsWith(`/harness-turns/${turnId}/interactions`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harness-sessions/session-activity-ledger/activity")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: "session-activity-ledger",
+        session_status: "idle",
+        busy: false,
+        live: true,
+        turn_id: turnId,
+        turn_status: "complete",
+        turn_origin: "chat",
+        started_at: "2026-08-26T12:00:00Z",
+        last_activity_at: "2026-08-26T12:00:35Z",
+        detail: "Harness is ready.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/chat-activity-ledger/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=chat-activity-ledger", "Workbench");
+  const ledger = page.getByRole("region", { name: "Work summary" });
+  await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
+  await expect(ledger).not.toContainText("item upsert");
+  const showActivity = ledger.getByRole("button", { name: "Show activity" });
+  if (testInfo.project.name.startsWith("mobile-") || testInfo.project.name === "narrow") {
+    const bounds = await showActivity.boundingBox();
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  const geometry = await ledger.evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: innerWidth,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
+  expect(accessibility.violations).toEqual([]);
+  await showActivity.click();
+  await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
+});
+
+test("native assistant tools use the shared activity ledger", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "One desktop stream proves the native-provider adapter; responsive ledger behavior is covered separately.");
+  const provider = {
+    ...entity,
+    id: "provider-native-ledger",
+    name: "Native ledger provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["native-ledger-model"],
+    capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "native-ledger-model" },
+  };
+  let replayDurableReceipt = false;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([provider]) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(replayDurableReceipt ? [{
+        ...entity,
+        id: "native-ledger-session",
+        engagement_id: "scratch-project",
+        title: "Review the saved evidence.",
+        backend: "provider",
+        provider_profile_id: provider.id,
+        model: "native-ledger-model",
+        metadata: {},
+      }] : []) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/native-ledger-session/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
+        { ...entity, id: "native-ledger-user", engagement_id: "scratch-project", session_id: "native-ledger-session", sequence: 1, role: "user", content: "Review the saved evidence.", citations: [], metadata: {} },
+        { ...entity, id: "native-ledger-assistant", engagement_id: "scratch-project", session_id: "native-ledger-session", sequence: 2, role: "assistant", content: "Evidence review complete.", citations: [], metadata: { tool_results: [{ tool_call_id: "native-tool-1", capability: "Search evidence", status: "complete", summary: "Found two relevant evidence records.", evidence_ids: ["evidence-ledger"], result_artifact_id: null }] } },
+      ]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/native-ledger-session/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const frames = [
+        { type: "started", provider_id: "provider-native-ledger", model: "native-ledger-model", session_id: "native-ledger-session", turn_id: "native-ledger-turn" },
+        { type: "tool_started", turn_id: "native-ledger-turn", tool_call_id: "native-tool-1", capability: "Search evidence", arguments: { query: "TLS" }, step: 1 },
+        { type: "tool_completed", turn_id: "native-ledger-turn", tool_call_id: "native-tool-1", capability: "Search evidence", status: "complete", summary: "Found two relevant evidence records.", evidence_ids: ["evidence-ledger"], artifacts: [], receipt: { matches: 2 }, step: 1 },
+        { type: "done", provider_id: "provider-native-ledger", model: "native-ledger-model", session_id: "native-ledger-session", turn_id: "native-ledger-turn", message: { id: "native-ledger-assistant", role: "assistant", content: "Evidence review complete." }, usage: { input_tokens: 4, output_tokens: 5, total_tokens: 9 }, finish_reason: "stop", citations: [] },
+      ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          frames.forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Review the saved evidence.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const ledger = page.getByRole("region", { name: "Work summary" });
+  await expect(ledger.getByText(/1 action/).first()).toBeVisible();
+  await ledger.getByRole("button", { name: "Show activity" }).click();
+  await ledger.getByText("Search evidence", { exact: true }).click();
+  await expect(ledger.getByText("Found two relevant evidence records.")).toBeVisible();
+  await expect(ledger.getByRole("link", { name: /Evidence evidence/ })).toHaveAttribute("href", "/evidence?id=evidence-ledger");
+
+  replayDurableReceipt = true;
+  await page.goto("/?view=chat&session=native-ledger-session");
+  const restoredLedger = page.getByRole("region", { name: "Work summary" });
+  await expect(restoredLedger.getByText(/1 action/).first()).toBeVisible();
+  await expect(restoredLedger).not.toContainText("item upsert");
+  await restoredLedger.getByRole("button", { name: "Show activity" }).click();
+  await expect(restoredLedger.getByText("Search evidence", { exact: true })).toBeVisible();
+});
+
 test("completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
@@ -2401,9 +2603,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
   await expect(guidanceComposer).toHaveValue("");
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
-  const activity = page.locator("details.harness-activity-card", { hasText: "Run verification" });
+  const ledger = page.getByRole("region", { name: "Work summary" });
+  await expect(ledger.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: 5_000 });
+  await ledger.getByRole("button", { name: "Show activity" }).click();
+  const activity = ledger.locator(".activity-ledger-entry-content details", { hasText: "Run verification" });
   await expect(activity).not.toHaveAttribute("open", "");
-  await expect(activity.getByText("completed", { exact: true })).toBeVisible({ timeout: 5_000 });
+  await expect(activity.getByText("Completed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
   await activity.locator(":scope > summary").click();
   await expect(activity).toHaveAttribute("open", "");
