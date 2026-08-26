@@ -99,7 +99,7 @@ from .domain import (
     utc_now,
 )
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
-from .browser_tools import AUTONOMOUS_BROWSER_TOOLS
+from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
 from .mcp import (
@@ -5293,8 +5293,6 @@ class HarnessRuntimeService:
                 if components is None:
                     components = browser_components
                 else:
-                    from .browser_tools import combine_tool_components
-
                     components = combine_tool_components(components, browser_components)
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:

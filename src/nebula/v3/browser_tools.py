@@ -18,6 +18,17 @@ from .browser_automation import (
     BrowserCommandCreateRequest,
     BrowserProxyRuleRequest,
 )
+from .browser_research import (
+    AttackCreateRequest,
+    AttackStateRequest,
+    BrowserResearchService,
+    CompareRequest,
+    CrawlCreateRequest,
+    DecoderRequest,
+    FindingPromotionRequest,
+    RepeaterTabCreateRequest,
+    TokenAnalysisRequest,
+)
 from .domain import (
     Approval,
     BrowserActionKind,
@@ -316,8 +327,16 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
                     "max_depth": {"type": "integer", "minimum": 0, "maximum": 10},
                     "max_requests": {"type": "integer", "minimum": 1, "maximum": 10000},
                     "max_concurrency": {"type": "integer", "minimum": 1, "maximum": 16},
-                    "max_duration_seconds": {"type": "integer", "minimum": 1, "maximum": 3600},
-                    "max_body_bytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+                    "max_duration_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3600,
+                    },
+                    "max_body_bytes": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 16777216,
+                    },
                 },
                 "required": ["start_url"],
             },
@@ -328,7 +347,8 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             "repeater.create",
             "Create a durable Repeater tab without copying identity secrets.",
             {
-                "type": "object", "additionalProperties": False,
+                "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": 200},
                     "method": {"type": "string", "pattern": "^[A-Za-z]{1,16}$"},
@@ -344,17 +364,51 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             "intruder.create",
             "Create a bounded Intruder draft using inert payload values.",
             {
-                "type": "object", "additionalProperties": False,
+                "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "name": {"type": "string", "minLength": 1, "maxLength": 200},
-                    "strategy": {"type": "string", "enum": ["sniper", "battering_ram", "pitchfork", "cluster_bomb"]},
+                    "strategy": {
+                        "type": "string",
+                        "enum": [
+                            "sniper",
+                            "battering_ram",
+                            "pitchfork",
+                            "cluster_bomb",
+                        ],
+                    },
                     "method": {"type": "string", "pattern": "^[A-Za-z]{1,16}$"},
-                    "url_template": {"type": "string", "minLength": 1, "maxLength": 16384},
-                    "positions": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "string", "maxLength": 200}},
-                    "payload_values": {"type": "array", "minItems": 1, "maxItems": 10000, "items": {"type": "string", "maxLength": 4000}},
-                    "max_requests": {"type": "integer", "minimum": 1, "maximum": 100000},
+                    "url_template": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16384,
+                    },
+                    "positions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 32,
+                        "items": {"type": "string", "maxLength": 200},
+                    },
+                    "payload_values": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 10000,
+                        "items": {"type": "string", "maxLength": 4000},
+                    },
+                    "max_requests": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100000,
+                    },
                 },
-                "required": ["name", "strategy", "method", "url_template", "positions", "payload_values"],
+                "required": [
+                    "name",
+                    "strategy",
+                    "method",
+                    "url_template",
+                    "positions",
+                    "payload_values",
+                ],
             },
             risk=RiskClass.ACTIVE_SCAN,
         ),
@@ -362,44 +416,108 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
             "intruder.control",
             "Queue, pause, resume, cancel, or complete a lease-session attack.",
             {
-                "type": "object", "additionalProperties": False,
+                "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "attack_id": {"type": "string", "minLength": 1, "maxLength": 200},
                     "expected_revision": {"type": "integer", "minimum": 1},
-                    "action": {"type": "string", "enum": ["queue", "start", "pause", "resume", "cancel", "complete"]},
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "queue",
+                            "start",
+                            "pause",
+                            "resume",
+                            "cancel",
+                            "complete",
+                        ],
+                    },
                 },
                 "required": ["attack_id", "expected_revision", "action"],
             },
             risk=RiskClass.ACTIVE_SCAN,
         ),
         "analysis.decode": spec(
-            "analysis.decode", "Apply one deterministic Decoder transformation.",
-            {"type": "object", "additionalProperties": False, "properties": {"operation": {"type": "string"}, "value": {"type": "string", "maxLength": 1048576}}, "required": ["operation", "value"]},
+            "analysis.decode",
+            "Apply one deterministic Decoder transformation.",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "operation": {"type": "string"},
+                    "value": {"type": "string", "maxLength": 1048576},
+                },
+                "required": ["operation", "value"],
+            },
             risk=RiskClass.PASSIVE,
         ),
         "analysis.compare": spec(
-            "analysis.compare", "Compare bounded text, JSON, bytes, or HTTP messages.",
-            {"type": "object", "additionalProperties": False, "properties": {"mode": {"type": "string", "enum": ["text", "json", "bytes", "http"]}, "left": {"type": "string", "maxLength": 1048576}, "right": {"type": "string", "maxLength": 1048576}}, "required": ["mode", "left", "right"]},
+            "analysis.compare",
+            "Compare bounded text, JSON, bytes, or HTTP messages.",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["text", "json", "bytes", "http"],
+                    },
+                    "left": {"type": "string", "maxLength": 1048576},
+                    "right": {"type": "string", "maxLength": 1048576},
+                },
+                "required": ["mode", "left", "right"],
+            },
             risk=RiskClass.PASSIVE,
         ),
         "analysis.tokens": spec(
-            "analysis.tokens", "Persist a descriptive Sequencer-style token analysis.",
-            {"type": "object", "additionalProperties": False, "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 200}, "samples": {"type": "array", "minItems": 1, "maxItems": 100000, "items": {"type": "string", "maxLength": 10000}}}, "required": ["name", "samples"]},
+            "analysis.tokens",
+            "Persist a descriptive Sequencer-style token analysis.",
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "samples": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100000,
+                        "items": {"type": "string", "maxLength": 10000},
+                    },
+                },
+                "required": ["name", "samples"],
+            },
             risk=RiskClass.PASSIVE,
         ),
         "finding.propose": spec(
             "finding.propose",
             "Create an evidence-linked candidate finding; confirmation remains operator-owned.",
             {
-                "type": "object", "additionalProperties": False,
+                "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "title": {"type": "string", "minLength": 1, "maxLength": 500},
                     "description": {"type": "string", "maxLength": 100000},
-                    "severity": {"type": "string", "enum": ["info", "low", "medium", "high", "critical"]},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "low", "medium", "high", "critical"],
+                    },
                     "severity_rationale": {"type": "string", "maxLength": 20000},
-                    "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string", "maxLength": 200}},
-                    "site_node_ids": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 200}},
-                    "source_exchange_ids": {"type": "array", "maxItems": 100, "items": {"type": "string", "maxLength": 200}},
+                    "evidence_ids": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 100,
+                        "items": {"type": "string", "maxLength": 200},
+                    },
+                    "site_node_ids": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {"type": "string", "maxLength": 200},
+                    },
+                    "source_exchange_ids": {
+                        "type": "array",
+                        "maxItems": 100,
+                        "items": {"type": "string", "maxLength": 200},
+                    },
                 },
                 "required": ["title", "evidence_ids"],
             },
@@ -454,19 +572,9 @@ class BrowserAutomationBroker(ToolBroker):
         try:
             lease = self.automation.active_lease_for_run(invocation.run_id)
             lease_id = lease.id
-            if invocation.tool_name.startswith(("target.", "repeater.", "intruder.", "analysis.", "finding.")):
-                from .browser_research import (
-                    AttackCreateRequest,
-                    AttackStateRequest,
-                    BrowserResearchService,
-                    CompareRequest,
-                    CrawlCreateRequest,
-                    DecoderRequest,
-                    FindingPromotionRequest,
-                    RepeaterTabCreateRequest,
-                    TokenAnalysisRequest,
-                )
-
+            if invocation.tool_name.startswith(
+                ("target.", "repeater.", "intruder.", "analysis.", "finding.")
+            ):
                 research = BrowserResearchService(
                     self.store, BrowserSecurityService(self.store)
                 )
@@ -520,7 +628,10 @@ class BrowserAutomationBroker(ToolBroker):
                         ),
                         invocation.requested_by,
                     )
-                    output = {"status": "draft", "attack": attack.model_dump(mode="json")}
+                    output = {
+                        "status": "draft",
+                        "attack": attack.model_dump(mode="json"),
+                    }
                 elif invocation.tool_name == "intruder.control":
                     attack_id = str(arguments.pop("attack_id"))
                     current_attack = self.store.get(BrowserAttack, attack_id)
@@ -534,19 +645,23 @@ class BrowserAutomationBroker(ToolBroker):
                             actor_id=invocation.requested_by, **arguments
                         ),
                     )
-                    output = {"status": attack.state, "attack": attack.model_dump(mode="json")}
+                    output = {
+                        "status": attack.state,
+                        "attack": attack.model_dump(mode="json"),
+                    }
                 elif invocation.tool_name == "analysis.decode":
                     output = research.decode(DecoderRequest.model_validate(arguments))
                 elif invocation.tool_name == "analysis.compare":
                     output = research.compare(CompareRequest.model_validate(arguments))
                 elif invocation.tool_name == "analysis.tokens":
                     analysis = research.analyze_tokens(
-                        TokenAnalysisRequest(
-                            session_id=session.id, **arguments
-                        ),
+                        TokenAnalysisRequest(session_id=session.id, **arguments),
                         invocation.requested_by,
                     )
-                    output = {"status": "complete", "analysis": analysis.model_dump(mode="json")}
+                    output = {
+                        "status": "complete",
+                        "analysis": analysis.model_dump(mode="json"),
+                    }
                 else:
                     finding = research.promote_finding(
                         lease.engagement_id,
