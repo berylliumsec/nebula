@@ -464,6 +464,46 @@ def test_host_workspace_folder_browser_creates_one_bounded_child(tmp_path):
     assert not (tmp_path / "nested").exists()
 
 
+def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
+    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+    browse_root = tmp_path / "many-projects"
+    browse_root.mkdir()
+    for index in range(503):
+        (browse_root / f"project-{index:03d}").mkdir()
+
+    first = client.get(
+        "/api/v1/workspace-folders",
+        params={"path": str(browse_root), "limit": 500},
+        headers=AUTH,
+    )
+    assert first.status_code == 200
+    first_listing = first.json()
+    assert len(first_listing["directories"]) == 500
+    assert first_listing["directories"][0]["name"] == "project-000"
+    assert first_listing["directories"][-1]["name"] == "project-499"
+    assert first_listing["next_offset"] == 500
+    assert first_listing["truncated"] is True
+
+    second = client.get(
+        "/api/v1/workspace-folders",
+        params={
+            "path": str(browse_root),
+            "offset": first_listing["next_offset"],
+            "limit": 500,
+        },
+        headers=AUTH,
+    )
+    assert second.status_code == 200
+    second_listing = second.json()
+    assert [directory["name"] for directory in second_listing["directories"]] == [
+        "project-500",
+        "project-501",
+        "project-502",
+    ]
+    assert second_listing["next_offset"] is None
+    assert second_listing["truncated"] is False
+
+
 def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     store, artifacts, platform, workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)

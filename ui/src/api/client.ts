@@ -7108,21 +7108,27 @@ export class ApiClient {
     ).then(mapSourceControlDiff);
   }
 
-  listHostWorkspaceFolders(path?: string): Promise<{
+  listHostWorkspaceFolders(path?: string, offset = 0): Promise<{
     path: string;
     parent?: string;
     directories: Array<{ name: string; path: string }>;
     truncated: boolean;
+    nextOffset?: number;
   }> {
-    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const parameters = new URLSearchParams();
+    if (path) parameters.set("path", path);
+    if (offset > 0) parameters.set("offset", String(offset));
+    const query = parameters.size ? `?${parameters}` : "";
     return this.request<{
       path: string;
       parent?: string | null;
       directories: Array<{ name: string; path: string }>;
       truncated: boolean;
-    }>(`workspace-folders${query}`).then((value) => ({
+      next_offset?: number | null;
+    }>(`workspace-folders${query}`).then(({ parent, next_offset, ...value }) => ({
       ...value,
-      parent: value.parent ?? undefined,
+      parent: parent ?? undefined,
+      nextOffset: next_offset ?? undefined,
     }));
   }
 

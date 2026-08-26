@@ -5098,6 +5098,8 @@ def create_app(
     )
     async def list_host_workspace_folders(
         path: str | None = Query(default=None, max_length=4096),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=500),
     ) -> dict[str, Any]:
         requested = Path(path).expanduser() if path else Path.home()
         if not requested.is_absolute():
@@ -5111,16 +5113,23 @@ def create_app(
         if not current.is_dir():
             raise HTTPException(status_code=422, detail="selected path is not a folder")
         directories: list[dict[str, str]] = []
+        directory_index = 0
         try:
             with os.scandir(current) as entries:
-                for entry in sorted(entries, key=lambda item: item.name.casefold()):
-                    if len(directories) >= 500:
-                        break
+                for entry in sorted(
+                    entries, key=lambda item: (item.name.casefold(), item.name)
+                ):
                     try:
                         if entry.is_dir(follow_symlinks=False):
+                            if directory_index < offset:
+                                directory_index += 1
+                                continue
                             directories.append(
                                 {"name": entry.name, "path": str(current / entry.name)}
                             )
+                            directory_index += 1
+                            if len(directories) > limit:
+                                break
                     except OSError:
                         # diagnostic-expected: an unreadable entry is omitted from the bounded browser.
                         continue
@@ -5128,12 +5137,15 @@ def create_app(
             raise HTTPException(
                 status_code=403, detail="folder cannot be listed"
             ) from exc
+        has_more = len(directories) > limit
+        page = directories[:limit]
         parent = None if current.parent == current else str(current.parent)
         return {
             "path": str(current),
             "parent": parent,
-            "directories": directories,
-            "truncated": len(directories) >= 500,
+            "directories": page,
+            "truncated": has_more,
+            "next_offset": offset + len(page) if has_more else None,
         }
 
     @app.post(
