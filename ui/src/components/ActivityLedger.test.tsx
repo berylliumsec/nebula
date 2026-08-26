@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ActivityLedger } from "./ActivityLedger";
 import type { ActivityLedgerViewModel } from "./activityLedgerModel";
 
@@ -59,6 +59,26 @@ describe("ActivityLedger", () => {
     rerender(<ActivityLedger model={model({ status: "complete", currentAction: undefined })} />);
     expect(screen.getByText("Newest first")).toBeVisible();
     expect(screen.getByRole("button", { name: "Hide activity" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("updates Now when a newer stream snapshot arrives", () => {
+    const { rerender } = render(<ActivityLedger model={model({ currentAction: "Reviewing AirPlay sources." })} />);
+    expect(screen.getByText("Reviewing AirPlay sources.")).toBeVisible();
+
+    rerender(<ActivityLedger model={model({ currentAction: "Saving the refreshed results." })} />);
+    expect(screen.queryByText("Reviewing AirPlay sources.")).toBeNull();
+    expect(screen.getByText("Saving the refreshed results.")).toBeVisible();
+  });
+
+  it("loads saved activity only when the audit is expanded", async () => {
+    const user = userEvent.setup();
+    const onExpandedChange = vi.fn();
+    render(<ActivityLedger model={model({ status: "complete", entries: [], currentAction: undefined, actionCount: 0, phases: [] })} onExpandedChange={onExpandedChange} emptyState={<p>Loading saved work…</p>} />);
+
+    expect(onExpandedChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Show activity" }));
+    expect(onExpandedChange).toHaveBeenCalledWith(true);
+    expect(screen.getByText("Loading saved work…")).toBeVisible();
   });
 
   it("keeps failures visible without opening the audit", () => {

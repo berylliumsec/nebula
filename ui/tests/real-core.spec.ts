@@ -242,6 +242,18 @@ test("production assistant preserves exact research context and relaunch-safe dr
       }],
     });
 
+    const switchTargetResponse = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      messages: [{ role: "user", content: "Switch target conversation" }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(switchTargetResponse.ok(), await switchTargetResponse.text()).toBe(true);
+    const switchTarget = await switchTargetResponse.json() as { session_id: string };
+
     const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
     await page.goto(assistantUrl);
     await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
@@ -266,6 +278,12 @@ test("production assistant preserves exact research context and relaunch-safe dr
     const savedSession = sessions.find((session) => session.id === completion.session_id);
     expect(savedSession).toBeTruthy();
     expect(savedSession!.title).toBe("Review the exact 443/tcp observation.");
+    await page.locator(".session-select").filter({ hasText: "Switch target conversation" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(switchTarget.session_id);
+    await expect(page.locator(".chat-message.operator").getByText("Switch target conversation", { exact: true })).toBeVisible();
+    await page.locator(".session-select").filter({ hasText: savedSession!.title }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
+    await expect(page.locator(".chat-message.operator").getByText("Review the exact 443/tcp observation.", { exact: true })).toBeVisible();
     const activeConversation = page.locator(".session-list-item.active");
     const activeConversationActions = page.locator(".session-list-item.active .session-actions-trigger");
     await activeConversation.hover();

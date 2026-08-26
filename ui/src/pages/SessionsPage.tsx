@@ -497,6 +497,8 @@ export function SessionsPage() {
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
   const [activityItems, setActivityItems] = useState<HarnessActivityItem[]>([]);
   const [harnessInteractions, setHarnessInteractions] = useState<HarnessInteraction[]>([]);
+  const [historicalActivityState, setHistoricalActivityState] = useState<Record<string, "loading" | "loaded" | "failed">>({});
+  const [historicalActivityErrors, setHistoricalActivityErrors] = useState<Record<string, string>>({});
   const [interactionAnswers, setInteractionAnswers] = useState<Record<string, string>>({});
   const [harnessControlBusy, setHarnessControlBusy] = useState(false);
   const [artifactInspector, setArtifactInspector] = useState<ToolLifecycleCard>();
@@ -535,7 +537,10 @@ export function SessionsPage() {
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
   const explicitNewConversationRef = useRef(false);
+  const pendingSessionNavigationRef = useRef<string | undefined>(undefined);
   const sessionSelectionGenerationRef = useRef(0);
+  const sessionLoadAbortRef = useRef<AbortController | undefined>(undefined);
+  const historicalActivityAbortRef = useRef(new Map<string, AbortController>());
   const assistantSettingsButtonRef = useRef<HTMLButtonElement>(null);
   const assistantSettingsPanelRef = useRef<HTMLElement>(null);
   const sessionActionsButtonRef = useRef<HTMLButtonElement>(null);
@@ -1008,11 +1013,15 @@ export function SessionsPage() {
   }, [canUseKnowledge, coreState, runtimeKind, selectedHarness, selectedProvider]);
 
   useEffect(() => {
+    sessionLoadAbortRef.current?.abort();
+    historicalActivityAbortRef.current.forEach((controller) => controller.abort());
+    historicalActivityAbortRef.current.clear();
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setSending(false);
     setSessions([]);
+    pendingSessionNavigationRef.current = undefined;
     setSessionId("");
     setConversationOpen(Boolean(assistantDrafts.length || requestedSessionId));
     setHarnessSessionId("");
@@ -1028,6 +1037,8 @@ export function SessionsPage() {
     setToolCards([]);
     setActivityItems([]);
     setHarnessInteractions([]);
+    setHistoricalActivityState({});
+    setHistoricalActivityErrors({});
     setPendingResponse(undefined);
   }, [engagement?.id]);
 
@@ -1084,6 +1095,9 @@ export function SessionsPage() {
 
   useEffect(() => {
     return () => {
+      sessionLoadAbortRef.current?.abort();
+      historicalActivityAbortRef.current.forEach((controller) => controller.abort());
+      historicalActivityAbortRef.current.clear();
       if (!detachActiveHarnessStream()) abortRef.current?.abort();
     };
   }, []);
@@ -1132,6 +1146,11 @@ export function SessionsPage() {
 
   const resetConversation = (open: boolean) => {
     sessionSelectionGenerationRef.current += 1;
+    pendingSessionNavigationRef.current = undefined;
+    sessionLoadAbortRef.current?.abort();
+    sessionLoadAbortRef.current = undefined;
+    historicalActivityAbortRef.current.forEach((controller) => controller.abort());
+    historicalActivityAbortRef.current.clear();
     followUpAutoDrainRef.current = false;
     followUpDrainIdRef.current = undefined;
     if (!detachActiveHarnessStream()) abortRef.current?.abort();
@@ -1153,6 +1172,8 @@ export function SessionsPage() {
     setToolCards([]);
     setActivityItems([]);
     setHarnessInteractions([]);
+    setHistoricalActivityState({});
+    setHistoricalActivityErrors({});
     setPendingResponse(undefined);
   };
 
@@ -1352,39 +1373,53 @@ export function SessionsPage() {
         ? "No models discovered"
         : "Select provider first";
 
-  const restoreHarnessActivity = async (history: PersistedChatMessage[], isCurrent: () => boolean = () => true) => {
-    if (!api) return;
-    const owners = history.filter((message) => message.role === "assistant" && message.harnessTurnId);
-    if (!owners.length) {
-      if (!isCurrent()) return;
-      setActivityItems([]);
-      setHarnessInteractions([]);
-      return;
-    }
-    const restored = await Promise.all(owners.map(async (message) => {
-      const turnId = message.harnessTurnId as string;
+  const loadHistoricalHarnessActivity = async (message: ConversationMessage) => {
+    const turnId = message.harnessTurnId;
+    if (!api || !turnId || historicalActivityAbortRef.current.has(turnId) || historicalActivityState[turnId] === "loaded") return;
+    const selectionGeneration = sessionSelectionGenerationRef.current;
+    const controller = new AbortController();
+    historicalActivityAbortRef.current.set(turnId, controller);
+    setHistoricalActivityState((current) => ({ ...current, [turnId]: "loading" }));
+    setHistoricalActivityErrors((current) => {
+      const next = { ...current };
+      delete next[turnId];
+      return next;
+    });
+    try {
       const [page, interactions] = await Promise.all([
-        api.getHarnessTurnEvents(turnId),
-        api.listHarnessInteractions(turnId),
+        api.getHarnessTurnEvents(turnId, 0, controller.signal),
+        api.listHarnessInteractions(turnId, controller.signal),
       ]);
-      return { message, events: page.events, interactions };
-    }));
-    if (!isCurrent()) return;
-    let reduced: HarnessActivityItem[] = [];
-    const interactions: HarnessInteraction[] = [];
-    for (const group of restored) {
-      for (const event of group.events) {
-        if (isTimelineActivity(event)) {
-          reduced = reduceHarnessActivity(reduced, event, group.message.id);
-        }
-      }
-      interactions.push(...group.interactions);
+      if (controller.signal.aborted || sessionSelectionGenerationRef.current !== selectionGeneration) return;
+      const restored = page.events.reduce(
+        (items, event) => isTimelineActivity(event)
+          ? reduceHarnessActivity(items, event, message.id)
+          : items,
+        [] as HarnessActivityItem[],
+      );
+      setActivityItems((current) => [
+        ...current.filter((item) => item.turnId !== turnId),
+        ...restored,
+      ]);
+      setHarnessInteractions((current) => [
+        ...current.filter((interaction) => interaction.harnessTurnId !== turnId),
+        ...interactions,
+      ]);
+      setHistoricalActivityState((current) => ({ ...current, [turnId]: "loaded" }));
+    } catch (error) {
+      if (controller.signal.aborted || sessionSelectionGenerationRef.current !== selectionGeneration) return;
+      void logCaughtDiagnostic("interface.sessions_page.historical_activity", "Historical harness activity could not be loaded.", error, "sessions_page");
+      setHistoricalActivityState((current) => ({ ...current, [turnId]: "failed" }));
+      setHistoricalActivityErrors((current) => ({
+        ...current,
+        [turnId]: error instanceof Error ? error.message : "Could not load this turn's work details.",
+      }));
+    } finally {
+      if (historicalActivityAbortRef.current.get(turnId) === controller) historicalActivityAbortRef.current.delete(turnId);
     }
-    setActivityItems(reduced);
-    setHarnessInteractions(interactions);
   };
 
-  const selectSession = async (id: string) => {
+  const selectSession = async (id: string, updateUrl = true) => {
     explicitNewConversationRef.current = false;
     if (!id) {
       newConversation();
@@ -1394,25 +1429,51 @@ export function SessionsPage() {
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
     const selectionIsCurrent = () => sessionSelectionGenerationRef.current === selectionGeneration;
+    sessionLoadAbortRef.current?.abort();
+    historicalActivityAbortRef.current.forEach((controller) => controller.abort());
+    historicalActivityAbortRef.current.clear();
+    const loadController = new AbortController();
+    sessionLoadAbortRef.current = loadController;
     followUpAutoDrainRef.current = false;
     followUpDrainIdRef.current = undefined;
     detachActiveHarnessStream();
     setSending(false);
+    setSessionId(id);
     setConversationOpen(true);
+    if (updateUrl) {
+      pendingSessionNavigationRef.current = id;
+      openSessionChatView(id);
+    }
     setLoadingHistory(true);
     setChatError(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
+    setMessages([]);
+    setToolCards([]);
+    setActivityItems([]);
+    setHarnessInteractions([]);
+    setHistoricalActivityState({});
+    setHistoricalActivityErrors({});
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
+    const summary = sessions.find((session) => session.id === id);
+    if (summary) {
+      setRuntimeKind(summary.backend);
+      setProviderId(summary.providerId ?? "");
+      setHarnessId(summary.harnessProfileId ?? "");
+      setHarnessSessionId(summary.harnessSessionId ?? "");
+      setModel(summary.model ?? "");
+    }
     try {
-      const summary = sessions.find((session) => session.id === id);
       const [history, pendingTurn] = await Promise.all([
-        api.listChatMessages(id),
-        api.getPendingChatTurn(id).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; }),
+        api.listChatMessages(id, loadController.signal),
+        api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
+          if (loadController.signal.aborted) return undefined;
+          void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
+          return undefined;
+        }),
       ]);
       if (!selectionIsCurrent()) return;
-      setSessionId(id);
       setMessages(history.map(persistedMessage));
       const restoredToolCards: ToolLifecycleCard[] = history.flatMap((message) => message.role === "assistant"
         ? (message.toolResults ?? []).map((result) => ({
@@ -1428,15 +1489,7 @@ export function SessionsPage() {
           }))
         : []);
       setToolCards(restoredToolCards);
-      await restoreHarnessActivity(history, selectionIsCurrent);
-      if (!selectionIsCurrent()) return;
-      if (summary) {
-        setRuntimeKind(summary.backend);
-        setProviderId(summary.providerId ?? "");
-        setHarnessId(summary.harnessProfileId ?? "");
-        setHarnessSessionId(summary.harnessSessionId ?? "");
-        setModel(summary.model ?? "");
-      }
+      setLoadingHistory(false);
       if (pendingTurn && summary?.backend === "provider") {
         const assistantId = makeId("assistant-pending");
         const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
@@ -1493,7 +1546,7 @@ export function SessionsPage() {
       } else if (pendingTurn?.harnessTurnId && summary?.backend === "harness") {
         const assistantId = makeId("assistant-harness-pending");
         const turnId = pendingTurn.harnessTurnId;
-        const page = await api.getHarnessTurnEvents(turnId);
+        const page = await api.getHarnessTurnEvents(turnId, 0, loadController.signal);
         if (!selectionIsCurrent()) return;
         setActivityItems((current) => page.events.reduce(
           (restored, event) => isTimelineActivity(event)
@@ -1501,7 +1554,7 @@ export function SessionsPage() {
             : restored,
           current,
         ));
-        const turnInteractions = await api.listHarnessInteractions(turnId);
+        const turnInteractions = await api.listHarnessInteractions(turnId, loadController.signal);
         if (!selectionIsCurrent()) return;
         setHarnessInteractions(turnInteractions);
         setMessages((current) => [...current, {
@@ -1543,7 +1596,8 @@ export function SessionsPage() {
             harnessFollowDetachRef.current = undefined;
             void api.listChatMessages(id).then(async (authoritative) => {
               setMessages(authoritative.map(persistedMessage));
-              await restoreHarnessActivity(authoritative);
+              const completedOwner = authoritative.find((message) => message.role === "assistant" && message.harnessTurnId === turnId);
+              if (completedOwner) await loadHistoricalHarnessActivity(persistedMessage(completedOwner));
               await refreshSessions(id);
             }).catch((error) => {
               void logCaughtDiagnostic("interface.sessions_page.harness_follow_complete", "A completed harness turn could not be restored.", error, "sessions_page");
@@ -1579,17 +1633,17 @@ export function SessionsPage() {
           const assistantTurnIds = new Set(history.filter((message) => message.role === "assistant").map((message) => message.harnessTurnId));
           const dangling = [...history].reverse().find((message) => message.role === "user" && message.harnessTurnId && !assistantTurnIds.has(message.harnessTurnId));
           if (dangling?.harnessTurnId) {
-            const turn = await api.getHarnessTurn(dangling.harnessTurnId);
+            const turn = await api.getHarnessTurn(dangling.harnessTurnId, loadController.signal);
             if (!selectionIsCurrent()) return;
             if (["failed", "cancelled", "interrupted"].includes(turn.status)) {
               const assistantId = makeId("assistant-harness-recovery");
-              const page = await api.getHarnessTurnEvents(turn.id);
+              const page = await api.getHarnessTurnEvents(turn.id, 0, loadController.signal);
               if (!selectionIsCurrent()) return;
               setActivityItems((current) => page.events.reduce(
                 (restored, event) => isTimelineActivity(event) ? reduceHarnessActivity(restored, event, assistantId) : restored,
                 current,
               ));
-              const interruptedInteractions = await api.listHarnessInteractions(turn.id);
+              const interruptedInteractions = await api.listHarnessInteractions(turn.id, loadController.signal);
               if (!selectionIsCurrent()) return;
               setHarnessInteractions(interruptedInteractions);
               setMessages((current) => [...current, {
@@ -1608,14 +1662,16 @@ export function SessionsPage() {
         }
       }
       if (!selectionIsCurrent()) return;
-      openSessionChatView(id);
       setMobileListOpen(false);
     } catch (error) {
-      if (!selectionIsCurrent()) return;
+      if (!selectionIsCurrent() || loadController.signal.aborted) return;
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_10", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
-      if (selectionIsCurrent()) setLoadingHistory(false);
+      if (selectionIsCurrent()) {
+        if (sessionLoadAbortRef.current === loadController) sessionLoadAbortRef.current = undefined;
+        setLoadingHistory(false);
+      }
     }
   };
 
@@ -1655,13 +1711,18 @@ export function SessionsPage() {
   };
 
   useEffect(() => {
+    const pendingNavigation = pendingSessionNavigationRef.current;
+    if (pendingNavigation) {
+      if (requestedSessionId === pendingNavigation) pendingSessionNavigationRef.current = undefined;
+      else return;
+    }
     if (!requestedSessionId) {
       explicitNewConversationRef.current = false;
       return;
     }
     if (explicitNewConversationRef.current) return;
     if (!requestedSessionId || requestedSessionId === sessionId || !api || !sessions.some((session) => session.id === requestedSessionId)) return;
-    void selectSession(requestedSessionId);
+    void selectSession(requestedSessionId, false);
   }, [api, requestedSessionId, sessionId, sessions]);
 
   useEffect(() => {
@@ -1686,7 +1747,10 @@ export function SessionsPage() {
       setSessionId(id);
       setConversationOpen(true);
       setMessages(history.map(persistedMessage));
-      await restoreHarnessActivity(history);
+      setActivityItems([]);
+      setHarnessInteractions([]);
+      setHistoricalActivityState({});
+      setHistoricalActivityErrors({});
       if (summary) {
         setRuntimeKind(summary.backend);
         setProviderId(summary.providerId ?? "");
@@ -3026,11 +3090,16 @@ export function SessionsPage() {
                   if (!message) return null;
                   const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));
                   const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
+                  const historicalTurnId = message.durable ? message.harnessTurnId : undefined;
+                  const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
+                  const historicalError = historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined;
                   const activityLedger = messageActivityItems.length > 0
                     ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
                     : messageToolCards.length > 0
                       ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
-                      : undefined;
+                      : historicalTurnId
+                        ? activityLedgerFromHarness("Work summary", message.state, [])
+                        : undefined;
                   return (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
@@ -3047,6 +3116,14 @@ export function SessionsPage() {
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {activityLedger && <ActivityLedger
                         model={activityLedger}
+                        onExpandedChange={historicalTurnId ? (expanded) => {
+                          if (expanded) void loadHistoricalHarnessActivity(message);
+                        } : undefined}
+                        emptyState={historicalState === "loading"
+                          ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading saved work…</div>
+                          : historicalState === "failed" && historicalError
+                            ? <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Could not load this turn's work details." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>
+                            : undefined}
                         renderEntryDetails={(entry) => <AssistantLedgerEntryDetails entry={entry} />}
                         renderEntryActions={(entry) => {
                           const item = entry.sourceItem;

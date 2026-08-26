@@ -410,8 +410,9 @@ export function buildActivityLedger(options: {
       total: entries.length,
     }];
   });
-  const current = [...uniqueEntries].reverse().find((entry) => entry.status === "active" || entry.status === "attention" || entry.status === "failed")
-    ?? [...uniqueEntries].reverse().find((entry) => entry.countsAsAction || entry.summary);
+  const newestFirst = [...uniqueEntries].reverse();
+  const current = newestFirst.find((entry) => entry.status === "attention" || entry.status === "failed")
+    ?? newestFirst.find((entry) => entry.status === "active" || entry.countsAsAction || entry.summary);
   const goal = options.harnessItems
     ? [...options.harnessItems].reverse().find((item) => item.goal?.currentStep || item.goal?.objective)?.goal
     : undefined;
@@ -424,7 +425,7 @@ export function buildActivityLedger(options: {
     status: overallStatus(options.status, uniqueEntries),
     entries: [...uniqueEntries].reverse(),
     phases,
-    currentAction: goal?.currentStep || goal?.objective || current?.label,
+    currentAction: current?.label || goal?.currentStep || goal?.objective,
     actionCount: uniqueEntries.filter((entry) => entry.countsAsAction).length,
     attentionCount: uniqueEntries.filter((entry) => ["attention", "failed"].includes(entry.status)).length,
     artifactCount: artifacts.size,

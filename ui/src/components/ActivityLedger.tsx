@@ -52,10 +52,14 @@ export function ActivityLedger({
   model,
   renderEntryDetails,
   renderEntryActions,
+  onExpandedChange,
+  emptyState,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
   renderEntryActions?: (entry: ActivityLedgerEntry) => ReactNode;
+  onExpandedChange?: (expanded: boolean) => void;
+  emptyState?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const auditId = useId();
@@ -98,7 +102,11 @@ export function ActivityLedger({
           type="button"
           aria-expanded={expanded}
           aria-controls={auditId}
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpanded((value) => {
+            const next = !value;
+            onExpandedChange?.(next);
+            return next;
+          })}
         >
           {expanded ? "Hide activity" : "Show activity"}
           <ChevronDown size={14} aria-hidden="true" />
@@ -123,7 +131,7 @@ export function ActivityLedger({
               </div>
             </li>;
           })}
-        </ol> : <p>No activity has been recorded yet.</p>}
+        </ol> : emptyState ?? <p>No activity has been recorded yet.</p>}
       </div>}
     </section>
   );
