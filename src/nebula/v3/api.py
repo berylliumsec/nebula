@@ -48,6 +48,7 @@ from starlette.types import Scope
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .action_registry import ActionRegistry
 from .automation_runtime import (
     AutomationPolicyDenied,
     AutomationRuntimeManager,
@@ -197,6 +198,8 @@ from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    ActionDescriptor,
+    ActionResolutionRequest,
     Artifact,
     BrowserAction,
     BrowserCommand,
@@ -1038,6 +1041,7 @@ def create_app(
     elif database is not None:
         raise ValueError("pass either store or database, not both")
     relation_service = ResourceRelationService(store)
+    action_registry = ActionRegistry(store)
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
@@ -3015,6 +3019,17 @@ def create_app(
     ) -> Response:
         relation_service.delete(project_id, relation_id, expected_revision)
         return Response(status_code=204)
+
+    @app.post(
+        f"{API_PREFIX}/actions/resolve",
+        response_model=list[ActionDescriptor],
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resolve_resource_actions(
+        request: ActionResolutionRequest,
+    ) -> list[ActionDescriptor]:
+        return action_registry.resolve(request)
 
     @app.get(
         f"{API_PREFIX}/harness-catalog",

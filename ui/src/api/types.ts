@@ -41,6 +41,18 @@ export interface ResourceRelation {
   updatedAt: string;
 }
 
+export interface ActionDescriptor {
+  id: string;
+  acceptedResourceKinds: ResourceKind[];
+  resultKind?: ResourceKind;
+  authority: "ui" | "core" | "device";
+  requiredCapabilities: string[];
+  risk: "safe" | "mutating" | "risky";
+  confirmationPolicy: "none" | "mutation" | "always";
+  available: boolean;
+  disabledReason?: string;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;
