@@ -75,7 +75,7 @@ export function TopBar({
           )}
           <span>{workspaceState === "degraded" ? "Limited" : workspaceState}</span>
         </button>
-        <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search commands">
+        <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />
           <span>Search</span>
           <kbd>⌘K</kbd>

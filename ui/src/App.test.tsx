@@ -140,7 +140,7 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     renderApp();
     await user.keyboard("{Control>}k{/Control}");
-    const search = screen.getByRole("textbox", { name: "Search commands" });
+    const search = screen.getByRole("textbox", { name: "Search pages, actions, and settings" });
     await user.type(search, "provider");
     await user.click(screen.getByRole("option", { name: /Go to Settings/ }));
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
@@ -161,14 +161,17 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");
   });
 
-  it("selects Light from command search and restores the saved preference", async () => {
+  it("opens Appearance from universal search, saves Light, and restores the preference", async () => {
     const user = userEvent.setup();
     const firstRender = renderApp();
     await user.keyboard("{Control>}k{/Control}");
-    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "light theme");
-    await user.click(screen.getByRole("option", { name: /Use Light theme/ }));
+    await user.type(screen.getByRole("textbox", { name: "Search pages, actions, and settings" }), "light theme");
+    await user.click(screen.getByRole("option", { name: /Appearance and theme/ }));
+    const lens = screen.getByRole("dialog", { name: "Appearance and theme" });
+    await user.click(await within(lens).findByRole("button", { name: /^Light$/ }));
     expect(document.documentElement).toHaveAttribute("data-theme", "light");
     expect(localStorage.getItem("nebula.theme")).toBe("light");
+    await user.click(within(lens).getByRole("button", { name: "Done" }));
 
     firstRender.unmount();
     renderApp("/settings");
@@ -198,8 +201,26 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Show sidebar" })).toBeVisible();
     expect(localStorage.getItem("nebula.sidebar.collapsed")).toBe("true");
     await user.keyboard("{Control>}k{/Control}");
-    await user.type(screen.getByRole("textbox", { name: "Search commands" }), "Overview");
+    await user.type(screen.getByRole("textbox", { name: "Search pages, actions, and settings" }), "Overview");
     expect(screen.getByRole("option", { name: /Go to Project/ })).toBeVisible();
+  });
+
+  it("opens a focused setting from the top-bar search without leaving the current pane", async () => {
+    const user = userEvent.setup();
+    renderApp("/findings");
+    await screen.findByRole("heading", { name: "Findings" });
+    const searchTrigger = screen.getByRole("button", { name: "Search pages, actions, and settings" });
+    await user.click(searchTrigger);
+    await user.type(screen.getByRole("textbox", { name: "Search pages, actions, and settings" }), "network ports");
+    await user.click(screen.getByRole("option", { name: /Project policy and network scope/ }));
+
+    const lens = screen.getByRole("dialog", { name: "Project policy and network scope" });
+    expect(await within(lens).findByRole("heading", { name: "Project execution policy" })).toBeVisible();
+    expect(within(lens).getByText("Network scope", { selector: "h3" })).toBeVisible();
+    expect(screen.getByTestId("router-location")).toHaveTextContent("/findings");
+
+    await user.click(within(lens).getByRole("button", { name: "Done" }));
+    expect(searchTrigger).toHaveFocus();
   });
 
   it("routes browser and desktop global shortcuts through the shared shell commands", async () => {

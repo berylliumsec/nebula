@@ -234,15 +234,17 @@ interface SettingsGroupProps {
   onOpen: (id: string) => void;
   children: ReactNode;
   bodyClassName?: string;
+  hidden?: boolean;
 }
 
 /** A URL-controlled Settings disclosure. Opening one group closes its sibling. */
-export function SettingsGroup({ id, title, summary, open, onOpen, children, bodyClassName = "" }: SettingsGroupProps) {
+export function SettingsGroup({ id, title, summary, open, onOpen, children, bodyClassName = "", hidden = false }: SettingsGroupProps) {
   return (
     <details
       className="settings-group"
       id={id}
       open={open}
+      hidden={hidden}
     >
       <summary onClick={(event) => { event.preventDefault(); onOpen(id); }}><span><strong>{title}</strong><small>{summary}</small></span></summary>
       <div className={`settings-group-body ${bodyClassName}`.trim()}>{children}</div>

@@ -14,6 +14,8 @@ import { UpdateBanner } from "./UpdateBanner";
 import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } from "../diagnostics";
 import { browserAuthorizationRecovery } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
+import { SettingsLens } from "./SettingsLens";
+import type { SettingCatalogEntry } from "../settingsCatalog";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", providerCatalog: "Provider setup",
@@ -40,6 +42,7 @@ export function AppShell() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
@@ -186,7 +189,9 @@ export function AppShell() {
                 onClose={() => setPaletteOpen(false)}
                 onToggleActivity={toggleActivity}
                 onToggleSidebar={toggleSidebar}
+                onOpenSetting={(entry, returnFocus) => setSettingLens({ entry, returnFocus })}
               />
+              {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} onClose={() => setSettingLens(undefined)} />}
             </div>
           </ChromeProvider>
         </WorkbenchDraftProvider>
