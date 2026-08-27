@@ -20,6 +20,27 @@ export interface ResourceResolution {
   actualProjectId?: Identifier;
 }
 
+export type RelationPredicate =
+  | "affects"
+  | "supports"
+  | "includes"
+  | "references"
+  | "produced_by"
+  | "derived_from";
+
+export interface ResourceRelation {
+  id: Identifier;
+  projectId: Identifier;
+  source: ResourceRef;
+  predicate: RelationPredicate;
+  target: ResourceRef;
+  attribution?: string;
+  provenance: Record<string, unknown>;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;

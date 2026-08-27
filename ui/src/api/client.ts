@@ -107,6 +107,11 @@ import type {
   ReportRender,
   ReportSummary,
   ReportUpdateRequest,
+  RelationPredicate,
+  ResourceKind,
+  ResourceRef,
+  ResourceRelation,
+  ResourceResolution,
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
@@ -144,6 +149,66 @@ import {
 import { logCaughtDiagnostic } from "../diagnostics";
 
 type JsonObject = Record<string, unknown>;
+
+interface WireResourceRef {
+  project_id?: string | null;
+  kind: ResourceKind;
+  id: string;
+  revision?: number | null;
+}
+
+interface WireResourceRelation {
+  id: string;
+  project_id: string;
+  source: WireResourceRef;
+  predicate: RelationPredicate;
+  target: WireResourceRef;
+  attribution?: string | null;
+  provenance: Record<string, unknown>;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WireResourceResolution {
+  ref: WireResourceRef;
+  label: string;
+  state: ResourceResolution["state"];
+  actual_project_id?: string | null;
+}
+
+function wireResourceRef(ref: ResourceRef): WireResourceRef {
+  return {
+    project_id: ref.projectId,
+    kind: ref.kind,
+    id: ref.id,
+    revision: ref.revision,
+  };
+}
+
+function mapResourceRef(ref: WireResourceRef): ResourceRef {
+  return {
+    projectId: ref.project_id ?? undefined,
+    kind: ref.kind,
+    id: ref.id,
+    revision: ref.revision ?? undefined,
+  };
+}
+
+function mapResourceRelation(value: WireResourceRelation): ResourceRelation {
+  return {
+    id: value.id,
+    projectId: value.project_id,
+    source: mapResourceRef(value.source),
+    predicate: value.predicate,
+    target: mapResourceRef(value.target),
+    attribution: value.attribution ?? undefined,
+    provenance: value.provenance,
+    revision: value.revision,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
 
 interface WireEntity extends JsonObject {
   id: string;
@@ -3841,6 +3906,98 @@ export class ApiClient {
       });
       throw error;
     }
+  }
+
+  listResourceRelations(
+    projectId: string,
+    resource?: ResourceRef,
+    predicate?: RelationPredicate,
+    signal?: AbortSignal,
+  ): Promise<ResourceRelation[]> {
+    const query = new URLSearchParams();
+    if (resource) {
+      query.set("resource_kind", resource.kind);
+      query.set("resource_id", resource.id);
+    }
+    if (predicate) query.set("predicate", predicate);
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return this.request<WireResourceRelation[]>(
+      `projects/${encodeURIComponent(projectId)}/relations${suffix}`,
+      { signal },
+    ).then((items) => items.map(mapResourceRelation));
+  }
+
+  resolveResource(ref: ResourceRef, signal?: AbortSignal): Promise<ResourceResolution> {
+    return this.request<WireResourceResolution>("resources/resolve", {
+      method: "POST",
+      signal,
+      body: JSON.stringify(wireResourceRef(ref)),
+    }).then((value) => ({
+      ref: mapResourceRef(value.ref),
+      label: value.label,
+      state: value.state,
+      actualProjectId: value.actual_project_id ?? undefined,
+    }));
+  }
+
+  createResourceRelation(
+    projectId: string,
+    source: ResourceRef,
+    predicate: RelationPredicate,
+    target: ResourceRef,
+    attribution?: string,
+    provenance: Record<string, unknown> = {},
+  ): Promise<ResourceRelation> {
+    return this.request<WireResourceRelation>(
+      `projects/${encodeURIComponent(projectId)}/relations`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          source: wireResourceRef(source),
+          predicate,
+          target: wireResourceRef(target),
+          attribution,
+          provenance,
+        }),
+      },
+    ).then(mapResourceRelation);
+  }
+
+  setResourceRelations(
+    projectId: string,
+    source: ResourceRef,
+    predicate: RelationPredicate,
+    targets: ResourceRef[],
+    expectedSourceRevision?: number,
+    attribution?: string,
+    provenance: Record<string, unknown> = {},
+  ): Promise<ResourceRelation[]> {
+    return this.request<WireResourceRelation[]>(
+      `projects/${encodeURIComponent(projectId)}/relations/set`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          project_id: projectId,
+          source: wireResourceRef(source),
+          predicate,
+          targets: targets.map(wireResourceRef),
+          expected_source_revision: expectedSourceRevision,
+          attribution,
+          provenance,
+        }),
+      },
+    ).then((items) => items.map(mapResourceRelation));
+  }
+
+  deleteResourceRelation(
+    projectId: string,
+    relationId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    return this.request<void>(
+      `projects/${encodeURIComponent(projectId)}/relations/${encodeURIComponent(relationId)}?expected_revision=${expectedRevision}`,
+      { method: "DELETE" },
+    );
   }
 
   diagnosticsSettings(signal?: AbortSignal): Promise<DiagnosticSettings> {

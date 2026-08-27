@@ -135,6 +135,59 @@ class EntityRow(Base):
     )
 
 
+class ResourceRelationRow(Base):
+    """Indexed authoritative edges; entity arrays are compatibility projections."""
+
+    __tablename__ = "resource_relations"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "source_kind",
+            "source_id",
+            "predicate",
+            "target_kind",
+            "target_id",
+            name="uq_resource_relations_edge",
+        ),
+        Index(
+            "ix_resource_relations_source",
+            "project_id",
+            "source_kind",
+            "source_id",
+            "predicate",
+        ),
+        Index(
+            "ix_resource_relations_target",
+            "project_id",
+            "target_kind",
+            "target_id",
+            "predicate",
+        ),
+        Index("ix_resource_relations_lineage", "project_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(4096), nullable=False)
+    source_revision: Mapped[int | None] = mapped_column(Integer)
+    predicate: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(4096), nullable=False)
+    target_revision: Mapped[int | None] = mapped_column(Integer)
+    attribution: Mapped[str | None] = mapped_column(String(200))
+    provenance: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
     __table_args__ = (
