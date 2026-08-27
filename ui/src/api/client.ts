@@ -1,6 +1,7 @@
 import type {
   AgentRunSummary,
   ActionDescriptor,
+  ActionIntent,
   ApprovalDecisionRequest,
   ApprovalSummary,
   AssetSummary,
@@ -28,6 +29,7 @@ import type {
   ContextSourceReference,
   ContextStatus,
   DebugSessionStart,
+  DeviceCapabilitySnapshot,
   CredentialStatus,
   EngagementSummary,
   EngagementCreateRequest,
@@ -188,6 +190,54 @@ interface WireActionDescriptor {
   confirmation_policy: ActionDescriptor["confirmationPolicy"];
   available: boolean;
   disabled_reason?: string | null;
+}
+
+interface WireActionIntent {
+  id: string;
+  engagement_id: string;
+  resources: WireResourceRef[];
+  action_id: string;
+  requester: string;
+  eligible_device_ids: string[];
+  selected_device_id?: string | null;
+  idempotency_key: string;
+  expected_revisions: Record<string, number>;
+  logical_lease_key: string;
+  lease_expires_at?: string | null;
+  status: ActionIntent["status"];
+  expires_at: string;
+  prepared_at?: string | null;
+  committed_at?: string | null;
+  receipt?: Record<string, unknown> | null;
+  result_refs: WireResourceRef[];
+  error?: string | null;
+  core_mutation_committed: boolean;
+  revision: number;
+}
+
+function mapActionIntent(value: WireActionIntent): ActionIntent {
+  return {
+    id: value.id,
+    projectId: value.engagement_id,
+    resources: value.resources.map(mapResourceRef),
+    actionId: value.action_id,
+    requester: value.requester,
+    eligibleDeviceIds: value.eligible_device_ids,
+    selectedDeviceId: value.selected_device_id ?? undefined,
+    idempotencyKey: value.idempotency_key,
+    expectedRevisions: value.expected_revisions,
+    logicalLeaseKey: value.logical_lease_key,
+    leaseExpiresAt: value.lease_expires_at ?? undefined,
+    status: value.status,
+    expiresAt: value.expires_at,
+    preparedAt: value.prepared_at ?? undefined,
+    committedAt: value.committed_at ?? undefined,
+    receipt: value.receipt ?? undefined,
+    resultRefs: value.result_refs.map(mapResourceRef),
+    error: value.error ?? undefined,
+    coreMutationCommitted: value.core_mutation_committed,
+    revision: value.revision,
+  };
 }
 
 function mapActionDescriptor(value: WireActionDescriptor): ActionDescriptor {
@@ -4044,6 +4094,79 @@ export class ApiClient {
     );
   }
 
+  createActionIntent(request: {
+    projectId: string; resources: ResourceRef[]; actionId: string; requester: string;
+    idempotencyKey: string; preferredDeviceId?: string; coreMutationCommitted?: boolean;
+    metadata?: Record<string, unknown>;
+  }): Promise<ActionIntent> {
+    return this.request<WireActionIntent>("action-intents", {
+      method: "POST",
+      body: JSON.stringify({
+        project_id: request.projectId,
+        resources: request.resources.map(wireResourceRef),
+        action_id: request.actionId,
+        requester: request.requester,
+        idempotency_key: request.idempotencyKey,
+        preferred_device_id: request.preferredDeviceId,
+        core_mutation_committed: request.coreMutationCommitted ?? false,
+        metadata: request.metadata ?? {},
+      }),
+    }).then(mapActionIntent);
+  }
+
+  listActionIntents(projectId: string): Promise<ActionIntent[]> {
+    return this.request<WireActionIntent[]>(
+      `action-intents?project_id=${encodeURIComponent(projectId)}`,
+    ).then((items) => items.map(mapActionIntent));
+  }
+
+  claimActionIntent(intentId: string, deviceId: string, expectedRevision: number): Promise<ActionIntent> {
+    return this.request<WireActionIntent>(`action-intents/${encodeURIComponent(intentId)}/claim`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, expected_revision: expectedRevision }),
+    }).then(mapActionIntent);
+  }
+
+  prepareActionIntent(intentId: string, deviceId: string, expectedRevision: number, preflightSucceeded: boolean, error?: string): Promise<ActionIntent> {
+    return this.request<WireActionIntent>(`action-intents/${encodeURIComponent(intentId)}/prepare`, {
+      method: "POST",
+      body: JSON.stringify({ device_id: deviceId, expected_revision: expectedRevision, preflight_succeeded: preflightSucceeded, error }),
+    }).then(mapActionIntent);
+  }
+
+  commitActionIntent(intentId: string, expectedRevision: number, coreMutationCommitted = false): Promise<ActionIntent> {
+    return this.request<WireActionIntent>(`action-intents/${encodeURIComponent(intentId)}/commit`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: expectedRevision, core_mutation_committed: coreMutationCommitted }),
+    }).then(mapActionIntent);
+  }
+
+  finishActionIntent(intentId: string, request: {
+    deviceId: string; expectedRevision: number; succeeded: boolean;
+    receipt?: Record<string, unknown>; resultRefs?: ResourceRef[]; error?: string;
+    compensationSucceeded?: boolean;
+  }): Promise<ActionIntent> {
+    return this.request<WireActionIntent>(`action-intents/${encodeURIComponent(intentId)}/result`, {
+      method: "POST",
+      body: JSON.stringify({
+        device_id: request.deviceId,
+        expected_revision: request.expectedRevision,
+        succeeded: request.succeeded,
+        receipt: request.receipt,
+        result_refs: (request.resultRefs ?? []).map(wireResourceRef),
+        error: request.error,
+        compensation_succeeded: request.compensationSucceeded,
+      }),
+    }).then(mapActionIntent);
+  }
+
+  cancelActionIntent(intentId: string, expectedRevision: number, reason?: string): Promise<ActionIntent> {
+    return this.request<WireActionIntent>(`action-intents/${encodeURIComponent(intentId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: expectedRevision, reason }),
+    }).then(mapActionIntent);
+  }
+
   diagnosticsSettings(signal?: AbortSignal): Promise<DiagnosticSettings> {
     return this.request<DiagnosticSettings>("diagnostics/settings", { signal });
   }
@@ -6811,6 +6934,8 @@ export class ApiClient {
     return this.request<Array<{
       id: string; name: string; created_at: string; last_used_at: string;
       idle_expires_at: string; absolute_expires_at: string; current: boolean;
+      platform?: string | null; app_version?: string | null; capabilities: string[];
+      ownership_claims: WireResourceRef[]; heartbeat_at?: string | null; healthy: boolean;
     }>>("auth/devices").then((items) => items.map((item) => ({
       id: item.id,
       name: item.name,
@@ -6819,7 +6944,46 @@ export class ApiClient {
       idleExpiresAt: item.idle_expires_at,
       absoluteExpiresAt: item.absolute_expires_at,
       current: item.current,
+      platform: item.platform ?? undefined,
+      appVersion: item.app_version ?? undefined,
+      capabilities: item.capabilities ?? [],
+      ownershipClaims: (item.ownership_claims ?? []).map(mapResourceRef),
+      heartbeatAt: item.heartbeat_at ?? undefined,
+      healthy: item.healthy ?? false,
     })));
+  }
+
+  heartbeatCurrentDevice(snapshot: DeviceCapabilitySnapshot): Promise<import("./types").PairedDevice> {
+    return this.request<{
+      id: string; name: string; created_at: string; last_used_at: string;
+      idle_expires_at: string; absolute_expires_at: string; current: boolean;
+      platform?: string | null; app_version?: string | null; capabilities: string[];
+      ownership_claims: WireResourceRef[]; heartbeat_at?: string | null; healthy: boolean;
+    }>("auth/devices/current/capabilities", {
+      method: "PUT",
+      body: JSON.stringify({
+        platform: snapshot.platform,
+        app_version: snapshot.appVersion,
+        capabilities: snapshot.capabilities,
+        ownership_claims: snapshot.ownershipClaims.map(wireResourceRef),
+        heartbeat_at: snapshot.heartbeatAt,
+        expected_revision: snapshot.expectedRevision,
+      }),
+    }).then((item) => ({
+      id: item.id,
+      name: item.name,
+      createdAt: item.created_at,
+      lastUsedAt: item.last_used_at,
+      idleExpiresAt: item.idle_expires_at,
+      absoluteExpiresAt: item.absolute_expires_at,
+      current: item.current,
+      platform: item.platform ?? undefined,
+      appVersion: item.app_version ?? undefined,
+      capabilities: item.capabilities,
+      ownershipClaims: item.ownership_claims.map(mapResourceRef),
+      heartbeatAt: item.heartbeat_at ?? undefined,
+      healthy: item.healthy,
+    }));
   }
 
   async revokePairedDevice(id: string): Promise<void> {

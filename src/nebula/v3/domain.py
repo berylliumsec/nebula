@@ -2945,12 +2945,95 @@ class PairedDeviceSession(Entity):
     idle_expires_at: datetime
     absolute_expires_at: datetime
     revoked_at: datetime | None = None
+    platform: str | None = Field(default=None, max_length=100)
+    app_version: str | None = Field(default=None, max_length=100)
+    capabilities: list[str] = Field(default_factory=list, max_length=128)
+    ownership_claims: list[ResourceRef] = Field(default_factory=list, max_length=100)
+    heartbeat_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def expiry_order_is_valid(self) -> "PairedDeviceSession":
         if self.idle_expires_at > self.absolute_expires_at:
             raise ValueError("idle expiry cannot exceed absolute expiry")
+        return self
+
+
+class DeviceCapabilitySnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: str = Field(min_length=1, max_length=100)
+    app_version: str = Field(min_length=1, max_length=100)
+    capabilities: list[str] = Field(default_factory=list, max_length=128)
+    ownership_claims: list[ResourceRef] = Field(default_factory=list, max_length=100)
+    heartbeat_at: datetime = Field(default_factory=utc_now)
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ActionIntentStatus(StringEnum):
+    QUEUED = "queued"
+    CLAIMED = "claimed"
+    PREPARED = "prepared"
+    COMMITTED = "committed"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    COMPENSATING = "compensating"
+    COMPENSATED = "compensated"
+    RECONCILE_REQUIRED = "reconcile_required"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class ActionIntent(Entity):
+    """Durable device action with explicit prepare, commit, and apply states."""
+
+    entity_kind: ClassVar[str] = "action_intents"
+    engagement_id: str
+    resources: list[ResourceRef] = Field(min_length=1, max_length=100)
+    action_id: str = Field(min_length=1, max_length=80)
+    requester: str = Field(min_length=1, max_length=200)
+    eligible_device_ids: list[str] = Field(default_factory=list, max_length=100)
+    selected_device_id: str | None = Field(default=None, max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=300)
+    expected_revisions: dict[str, int] = Field(default_factory=dict)
+    logical_lease_key: str = Field(min_length=1, max_length=500)
+    lease_expires_at: datetime | None = None
+    status: ActionIntentStatus = ActionIntentStatus.QUEUED
+    expires_at: datetime
+    prepared_at: datetime | None = None
+    committed_at: datetime | None = None
+    receipt: dict[str, Any] | None = None
+    result_refs: list[ResourceRef] = Field(default_factory=list, max_length=100)
+    error: str | None = Field(default=None, max_length=2_000)
+    core_mutation_committed: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def intent_lifecycle_is_coherent(self) -> "ActionIntent":
+        if self.expires_at <= self.created_at:
+            raise ValueError("action intent expiry must follow creation")
+        if (
+            self.selected_device_id
+            and self.selected_device_id not in self.eligible_device_ids
+        ):
+            raise ValueError("selected device must be eligible")
+        if (
+            self.status
+            in {
+                ActionIntentStatus.CLAIMED,
+                ActionIntentStatus.PREPARED,
+                ActionIntentStatus.COMMITTED,
+            }
+            and not self.selected_device_id
+        ):
+            raise ValueError("active action intents require a selected device")
+        if (
+            self.status in {ActionIntentStatus.PREPARED, ActionIntentStatus.COMMITTED}
+            and not self.prepared_at
+        ):
+            raise ValueError("prepared action intents require prepared_at")
+        if self.status == ActionIntentStatus.COMMITTED and not self.committed_at:
+            raise ValueError("committed action intents require committed_at")
         return self
 
 
@@ -3366,6 +3449,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,
+    ActionIntent,
     HarnessTurn,
     HarnessInteraction,
     ContextSnapshot,

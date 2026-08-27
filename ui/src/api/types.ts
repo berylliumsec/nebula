@@ -1204,6 +1204,48 @@ export interface PairedDevice {
   idleExpiresAt: string;
   absoluteExpiresAt: string;
   current: boolean;
+  platform?: string;
+  appVersion?: string;
+  capabilities?: string[];
+  ownershipClaims?: ResourceRef[];
+  heartbeatAt?: string;
+  healthy?: boolean;
+}
+
+export interface DeviceCapabilitySnapshot {
+  platform: string;
+  appVersion: string;
+  capabilities: string[];
+  ownershipClaims: ResourceRef[];
+  heartbeatAt?: string;
+  expectedRevision?: number;
+}
+
+export type ActionIntentStatus =
+  | "queued" | "claimed" | "prepared" | "committed" | "succeeded" | "failed"
+  | "compensating" | "compensated" | "reconcile_required" | "cancelled" | "expired";
+
+export interface ActionIntent {
+  id: Identifier;
+  projectId: Identifier;
+  resources: ResourceRef[];
+  actionId: string;
+  requester: string;
+  eligibleDeviceIds: Identifier[];
+  selectedDeviceId?: Identifier;
+  idempotencyKey: string;
+  expectedRevisions: Record<string, number>;
+  logicalLeaseKey: string;
+  leaseExpiresAt?: string;
+  status: ActionIntentStatus;
+  expiresAt: string;
+  preparedAt?: string;
+  committedAt?: string;
+  receipt?: Record<string, unknown>;
+  resultRefs: ResourceRef[];
+  error?: string;
+  coreMutationCommitted: boolean;
+  revision: number;
 }
 
 export interface ChatContextAttachment {

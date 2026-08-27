@@ -49,6 +49,15 @@ from starlette.types import Scope
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
 from .action_registry import ActionRegistry
+from .action_broker import (
+    ActionBroker,
+    ActionIntentCancelRequest,
+    ActionIntentClaimRequest,
+    ActionIntentCommitRequest,
+    ActionIntentCreateRequest,
+    ActionIntentPrepareRequest,
+    ActionIntentResultRequest,
+)
 from .automation_runtime import (
     AutomationPolicyDenied,
     AutomationRuntimeManager,
@@ -199,6 +208,7 @@ from .domain import (
     Approval,
     ApprovalStatus,
     ActionDescriptor,
+    ActionIntent,
     ActionResolutionRequest,
     Artifact,
     BrowserAction,
@@ -222,6 +232,7 @@ from .domain import (
     ChatTokenUsage,
     ContextOwnerType,
     ContextSnapshotStatus,
+    DeviceCapabilitySnapshot,
     Engagement,
     Entity,
     Evidence,
@@ -438,6 +449,7 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "action_intents",
     "automation_policies",
     "chat_turns",
     "context_snapshots",
@@ -656,6 +668,12 @@ class PairedDeviceResponse(NebulaModel):
     idle_expires_at: datetime
     absolute_expires_at: datetime
     current: bool = False
+    platform: str | None = None
+    app_version: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    ownership_claims: list[ResourceRef] = Field(default_factory=list)
+    heartbeat_at: datetime | None = None
+    healthy: bool = False
 
 
 class PairingRedeemResponse(NebulaModel):
@@ -1042,6 +1060,7 @@ def create_app(
         raise ValueError("pass either store or database, not both")
     relation_service = ResourceRelationService(store)
     action_registry = ActionRegistry(store)
+    action_broker = ActionBroker(store)
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
@@ -2123,6 +2142,12 @@ def create_app(
             idle_expires_at=device.idle_expires_at,
             absolute_expires_at=device.absolute_expires_at,
             current=device.id == current_id,
+            platform=device.platform,
+            app_version=device.app_version,
+            capabilities=device.capabilities,
+            ownership_claims=device.ownership_claims,
+            heartbeat_at=device.heartbeat_at,
+            healthy=action_broker.healthy(device),
         )
 
     @app.post(
@@ -2234,6 +2259,24 @@ def create_app(
             for device in store.list_entities(PairedDeviceSession, limit=1_000)
             if device.revoked_at is None
         ]
+
+    @app.put(
+        f"{API_PREFIX}/auth/devices/current/capabilities",
+        response_model=PairedDeviceResponse,
+        tags=["authentication"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def heartbeat_current_device(
+        request: Request, snapshot: DeviceCapabilitySnapshot
+    ) -> PairedDeviceResponse:
+        device_id = getattr(request.state, "auth_device_id", None)
+        if not device_id:
+            raise HTTPException(
+                status_code=403,
+                detail="capability heartbeat requires paired-device authentication",
+            )
+        device = action_broker.heartbeat(device_id, snapshot)
+        return _device_response(device, current_id=device.id)
 
     @app.delete(
         f"{API_PREFIX}/auth/devices/{{device_id}}",
@@ -3030,6 +3073,84 @@ def create_app(
         request: ActionResolutionRequest,
     ) -> list[ActionDescriptor]:
         return action_registry.resolve(request)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents",
+        response_model=ActionIntent,
+        status_code=201,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_action_intent(request: ActionIntentCreateRequest) -> ActionIntent:
+        try:
+            return action_broker.create(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/action-intents",
+        response_model=list[ActionIntent],
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_action_intents(project_id: str) -> list[ActionIntent]:
+        return action_broker.list_intents(project_id)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents/{{intent_id}}/claim",
+        response_model=ActionIntent,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def claim_action_intent(
+        intent_id: str, request: ActionIntentClaimRequest
+    ) -> ActionIntent:
+        return action_broker.claim(intent_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents/{{intent_id}}/prepare",
+        response_model=ActionIntent,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def prepare_action_intent(
+        intent_id: str, request: ActionIntentPrepareRequest
+    ) -> ActionIntent:
+        return action_broker.prepare(intent_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents/{{intent_id}}/commit",
+        response_model=ActionIntent,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def commit_action_intent(
+        intent_id: str, request: ActionIntentCommitRequest
+    ) -> ActionIntent:
+        return action_broker.commit(intent_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents/{{intent_id}}/result",
+        response_model=ActionIntent,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def finish_action_intent(
+        intent_id: str, request: ActionIntentResultRequest
+    ) -> ActionIntent:
+        return action_broker.result(intent_id, request)
+
+    @app.post(
+        f"{API_PREFIX}/action-intents/{{intent_id}}/cancel",
+        response_model=ActionIntent,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_action_intent(
+        intent_id: str, body: ActionIntentCancelRequest, request: Request
+    ) -> ActionIntent:
+        actor_id = getattr(request.state, "auth_device_id", None) or "operator"
+        return action_broker.cancel(intent_id, body, str(actor_id))
 
     @app.get(
         f"{API_PREFIX}/harness-catalog",
@@ -8734,7 +8855,31 @@ def create_app(
     async def create_browser_handoff(
         session_id: str, request: BrowserHandoffCreateRequest
     ) -> BrowserHandoff:
-        return browser_security.create_handoff(session_id, request)
+        handoff = browser_security.create_handoff(session_id, request)
+        session = store.get(BrowserSession, session_id)
+        try:
+            action_broker.create(
+                ActionIntentCreateRequest(
+                    project_id=handoff.engagement_id,
+                    resources=[
+                        ResourceRef(
+                            project_id=handoff.engagement_id,
+                            kind=ResourceKind.BROWSER_SESSION,
+                            id=session.id,
+                            revision=session.revision,
+                        )
+                    ],
+                    action_id="navigate",
+                    requester=request.requested_by_device_id,
+                    idempotency_key=f"browser-handoff:{handoff.id}",
+                    metadata={"legacy_handoff_id": handoff.id},
+                )
+            )
+        except ConflictError:
+            # diagnostic-expected: legacy handoffs remain the compatibility
+            # authority until a healthy capability-advertising device exists.
+            pass
+        return handoff
 
     @app.post(
         f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/claim",
@@ -8745,6 +8890,35 @@ def create_app(
     async def claim_browser_handoff(
         handoff_id: str, request: BrowserHandoffClaimRequest
     ) -> BrowserHandoff:
+        handoff = store.get(BrowserHandoff, handoff_id)
+        intent = next(
+            (
+                item
+                for item in action_broker.list_intents(handoff.engagement_id)
+                if item.metadata.get("legacy_handoff_id") == handoff_id
+            ),
+            None,
+        )
+        if intent is not None:
+            intent = action_broker.claim(
+                intent.id,
+                ActionIntentClaimRequest(
+                    device_id=request.desktop_device_id,
+                    expected_revision=intent.revision,
+                ),
+            )
+            intent = action_broker.prepare(
+                intent.id,
+                ActionIntentPrepareRequest(
+                    device_id=request.desktop_device_id,
+                    expected_revision=intent.revision,
+                    preflight_succeeded=True,
+                ),
+            )
+            action_broker.commit(
+                intent.id,
+                ActionIntentCommitRequest(expected_revision=intent.revision),
+            )
         return browser_security.claim_handoff(handoff_id, request)
 
     @app.post(
@@ -8756,6 +8930,26 @@ def create_app(
     async def finish_browser_handoff(
         handoff_id: str, request: BrowserHandoffResultRequest
     ) -> BrowserHandoff:
+        handoff = store.get(BrowserHandoff, handoff_id)
+        intent = next(
+            (
+                item
+                for item in action_broker.list_intents(handoff.engagement_id)
+                if item.metadata.get("legacy_handoff_id") == handoff_id
+            ),
+            None,
+        )
+        if intent is not None:
+            action_broker.result(
+                intent.id,
+                ActionIntentResultRequest(
+                    device_id=request.desktop_device_id,
+                    expected_revision=intent.revision,
+                    succeeded=request.state == "complete",
+                    receipt={},
+                    error=request.error,
+                ),
+            )
         return browser_security.finish_handoff(handoff_id, request)
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
