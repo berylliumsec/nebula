@@ -128,7 +128,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
-  const { activityOpen, paletteOpen, sidebarCollapsed } = useChrome();
+  const { activityOpen, paletteOpen, settingLensOpen, sidebarCollapsed } = useChrome();
   const desktop = isTauriRuntime();
   const [deviceId, setDeviceId] = useState<string | undefined>(desktop ? undefined : "paired-browser");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [blankTab()]);
@@ -245,7 +245,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
     : evaluateBrowserScope(activeTab?.url, scope);
-  const browserVisible = desktop && active && !activityOpen && !paletteOpen && !dialogOpen
+  const browserVisible = desktop && active && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
   const bounds = useCallback((): BrowserBounds | undefined => {

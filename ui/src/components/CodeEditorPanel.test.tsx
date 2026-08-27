@@ -576,6 +576,7 @@ describe("CodeEditorPanel", () => {
     const chrome: ChromeContextValue = {
       activityOpen: false,
       paletteOpen: false,
+      settingLensOpen: false,
       sidebarCollapsed: false,
       toolbarHost: null,
       openPalette: vi.fn(),
