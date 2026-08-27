@@ -2199,7 +2199,9 @@ test("conversation switching between projects detaches the provider viewer witho
   if (mobileViewport) {
     await page.getByRole("button", { name: "Close sidebar" }).click({
       position: { x: (page.viewportSize()?.width ?? 390) - 8, y: 80 },
+      force: true,
     });
+    await expect(page.locator(".app-shell")).toHaveClass(/sidebar-collapsed/);
   }
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await page.getByPlaceholder("Ask about this project…").fill("Stop this response explicitly");
