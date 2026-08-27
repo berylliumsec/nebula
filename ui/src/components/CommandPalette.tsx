@@ -5,6 +5,7 @@ import type { ApiClient } from "../api/client";
 import type { ActionDescriptor, SearchResult } from "../api/types";
 import { navigationItems } from "../navigation";
 import { resourcePath } from "../resourceRoutes";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { settingCatalog, settingCatalogText, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ContextualCommand } from "../state/ChromeContext";
 
@@ -154,8 +155,11 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
           setPartialIndex(response.partialIndex);
           setSearchState("ready");
         })
-        .catch(() => {
-          if (!controller.signal.aborted) setSearchState("offline");
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) {
+            void logCaughtDiagnostic("interface.omnibox.search_failed", "Federated omnibox search could not reach Core.", error, "omnibox");
+            setSearchState("offline");
+          }
         });
     }, 160);
     return () => {
