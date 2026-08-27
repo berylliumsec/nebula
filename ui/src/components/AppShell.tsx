@@ -15,6 +15,7 @@ import { DiagnosticErrorNotice, DiagnosticsAvailabilityBanner, logDiagnostic } f
 import { browserAuthorizationRecovery } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
+import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
 
@@ -184,6 +185,7 @@ export function AppShell() {
                 </section>}
                 {workspaceState === "failed" && authorizationRecovery ? <div className="workspace-state-banner failed expired-session-state" role="alert"><span>{authorizationRecovery === "pair" ? <><strong>Pair this browser to continue</strong><small>On an authorized browser on the Nebula host, open Settings → Advanced → Identity &amp; Security → Paired devices, choose Pair phone, then scan the QR code. If this device was previously paired, pair it again because its access expired or was revoked.</small></> : <><strong>Browser session expired</strong><small>Nebula keeps the Core token in memory only, so reloading this page intentionally clears access. Close this tab and relaunch the interface with <code>nebula-core ui</code>.</small></>}</span></div> : workspaceState === "failed" ? <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div> : null}
                 <UpdateBanner />
+                <HandoffRecoveryNotice />
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />

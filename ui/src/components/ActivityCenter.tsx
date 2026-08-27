@@ -13,6 +13,7 @@ import type { ApprovalDecisionRequest, RunEventKind } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { ModalSurface } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { ResourceActionMenu } from "./ResourceActionMenu";
 
 export type ActivityCenterView = "activity" | "approvals";
 
@@ -48,7 +49,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
   const [editingId, setEditingId] = useState<string>();
   const [editedArguments, setEditedArguments] = useState("");
   const [selectedApprovalId, setSelectedApprovalId] = useState<string>();
-  const { events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
+  const { engagement, events, approvals, previewMode, resolveApproval, streamState } = useWorkspace();
   const selectedApproval = approvals.find((approval) => approval.id === selectedApprovalId);
 
   const decide = async (id: string, request: ApprovalDecisionRequest) => {
@@ -209,6 +210,7 @@ export function ActivityCenter({ open, onClose, view, onViewChange }: ActivityCe
           <button className="icon-button subtle" type="button" aria-label="Close approval review" onClick={() => setSelectedApprovalId(undefined)}><X size={17} /></button>
         </header>
         <div className="approval-review-body">
+          {engagement && <ResourceActionMenu resource={{ projectId: engagement.id, kind: "approval", id: selectedApproval.id }} />}
           {decisionError && <DiagnosticErrorNotice error={decisionError} fallback="The approval decision could not be saved." compact />}
           <dl className="approval-review-facts">
             <div><dt>Agent</dt><dd>{selectedApproval.agentName}</dd></div>

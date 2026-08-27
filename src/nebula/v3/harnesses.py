@@ -3814,6 +3814,7 @@ class GrokAcpConnection(HarnessConnection):
         )
         message_parts: list[str] = []
         pending_agent_parts: list[str] = []
+        commentary_sequence = 0
         yield HarnessEvent(
             type="started",
             vendor=HarnessKind.GROK_ACP,
@@ -3868,17 +3869,17 @@ class GrokAcpConnection(HarnessConnection):
                 if pending_agent_parts and kind == "tool_call":
                     # Only a subsequent tool start proves this text was progress
                     # narration. Session metadata can arrive after the final answer.
-                    for commentary in pending_agent_parts:
-                        yield HarnessEvent(
-                            type="output_delta",
-                            vendor=HarnessKind.GROK_ACP,
-                            item_id="commentary",
-                            item_kind="reasoning",
-                            item_status="streaming",
-                            title="Commentary",
-                            stream="commentary",
-                            delta=commentary,
-                        )
+                    commentary_sequence += 1
+                    yield HarnessEvent(
+                        type="output_delta",
+                        vendor=HarnessKind.GROK_ACP,
+                        item_id=f"commentary-{commentary_sequence}",
+                        item_kind="reasoning",
+                        item_status="streaming",
+                        title="Commentary",
+                        stream="commentary",
+                        delta="".join(pending_agent_parts),
+                    )
                     pending_agent_parts.clear()
                 if kind == "agent_thought_chunk":
                     delta = _acp_text(update.get("content"))

@@ -5,6 +5,8 @@ import type { ApiClient } from "../api/client";
 import { DialogProvider } from "./DialogSystem";
 import { TerminalCommandHistoryPanel } from "./TerminalCommandHistoryPanel";
 
+vi.mock("./ResourceActionMenu", () => ({ ResourceActionMenu: () => null }));
+
 describe("TerminalCommandHistoryPanel", () => {
   it("loads immutable terminal audit records and reveals redacted results lazily", async () => {
     const status = {
