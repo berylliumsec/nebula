@@ -13,6 +13,7 @@ export interface ContextualCommand {
 export interface ChromeContextValue {
   activityOpen: boolean;
   paletteOpen: boolean;
+  settingLensOpen: boolean;
   sidebarCollapsed: boolean;
   toolbarHost: HTMLElement | null;
   contextualCommands?: ContextualCommand[];

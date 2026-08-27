@@ -51,6 +51,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 const chrome: ChromeContextValue = {
   activityOpen: false,
   paletteOpen: false,
+  settingLensOpen: false,
   sidebarCollapsed: true,
   toolbarHost: null,
   openPalette: () => undefined,
@@ -174,6 +175,7 @@ async function openPage(finalUrl = "https://docs.example.com/guide") {
 describe("WorkbenchBrowser", () => {
   beforeEach(() => {
     eventMocks.handlers.clear();
+    chrome.settingLensOpen = false;
     runtimeMocks.isTauriRuntime.mockReset();
     runtimeMocks.isTauriRuntime.mockReturnValue(false);
     runtimeMocks.desktopDeviceId.mockReset();
@@ -187,6 +189,28 @@ describe("WorkbenchBrowser", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("hides the native browser while a settings lens is open and restores the active tab", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    renderBrowser();
+    await openPage();
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", true));
+
+    chrome.settingLensOpen = true;
+    fireEvent.change(screen.getByLabelText("Address or search"), {
+      target: { value: "https://docs.example.com/hidden" },
+    });
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", false));
+
+    chrome.settingLensOpen = false;
+    fireEvent.change(screen.getByLabelText("Address or search"), {
+      target: { value: "https://docs.example.com/restored" },
+    });
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(expect.any(String), "project-1", true));
   });
 
   it("opens web addresses externally and can add them directly to Project Sources", async () => {

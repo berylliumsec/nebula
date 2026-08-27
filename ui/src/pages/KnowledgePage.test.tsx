@@ -26,6 +26,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 const chrome: ChromeContextValue = {
   activityOpen: false,
   paletteOpen: false,
+  settingLensOpen: false,
   sidebarCollapsed: true,
   toolbarHost: null,
   openPalette: () => undefined,

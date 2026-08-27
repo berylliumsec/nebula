@@ -136,6 +136,7 @@ export function AppShell() {
     activityOpen,
     contextualCommands,
     paletteOpen,
+    settingLensOpen: Boolean(settingLens),
     sidebarCollapsed,
     toolbarHost,
     openPalette,
@@ -145,7 +146,7 @@ export function AppShell() {
     setToolbarHost,
     toggleActivity,
     toggleSidebar,
-  }), [activityOpen, contextualCommands, openPalette, paletteOpen, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
+  }), [activityOpen, contextualCommands, openPalette, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>
