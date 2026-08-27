@@ -3,6 +3,7 @@ import { GitBranch, Link2 } from "lucide-react";
 import type { ResourceRef, ResourceRelation } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { ResourceActionMenu, type ResourceActionAdapters } from "./ResourceActionMenu";
 
 const inverseLabels: Record<ResourceRelation["predicate"], string> = {
   affects: "Affected by",
@@ -22,7 +23,7 @@ const forwardLabels: Record<ResourceRelation["predicate"], string> = {
   derived_from: "Derived from",
 };
 
-export function ResourceRelationsPanel({ resource }: { resource: ResourceRef }) {
+export function ResourceRelationsPanel({ resource, actionAdapters }: { resource: ResourceRef; actionAdapters?: ResourceActionAdapters }) {
   const { api } = useWorkspace();
   const [relations, setRelations] = useState<ResourceRelation[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
@@ -59,6 +60,7 @@ export function ResourceRelationsPanel({ resource }: { resource: ResourceRef }) 
   );
   return (
     <section className="resource-relations" aria-labelledby="resource-relations-title">
+      <ResourceActionMenu resource={resource} adapters={actionAdapters} />
       <h3 id="resource-relations-title"><Link2 size={15} /> Connections</h3>
       {state === "loading" && <p role="status">Loading connections…</p>}
       {state === "failed" && <p role="alert">Connections are temporarily unavailable. The resource is still usable.</p>}

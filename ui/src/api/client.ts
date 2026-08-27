@@ -1,5 +1,6 @@
 import type {
   AgentRunSummary,
+  ActionDescriptor,
   ApprovalDecisionRequest,
   ApprovalSummary,
   AssetSummary,
@@ -175,6 +176,32 @@ interface WireResourceResolution {
   label: string;
   state: ResourceResolution["state"];
   actual_project_id?: string | null;
+}
+
+interface WireActionDescriptor {
+  id: string;
+  accepted_resource_kinds: ResourceKind[];
+  result_kind?: ResourceKind | null;
+  authority: ActionDescriptor["authority"];
+  required_capabilities: string[];
+  risk: ActionDescriptor["risk"];
+  confirmation_policy: ActionDescriptor["confirmationPolicy"];
+  available: boolean;
+  disabled_reason?: string | null;
+}
+
+function mapActionDescriptor(value: WireActionDescriptor): ActionDescriptor {
+  return {
+    id: value.id,
+    acceptedResourceKinds: value.accepted_resource_kinds,
+    resultKind: value.result_kind ?? undefined,
+    authority: value.authority,
+    requiredCapabilities: value.required_capabilities,
+    risk: value.risk,
+    confirmationPolicy: value.confirmation_policy,
+    available: value.available,
+    disabledReason: value.disabled_reason ?? undefined,
+  };
 }
 
 function wireResourceRef(ref: ResourceRef): WireResourceRef {
@@ -3938,6 +3965,23 @@ export class ApiClient {
       state: value.state,
       actualProjectId: value.actual_project_id ?? undefined,
     }));
+  }
+
+  resolveResourceActions(
+    resources: ResourceRef[],
+    deviceId?: string,
+    deviceCapabilities: string[] = [],
+    signal?: AbortSignal,
+  ): Promise<ActionDescriptor[]> {
+    return this.request<WireActionDescriptor[]>("actions/resolve", {
+      method: "POST",
+      signal,
+      body: JSON.stringify({
+        resources: resources.map(wireResourceRef),
+        device_id: deviceId,
+        device_capabilities: deviceCapabilities,
+      }),
+    }).then((items) => items.map(mapActionDescriptor));
   }
 
   createResourceRelation(

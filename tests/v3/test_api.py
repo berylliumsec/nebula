@@ -10,6 +10,7 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    Asset,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -77,6 +78,31 @@ def test_health_and_data_routes_require_auth(api):
     assert any(
         item["flavor"] == "vllm" and item["local"] is True for item in catalog.json()
     )
+
+
+def test_action_resolution_endpoint_uses_core_resource_and_device_authority(api):
+    client, store, _ = api
+    project = store.create(Engagement(name="Action project"))
+    asset = store.create(Asset(engagement_id=project.id, name="Gateway"))
+    response = client.post(
+        "/api/v1/actions/resolve",
+        headers=_auth(),
+        json={
+            "resources": [
+                {
+                    "project_id": project.id,
+                    "kind": "asset",
+                    "id": asset.id,
+                    "revision": asset.revision,
+                }
+            ],
+            "device_capabilities": ["clipboard.write"],
+        },
+    )
+    assert response.status_code == 200
+    actions = {item["id"]: item for item in response.json()}
+    assert actions["open"]["available"] is True
+    assert actions["copy"]["available"] is True
 
 
 def test_canonical_resource_resolution_preserves_project_identity(api):

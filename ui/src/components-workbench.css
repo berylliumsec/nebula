@@ -1420,6 +1420,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .resource-lineage small { color: var(--muted); font-size: 10px; }
 .resource-lineage strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .resource-lineage time { color: var(--muted); font-size: 10px; }
+.resource-action-menu { position: relative; display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.resource-action-menu > [role="menu"] { position: absolute; z-index: 4; top: calc(100% + 5px); right: 0; display: grid; min-width: 190px; padding: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: var(--shadow-float); }
+.resource-action-menu [role="menuitem"] { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 36px; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; }
+.resource-action-menu [role="menuitem"]:hover:not(:disabled), .resource-action-menu [role="menuitem"]:focus-visible { background: var(--surface-hover); }
+.resource-action-menu [role="menuitem"]:disabled { color: var(--muted); opacity: .7; }
 .artifact-actions { display: flex; gap: 10px; }
 .inspector-actions { padding: 18px 22px; }
 @keyframes inspector-in { from { opacity: 0; transform: translateX(18px); } }

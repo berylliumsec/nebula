@@ -136,6 +136,56 @@ class ResourceRelationSet(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+class ActionAuthority(StringEnum):
+    UI = "ui"
+    CORE = "core"
+    DEVICE = "device"
+
+
+class ActionRisk(StringEnum):
+    SAFE = "safe"
+    MUTATING = "mutating"
+    RISKY = "risky"
+
+
+class ActionConfirmationPolicy(StringEnum):
+    NONE = "none"
+    MUTATION = "mutation"
+    ALWAYS = "always"
+
+
+class ActionDescriptor(BaseModel):
+    """One shared verb after Core capability and security resolution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    accepted_resource_kinds: list[ResourceKind] = Field(min_length=1)
+    result_kind: ResourceKind | None = None
+    authority: ActionAuthority
+    required_capabilities: list[str] = Field(default_factory=list)
+    risk: ActionRisk = ActionRisk.SAFE
+    confirmation_policy: ActionConfirmationPolicy = ActionConfirmationPolicy.NONE
+    available: bool = True
+    disabled_reason: str | None = None
+
+    @model_validator(mode="after")
+    def availability_has_a_reason(self) -> "ActionDescriptor":
+        if self.available and self.disabled_reason is not None:
+            raise ValueError("available actions cannot have a disabled reason")
+        if not self.available and not self.disabled_reason:
+            raise ValueError("unavailable actions require a disabled reason")
+        return self
+
+
+class ActionResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resources: list[ResourceRef] = Field(min_length=1, max_length=100)
+    device_id: str | None = Field(default=None, max_length=200)
+    device_capabilities: list[str] = Field(default_factory=list, max_length=200)
+
+
 class EngagementStatus(StringEnum):
     DRAFT = "draft"
     ACTIVE = "active"
