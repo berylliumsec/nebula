@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SelectionActionDraft } from "../components/selection";
-import { ASSISTANT_CONTEXT_CHARACTER_LIMIT, mergeAssistantDraft, selectionHandoffMetadata } from "./WorkbenchDraftContext";
+import {
+  ASSISTANT_CONTEXT_CHARACTER_LIMIT,
+  assistantHandoffSessionId,
+  mergeAssistantDraft,
+  selectionHandoffMetadata,
+} from "./WorkbenchDraftContext";
 
 function draft(text: string, id: string): SelectionActionDraft {
   return {
@@ -51,5 +56,33 @@ describe("selection handoff privacy", () => {
     expect(metadata.sourceHashes["terminal_session:command-1"]).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(metadata)).not.toContain(selected.text);
     expect(JSON.stringify(metadata)).not.toContain("secret");
+  });
+});
+
+describe("assistant handoff navigation", () => {
+  it("retains the selected conversation from the same project's Workbench", () => {
+    expect(assistantHandoffSessionId(
+      "project-1",
+      "/projects/project-1/workbench",
+      "?view=chat&session=conversation-1",
+    )).toBe("conversation-1");
+    expect(assistantHandoffSessionId(
+      "project-1",
+      "/projects/project-1/workbench",
+      "?view=notes&session=conversation-1",
+    )).toBe("conversation-1");
+  });
+
+  it("does not carry stale conversation identity across projects or surfaces", () => {
+    expect(assistantHandoffSessionId(
+      "project-1",
+      "/projects/project-2/workbench",
+      "?view=chat&session=conversation-2",
+    )).toBeUndefined();
+    expect(assistantHandoffSessionId(
+      "project-1",
+      "/projects/project-1/findings",
+      "?session=conversation-1",
+    )).toBeUndefined();
   });
 });

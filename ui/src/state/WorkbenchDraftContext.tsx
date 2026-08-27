@@ -90,6 +90,23 @@ export interface SelectionHandoffMetadata {
   sourceLabels: Record<string, string>;
 }
 
+/** Keeps the canonical conversation selected when a handoff starts inside Assistant. */
+export function assistantHandoffSessionId(
+  projectId: string,
+  pathname: string,
+  search: string,
+): string | undefined {
+  if (pathname !== projectSurface(projectId, "workbench")) return undefined;
+  return new URLSearchParams(search).get("session") || undefined;
+}
+
+function assistantHandoffPath(projectId: string, sessionId?: string, handoffId?: string): string {
+  const parameters = new URLSearchParams({ view: "chat" });
+  if (sessionId) parameters.set("session", sessionId);
+  if (handoffId) parameters.set("handoff", handoffId);
+  return `${projectSurface(projectId, "workbench")}?${parameters}`;
+}
+
 /** Builds the durable, reference-only portion of a transient selection handoff. */
 export function selectionHandoffMetadata(
   projectId: string,
@@ -200,6 +217,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     draft: SelectionActionDraft,
     actionId: string,
     view: string,
+    assistantSessionId?: string,
   ) => {
     if (!api || !engagement) return;
     const metadata = selectionHandoffMetadata(engagement.id, draft);
@@ -214,6 +232,10 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         transient: true,
       });
       setActiveHandoffIds((current) => [...new Set([...current, envelope.id])]);
+      if (view === "chat") {
+        navigate(assistantHandoffPath(engagement.id, assistantSessionId, envelope.id), { replace: true });
+        return;
+      }
       const parameters = new URLSearchParams({ view, handoff: envelope.id });
       navigate(`${projectSurface(engagement.id, "workbench")}?${parameters}`, { replace: true });
     } catch (error) {
@@ -229,10 +251,13 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
     if (!next) return;
+    const currentSessionId = engagement
+      ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+      : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, next));
-    navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=chat` : "/?view=chat");
-    void persistSelectionHandoff(next, "ask_nebula", "chat");
-  }, [engagement, navigate, persistSelectionHandoff]);
+    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
+    void persistSelectionHandoff(next, "ask_nebula", "chat", currentSessionId);
+  }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
 
   const requestNoteDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
@@ -265,10 +290,13 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, [api, navigate]);
 
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
+    const currentSessionId = engagement
+      ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+      : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, draft));
-    navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=chat` : "/?view=chat");
-    void persistSelectionHandoff(draft, "ask_nebula", "chat");
-  }, [engagement, navigate, persistSelectionHandoff]);
+    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
+    void persistSelectionHandoff(draft, "ask_nebula", "chat", currentSessionId);
+  }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
   const openNoteSelection = useCallback((draft: SelectionActionDraft) => {
     setNoteDraft(draft);
     navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=notes` : "/?view=notes");

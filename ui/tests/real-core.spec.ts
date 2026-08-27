@@ -383,7 +383,26 @@ test("production assistant preserves exact research context and relaunch-safe dr
 
     const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
     await page.goto(assistantUrl);
-    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    const durableAnswer = page.getByText("Real Core retained the exact research context.");
+    await expect(durableAnswer).toBeVisible({ timeout: 20_000 });
+    await durableAnswer.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const bounds = element.getBoundingClientRect();
+      element.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        clientX: bounds.left + Math.min(24, bounds.width / 2),
+        clientY: bounds.top + bounds.height / 2,
+      }));
+    });
+    await page.getByRole("button", { name: "Ask Nebula" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
+    await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).not.toBeNull();
+    await expect(durableAnswer).toBeVisible();
+    await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
     await expect(page.getByText("BEGIN UNTRUSTED SELECTED CONTEXT", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: /Open context details/ }).click();
     const inspector = page.getByLabel("Session inspector");
