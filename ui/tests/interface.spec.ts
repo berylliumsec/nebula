@@ -2101,6 +2101,240 @@ test("assistant live guidance steers an active Codex turn with stale saved capab
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
 });
 
+test("assistant live guidance exposes Grok send now as stop and immediate submit", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile Assistant lifecycle projects.");
+  const profile = {
+    ...entity,
+    id: "harness-grok-send-now",
+    name: "Grok harness",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "/usr/bin/grok",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "grok-4.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", steering: false, interruption: true },
+  };
+  let stopped = false;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([profile]) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harness-sessions/grok-send-now-session/activity")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: "grok-send-now-session",
+        session_status: stopped ? "idle" : "running",
+        busy: !stopped,
+        live: !stopped,
+        turn_id: stopped ? null : "grok-send-now-turn-1",
+        turn_status: stopped ? null : "running",
+        turn_origin: stopped ? null : "chat",
+        started_at: stopped ? null : entity.updated_at,
+        last_activity_at: entity.updated_at,
+        detail: stopped ? "This harness session is ready for another turn." : "A harness turn is currently running.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/harness-turns/grok-send-now-turn-1/stop") && request.method() === "POST") {
+      stopped = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "grok-send-now-turn-1",
+        status: "cancelled",
+        origin: "chat",
+        harness_session_id: "grok-send-now-session",
+        chat_session_id: "grok-send-now-chat",
+        metadata: {},
+      }) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "grok-send-now-chat",
+        engagement_id: "scratch-project",
+        title: "Grok send-now conversation",
+        backend: "harness",
+        harness_profile_id: profile.id,
+        harness_session_id: "grok-send-now-session",
+        model: "grok-4.6",
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/grok-send-now-chat/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/grok-send-now-chat/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    let requestNumber = 0;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const request = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      requestNumber += 1;
+      const current = requestNumber;
+      const requests = (globalThis as typeof globalThis & { __grokSendNowRequests?: unknown[] }).__grokSendNowRequests ??= [];
+      requests.push(request);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueue = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          enqueue({ type: "started", harness_profile_id: "harness-grok-send-now", harness_session_id: "grok-send-now-session", harness_turn_id: `grok-send-now-turn-${current}`, session_id: "grok-send-now-chat", model: "grok-4.6" });
+          enqueue({ type: "message_delta", harness_session_id: "grok-send-now-session", harness_turn_id: `grok-send-now-turn-${current}`, model: "grok-4.6", delta: current === 1 ? "Working on the original request." : "The urgent direction completed." });
+          if (current === 1) return;
+          enqueue({ type: "done", session_id: "grok-send-now-chat", harness_profile_id: "harness-grok-send-now", harness_session_id: "grok-send-now-session", harness_turn_id: "grok-send-now-turn-2", model: "grok-4.6", message: { id: "grok-send-now-assistant", role: "assistant", content: "The urgent direction completed." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] });
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Start the long Grok task.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Working on the original request.")).toBeVisible();
+
+  const activeComposer = page.getByPlaceholder("Queue a follow-up or send it now…");
+  await activeComposer.fill("Keep this ordinary follow-up queued.");
+  await activeComposer.press("Enter");
+  await expect(page.getByRole("button", { name: "Send queued message 1 now" })).toBeVisible();
+  await activeComposer.fill("Handle the urgent direction instead.");
+  await expect(page.getByRole("button", { name: "Queue follow-up message" })).toBeVisible();
+  await page.getByRole("button", { name: "Send message now" }).click();
+
+  await expect.poll(() => stopped).toBe(true);
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __grokSendNowRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__grokSendNowRequests?.length ?? 0)).toBe(3);
+  const requests = await page.evaluate(() => (globalThis as typeof globalThis & { __grokSendNowRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__grokSendNowRequests ?? []);
+  expect(requests.map((request) => request.messages?.at(-1)?.content)).toEqual([
+    "Start the long Grok task.",
+    "Handle the urgent direction instead.",
+    "Keep this ordinary follow-up queued.",
+  ]);
+  await expect(page.getByText("The urgent direction completed.").first()).toBeVisible();
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
+  await expect(page.getByText("Harness is working")).toHaveCount(0);
+  const composerGeometry = await page.locator(".chat-composer").evaluate((element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
+  expect(composerGeometry.scrollWidth).toBeLessThanOrEqual(composerGeometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".chat-composer").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("assistant live guidance releases stale busy UI when Core reports a terminal Grok turn", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile Assistant lifecycle projects.");
+  const profile = {
+    ...entity,
+    id: "harness-grok-terminal-recovery",
+    name: "Grok harness",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "/usr/bin/grok",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "grok-4.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", steering: false, interruption: true },
+  };
+  let activityReads = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([profile]) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harness-sessions/grok-terminal-session/activity")) {
+      activityReads += 1;
+      const terminal = activityReads > 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: "grok-terminal-session",
+        session_status: terminal ? "interrupted" : "running",
+        busy: !terminal,
+        live: !terminal,
+        turn_id: "grok-terminal-turn",
+        turn_status: terminal ? "interrupted" : "running",
+        turn_origin: "chat",
+        started_at: entity.updated_at,
+        last_activity_at: entity.updated_at,
+        detail: terminal ? "The harness turn was interrupted." : "A harness turn is currently running.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueue = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          enqueue({ type: "started", harness_profile_id: "harness-grok-terminal-recovery", harness_session_id: "grok-terminal-session", harness_turn_id: "grok-terminal-turn", session_id: "grok-terminal-chat", model: "grok-4.6" });
+          enqueue({ type: "message_delta", harness_session_id: "grok-terminal-session", harness_turn_id: "grok-terminal-turn", model: "grok-4.6", delta: "Working before the connection failed." });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Start work that will be interrupted.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Harness is working")).toBeVisible();
+
+  await expect(page.getByText("Harness is working")).toHaveCount(0, { timeout: 6_000 });
+  await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
+  await expect(page.getByPlaceholder("Ask about this project…")).toBeEnabled();
+});
+
 test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Harness status placement needs one desktop interaction run.");
   const harnessSessionId = "c9745e80-1111-4222-8333-444455556666";
