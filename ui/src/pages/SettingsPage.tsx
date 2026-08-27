@@ -41,6 +41,10 @@ const advancedSettingsGroups = [
 ] as const;
 type AdvancedSettingsGroup = typeof advancedSettingsGroups[number];
 
+interface SettingsPageProps {
+  embeddedTarget?: string;
+}
+
 function elapsedLabel(startedAt: string | undefined, now: number): string | undefined {
   if (!startedAt) return undefined;
   const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1_000));
@@ -64,6 +68,12 @@ function sectionFromHash(): SettingsSection {
   return "setup-settings";
 }
 
+function sectionFromTarget(target: string | undefined): SettingsSection {
+  if (target === "setup-settings") return "setup-settings";
+  if (target === "diagnostics-settings") return "diagnostics-settings";
+  return "advanced-settings";
+}
+
 function providerOption(provider: ProviderHealth, key: string): string {
   const value = provider.options[key];
   return typeof value === "string" ? value : "";
@@ -74,7 +84,7 @@ function providerNumberOption(provider: ProviderHealth, key: string): string {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? String(value) : "";
 }
 
-export function SettingsPage() {
+export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const confirm = useConfirmation();
   const { preference, setPreference } = useTheme();
   const {
@@ -160,8 +170,10 @@ export function SettingsPage() {
   const [operatorRole, setOperatorRole] = useState("");
   const [operatorBusy, setOperatorBusy] = useState<string>();
   const [operatorError, setOperatorError] = useState<string>();
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>(sectionFromHash);
-  const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(advancedGroupFromHash);
+  const embedded = Boolean(embeddedTarget);
+  const embeddedAdvancedGroup = advancedGroupFromHash(embeddedTarget);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => embedded ? sectionFromTarget(embeddedTarget) : sectionFromHash());
+  const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(() => embedded ? embeddedAdvancedGroup : advancedGroupFromHash());
   const [checkingTerminal, setCheckingTerminal] = useState(false);
   const [preparationClock, setPreparationClock] = useState(Date.now());
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
@@ -190,6 +202,7 @@ export function SettingsPage() {
   }, [api, workspaceState]);
 
   useEffect(() => {
+    if (embedded) return;
     const syncSection = () => {
       const section = sectionFromHash();
       setSettingsSection(section);
@@ -197,12 +210,12 @@ export function SettingsPage() {
     };
     window.addEventListener("hashchange", syncSection);
     return () => window.removeEventListener("hashchange", syncSection);
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
     if (settingsSection !== "advanced-settings") return;
     const frame = window.requestAnimationFrame(() => {
-      const hash = window.location.hash.slice(1);
+      const hash = embeddedTarget ?? window.location.hash.slice(1);
       const target = document.getElementById(hash === "advanced-settings" ? "models-settings" : hash);
       const group = target?.matches("details") ? target as HTMLDetailsElement : target?.closest<HTMLDetailsElement>("details.settings-group");
       if (!group) return;
@@ -212,14 +225,14 @@ export function SettingsPage() {
       group.scrollIntoView?.({ block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [openAdvancedGroup, settingsSection]);
+  }, [embeddedTarget, openAdvancedGroup, settingsSection]);
 
   const openSettingsGroup = (id: string) => {
     const group = id as AdvancedSettingsGroup;
     if (!advancedSettingsGroups.includes(group)) return;
     setOpenAdvancedGroup(group);
     setSettingsSection("advanced-settings");
-    if (window.location.hash !== `#${group}`) window.history.replaceState(null, "", `#${group}`);
+    if (!embedded && window.location.hash !== `#${group}`) window.history.replaceState(null, "", `#${group}`);
   };
 
   useEffect(() => {
@@ -596,11 +609,11 @@ export function SettingsPage() {
     return () => window.clearInterval(timer);
   }, [imagePreparationActive]);
   return (
-    <div className="page settings-page">
+    <div className={`page settings-page${embedded ? " embedded-settings-page" : ""}`} data-embedded-target={embeddedTarget}>
       <SettingsSaveFeedback />
-      <PageHeader title="Settings" description="Workspace preferences." />
+      {!embedded && <PageHeader title="Settings" description="Workspace preferences." />}
       <div className="settings-workspace">
-      <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); const hash = id === "advanced-settings" ? openAdvancedGroup : id; window.history.replaceState(null, "", `#${hash}`); setSettingsSection(id); }}>{label}</a>)}</nav>
+      {!embedded && <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); const hash = id === "advanced-settings" ? openAdvancedGroup : id; window.history.replaceState(null, "", `#${hash}`); setSettingsSection(id); }}>{label}</a>)}</nav>}
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section setup-overview" id="setup-settings">
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
@@ -647,7 +660,7 @@ export function SettingsPage() {
         {!setupStatus && workspaceState !== "starting" && <p className="setup-footnote">Setup details are unavailable. Core reports runner status: {health?.runner ?? "unknown"}.</p>}
       </section>
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
-      <SettingsGroup id="models-settings" title="Models" summary={providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"} open={openAdvancedGroup === "models-settings"} onOpen={openSettingsGroup}>
+      <SettingsGroup id="models-settings" title="Models" summary={providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"} open={openAdvancedGroup === "models-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "models-settings"}>
       <section className="settings-section" id="provider-settings">
         <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
@@ -658,16 +671,16 @@ export function SettingsPage() {
         )}
       </section>
       </SettingsGroup>
-      <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup}>
+      <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "automation-settings"}>
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
       </SettingsGroup>
-      <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup}>
+      <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "project-policy-settings"}>
       <EngagementPolicySettings />
       </SettingsGroup>
-      <SettingsGroup id="identity-security-settings" title="Identity & Security" summary={operatorProfiles.find((profile) => profile.active)?.displayName ?? "Operator attribution and local credentials"} open={openAdvancedGroup === "identity-security-settings"} onOpen={openSettingsGroup}>
+      <SettingsGroup id="identity-security-settings" title="Identity & Security" summary={operatorProfiles.find((profile) => profile.active)?.displayName ?? "Operator attribution and local credentials"} open={openAdvancedGroup === "identity-security-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "identity-security-settings"}>
       <section className="settings-section" id="operator-settings">
         <div className="section-heading"><div><h2>Operator profiles</h2><p>Local activity attribution</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openOperator()}><Plus size={16} /> Add operator</button></div>
         {operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile operation could not be completed." />}
@@ -690,7 +703,7 @@ export function SettingsPage() {
         </section>
       </div>
       </SettingsGroup>
-      <SettingsGroup id="release-settings-group" title="Release" summary="Version and update channel" open={openAdvancedGroup === "release-settings-group"} onOpen={openSettingsGroup} bodyClassName="settings-release-body"><ReleaseSettingsPanel /></SettingsGroup>
+      <SettingsGroup id="release-settings-group" title="Release" summary="Version and update channel" open={openAdvancedGroup === "release-settings-group"} onOpen={openSettingsGroup} bodyClassName="settings-release-body" hidden={embedded && embeddedAdvancedGroup !== "release-settings-group"}><ReleaseSettingsPanel /></SettingsGroup>
       </div>
       </div>
       {adding && (selected || editingProvider) && (

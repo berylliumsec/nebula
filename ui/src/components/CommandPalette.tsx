@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Command, Moon, PanelLeft, PanelRight, Search, Sun } from "lucide-react";
+import { Command, PanelLeft, PanelRight, Search, SlidersHorizontal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { navigationItems } from "../navigation";
-import { useTheme } from "../state/ThemeContext";
+import { settingCatalog, settingCatalogText, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ContextualCommand } from "../state/ChromeContext";
 
 interface CommandPaletteProps {
@@ -10,6 +10,7 @@ interface CommandPaletteProps {
   onClose: () => void;
   onToggleActivity: () => void;
   onToggleSidebar: () => void;
+  onOpenSetting: (entry: SettingCatalogEntry, returnFocus: HTMLElement | null) => void;
   contextualCommands?: ContextualCommand[];
 }
 
@@ -20,6 +21,8 @@ interface PaletteAction {
   icon: typeof Command;
   keywords: string;
   shortcut?: string;
+  meta?: string;
+  kind?: "command" | "setting";
   disabled?: boolean;
   run: () => void;
 }
@@ -31,9 +34,8 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar, contextualCommands = [] }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar, onOpenSetting, contextualCommands = [] }: CommandPaletteProps) {
   const navigate = useNavigate();
-  const { setPreference } = useTheme();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -50,30 +52,16 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         keywords: `${item.label} ${item.legacyLabel ?? ""} ${item.aliases.join(" ")} ${item.description}`,
         run: () => navigate(item.path),
       })),
-      {
-        id: "theme-light",
-        label: "Use Light theme",
-        description: "Use the light workspace on this device",
-        icon: Sun,
-        keywords: "appearance theme light",
-        run: () => setPreference("light"),
-      },
-      {
-        id: "theme-dark",
-        label: "Use Dark theme",
-        description: "Use the dark workspace on this device",
-        icon: Moon,
-        keywords: "appearance theme dark",
-        run: () => setPreference("dark"),
-      },
-      {
-        id: "theme-zero-dark",
-        label: "Use Zero Dark theme",
-        description: "Use the dark Zero workspace on this device",
-        icon: Moon,
-        keywords: "appearance theme zero dark",
-        run: () => setPreference("zero-dark"),
-      },
+      ...settingCatalog.map((entry) => ({
+        id: entry.id,
+        label: entry.label,
+        description: entry.description,
+        icon: SlidersHorizontal,
+        keywords: settingCatalogText(entry),
+        meta: `${entry.category} · ${entry.scope}`,
+        kind: "setting" as const,
+        run: () => onOpenSetting(entry, returnFocusRef.current),
+      })),
       {
         id: "sidebar",
         label: "Toggle sidebar",
@@ -96,14 +84,25 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         keywords: `${command.keywords ?? ""} editor code`,
       })),
     ],
-    [contextualCommands, navigate, onToggleActivity, onToggleSidebar, setPreference],
+    [contextualCommands, navigate, onOpenSetting, onToggleActivity, onToggleSidebar],
   );
 
   const results = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return needle
-      ? actions.filter((action) => `${action.label} ${action.keywords}`.toLowerCase().includes(needle))
-      : actions;
+    if (!needle) return actions;
+    const terms = needle.split(/\s+/).filter(Boolean);
+    return actions
+      .filter((action) => {
+        const haystack = `${action.label} ${action.keywords}`.toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      })
+      .sort((left, right) => {
+        const leftLabel = left.label.toLowerCase();
+        const rightLabel = right.label.toLowerCase();
+        const leftScore = leftLabel.startsWith(needle) ? 0 : left.kind === "setting" ? 1 : 2;
+        const rightScore = rightLabel.startsWith(needle) ? 0 : right.kind === "setting" ? 1 : 2;
+        return leftScore - rightScore;
+      });
   }, [actions, query]);
 
   useEffect(() => {
@@ -161,13 +160,13 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
       >
         <label className="palette-search">
           <Search size={19} aria-hidden="true" />
-          <span className="sr-only">Search commands</span>
+          <span className="sr-only">Search pages, actions, and settings</span>
           <input
             ref={inputRef}
-            aria-label="Search commands"
+            aria-label="Search pages, actions, and settings"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search pages and actions…"
+            placeholder="Search pages, actions, and settings…"
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -201,6 +200,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
                 <span>
                   <strong>{action.label}</strong>
                   <small>{action.description}</small>
+                  {action.meta && <em className="palette-result-meta">{action.meta}</em>}
                 </span>
                 {action.shortcut && <kbd>{action.shortcut}</kbd>}
               </button>

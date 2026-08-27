@@ -942,11 +942,43 @@ test("Light keeps the shared status and search cluster in the conventional shell
   await setTheme(page, "light");
 
   const ready = page.getByRole("button", { name: "Nebula Core ready" });
-  const search = page.getByRole("button", { name: "Search commands" });
+  const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
   await expect(ready).toBeVisible();
   await expect(search).toBeVisible();
   await expect(page.locator(".app-shell")).not.toHaveClass(/zero-layer-shell/);
   await expect(page.locator(".top-bar")).not.toHaveClass(/zero-status-band/);
+});
+
+test("universal search opens a focused setting without leaving the active pane", async ({ page }) => {
+  await openWorkspace(page, "/findings", "Findings");
+  const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
+  await search.click();
+  await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
+  await page.getByRole("option", { name: /Project policy and network scope/ }).click();
+
+  const lens = page.getByRole("dialog", { name: "Project policy and network scope" });
+  await expect(lens).toBeVisible();
+  await expect(lens.getByRole("heading", { name: "Project execution policy" })).toBeVisible();
+  await expect(lens.getByRole("heading", { name: "Network scope", exact: true })).toBeVisible();
+  expect(new URL(page.url()).pathname).toBe("/findings");
+
+  const bounds = await lens.boundingBox();
+  const viewport = page.viewportSize();
+  expect(bounds).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport!.width + 1);
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  const groupBounds = await lens.locator("#project-policy-settings").boundingBox();
+  expect(groupBounds).not.toBeNull();
+  expect(groupBounds!.width).toBeGreaterThan(bounds!.width * 0.8);
+  const accessibility = await new AxeBuilder({ page }).include(".settings-lens").analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await lens.getByRole("button", { name: "Done" }).click();
+  await expect(lens).toBeHidden();
+  await expect(search).toBeFocused();
 });
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
@@ -3329,7 +3361,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.keyboard.press("Control+Shift+P");
     const palette = page.getByRole("dialog", { name: "Command palette" });
-    await palette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Workspace Environment");
+    await palette.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("Editor: Workspace Environment");
     await palette.getByRole("option", { name: /Editor: Workspace Environment/ }).click();
   } else {
     await page.getByRole("button", { name: "Environment", exact: true }).click();
@@ -3492,7 +3524,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   await page.keyboard.press("Control+Shift+P");
   const editorPalette = page.getByRole("dialog", { name: "Command palette" });
   await expect(editorPalette).toBeVisible();
-  await editorPalette.getByRole("textbox", { name: "Search commands" }).fill("Editor: Debug Saved Python");
+    await editorPalette.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("Editor: Debug Saved Python");
   const unavailableDebugger = editorPalette.getByRole("option", { name: /Editor: Debug Saved Python/ });
   await expect(unavailableDebugger).toBeDisabled();
   await expect(unavailableDebugger).toContainText("Debugging requires an open Python file");
@@ -3880,7 +3912,7 @@ test("Zero keeps its themed shell without the removed context deck", async ({ pa
   await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Search commands" }).click();
+  await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
@@ -3964,9 +3996,11 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   const persistentSurface = mobile ? page.locator(".sessions-page") : page.locator(".persistent-terminal");
   await expect(persistentSurface).toBeVisible();
   await persistentSurface.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
-  await page.getByRole("button", { name: "Search commands" }).click();
-  await page.getByRole("textbox", { name: "Search commands" }).fill("Light theme");
-  await page.getByRole("option", { name: /Use Light theme/ }).click();
+  await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+  await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("Light theme");
+  await page.getByRole("option", { name: /Appearance and theme/ }).click();
+  const appearanceLens = page.getByRole("dialog", { name: "Appearance and theme" });
+  await appearanceLens.getByRole("button", { name: /^Light$/ }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   expect(await persistentSurface.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
 });
@@ -3986,7 +4020,7 @@ test("Zero Dark preserves representative desktop overlays", async ({ page }, tes
   test.skip(testInfo.project.name !== "desktop", "Zero Dark visual baselines are captured at the reference desktop size.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/", "Workbench");
-  await page.getByRole("button", { name: "Search commands" }).click();
+  await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await expect(page).toHaveScreenshot("workbench-zero-dark-command-palette.png", { fullPage: true });
 

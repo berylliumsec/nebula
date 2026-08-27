@@ -251,10 +251,43 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .palette-results button > kbd { color: var(--muted); font: 10px var(--font-mono); white-space: nowrap; }
 .palette-results button strong { font-size: 11px; }
 .palette-results button small { margin-top: 3px; color: var(--muted); font-size: 11px; }
+.palette-result-meta { margin-top: 5px; color: var(--blue); font-size: 10px; font-style: normal; font-weight: var(--weight-semibold); letter-spacing: .015em; }
 .palette-icon { display: grid; width: 31px; height: 31px; place-items: center; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--blue); background: var(--surface); }
 .palette-empty { margin: 24px; color: var(--muted); text-align: center; font-size: 11px; }
 .command-palette > footer { display: flex; gap: 16px; padding: 8px 14px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
 .command-palette footer span { display: flex; align-items: center; gap: 4px; }
+
+.settings-lens-backdrop { position: fixed; z-index: 110; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--overlay-scrim); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.settings-lens { display: grid; width: min(1080px, calc(100vw - 48px)); max-height: min(860px, calc(100dvh - 48px)); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
+.settings-lens-header { display: grid; min-width: 0; grid-template-columns: 40px minmax(0, 1fr) 44px; align-items: start; gap: 12px; padding: 18px 20px 16px; border-bottom: 1px solid var(--border-soft); }
+.settings-lens-header > div { min-width: 0; }
+.settings-lens-header small { color: var(--blue); font-size: 10px; font-weight: var(--weight-bold); text-transform: uppercase; letter-spacing: .045em; }
+.settings-lens-header h2 { margin: 4px 0 3px; color: var(--text-strong); font-size: 18px; }
+.settings-lens-header p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.settings-lens-icon { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid color-mix(in srgb, var(--blue) 38%, var(--border)); border-radius: 11px; color: var(--blue); background: var(--blue-muted); }
+.settings-lens-content { min-height: 0; padding: 20px; overflow: auto; overscroll-behavior: contain; }
+.settings-lens-loading { display: grid; min-height: 240px; place-items: center; color: var(--muted); font-size: 12px; }
+.settings-lens > footer { display: flex; min-height: 66px; align-items: center; justify-content: flex-end; gap: 8px; padding: 11px 20px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
+.settings-lens > footer > span { margin-right: auto; color: var(--muted); font-size: 11px; }
+.embedded-settings-page { width: 100%; padding: 0; }
+.embedded-settings-page .settings-workspace { display: block !important; grid-template-columns: none !important; }
+.embedded-settings-page .settings-detail { display: grid; gap: 16px; }
+.embedded-settings-page .settings-group[hidden] { display: none !important; }
+.embedded-settings-page .settings-group > summary { display: none; }
+.embedded-settings-page .settings-group-body { padding: 0; border: 0; }
+.embedded-settings-page .settings-group { width: 100%; overflow: visible; border: 0; background: transparent; }
+
+@media (max-width: 700px) {
+  .settings-lens-backdrop { display: block; padding: 0; }
+  .settings-lens { width: 100vw; max-height: 100dvh; height: 100dvh; border: 0; border-radius: 0; }
+  .settings-lens-header { grid-template-columns: 36px minmax(0, 1fr) 44px; gap: 10px; padding: max(12px, env(safe-area-inset-top)) 12px 12px; }
+  .settings-lens-icon { width: 36px; height: 36px; }
+  .settings-lens-header h2 { font-size: 16px; }
+  .settings-lens-content { padding: 14px 12px 24px; }
+  .settings-lens > footer { min-height: 72px; padding: 10px 12px max(10px, env(safe-area-inset-bottom)); }
+  .settings-lens > footer > span, .settings-lens > footer .secondary { display: none; }
+  .settings-lens > footer .primary { width: 100%; min-height: 44px; }
+}
 
 /* Overview */
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 11px; margin-bottom: 13px; }
