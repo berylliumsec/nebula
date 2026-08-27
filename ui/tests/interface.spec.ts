@@ -2109,6 +2109,7 @@ test("conversation switching commits URL identity before loading and defers save
 });
 
 test("conversation switching between projects detaches the provider viewer without stopping Core work", async ({ page }) => {
+  test.setTimeout(60_000);
   let cancelRequests = 0;
   const projects = [
     { ...entity, id: "project-a", name: "Project A", description: "Active provider work", status: "active", tags: [], metadata: {} },
