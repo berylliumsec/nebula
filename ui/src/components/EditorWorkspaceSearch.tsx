@@ -9,14 +9,15 @@ interface EditorWorkspaceSearchProps {
   api: ApiClient;
   engagementId: string;
   initialMode: "files" | "text";
+  initialQuery?: string;
   onClose(): void;
   onOpen(match: WorkspaceSearchMatch): void;
 }
 
-export function EditorWorkspaceSearch({ api, engagementId, initialMode, onClose, onOpen }: EditorWorkspaceSearchProps) {
+export function EditorWorkspaceSearch({ api, engagementId, initialMode, initialQuery = "", onClose, onOpen }: EditorWorkspaceSearchProps) {
   const titleId = useId();
   const [mode, setMode] = useState(initialMode);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery);
   const [matches, setMatches] = useState<WorkspaceSearchMatch[]>([]);
   const [scannedFiles, setScannedFiles] = useState(0);
   const [truncated, setTruncated] = useState(false);

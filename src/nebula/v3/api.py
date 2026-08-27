@@ -263,6 +263,8 @@ from .domain import (
     ResourceRelationCreate,
     ResourceRelationSet,
     ResourceResolution,
+    SearchResponse,
+    SearchScope,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -388,6 +390,7 @@ from .writing_ai import (
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
+from .search import FederatedSearch
 from .terminal_history import (
     TerminalAuditImmutableError,
     TerminalCommandHistory,
@@ -1061,6 +1064,7 @@ def create_app(
     relation_service = ResourceRelationService(store)
     action_registry = ActionRegistry(store)
     action_broker = ActionBroker(store)
+    federated_search = FederatedSearch(store, action_registry)
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
@@ -2948,9 +2952,11 @@ def create_app(
             ResourceKind.TERMINAL_COMMAND: "command_executions",
             ResourceKind.BROWSER_SESSION: "browser_sessions",
             ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
-            ResourceKind.MISSION: "agent_runs",
+            ResourceKind.MISSION: "runs",
+            ResourceKind.TERMINAL_SESSION: "automation_sessions",
             ResourceKind.EXECUTION: "operator_executions",
             ResourceKind.APPROVAL: "approvals",
+            ResourceKind.RECEIPT: "action_intents",
             ResourceKind.ARTIFACT: "artifacts",
         }
         entity_kind = entity_kinds.get(ref.kind)
@@ -2990,6 +2996,34 @@ def create_app(
             state="available",
             actual_project_id=actual_project_id,
         )
+
+    @app.get(
+        f"{API_PREFIX}/search",
+        response_model=SearchResponse,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def search_resources(
+        query: str = Query(default="", max_length=500),
+        active_project: str | None = Query(default=None, max_length=200),
+        scope: SearchScope = SearchScope.ACTIVE,
+        resource_kind: list[ResourceKind] = Query(default=[]),
+        cursor: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=30, ge=1, le=100),
+    ) -> SearchResponse:
+        try:
+            return federated_search.search(
+                query=query,
+                active_project=active_project,
+                scope=scope,
+                kinds=resource_kind,
+                cursor=cursor,
+                limit=limit,
+            )
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=422, detail="invalid search cursor"
+            ) from exc
 
     @app.get(
         f"{API_PREFIX}/projects/{{project_id}}/relations",

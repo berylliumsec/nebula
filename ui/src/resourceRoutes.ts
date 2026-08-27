@@ -14,6 +14,14 @@ export function resourcePath(projectId: string | undefined, kind: ResourceKind, 
   if (kind === "library_item") return id ? `/library/${encodeURIComponent(id)}` : "/library";
   if (!projectId) return "/";
   if (kind === "project") return projectRoot(projectId);
+  if (kind === "browser_session" && id) return `${projectSurface(projectId, "workbench")}?browserSession=${encodeURIComponent(id)}`;
+  if (kind === "browser_tab" && id) {
+    const [browserSession, ...tabParts] = id.split("/");
+    const query = new URLSearchParams({ browserSession, tab: tabParts.join("/") });
+    return `${projectSurface(projectId, "workbench")}?${query}`;
+  }
+  if (kind === "terminal_session" && id) return `${projectSurface(projectId, "workbench")}?view=terminal&session=${encodeURIComponent(id)}`;
+  if (kind === "mission" && id) return `${projectSurface(projectId, "workbench")}?mission=${encodeURIComponent(id)}`;
   const surface: Partial<Record<ResourceKind, ProjectSurface>> = {
     asset: "assets", evidence: "evidence", source: "sources", finding: "findings",
     report: "reports", conversation: "workbench",
