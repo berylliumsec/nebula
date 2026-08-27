@@ -32,7 +32,9 @@ class ModelTokenPricing:
 
     def matches(self, model: str) -> bool:
         normalized = model.strip().casefold()
-        identifiers = (self.model, *self.aliases)
+        identifiers = tuple(
+            identifier.strip().casefold() for identifier in (self.model, *self.aliases)
+        )
         return normalized in identifiers or any(
             re.fullmatch(re.escape(identifier) + _SNAPSHOT_SUFFIX, normalized)
             for identifier in identifiers

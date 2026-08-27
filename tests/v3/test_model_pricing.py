@@ -61,3 +61,16 @@ def test_catalog_entry_without_long_context_surcharge_uses_standard_rates():
         cached_input_tokens=2_000_000,
         output_tokens=1_000_000,
     ) == pytest.approx(2.1)
+
+
+def test_catalog_matches_case_insensitive_custom_identifiers():
+    pricing = ModelTokenPricing(
+        model="Fixture-Model",
+        aliases=("Friendly-Alias",),
+        input_per_million_usd=Decimal("1"),
+        cached_input_per_million_usd=Decimal("0.1"),
+        output_per_million_usd=Decimal("2"),
+        source_url="https://example.test/pricing",
+    )
+
+    assert pricing.matches(" friendly-alias-2026-07-22 ")
