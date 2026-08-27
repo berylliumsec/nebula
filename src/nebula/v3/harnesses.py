@@ -6912,12 +6912,11 @@ class HarnessRuntimeService:
         if active is None or active.turn_id != turn.id:
             raise HarnessStateError("harness turn is not active")
         session = self.store.get(HarnessSession, turn.harness_session_id)
-        profile = self.store.get(HarnessProfile, session.harness_profile_id)
-        if not profile.capabilities.steering:
-            raise HarnessStateError("this harness does not advertise turn steering")
         clean = text.strip()
         if not clean:
             raise HarnessConfigurationError("steering text cannot be blank")
+        # The live connection is authoritative. Persisted capability reports can
+        # predate steering support and must not disable an upgraded active adapter.
         await active.connection.steer(clean)
         event = HarnessEvent(
             type="notice",

@@ -1577,6 +1577,8 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
     });
     return {
       offenders,
+      panelTops: panels.map((panel) => panel.getBoundingClientRect().top),
+      panelWidths: panels.map((panel) => panel.getBoundingClientRect().width),
       sectionClientWidth: section.clientWidth,
       sectionScrollWidth: section.scrollWidth,
       sectionLeft: sectionBounds.left,
@@ -1585,6 +1587,8 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
     };
   });
   expect(policyGeometry.offenders).toEqual([]);
+  expect(policyGeometry.panelTops[1]).toBeGreaterThan(policyGeometry.panelTops[0]);
+  expect(Math.abs(policyGeometry.panelWidths[0] - policyGeometry.panelWidths[1])).toBeLessThanOrEqual(1);
   expect(policyGeometry.sectionScrollWidth).toBeLessThanOrEqual(policyGeometry.sectionClientWidth + 1);
   expect(policyGeometry.sectionLeft).toBeGreaterThanOrEqual(-1);
   expect(policyGeometry.sectionRight).toBeLessThanOrEqual(policyGeometry.viewportWidth + 1);
@@ -1832,6 +1836,106 @@ test("assistant follow-up queue sends ordered provider messages after the active
   ]);
   await expect(page.getByText("The queued follow-up completed.").first()).toBeVisible();
   await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
+});
+
+test("assistant live guidance steers an active Codex turn with stale saved capabilities", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant guidance projects.");
+  const profile = {
+    ...entity,
+    id: "harness-stale-steering",
+    name: "Codex harness",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "codex",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "gpt-5.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, skills: true },
+    capabilities: { models: ["gpt-5.6"], checked_at: entity.updated_at, harness_version: "0.149.0" },
+  };
+  let guidance = "";
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([profile]) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions/live-guidance-session/activity") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session_id: "live-guidance-session",
+        session_status: "running",
+        busy: true,
+        live: true,
+        turn_id: "live-guidance-turn",
+        turn_status: "running",
+        turn_origin: "chat",
+        started_at: entity.updated_at,
+        last_activity_at: entity.updated_at,
+        detail: "The Codex harness is processing this turn.",
+      }) });
+      return;
+    }
+    if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    if (path.endsWith("/harness-turns/live-guidance-turn/steer") && request.method() === "POST") {
+      guidance = (request.postDataJSON() as { text: string }).text;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "live-guidance-turn",
+        status: "running",
+        origin: "chat",
+        harness_session_id: "live-guidance-session",
+        chat_session_id: "live-guidance-chat",
+        metadata: {},
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueue = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          enqueue({ type: "started", harness_profile_id: "harness-stale-steering", harness_session_id: "live-guidance-session", harness_turn_id: "live-guidance-turn", session_id: "live-guidance-chat", model: "gpt-5.6" });
+          enqueue({ type: "message_delta", harness_session_id: "live-guidance-session", harness_turn_id: "live-guidance-turn", model: "gpt-5.6", delta: "Working on the original request." });
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await composer.fill("Start the long analysis.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Working on the original request.")).toBeVisible();
+  await expect(composer).toHaveAttribute("placeholder", "Add guidance while the harness works…");
+  await composer.fill("Prioritize the parser first.");
+  await composer.press("Enter");
+  await expect.poll(() => guidance).toBe("Prioritize the parser first.");
+  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
+  await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
 });
 
 test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, testInfo) => {

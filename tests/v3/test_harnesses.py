@@ -1003,6 +1003,57 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
     asyncio.run(scenario())
 
 
+def test_active_codex_turn_accepts_steering_with_stale_profile_capabilities(tmp_path):
+    class BlockingConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str
+        ) -> AsyncIterator[HarnessEvent]:
+            del prompt, model
+            yield HarnessEvent(type="started")
+            await asyncio.Event().wait()
+
+    class BlockingAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            connection = BlockingConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        assert profile.capabilities.steering is False
+        adapter = BlockingAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Work until redirected",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        task = runtime.start_chat_turn(turn.id)
+        for _ in range(100):
+            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+                break
+            await asyncio.sleep(0.01)
+
+        await runtime.steer_turn(
+            turn.id, "Prioritize the parser", actor_id="operator-a"
+        )
+
+        assert adapter.connections[0].steering == ["Prioritize the parser"]
+        guidance = runtime.activity_events(turn.id).events[-1]
+        assert guidance.type == "notice"
+        assert guidance.title == "Operator guidance"
+        assert guidance.payload["text"] == "Prioritize the parser"
+        await runtime.cancel_turn(turn.id, reason="Test cleanup")
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+
 def test_harness_mission_executes_operator_stages_sequentially(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)

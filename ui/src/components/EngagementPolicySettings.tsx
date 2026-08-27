@@ -214,7 +214,7 @@ export function EngagementPolicySettings() {
     <div className="section-heading"><div><h2>Project execution policy</h2><p>Freeze the scope, approval behavior, and whole-project network boundary used by new agent sessions.</p></div><ShieldCheck size={20} /></div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
     {validationError && <InlineValidationNotice message={validationError} />}
-    <div className="runner-layout">
+    <div className="runner-layout policy-layout">
       <form className="panel policy-form" onSubmit={(event) => void saveRuntime(event)}>
         <header className="panel-header compact"><div><h3>Command runtime</h3><p>Workspace commands never need a target address.</p></div><TerminalSquare size={18} /></header>
         <div className="policy-form-body">
