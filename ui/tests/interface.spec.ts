@@ -890,6 +890,90 @@ test("assistant context pack stays exact, compact, and accessible", async ({ pag
   expect(accessibility.violations).toEqual([]);
 });
 
+test("assistant context pack preserves the active conversation identity", async ({ page }) => {
+  const sessionId = "chat-selection-preserved";
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: sessionId,
+        engagement_id: "scratch-project",
+        title: "Selection continuity",
+        backend: "provider",
+        provider_id: null,
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: null,
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: "assistant-selection-preserved",
+        engagement_id: "scratch-project",
+        session_id: sessionId,
+        sequence: 1,
+        role: "assistant",
+        content: "Keep this answer visible while adding it to context.",
+        citations: [],
+        metadata: {},
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    if (path.endsWith("/handoffs") && request.method() === "POST") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "handoff-selection-preserved",
+        engagement_id: "scratch-project",
+        source_refs: [{ project_id: "scratch-project", kind: "conversation", id: "assistant-selection-preserved" }],
+        action_id: "ask_nebula",
+        target_ref: null,
+        origin_device_id: "browser-test",
+        source_hashes: {},
+        source_labels: { "conversation:assistant-selection-preserved": "Assistant response" },
+        transient: true,
+        status: "pending",
+        expires_at: "2026-07-15T12:00:00Z",
+        consumed_at: null,
+        consumed_by_device_id: null,
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/projects/scratch-project/workbench?view=chat&session=${sessionId}`, "Workbench");
+  const answer = page.getByText("Keep this answer visible while adding it to context.", { exact: true });
+  await expect(answer).toBeVisible();
+  await answer.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const bounds = element.getBoundingClientRect();
+    element.dispatchEvent(new PointerEvent("pointerup", {
+      bubbles: true,
+      clientX: bounds.left + Math.min(24, bounds.width / 2),
+      clientY: bounds.top + bounds.height / 2,
+    }));
+  });
+  await page.getByRole("button", { name: "Ask Nebula" }).click();
+
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionId);
+  await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("handoff-selection-preserved");
+  await expect(answer).toBeVisible();
+  await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
+});
+
 test("assistant context pack handoff recovery keeps unsent bytes on the originating device", async ({ page }) => {
   await openWorkspace(
     page,
