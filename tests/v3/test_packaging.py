@@ -112,7 +112,7 @@ def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     assert "Homebrew" not in workflows
 
 
-def test_release_stages_and_smoke_tests_bundled_playwright_chromium():
+def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy():
     release = (ROOT / ".github/workflows/nebula3-release.yml").read_text(
         encoding="utf-8"
     )
@@ -121,7 +121,11 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium():
     )
     command = "python -m scripts.stage_playwright_runtime"
     assert command in release
-    assert command in continuous_integration
+    assert command not in continuous_integration
+    assert "full-e2e:" in release
+    assert "needs: [validate, full-e2e]" in release
+    assert "npm --prefix ui run test:e2e" in release
+    assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
     assert "--dump-dom about:blank" in release
 
