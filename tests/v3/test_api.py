@@ -79,6 +79,47 @@ def test_health_and_data_routes_require_auth(api):
     )
 
 
+def test_canonical_resource_resolution_preserves_project_identity(api):
+    client, _, _ = api
+    first = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "First"}
+    ).json()
+    second = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Second"}
+    ).json()
+    asset = client.post(
+        "/api/v1/assets",
+        headers=_auth(),
+        json={"engagement_id": first["id"], "name": "api.example.test"},
+    ).json()
+
+    available = client.post(
+        "/api/v1/resources/resolve",
+        headers=_auth(),
+        json={"project_id": first["id"], "kind": "asset", "id": asset["id"]},
+    )
+    assert available.status_code == 200
+    assert available.json()["state"] == "available"
+    assert available.json()["ref"]["revision"] == asset["revision"]
+
+    wrong_project = client.post(
+        "/api/v1/resources/resolve",
+        headers=_auth(),
+        json={"project_id": second["id"], "kind": "asset", "id": asset["id"]},
+    )
+    assert wrong_project.status_code == 200
+    assert wrong_project.json()["state"] == "wrong_project"
+    assert wrong_project.json()["actual_project_id"] == first["id"]
+
+    deleted = client.post(
+        "/api/v1/resources/resolve",
+        headers=_auth(),
+        json={"project_id": first["id"], "kind": "asset", "id": "missing"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["state"] == "deleted"
+
+
 def test_local_provider_discovery_probes_only_fixed_services(api, monkeypatch):
     client, _, _ = api
     observed: list[tuple[ProviderFlavor, str]] = []

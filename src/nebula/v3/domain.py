@@ -31,6 +31,51 @@ class StringEnum(str, Enum):
     """A string-valued enum with stable JSON serialization."""
 
 
+class ResourceKind(StringEnum):
+    """Stable, UI-independent names for resources that can cross surfaces."""
+
+    PROJECT = "project"
+    CONVERSATION = "conversation"
+    NOTE = "note"
+    SOURCE = "source"
+    LIBRARY_ITEM = "library_item"
+    WORKSPACE_FILE = "workspace_file"
+    ASSET = "asset"
+    EVIDENCE = "evidence"
+    FINDING = "finding"
+    REPORT = "report"
+    TERMINAL_SESSION = "terminal_session"
+    TERMINAL_COMMAND = "terminal_command"
+    BROWSER_SESSION = "browser_session"
+    BROWSER_TAB = "browser_tab"
+    BROWSER_EXCHANGE = "browser_exchange"
+    MISSION = "mission"
+    EXECUTION = "execution"
+    APPROVAL = "approval"
+    RECEIPT = "receipt"
+    ARTIFACT = "artifact"
+
+
+class ResourceRef(BaseModel):
+    """Canonical identity passed between Core, UI, devices, and durable records."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str | None = Field(default=None, max_length=200)
+    kind: ResourceKind
+    id: str = Field(min_length=1, max_length=4096)
+    revision: int | None = Field(default=None, ge=1)
+
+
+class ResourceResolution(BaseModel):
+    """Result of validating a canonical resource reference."""
+
+    ref: ResourceRef
+    label: str
+    state: Literal["available", "deleted", "inaccessible", "wrong_project"]
+    actual_project_id: str | None = None
+
+
 class EngagementStatus(StringEnum):
     DRAFT = "draft"
     ACTIVE = "active"

@@ -13,6 +13,7 @@ import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import { setBrowserDiagnosticIngress, setDiagnosticsAvailability } from "../diagnostics";
+import { projectIdFromPath } from "../resourceRoutes";
 import type {
   AgentRunSummary,
   ApprovalDecisionRequest,
@@ -221,7 +222,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [knowledgeSources, setKnowledgeSources] = useState<KnowledgeSource[]>([]);
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [attempt, setAttempt] = useState(0);
-  const [selectedEngagementId, setSelectedEngagementId] = useState(() => localStorage.getItem("nebula.engagement") ?? "");
+  const [selectedEngagementId, setSelectedEngagementId] = useState(() => (
+    projectIdFromPath(window.location.pathname) ?? localStorage.getItem("nebula.engagement") ?? ""
+  ));
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
 
@@ -277,9 +280,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         const engagementItems = engagementResult.status === "fulfilled" ? engagementResult.value.items : [];
         if (engagementResult.status === "rejected") loadErrors.push("projects");
         setEngagements(engagementItems);
-        const rememberedId = selectedEngagementId || localStorage.getItem("nebula.engagement") || "";
+        const urlProjectId = projectIdFromPath(window.location.pathname);
+        const rememberedId = urlProjectId || selectedEngagementId || localStorage.getItem("nebula.engagement") || "";
         const nextEngagement = engagementItems.find((item) => item.id === rememberedId)
-          ?? engagementItems[0];
+          ?? (urlProjectId ? undefined : engagementItems[0]);
         if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
           setSelectedEngagementId(nextEngagement.id);
           localStorage.setItem("nebula.engagement", nextEngagement.id);

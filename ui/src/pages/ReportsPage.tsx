@@ -8,6 +8,8 @@ import { PageHeader } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { useNavigate, useParams } from "react-router-dom";
+import { resourcePath } from "../resourceRoutes";
 
 function safeFilename(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-report";
@@ -23,6 +25,8 @@ function downloadBlob(filename: string, content: Blob): void {
 }
 
 export function ReportsPage() {
+  const navigate = useNavigate();
+  const { resourceId } = useParams();
   const confirm = useConfirmation();
   const {
     activeOperator,
@@ -67,9 +71,17 @@ export function ReportsPage() {
   );
 
   useEffect(() => {
-    if (selectedId && reports.some((report) => report.id === selectedId)) return;
-    setSelectedId(reports[0]?.id ?? "");
-  }, [reports, selectedId]);
+    if (!resourceId) {
+      if (reports.length) {
+        const first = reports[0];
+        setSelectedId(first.id);
+        navigate(resourcePath(engagement?.id, "report", first.id), { replace: true });
+      } else if (selectedId) setSelectedId("");
+      return;
+    }
+    if (reports.some((report) => report.id === resourceId) && selectedId !== resourceId) setSelectedId(resourceId);
+  }, [engagement?.id, navigate, reports, resourceId, selectedId]);
+  const missingResourceId = resourceId && !reports.some((report) => report.id === resourceId) ? resourceId : undefined;
 
   useEffect(() => {
     if (!selected) {
@@ -133,6 +145,7 @@ export function ReportsPage() {
         findingIds: findings.filter((finding) => ["validated", "confirmed"].includes(finding.status)).map((finding) => finding.id),
       });
       setSelectedId(report.id);
+      navigate(resourcePath(engagement.id, "report", report.id));
       setNewTitle("");
       setCreating(false);
     } catch (createError) {
@@ -191,7 +204,10 @@ export function ReportsPage() {
     tone: "danger",
   });
   const selectReport = async (id: string) => {
-    if (id !== selectedId && await allowDiscard()) setSelectedId(id);
+    if (id !== selectedId && await allowDiscard()) {
+      setSelectedId(id);
+      navigate(resourcePath(engagement?.id, "report", id));
+    }
   };
   const openCreate = async () => {
     if (!await allowDiscard()) return;
@@ -275,6 +291,7 @@ export function ReportsPage() {
     <div className="page reports-page">
       <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={selected ? <button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button> : undefined} />
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
+      {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Report unavailable</strong><small>The linked report was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={() => navigate(resourcePath(engagement?.id, "report"))}>Return to reports</button></div>}
       {!selected ? <StandardEmptyState className="report-empty-state" icon={<FileText size={28} />} title="Create your first report" explanation="Turn verified findings and evidence into a reviewable deliverable." primaryAction={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={15} /> New report</button>} /> : <div className="report-layout">
         <aside className="panel report-outline">
           <header><div><span>{reports.length} report{reports.length === 1 ? "" : "s"}</span><strong>{engagement?.name}</strong></div></header>

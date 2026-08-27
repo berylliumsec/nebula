@@ -1,5 +1,6 @@
 import { BookOpen, FileSearch, LayoutDashboard, Network } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { projectRoot, projectSurface } from "../resourceRoutes";
 import { AssetsPage } from "./AssetsPage";
 import { EvidencePage } from "./EvidencePage";
 import { KnowledgePage } from "./KnowledgePage";
@@ -18,12 +19,18 @@ function isProjectView(value: string | null): value is ProjectView {
   return projectViews.some((item) => item.id === value);
 }
 
-export function ProjectPage() {
+export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) {
+  const navigate = useNavigate();
+  const { projectId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("view");
-  const view: ProjectView = isProjectView(requested) ? requested : "overview";
+  const view: ProjectView = canonicalView ?? (isProjectView(requested) ? requested : "overview");
 
   const selectView = (next: ProjectView) => {
+    if (projectId) {
+      navigate(next === "overview" ? projectRoot(projectId) : projectSurface(projectId, next));
+      return;
+    }
     const params = new URLSearchParams(searchParams);
     params.set("view", next);
     if (next !== "sources") params.delete("source");

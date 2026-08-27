@@ -90,8 +90,8 @@ describe("Nebula workspace", () => {
   it("opens the Workbench full screen and exits with Escape", async () => {
     const user = userEvent.setup();
     renderApp();
-    const workbench = document.querySelector(".sessions-page");
     await user.click(await screen.findByRole("button", { name: "More Workbench actions" }));
+    const workbench = document.querySelector(".sessions-page");
     await user.click(screen.getByRole("menuitem", { name: /Enter focus mode/ }));
     expect(workbench).toHaveClass("full-screen");
     expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toBeVisible();
@@ -347,7 +347,7 @@ describe("Nebula workspace", () => {
 
     await user.click(screen.getByRole("button", { name: "Start new chat" }));
     expect(screen.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-    expect(screen.getByTestId("router-location")).toHaveTextContent("/?view=chat");
+    expect(screen.getByTestId("router-location")).toHaveTextContent("/projects/engagement-1/workbench?view=chat");
   });
 
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
@@ -781,10 +781,11 @@ describe("Nebula workspace", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
-    renderApp();
+    renderApp("/projects/engagement-1/workbench");
 
     expect(await screen.findByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("heading", { name: "Terminal" })).toBeVisible();
+    await waitFor(() => expect(screen.getByTestId("router-location")).toHaveTextContent("/projects/engagement-1/workbench"));
+    expect(await screen.findByRole("heading", { name: /^Terminal/ })).toBeVisible();
     expect(screen.getByText("Root · bridge permitted")).toBeVisible();
     expect(screen.getAllByText("kali-linux-headless").length).toBeGreaterThan(0);
     await waitFor(() => expect(fetchMock.mock.calls.some(([input, request]) => new URL(String(input)).pathname.endsWith("/container-terminal/sessions") && request?.method === "POST")).toBe(true));

@@ -242,6 +242,9 @@ from .domain import (
     ProviderVerificationStatus,
     Report,
     ReportStatus,
+    ResourceKind,
+    ResourceRef,
+    ResourceResolution,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -255,6 +258,7 @@ from .domain import (
     ScopePolicy,
     ToolCall,
     ToolCallOrigin,
+    entity_engagement_id,
     utc_now,
 )
 from .evidence import (
@@ -2868,6 +2872,71 @@ def create_app(
             },
             **store.database.health(),
         }
+
+    @app.post(
+        f"{API_PREFIX}/resources/resolve",
+        response_model=ResourceResolution,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resolve_resource(ref: ResourceRef) -> ResourceResolution:
+        """Validate canonical identity without silently substituting another object."""
+
+        entity_kinds = {
+            ResourceKind.PROJECT: "engagements",
+            ResourceKind.CONVERSATION: "chat_sessions",
+            ResourceKind.NOTE: "observations",
+            ResourceKind.SOURCE: "knowledge",
+            ResourceKind.LIBRARY_ITEM: "library_items",
+            ResourceKind.ASSET: "assets",
+            ResourceKind.EVIDENCE: "evidence",
+            ResourceKind.FINDING: "findings",
+            ResourceKind.REPORT: "reports",
+            ResourceKind.TERMINAL_COMMAND: "command_executions",
+            ResourceKind.BROWSER_SESSION: "browser_sessions",
+            ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
+            ResourceKind.MISSION: "agent_runs",
+            ResourceKind.EXECUTION: "operator_executions",
+            ResourceKind.APPROVAL: "approvals",
+            ResourceKind.ARTIFACT: "artifacts",
+        }
+        entity_kind = entity_kinds.get(ref.kind)
+        model = ENTITY_MODEL_BY_KIND.get(entity_kind or "")
+        if model is None:
+            return ResourceResolution(
+                ref=ref,
+                label=ref.id,
+                state="inaccessible",
+            )
+        try:
+            entity = store.get(model, ref.id)
+        except NotFoundError:
+            # diagnostic-expected: absence is the successful deleted-resource
+            # resolution result surfaced to canonical-route recovery UI.
+            return ResourceResolution(ref=ref, label=ref.id, state="deleted")
+
+        actual_project_id = entity_engagement_id(entity)
+        if ref.project_id is not None and actual_project_id != ref.project_id:
+            return ResourceResolution(
+                ref=ref,
+                label=getattr(entity, "name", None)
+                or getattr(entity, "title", None)
+                or ref.id,
+                state="wrong_project",
+                actual_project_id=actual_project_id,
+            )
+        resolved_ref = ref.model_copy(
+            update={"project_id": actual_project_id, "revision": entity.revision}
+        )
+        return ResourceResolution(
+            ref=resolved_ref,
+            label=getattr(entity, "name", None)
+            or getattr(entity, "title", None)
+            or getattr(entity, "filename", None)
+            or ref.id,
+            state="available",
+            actual_project_id=actual_project_id,
+        )
 
     @app.get(
         f"{API_PREFIX}/harness-catalog",
