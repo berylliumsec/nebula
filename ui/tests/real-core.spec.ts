@@ -383,7 +383,26 @@ test("production assistant preserves exact research context and relaunch-safe dr
 
     const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
     await page.goto(assistantUrl);
-    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    const durableAnswer = page.getByText("Real Core retained the exact research context.");
+    await expect(durableAnswer).toBeVisible({ timeout: 20_000 });
+    await durableAnswer.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const bounds = element.getBoundingClientRect();
+      element.dispatchEvent(new PointerEvent("pointerup", {
+        bubbles: true,
+        clientX: bounds.left + Math.min(24, bounds.width / 2),
+        clientY: bounds.top + bounds.height / 2,
+      }));
+    });
+    await page.getByRole("button", { name: "Ask Nebula" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
+    await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).not.toBeNull();
+    await expect(durableAnswer).toBeVisible();
+    await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
     await expect(page.getByText("BEGIN UNTRUSTED SELECTED CONTEXT", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: /Open context details/ }).click();
     const inspector = page.getByLabel("Session inspector");
@@ -709,6 +728,67 @@ test("real Core persists network scope changed through universal settings search
     await expect(lens.getByLabel("Allowed domains")).toHaveValue("www.google.com");
     await expect(lens.getByLabel("Allowed domains")).toBeDisabled();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
+test("production LAN handoff survives reload without persisting unsent bytes", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+
+    const unsentBytes = "UNSENT_REAL_CORE_SELECTION_MUST_NOT_PERSIST";
+    const createdResponse = await api.post("handoffs", { data: {
+      project_id: projectId,
+      source_refs: [],
+      action_id: "ask_nebula",
+      origin_device_id: "paired-mac",
+      source_hashes: {},
+      source_labels: {},
+      transient: true,
+    } });
+    expect(createdResponse.ok(), await createdResponse.text()).toBe(true);
+    const envelope = await createdResponse.json() as { id: string; revision: number };
+    expect(JSON.stringify(envelope)).not.toContain(unsentBytes);
+
+    const localPairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await localPairingApi.post("auth/pairings", { data: { name: "Handoff recovery browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await localPairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Handoff recovery browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+
+    const route = `/projects/${encodeURIComponent(projectId)}/workbench?view=chat&handoff=${encodeURIComponent(envelope.id)}`;
+    await page.goto(`${core.origin}${route}`);
+    await expect(page.getByText("Resume on the originating device", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/Unsent selected bytes remained only in memory on paired-mac/)).toBeVisible();
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+
+    await page.reload();
+    await expect(page.getByText("Resume on the originating device", { exact: true })).toBeVisible({ timeout: 20_000 });
+    const refreshedResponse = await api.get(`handoffs/${encodeURIComponent(envelope.id)}?device_id=linux-browser`);
+    expect(refreshedResponse.ok(), await refreshedResponse.text()).toBe(true);
+    const refreshedText = await refreshedResponse.text();
+    expect(refreshedText).not.toContain(unsentBytes);
+    expect(JSON.parse(refreshedText)).toMatchObject({ recovery: "resume_origin" });
   } finally {
     await api.dispose();
     await stopRealCore(core);

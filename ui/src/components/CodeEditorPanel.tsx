@@ -47,6 +47,7 @@ interface CodeEditorPanelProps {
     sourceLabel: string;
     truncated: boolean;
   }) => void;
+  initialWorkspaceSearch?: string;
 }
 
 function validWorkspacePath(path: string): boolean {
@@ -82,7 +83,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch }: CodeEditorPanelProps) {
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
   const openPalette = chrome?.openPalette;
@@ -118,6 +119,9 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
   const [breakpoints, setBreakpoints] = useState<Record<string, number[]>>({});
   const skipBreakpointPersist = useRef(false);
   const [workspaceSearchMode, setWorkspaceSearchMode] = useState<"files" | "text">();
+  useEffect(() => {
+    if (active && initialWorkspaceSearch) setWorkspaceSearchMode("text");
+  }, [active, initialWorkspaceSearch]);
   const [sidebarMode, setSidebarMode] = useState<"files" | "source-control">("files");
   const [sourceControlRevision, setSourceControlRevision] = useState(0);
   const [preferencesOpen, setPreferencesOpen] = useState(false);
@@ -793,7 +797,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       {persistenceState === "failed" && <div className="code-editor-persistence-error" role="alert"><ShieldAlert size={15} /><span><strong>Hot-exit recovery is unavailable</strong><small>Save workspace files before closing this browser. {persistenceError}</small></span><button className="button quiet" type="button" onClick={retryPersistence}>Retry</button></div>}
     </section>
     {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
-    {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
+    {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} initialQuery={initialWorkspaceSearch} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
     {preferencesOpen && <EditorPreferencesDialog preferences={preferences} onApply={savePreferences} onClose={() => setPreferencesOpen(false)} />}
     {environmentOpen && <EditorEnvironmentDialog api={api} engagementId={engagementId} workspacePath={workspacePath} onOpenTerminal={onOpenTerminal} onClose={() => setEnvironmentOpen(false)} />}
     {tasksOpen && onRun && <EditorTasksDialog api={api} engagementId={engagementId} onClose={() => setTasksOpen(false)} onRun={onRun} />}

@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Command, PanelLeft, PanelRight, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Command, FileSearch, PanelLeft, PanelRight, Search, SlidersHorizontal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import type { ApiClient } from "../api/client";
+import type { ActionDescriptor, SearchResult } from "../api/types";
 import { navigationItems } from "../navigation";
+import { resourcePath } from "../resourceRoutes";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { settingCatalog, settingCatalogText, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ContextualCommand } from "../state/ChromeContext";
 
@@ -12,6 +16,8 @@ interface CommandPaletteProps {
   onToggleSidebar: () => void;
   onOpenSetting: (entry: SettingCatalogEntry, returnFocus: HTMLElement | null) => void;
   contextualCommands?: ContextualCommand[];
+  api?: ApiClient;
+  activeProjectId?: string;
 }
 
 interface PaletteAction {
@@ -23,6 +29,7 @@ interface PaletteAction {
   shortcut?: string;
   meta?: string;
   kind?: "command" | "setting";
+  resource?: SearchResult;
   disabled?: boolean;
   run: () => void;
 }
@@ -34,10 +41,15 @@ const FOCUSABLE = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar, onOpenSetting, contextualCommands = [] }: CommandPaletteProps) {
+export function CommandPalette({ open, onClose, onToggleActivity, onToggleSidebar, onOpenSetting, contextualCommands = [], api, activeProjectId }: CommandPaletteProps) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
+  const [scope, setScope] = useState<"active" | "all">("active");
+  const [remoteResults, setRemoteResults] = useState<SearchResult[]>([]);
+  const [searchState, setSearchState] = useState<"idle" | "loading" | "ready" | "offline">("idle");
+  const [partialIndex, setPartialIndex] = useState(false);
+  const [actionResult, setActionResult] = useState<SearchResult>();
   const inputRef = useRef<HTMLInputElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -91,7 +103,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
     const needle = query.trim().toLowerCase();
     if (!needle) return actions;
     const terms = needle.split(/\s+/).filter(Boolean);
-    return actions
+    const local = actions
       .filter((action) => {
         const haystack = `${action.label} ${action.keywords}`.toLowerCase();
         return terms.every((term) => haystack.includes(term));
@@ -103,13 +115,66 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         const rightScore = rightLabel.startsWith(needle) ? 0 : right.kind === "setting" ? 1 : 2;
         return leftScore - rightScore;
       });
-  }, [actions, query]);
+    const resources: PaletteAction[] = remoteResults.map((result) => ({
+      id: `resource:${result.ref.kind}:${result.ref.id}`,
+      label: result.label,
+      description: result.description || result.snippet || result.breadcrumb,
+      icon: FileSearch,
+      keywords: `${result.label} ${result.description} ${result.snippet}`,
+      meta: `${result.project} · ${result.breadcrumb}`,
+      resource: result,
+      run: () => navigate(resourcePath(result.ref.projectId, result.ref.kind, result.ref.id)),
+    }));
+    const fileSearch: PaletteAction[] = activeProjectId && needle.length >= 2 ? [{
+      id: "workspace-file-search",
+      label: `Search project files for “${query.trim()}”`,
+      description: "Run the bounded workspace-content search in Code",
+      icon: FileSearch,
+      keywords: query,
+      meta: "Current project · Files",
+      run: () => {
+        const parameters = new URLSearchParams({ view: "code", workspaceSearch: query.trim() });
+        navigate(`/projects/${encodeURIComponent(activeProjectId)}/workbench?${parameters}`);
+      },
+    }] : [];
+    return [...resources, ...fileSearch, ...local];
+  }, [actions, activeProjectId, navigate, query, remoteResults]);
+
+  useEffect(() => {
+    if (!open || !api || query.trim().length < 2) {
+      setRemoteResults([]);
+      setSearchState("idle");
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setSearchState("loading");
+      void api.searchResources({ query: query.trim(), activeProject: activeProjectId, scope }, controller.signal)
+        .then((response) => {
+          setRemoteResults(response.items);
+          setPartialIndex(response.partialIndex);
+          setSearchState("ready");
+        })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) {
+            void logCaughtDiagnostic("interface.omnibox.search_failed", "Federated omnibox search could not reach Core.", error, "omnibox");
+            setSearchState("offline");
+          }
+        });
+    }, 160);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeProjectId, api, open, query, scope]);
 
   useEffect(() => {
     if (open) {
       returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       setQuery("");
       setSelected(0);
+      setScope("active");
+      setActionResult(undefined);
       requestAnimationFrame(() => inputRef.current?.focus());
     }
     return () => {
@@ -177,10 +242,29 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
                 setSelected((value) => Math.max(value - 1, 0));
               }
               if (event.key === "Enter") execute(results[selected]);
+              if (event.key === "ArrowRight" && results[selected]?.resource) {
+                event.preventDefault();
+                setActionResult(results[selected].resource);
+              }
             }}
           />
           <kbd>Esc</kbd>
         </label>
+        <div className="palette-scope" aria-label="Search scope">
+          <button type="button" aria-pressed={scope === "active"} onClick={() => setScope("active")}>Current project</button>
+          <button type="button" aria-pressed={scope === "all"} onClick={() => setScope("all")}>All projects</button>
+        </div>
+        {actionResult && <div className="palette-action-menu" role="menu" aria-label={`Actions for ${actionResult.label}`}>
+          <header><strong>{actionResult.label}</strong><button type="button" onClick={() => setActionResult(undefined)}>Back</button></header>
+          {actionResult.actions.map((descriptor: ActionDescriptor) => <button
+            key={descriptor.id}
+            type="button"
+            role="menuitem"
+            disabled={!descriptor.available || descriptor.id !== "open"}
+            title={descriptor.disabledReason ?? (descriptor.id === "open" ? undefined : "Open the resource to use this action in context.")}
+            onClick={() => execute(results.find((item) => item.resource === actionResult))}
+          >{descriptor.id.replaceAll("_", " ")}<small>{descriptor.authority}</small></button>)}
+        </div>}
         <div className="palette-results" role="listbox" aria-label="Commands">
           {results.map((action, index) => {
             const Icon = action.icon;
@@ -203,14 +287,19 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
                   {action.meta && <em className="palette-result-meta">{action.meta}</em>}
                 </span>
                 {action.shortcut && <kbd>{action.shortcut}</kbd>}
+                {action.resource && <ChevronRight size={17} aria-label="Show actions" />}
               </button>
             );
           })}
-          {results.length === 0 && <p className="palette-empty">No matching commands</p>}
+          {searchState === "loading" && <p className="palette-empty" role="status">Searching Nebula…</p>}
+          {searchState === "offline" && <p className="palette-empty" role="status">Core search is offline. Pages, settings, and local actions are still available.</p>}
+          {partialIndex && <p className="palette-empty" role="status">Search index was refreshed; results are current.</p>}
+          {results.length === 0 && searchState !== "loading" && <p className="palette-empty">No results. The item may have moved or been deleted.</p>}
         </div>
         <footer>
           <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
           <span><kbd>↵</kbd> Open</span>
+          <span><kbd>→</kbd> Actions</span>
         </footer>
       </div>
     </div>

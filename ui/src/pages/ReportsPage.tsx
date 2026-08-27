@@ -10,6 +10,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useNavigate, useParams } from "react-router-dom";
 import { resourcePath } from "../resourceRoutes";
+import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
 function safeFilename(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-report";
@@ -327,6 +328,7 @@ export function ReportsPage() {
         </section>
         <aside className="panel report-review">
           <header><h2>{selected.status === "review" ? "Sign off & export" : "Export"}</h2><p>{dirty ? "Save this revision before exporting. PDF output is always rendered from the persisted record." : `PDF output uses saved revision ${selected.revision}.`}</p></header>
+          {engagement && <ResourceRelationsPanel resource={{ projectId: engagement.id, kind: "report", id: selected.id, revision: selected.revision }} actionAdapters={{ download: exportPdf }} />}
           <ul><li className={summary.trim() ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Executive summary</strong><small>{summary.trim() ? "Present" : "Needs content"}</small></span></li><li className={linkedFindings.length ? "pass" : "warning"}><ShieldCheck size={16} /><span><strong>Finding coverage</strong><small>{linkedFindings.length} included</small></span></li></ul>
           <div className="export-actions">{selected.status === "review" && <button className="button primary full" type="button" disabled={dirty || signing} title={dirty ? "Save the report before sign-off" : undefined} onClick={openSignoff}><BadgeCheck size={15} /> Sign off final report</button>}<button className={`button ${selected.status === "review" ? "secondary" : "primary"} full`} type="button" disabled={dirty || !api || pdfState !== "idle"} title={dirty ? "Save the report before exporting" : undefined} onClick={() => void exportPdf()}>{pdfState === "idle" ? <Download size={15} /> : <LoaderCircle className="spin" size={15} />} {pdfState === "idle" ? "Export PDF" : pdfState === "downloading" ? "Downloading…" : "Rendering PDF…"}</button><button className="button secondary full" type="button" disabled={!api || !engagement || bundleSaving} onClick={() => void exportBundle()}>{bundleSaving ? <LoaderCircle className="spin" size={15} /> : <Archive size={15} />} {bundleSaving ? "Exporting…" : "Export engagement bundle"}</button><p className="provider-dialog-note">The .nebula.zip bundle is a portable sensitive export, not a backup. It includes unredacted evidence, retained selected-tool terminal results, and metadata-only terminal records; scratch workspace files are excluded.</p></div>
         </aside>

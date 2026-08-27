@@ -150,7 +150,10 @@ class ActionRegistry:
                 row = session.get(EntityRow, ref.id)
                 if row is None or row.kind != entity_kind:
                     return f"The selected {ref.kind.value.replace('_', ' ')} no longer exists."
-                if ref.project_id != row.engagement_id:
+                actual_project_id = (
+                    row.id if ref.kind == ResourceKind.PROJECT else row.engagement_id
+                )
+                if ref.project_id != actual_project_id:
                     return "The selected resource belongs to a different project."
                 if ref.revision is not None and ref.revision != row.revision:
                     return "The selected resource changed. Refresh it before using this action."

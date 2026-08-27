@@ -7,6 +7,12 @@ import {
   useState,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import type { ResourceKind, ResourceRef } from "../api/types";
+import { desktopDeviceId } from "../api/runtime";
+import { logCaughtDiagnostic } from "../diagnostics";
+import { projectSurface } from "../resourceRoutes";
+import { sha256Hex } from "../sha256";
+import { useWorkspace } from "./WorkspaceContext";
 import {
   createSelectionDraft,
   SelectionActionsProvider,
@@ -35,6 +41,7 @@ interface WorkbenchDraftContextValue {
   noteDraft?: SelectionActionDraft;
   executionDraft?: SelectionActionDraft;
   findingDraft?: FindingDraftRequest;
+  activeHandoffIds: string[];
   requestNebulaDraft(request: NebulaDraftRequest): void;
   requestNoteDraft(request: NebulaDraftRequest): void;
   requestFindingDraft(request: FindingDraftRequest): void;
@@ -51,9 +58,70 @@ const WorkbenchDraftContext = createContext<WorkbenchDraftContextValue | undefin
 export const ASSISTANT_CONTEXT_CHARACTER_LIMIT = 20_000;
 export const ASSISTANT_CONTEXT_ITEM_LIMIT = 20;
 
+const handoffResourceKinds: Partial<Record<string, ResourceKind>> = {
+  project: "project",
+  conversation: "conversation",
+  workbench: "conversation",
+  note: "note",
+  source: "source",
+  knowledge: "source",
+  workspace_file: "workspace_file",
+  asset: "asset",
+  evidence: "evidence",
+  finding: "finding",
+  report: "report",
+  terminal: "terminal_session",
+  terminal_command: "terminal_command",
+  browser_session: "browser_session",
+  browser_tab: "browser_tab",
+  browser_exchange: "browser_exchange",
+  mission: "mission",
+  execution: "execution",
+};
+
 interface AssistantDraftMerge {
   drafts: SelectionActionDraft[];
   notice?: string;
+}
+
+export interface SelectionHandoffMetadata {
+  sourceRefs: ResourceRef[];
+  sourceHashes: Record<string, string>;
+  sourceLabels: Record<string, string>;
+}
+
+/** Keeps the canonical conversation selected when a handoff starts inside Assistant. */
+export function assistantHandoffSessionId(
+  projectId: string,
+  pathname: string,
+  search: string,
+): string | undefined {
+  if (pathname !== projectSurface(projectId, "workbench")) return undefined;
+  return new URLSearchParams(search).get("session") || undefined;
+}
+
+function assistantHandoffPath(projectId: string, sessionId?: string, handoffId?: string): string {
+  const parameters = new URLSearchParams({ view: "chat" });
+  if (sessionId) parameters.set("session", sessionId);
+  if (handoffId) parameters.set("handoff", handoffId);
+  return `${projectSurface(projectId, "workbench")}?${parameters}`;
+}
+
+/** Builds the durable, reference-only portion of a transient selection handoff. */
+export function selectionHandoffMetadata(
+  projectId: string,
+  draft: SelectionActionDraft,
+): SelectionHandoffMetadata {
+  const kind = handoffResourceKinds[draft.source.kind];
+  const sourceRefs: ResourceRef[] = kind && draft.source.id
+    ? [{ projectId, kind, id: draft.source.id }]
+    : [];
+  const sourceKey = sourceRefs[0] ? `${sourceRefs[0].kind}:${sourceRefs[0].id}` : undefined;
+  return {
+    sourceRefs,
+    sourceHashes: sourceKey ? { [sourceKey]: sha256Hex(draft.text) } : {},
+    sourceLabels: sourceKey ? { [sourceKey]: draft.source.label } : {},
+  };
 }
 
 function sameAssistantDraft(left: SelectionActionDraft, right: SelectionActionDraft): boolean {
@@ -135,6 +203,7 @@ function sourceForRoute(pathname: string, element: Element | null): SelectionSou
 }
 
 export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
+  const { api, engagement } = useWorkspace();
   const location = useLocation();
   const navigate = useNavigate();
   const [assistantContext, setAssistantContext] = useState<AssistantDraftMerge>({ drafts: [] });
@@ -142,38 +211,102 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const [noteDraft, setNoteDraft] = useState<SelectionActionDraft>();
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
   const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
+  const [activeHandoffIds, setActiveHandoffIds] = useState<string[]>([]);
+
+  const persistSelectionHandoff = useCallback(async (
+    draft: SelectionActionDraft,
+    actionId: string,
+    view: string,
+    assistantSessionId?: string,
+  ) => {
+    if (!api || !engagement) return;
+    const metadata = selectionHandoffMetadata(engagement.id, draft);
+    try {
+      const envelope = await api.createHandoff({
+        projectId: engagement.id,
+        sourceRefs: metadata.sourceRefs,
+        actionId,
+        originDeviceId: await desktopDeviceId(),
+        sourceHashes: metadata.sourceHashes,
+        sourceLabels: metadata.sourceLabels,
+        transient: true,
+      });
+      setActiveHandoffIds((current) => [...new Set([...current, envelope.id])]);
+      if (view === "chat") {
+        navigate(assistantHandoffPath(engagement.id, assistantSessionId, envelope.id), { replace: true });
+        return;
+      }
+      const parameters = new URLSearchParams({ view, handoff: envelope.id });
+      navigate(`${projectSurface(engagement.id, "workbench")}?${parameters}`, { replace: true });
+    } catch (error) {
+      void logCaughtDiagnostic(
+        "interface.handoff.selection_create_failed",
+        "The selection stayed in memory, but its durable handoff reference could not be created.",
+        error,
+        "handoffs",
+      );
+    }
+  }, [api, engagement, navigate]);
 
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
     if (!next) return;
+    const currentSessionId = engagement
+      ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+      : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, next));
-    navigate("/?view=chat");
-  }, [navigate]);
+    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
+    void persistSelectionHandoff(next, "ask_nebula", "chat", currentSessionId);
+  }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
 
   const requestNoteDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
     if (!next) return;
     setNoteDraft(next);
-    navigate("/?view=notes");
-  }, [navigate]);
+    navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=notes` : "/?view=notes");
+    void persistSelectionHandoff(next, "take_note", "notes");
+  }, [engagement, navigate, persistSelectionHandoff]);
 
   const requestFindingDraft = useCallback((request: FindingDraftRequest) => {
     setFindingDraft(request);
-    navigate("/findings");
-  }, [navigate]);
+    navigate(`/projects/${encodeURIComponent(request.engagementId)}/findings`);
+    if (!api) return;
+    void (async () => {
+      try {
+        const source: ResourceRef = { projectId: request.engagementId, kind: "evidence", id: request.evidenceId };
+        const envelope = await api.createHandoff({
+          projectId: request.engagementId,
+          sourceRefs: [source],
+          actionId: "draft_finding",
+          originDeviceId: await desktopDeviceId(),
+          sourceLabels: { [`evidence:${request.evidenceId}`]: request.title },
+        });
+        setActiveHandoffIds((current) => [...new Set([...current, envelope.id])]);
+        navigate(`/projects/${encodeURIComponent(request.engagementId)}/findings?handoff=${encodeURIComponent(envelope.id)}`, { replace: true });
+      } catch (error) {
+        void logCaughtDiagnostic("interface.handoff.finding_create_failed", "The finding draft remained in memory, but its durable source handoff could not be created.", error, "handoffs");
+      }
+    })();
+  }, [api, navigate]);
 
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
+    const currentSessionId = engagement
+      ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+      : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, draft));
-    navigate("/?view=chat");
-  }, [navigate]);
+    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
+    void persistSelectionHandoff(draft, "ask_nebula", "chat", currentSessionId);
+  }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
   const openNoteSelection = useCallback((draft: SelectionActionDraft) => {
     setNoteDraft(draft);
-    navigate("/?view=notes");
-  }, [navigate]);
+    navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=notes` : "/?view=notes");
+    void persistSelectionHandoff(draft, "take_note", "notes");
+  }, [engagement, navigate, persistSelectionHandoff]);
   const openRunSelection = useCallback((draft: SelectionActionDraft) => {
     setExecutionDraft(draft);
-    navigate("/?view=terminal");
-  }, [navigate]);
+    navigate(engagement ? `${projectSurface(engagement.id, "workbench")}?view=terminal` : "/?view=terminal");
+    void persistSelectionHandoff(draft, "run", "terminal");
+  }, [engagement, navigate, persistSelectionHandoff]);
   const removeAssistantDraft = useCallback((index: number) => {
     setAssistantContext((current) => ({
       drafts: current.drafts.filter((_, currentIndex) => currentIndex !== index),
@@ -199,6 +332,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     noteDraft,
     executionDraft,
     findingDraft,
+    activeHandoffIds,
     requestNebulaDraft,
     requestNoteDraft,
     requestFindingDraft,
@@ -218,6 +352,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     clearFindingDraft,
     executionDraft,
     findingDraft,
+    activeHandoffIds,
     noteDraft,
     removeAssistantDraft,
     requestNebulaDraft,

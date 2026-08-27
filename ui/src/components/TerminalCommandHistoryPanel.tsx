@@ -6,6 +6,7 @@ import { useConfirmation } from "./DialogSystem";
 import "./TerminalCommandHistoryPanel.css";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
+import { ResourceActionMenu } from "./ResourceActionMenu";
 
 interface TerminalCommandHistoryPanelProps {
   api: ApiClient;
@@ -246,6 +247,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
             <code>{record.command}</code>
           </button>
           <footer><span title={record.cwd}>{record.cwd || "/"}</span><span title={record.operatorId}>operator {record.operatorId ? (record.operatorId === "system" ? "system" : record.operatorId.slice(0, 8)) : "unknown (legacy)"}</span><span className={record.exitCode === 0 ? "success" : record.exitCode === undefined ? "warning" : "failure"}>{record.exitCode === undefined ? record.status.replaceAll("_", " ") : `exit ${record.exitCode}`}</span><span className={record.captureDecision === "classification_failed" || record.captureDecision === "capture_failed" ? "warning" : undefined}>{captureDecisionLabel(record)}</span>{durationLabel(record) && <span>{durationLabel(record)}</span>}<time dateTime={record.occurredAt}>{new Date(record.occurredAt).toLocaleString()}</time></footer>
+          {expanded === record.id && <ResourceActionMenu resource={{ projectId: engagementId, kind: "terminal_command", id: record.id }} />}
           {expanded === record.id && <div className="terminal-audit-output">
             <div className="terminal-audit-output-toolbar"><span>{sizeLabel(record.capturedOutputBytes)} captured{record.outputTruncated ? ` of ${sizeLabel(record.observedOutputBytes)}` : ""}</span><div><button className="button quiet" type="button" onClick={() => void copyText(record.command, "command")}><Copy size={13} /> Copy command</button>{outputs[record.id] !== undefined && <button className="button quiet" type="button" onClick={() => void copyText(outputs[record.id], "result")}><Copy size={13} /> Copy result</button>}<button className="button quiet" type="button" disabled={!record.rawOutputAvailable} onClick={() => void downloadRaw(record)}><Download size={13} /> Raw</button></div></div>
             {record.outputTruncated && <p className="terminal-output-warning"><AlertTriangle size={13} /> Result exceeded the 10 MiB capture limit. The full observed stream hash is retained.</p>}

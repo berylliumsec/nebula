@@ -248,6 +248,7 @@ from .domain import (
     OperationEvent,
     OperatorProfile,
     PairedDeviceSession,
+    HandoffEnvelope,
     OperatorExecution,
     OperatorExecutionStatus,
     Observation,
@@ -263,6 +264,8 @@ from .domain import (
     ResourceRelationCreate,
     ResourceRelationSet,
     ResourceResolution,
+    SearchResponse,
+    SearchScope,
     Task,
     ReportRender,
     RunnerIsolation,
@@ -388,6 +391,14 @@ from .writing_ai import (
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
+from .search import FederatedSearch
+from .handoffs import (
+    HandoffCancelRequest,
+    HandoffConsumeRequest,
+    HandoffCreateRequest,
+    HandoffResolution,
+    HandoffService,
+)
 from .terminal_history import (
     TerminalAuditImmutableError,
     TerminalCommandHistory,
@@ -1061,6 +1072,8 @@ def create_app(
     relation_service = ResourceRelationService(store)
     action_registry = ActionRegistry(store)
     action_broker = ActionBroker(store)
+    federated_search = FederatedSearch(store, action_registry)
+    handoff_service = HandoffService(store)
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
@@ -2948,9 +2961,11 @@ def create_app(
             ResourceKind.TERMINAL_COMMAND: "command_executions",
             ResourceKind.BROWSER_SESSION: "browser_sessions",
             ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
-            ResourceKind.MISSION: "agent_runs",
+            ResourceKind.MISSION: "runs",
+            ResourceKind.TERMINAL_SESSION: "automation_sessions",
             ResourceKind.EXECUTION: "operator_executions",
             ResourceKind.APPROVAL: "approvals",
+            ResourceKind.RECEIPT: "action_intents",
             ResourceKind.ARTIFACT: "artifacts",
         }
         entity_kind = entity_kinds.get(ref.kind)
@@ -2990,6 +3005,34 @@ def create_app(
             state="available",
             actual_project_id=actual_project_id,
         )
+
+    @app.get(
+        f"{API_PREFIX}/search",
+        response_model=SearchResponse,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def search_resources(
+        query: str = Query(default="", max_length=500),
+        active_project: str | None = Query(default=None, max_length=200),
+        scope: SearchScope = SearchScope.ACTIVE,
+        resource_kind: list[ResourceKind] = Query(default=[]),
+        cursor: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=30, ge=1, le=100),
+    ) -> SearchResponse:
+        try:
+            return federated_search.search(
+                query=query,
+                active_project=active_project,
+                scope=scope,
+                kinds=resource_kind,
+                cursor=cursor,
+                limit=limit,
+            )
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise HTTPException(
+                status_code=422, detail="invalid search cursor"
+            ) from exc
 
     @app.get(
         f"{API_PREFIX}/projects/{{project_id}}/relations",
@@ -3095,6 +3138,70 @@ def create_app(
     )
     async def list_action_intents(project_id: str) -> list[ActionIntent]:
         return action_broker.list_intents(project_id)
+
+    @app.post(
+        f"{API_PREFIX}/handoffs",
+        response_model=HandoffEnvelope,
+        status_code=201,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_handoff(
+        payload: HandoffCreateRequest, request: Request
+    ) -> HandoffEnvelope:
+        actor_id = getattr(request.state, "auth_device_id", None) or "operator"
+        try:
+            return handoff_service.create(payload, actor_id=actor_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/handoffs",
+        response_model=list[HandoffEnvelope],
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_handoffs(
+        project_id: str, limit: int = Query(default=100, ge=1, le=500)
+    ) -> list[HandoffEnvelope]:
+        return handoff_service.list(project_id, limit=limit)
+
+    @app.get(
+        f"{API_PREFIX}/handoffs/{{handoff_id}}",
+        response_model=HandoffResolution,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def resolve_handoff(
+        handoff_id: str, request: Request, device_id: str | None = None
+    ) -> HandoffResolution:
+        current_device = (
+            getattr(request.state, "auth_device_id", None) or device_id or "core-ui"
+        )
+        return handoff_service.resolve(handoff_id, current_device_id=current_device)
+
+    @app.post(
+        f"{API_PREFIX}/handoffs/{{handoff_id}}/consume",
+        response_model=HandoffEnvelope,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def consume_handoff(
+        handoff_id: str, payload: HandoffConsumeRequest
+    ) -> HandoffEnvelope:
+        return handoff_service.consume(handoff_id, payload)
+
+    @app.post(
+        f"{API_PREFIX}/handoffs/{{handoff_id}}/cancel",
+        response_model=HandoffEnvelope,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def cancel_handoff(
+        handoff_id: str, payload: HandoffCancelRequest, request: Request
+    ) -> HandoffEnvelope:
+        actor_id = getattr(request.state, "auth_device_id", None) or "operator"
+        return handoff_service.cancel(handoff_id, payload, actor_id=actor_id)
 
     @app.post(
         f"{API_PREFIX}/action-intents/{{intent_id}}/claim",

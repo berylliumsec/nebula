@@ -53,6 +53,53 @@ export interface ActionDescriptor {
   disabledReason?: string;
 }
 
+export interface SearchResult {
+  ref: ResourceRef;
+  project: string;
+  label: string;
+  description: string;
+  snippet: string;
+  breadcrumb: string;
+  updatedAt: string;
+  score: number;
+  actions: ActionDescriptor[];
+}
+
+export interface SearchResponse {
+  items: SearchResult[];
+  nextCursor?: string;
+  partialIndex: boolean;
+}
+
+export interface HandoffEnvelope {
+  id: Identifier;
+  projectId: Identifier;
+  sourceRefs: ResourceRef[];
+  actionId: string;
+  targetRef?: ResourceRef;
+  originDeviceId: string;
+  sourceHashes: Record<string, string>;
+  sourceLabels: Record<string, string>;
+  transient: boolean;
+  status: "pending" | "consumed" | "cancelled" | "expired";
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  consumedAt?: string;
+  consumedByDeviceId?: string;
+  revision: number;
+}
+
+export interface HandoffResolution {
+  envelope: HandoffEnvelope;
+  sources: Array<{
+    ref: ResourceRef;
+    state: "available" | "changed" | "deleted" | "origin_required";
+    label: string;
+  }>;
+  recovery: "ready" | "resume_origin" | "preserve_or_recapture";
+}
+
 export interface Page<T> {
   items: T[];
   total: number;

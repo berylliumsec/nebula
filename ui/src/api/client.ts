@@ -71,6 +71,8 @@ import type {
   GeneratedDraft,
   GeneratedDraftContent,
   HealthResponse,
+  HandoffEnvelope,
+  HandoffResolution,
   HarnessProfile,
   HarnessActivityEvent,
   HarnessActivityEventPage,
@@ -115,6 +117,7 @@ import type {
   ResourceRef,
   ResourceRelation,
   ResourceResolution,
+  SearchResponse,
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
@@ -192,6 +195,16 @@ interface WireActionDescriptor {
   disabled_reason?: string | null;
 }
 
+interface WireSearchResponse {
+  items: Array<{
+    ref: WireResourceRef; project: string; label: string; description: string;
+    snippet: string; breadcrumb: string; updated_at: string; score: number;
+    actions: WireActionDescriptor[];
+  }>;
+  next_cursor?: string | null;
+  partial_index: boolean;
+}
+
 interface WireActionIntent {
   id: string;
   engagement_id: string;
@@ -213,6 +226,46 @@ interface WireActionIntent {
   error?: string | null;
   core_mutation_committed: boolean;
   revision: number;
+}
+
+interface WireHandoffEnvelope {
+  id: string;
+  engagement_id: string;
+  source_refs: WireResourceRef[];
+  action_id: string;
+  target_ref?: WireResourceRef | null;
+  origin_device_id: string;
+  source_hashes: Record<string, string>;
+  source_labels: Record<string, string>;
+  transient: boolean;
+  status: HandoffEnvelope["status"];
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  consumed_at?: string | null;
+  consumed_by_device_id?: string | null;
+  revision: number;
+}
+
+function mapHandoffEnvelope(value: WireHandoffEnvelope): HandoffEnvelope {
+  return {
+    id: value.id,
+    projectId: value.engagement_id,
+    sourceRefs: value.source_refs.map(mapResourceRef),
+    actionId: value.action_id,
+    targetRef: value.target_ref ? mapResourceRef(value.target_ref) : undefined,
+    originDeviceId: value.origin_device_id,
+    sourceHashes: value.source_hashes,
+    sourceLabels: value.source_labels,
+    transient: value.transient,
+    status: value.status,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    expiresAt: value.expires_at,
+    consumedAt: value.consumed_at ?? undefined,
+    consumedByDeviceId: value.consumed_by_device_id ?? undefined,
+    revision: value.revision,
+  };
 }
 
 function mapActionIntent(value: WireActionIntent): ActionIntent {
@@ -4034,6 +4087,31 @@ export class ApiClient {
     }).then((items) => items.map(mapActionDescriptor));
   }
 
+  searchResources(request: {
+    query: string;
+    activeProject?: string;
+    scope?: "active" | "all";
+    resourceKinds?: ResourceKind[];
+    cursor?: string;
+    limit?: number;
+  }, signal?: AbortSignal): Promise<SearchResponse> {
+    const query = new URLSearchParams({ query: request.query, scope: request.scope ?? "active" });
+    if (request.activeProject) query.set("active_project", request.activeProject);
+    request.resourceKinds?.forEach((kind) => query.append("resource_kind", kind));
+    if (request.cursor) query.set("cursor", request.cursor);
+    query.set("limit", String(request.limit ?? 30));
+    return this.request<WireSearchResponse>(`search?${query.toString()}`, { signal }).then((value) => ({
+      items: value.items.map((item) => ({
+        ref: mapResourceRef(item.ref), project: item.project, label: item.label,
+        description: item.description, snippet: item.snippet, breadcrumb: item.breadcrumb,
+        updatedAt: item.updated_at, score: item.score,
+        actions: item.actions.map(mapActionDescriptor),
+      })),
+      nextCursor: value.next_cursor ?? undefined,
+      partialIndex: value.partial_index,
+    }));
+  }
+
   createResourceRelation(
     projectId: string,
     source: ResourceRef,
@@ -4165,6 +4243,65 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify({ expected_revision: expectedRevision, reason }),
     }).then(mapActionIntent);
+  }
+
+  createHandoff(request: {
+    projectId: string;
+    sourceRefs?: ResourceRef[];
+    actionId: string;
+    targetRef?: ResourceRef;
+    originDeviceId: string;
+    sourceHashes?: Record<string, string>;
+    sourceLabels?: Record<string, string>;
+    transient?: boolean;
+  }): Promise<HandoffEnvelope> {
+    return this.request<WireHandoffEnvelope>("handoffs", {
+      method: "POST",
+      body: JSON.stringify({
+        project_id: request.projectId,
+        source_refs: (request.sourceRefs ?? []).map(wireResourceRef),
+        action_id: request.actionId,
+        target_ref: request.targetRef ? wireResourceRef(request.targetRef) : undefined,
+        origin_device_id: request.originDeviceId,
+        source_hashes: request.sourceHashes ?? {},
+        source_labels: request.sourceLabels ?? {},
+        transient: request.transient ?? false,
+      }),
+    }).then(mapHandoffEnvelope);
+  }
+
+  listHandoffs(projectId: string, signal?: AbortSignal): Promise<HandoffEnvelope[]> {
+    return this.request<WireHandoffEnvelope[]>(
+      `handoffs?project_id=${encodeURIComponent(projectId)}`,
+      { signal },
+    ).then((items) => items.map(mapHandoffEnvelope));
+  }
+
+  resolveHandoff(handoffId: string, deviceId?: string, signal?: AbortSignal): Promise<HandoffResolution> {
+    const query = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    return this.request<{
+      envelope: WireHandoffEnvelope;
+      sources: Array<{ ref: WireResourceRef; state: HandoffResolution["sources"][number]["state"]; label: string }>;
+      recovery: HandoffResolution["recovery"];
+    }>(`handoffs/${encodeURIComponent(handoffId)}${query}`, { signal }).then((value) => ({
+      envelope: mapHandoffEnvelope(value.envelope),
+      sources: value.sources.map((item) => ({ ...item, ref: mapResourceRef(item.ref) })),
+      recovery: value.recovery,
+    }));
+  }
+
+  consumeHandoff(handoffId: string, expectedRevision: number, deviceId: string, idempotencyKey: string): Promise<HandoffEnvelope> {
+    return this.request<WireHandoffEnvelope>(`handoffs/${encodeURIComponent(handoffId)}/consume`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: expectedRevision, device_id: deviceId, idempotency_key: idempotencyKey }),
+    }).then(mapHandoffEnvelope);
+  }
+
+  cancelHandoff(handoffId: string, expectedRevision: number): Promise<HandoffEnvelope> {
+    return this.request<WireHandoffEnvelope>(`handoffs/${encodeURIComponent(handoffId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ expected_revision: expectedRevision }),
+    }).then(mapHandoffEnvelope);
   }
 
   diagnosticsSettings(signal?: AbortSignal): Promise<DiagnosticSettings> {

@@ -243,6 +243,15 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .command-palette { width: min(580px, calc(100vw - 32px)); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: none; }
 .palette-search { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 0 14px; border-bottom: 1px solid var(--border); color: var(--muted); }
 .palette-search input { min-width: 0; flex: 1; height: 52px; border: 0; outline: 0; color: var(--text-strong); font-size: 13px; }
+.palette-scope { display: flex; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--border-soft); }
+.palette-scope button { min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); background: transparent; font-size: 11px; }
+.palette-scope button[aria-pressed="true"] { border-color: var(--blue); color: var(--text-strong); background: var(--blue-muted); }
+.palette-action-menu { max-height: 300px; padding: 8px; overflow-y: auto; border-bottom: 1px solid var(--border); }
+.palette-action-menu header { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 8px; }
+.palette-action-menu button { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: space-between; padding: 7px 9px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; text-transform: capitalize; }
+.palette-action-menu button:not(:disabled):hover { background: var(--blue-muted); }
+.palette-action-menu button:disabled { color: var(--muted); }
+.palette-action-menu button small { color: var(--muted); text-transform: none; }
 .palette-results { max-height: 360px; padding: 7px; overflow-y: auto; }
 .palette-results button { display: grid; width: 100%; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border: 0; border-radius: var(--radius-control); background: transparent; text-align: left; cursor: pointer; }
 .palette-results button[aria-selected="true"] { background: var(--blue-muted); }

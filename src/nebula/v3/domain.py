@@ -186,6 +186,31 @@ class ActionResolutionRequest(BaseModel):
     device_capabilities: list[str] = Field(default_factory=list, max_length=200)
 
 
+class SearchScope(StringEnum):
+    ACTIVE = "active"
+    ALL = "all"
+
+
+class SearchResult(BaseModel):
+    """One ranked, canonical omnibox result with resolved applicable actions."""
+
+    ref: ResourceRef
+    project: str
+    label: str
+    description: str = ""
+    snippet: str = ""
+    breadcrumb: str = ""
+    updated_at: datetime
+    score: float
+    actions: list[ActionDescriptor] = Field(default_factory=list)
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchResult]
+    next_cursor: str | None = None
+    partial_index: bool = False
+
+
 class EngagementStatus(StringEnum):
     DRAFT = "draft"
     ACTIVE = "active"
@@ -3037,6 +3062,63 @@ class ActionIntent(Entity):
         return self
 
 
+class HandoffStatus(StringEnum):
+    PENDING = "pending"
+    CONSUMED = "consumed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
+class HandoffEnvelope(Entity):
+    """Reference-only handoff; selected or unsaved bytes never enter this entity."""
+
+    entity_kind: ClassVar[str] = "handoff_envelopes"
+    engagement_id: str
+    source_refs: list[ResourceRef] = Field(default_factory=list, max_length=20)
+    action_id: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,79}$")
+    target_ref: ResourceRef | None = None
+    origin_device_id: str = Field(min_length=1, max_length=200)
+    source_hashes: dict[str, str] = Field(default_factory=dict, max_length=20)
+    source_labels: dict[str, str] = Field(default_factory=dict, max_length=20)
+    transient: bool = False
+    status: HandoffStatus = HandoffStatus.PENDING
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    consumed_by_device_id: str | None = Field(default=None, max_length=200)
+    consume_idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @field_validator("source_hashes")
+    @classmethod
+    def handoff_hashes_are_sha256(cls, values: dict[str, str]) -> dict[str, str]:
+        if any(not re.fullmatch(r"[0-9a-f]{64}", value) for value in values.values()):
+            raise ValueError("handoff source hashes must be lowercase SHA-256 values")
+        return values
+
+    @field_validator("source_labels")
+    @classmethod
+    def handoff_labels_are_bounded(cls, values: dict[str, str]) -> dict[str, str]:
+        if any(not value.strip() or len(value) > 300 for value in values.values()):
+            raise ValueError("handoff source labels must contain 1 to 300 characters")
+        return values
+
+    @model_validator(mode="after")
+    def handoff_is_bounded_and_coherent(self) -> "HandoffEnvelope":
+        if self.expires_at <= self.created_at:
+            raise ValueError("handoff expiry must follow creation")
+        if any(ref.project_id != self.engagement_id for ref in self.source_refs):
+            raise ValueError("handoff sources must belong to its project")
+        if self.target_ref and self.target_ref.project_id != self.engagement_id:
+            raise ValueError("handoff target must belong to its project")
+        allowed_keys = {f"{ref.kind.value}:{ref.id}" for ref in self.source_refs}
+        if not set(self.source_hashes).issubset(allowed_keys):
+            raise ValueError("handoff hashes must identify a source reference")
+        if not set(self.source_labels).issubset(allowed_keys):
+            raise ValueError("handoff labels must identify a source reference")
+        if self.status == HandoffStatus.CONSUMED and not self.consumed_at:
+            raise ValueError("consumed handoffs require a consumption timestamp")
+        return self
+
+
 class ExecutionOrigin(NebulaModel):
     kind: ExecutionOriginKind
     message_id: str | None = Field(default=None, max_length=200)
@@ -3450,6 +3532,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatMessage,
     PairedDeviceSession,
     ActionIntent,
+    HandoffEnvelope,
     HarnessTurn,
     HarnessInteraction,
     ContextSnapshot,

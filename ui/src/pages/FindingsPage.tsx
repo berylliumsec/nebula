@@ -7,6 +7,7 @@ import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
+import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
 function parseIdentifiers(
   value: string,
@@ -351,6 +352,7 @@ export function FindingsPage() {
         </header>
         <div className="finding-inline-actions"><button className="button secondary" type="button" disabled={findingActionSaving} onClick={() => void askNebulaAboutFinding()}><MessageSquareQuote size={14} /> Ask Nebula</button></div>
         <dl className="resource-details"><div><dt>Affected assets</dt><dd>{editDraft.assetIds.length}</dd></div><div><dt>Evidence records</dt><dd>{editDraft.evidenceIds.length}</dd></div><div><dt>Verifier</dt><dd>{selected.verifierId || "Not independently verified"}</dd></div><div><dt>Verified</dt><dd>{selected.verifiedAt ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(selected.verifiedAt)) : "Not yet"}</dd></div></dl>
+        {engagement && <ResourceRelationsPanel resource={{ projectId: engagement.id, kind: "finding", id: selected.id, revision: selected.revision }} actionAdapters={{ ask_nebula: askNebulaAboutFinding, add_to_report: addFindingToReport }} />}
         <form className="finding-edit-form" onSubmit={(event) => { event.preventDefault(); void saveFinding(); }}>
           <fieldset className="finding-edit-fields" disabled={findingActionSaving}>
             <legend className="sr-only">Editable finding fields</legend>
