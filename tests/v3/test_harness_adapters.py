@@ -578,6 +578,75 @@ def test_grok_connection_separates_pre_tool_commentary_from_final_answer():
     asyncio.run(scenario())
 
 
+def test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item():
+    class SpacedCommentaryRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method != "session/prompt":
+                return await super().request(method, params)
+            self.calls.append((method, params))
+            for index, text in enumerate(
+                ("I'll inspect the binary.", "I'll bind the exact imports."), start=1
+            ):
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": text},
+                            }
+                        },
+                    }
+                )
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "tool_call",
+                                "toolCallId": f"tool-{index}",
+                                "title": f"Inspect {index}",
+                            }
+                        },
+                    }
+                )
+            await self.events.put(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "Finished."},
+                        }
+                    },
+                }
+            )
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+
+    async def scenario() -> None:
+        connection = GrokAcpConnection(
+            SpacedCommentaryRpc(),
+            external_session_id="grok-session",
+            permission_handler=lambda _request: None,
+        )
+        events = [
+            event async for event in connection.run_turn("inspect", model="grok-build")
+        ]
+        commentary = [
+            event
+            for event in events
+            if event.type == "output_delta" and event.stream == "commentary"
+        ]
+        assert [(event.item_id, event.delta) for event in commentary] == [
+            ("commentary-1", "I'll inspect the binary."),
+            ("commentary-2", "I'll bind the exact imports."),
+        ]
+        assert events[-1].message == "Finished."
+
+    asyncio.run(scenario())
+
+
 def test_grok_connection_keeps_final_answer_before_session_metadata():
     class MetadataAfterAnswerRpc(FixtureGrokRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SelectionActionDraft } from "../components/selection";
-import { ASSISTANT_CONTEXT_CHARACTER_LIMIT, mergeAssistantDraft } from "./WorkbenchDraftContext";
+import { ASSISTANT_CONTEXT_CHARACTER_LIMIT, mergeAssistantDraft, selectionHandoffMetadata } from "./WorkbenchDraftContext";
 
 function draft(text: string, id: string): SelectionActionDraft {
   return {
@@ -35,5 +35,21 @@ describe("assistant context packs", () => {
     const merged = mergeAssistantDraft(current, draft("abcde", "two"));
     expect(merged.drafts[1]).toMatchObject({ text: "abc", truncated: true });
     expect(merged.drafts.reduce((total, item) => total + item.text.length, 0)).toBe(ASSISTANT_CONTEXT_CHARACTER_LIMIT);
+  });
+});
+
+describe("selection handoff privacy", () => {
+  it("persists only the source reference, label, and selected-byte hash", () => {
+    const selected = draft("authorization: Bearer secret", "command-1");
+    const metadata = selectionHandoffMetadata("project-1", selected);
+    expect(metadata.sourceRefs).toEqual([{
+      projectId: "project-1",
+      kind: "terminal_session",
+      id: "command-1",
+    }]);
+    expect(metadata.sourceLabels).toEqual({ "terminal_session:command-1": "Terminal command-1" });
+    expect(metadata.sourceHashes["terminal_session:command-1"]).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(metadata)).not.toContain(selected.text);
+    expect(JSON.stringify(metadata)).not.toContain("secret");
   });
 });

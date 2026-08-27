@@ -180,6 +180,31 @@ async function installTruthfulCore(page: Page) {
         confirmation_code: "123456",
         expires_at: "2026-07-14T12:05:00Z",
       };
+    } else if (path.endsWith("/handoffs/handoff-preview")) {
+      body = {
+        envelope: {
+          ...entity,
+          id: "handoff-preview",
+          engagement_id: "scratch-project",
+          source_refs: [{ project_id: "scratch-project", kind: "evidence", id: "evidence-preview", revision: 1 }],
+          action_id: "ask_nebula",
+          target_ref: null,
+          origin_device_id: "paired-mac",
+          source_hashes: { "evidence:evidence-preview": "a".repeat(64) },
+          source_labels: { "evidence:evidence-preview": "Selected request text" },
+          transient: true,
+          status: "pending",
+          expires_at: "2026-07-15T12:00:00Z",
+          consumed_at: null,
+          consumed_by_device_id: null,
+        },
+        sources: [{
+          ref: { project_id: "scratch-project", kind: "evidence", id: "evidence-preview", revision: 1 },
+          state: "origin_required",
+          label: "Selected request text",
+        }],
+        recovery: "resume_origin",
+      };
     } else if (path.endsWith("/setup/status") || path.endsWith("/setup/runtime/refresh")) {
       body = {
         core: { status: "ready", detail: null },
@@ -862,6 +887,28 @@ test("assistant context pack stays exact, compact, and accessible", async ({ pag
   expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
   const accessibility = await new AxeBuilder({ page }).include(".chat-context-pack").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("assistant context pack handoff recovery keeps unsent bytes on the originating device", async ({ page }) => {
+  await openWorkspace(
+    page,
+    "/projects/scratch-project/workbench?view=chat&handoff=handoff-preview",
+    "Workbench",
+  );
+
+  const recovery = page.getByRole("alert").filter({ hasText: "Resume on the originating device" });
+  await expect(recovery).toBeVisible();
+  await expect(recovery).toContainText("Unsent selected bytes remained only in memory on paired-mac");
+  await expect(recovery).toContainText("open the durable source here and recapture");
+  await expect(recovery.getByRole("button", { name: /Continue/ })).toHaveCount(0);
+  const bounds = await recovery.boundingBox();
+  const viewport = page.viewportSize();
+  expect(bounds).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(0);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport!.width + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".handoff-recovery").analyze();
   expect(accessibility.violations).toEqual([]);
 });
 

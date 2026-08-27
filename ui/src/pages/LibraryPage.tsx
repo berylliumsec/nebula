@@ -10,6 +10,7 @@ import {
   Search,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import type { LibraryItem } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
@@ -17,6 +18,8 @@ import { PageHeader } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
+import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
 const MAX_ITEM_BYTES = 20 * 1024 * 1024;
 const ACCEPTED_FILES = [
@@ -69,6 +72,8 @@ export function LibraryPage() {
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
+  const [selected, setSelected] = useState<LibraryItem>();
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("library_item", libraryItems, selected, setSelected);
   const visibleItems = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return libraryItems;
@@ -228,6 +233,7 @@ export function LibraryPage() {
               <span className={`source-state ${busy ? "indexing" : item.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : item.status}</span>
               <span className="source-updated">{displayTime(item.updatedAt)}</span>
               <div className="source-actions">
+                <button className="button quiet" type="button" onClick={() => openResource(item)}>Inspect</button>
                 <button className="icon-button subtle" type="button" title="Reindex item" aria-label={`Reindex ${item.name}`} disabled={!canMutate || busy} onClick={() => void reindex(item)}><RefreshCw size={14} /></button>
                 <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${item.name}`} disabled={!item.artifactId || busy} onClick={() => void download(item)}><Download size={14} /></button>
                 <button className="icon-button subtle" type="button" title="Remove from Library" aria-label={`Remove ${item.name}`} disabled={!canMutate || busy} onClick={() => void remove(item)}><Trash2 size={14} /></button>
@@ -237,6 +243,12 @@ export function LibraryPage() {
           {visibleItems.length === 0 && <StandardEmptyState icon={<BookMarked size={24} />} title={query ? "No matching Library items" : "Your Library is empty"} explanation={query ? "Try a different name or type." : "Add a document or script once, then retrieve it from any project."} />}
         </div>
       </section>
+      {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Library item unavailable</strong><small>The linked item was deleted or is inaccessible.</small></span><button className="button quiet" type="button" onClick={closeResource}>Return to Library</button></div>}
+      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="library-detail-title">
+        <header><div><small>{selected.sourceType}</small><h2 id="library-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close Library details" onClick={closeResource}><X size={17} /></button></header>
+        <dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div><div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div></dl>
+        <ResourceRelationsPanel resource={{ kind: "library_item", id: selected.id }} actionAdapters={selected.artifactId ? { download: () => download(selected) } : undefined} />
+      </aside>}
     </div>
   );
 }

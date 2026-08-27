@@ -861,7 +861,7 @@ kbd { font-size: 11px; }
 @media (prefers-reduced-motion: reduce) { .chat-message-actions { transition: none; } }
 .assistant-streaming-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-streaming-text::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; border-radius: var(--radius-control); vertical-align: -2px; background: var(--blue); animation: assistant-stream-caret 1s steps(2, jump-none) infinite; }
-.assistant-commentary { display: grid; gap: 8px; margin: 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); }
+.assistant-commentary { display: grid; gap: 12px; margin: 0 0 12px; padding-left: 12px; border-left: 2px solid var(--border); }
 .assistant-commentary p { margin: 0; color: var(--muted-strong); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-commentary.live { border-left-color: var(--blue); }
 .assistant-commentary.live p:last-child { color: var(--text); }

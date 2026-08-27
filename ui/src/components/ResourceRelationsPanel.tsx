@@ -27,10 +27,13 @@ export function ResourceRelationsPanel({ resource, actionAdapters }: { resource:
   const { api } = useWorkspace();
   const [relations, setRelations] = useState<ResourceRelation[]>([]);
   const [labels, setLabels] = useState<Record<string, string>>({});
-  const [state, setState] = useState<"loading" | "ready" | "failed">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "failed">(resource.projectId ? "loading" : "ready");
 
   useEffect(() => {
-    if (!api || !resource.projectId) return;
+    if (!api || !resource.projectId) {
+      setState("ready");
+      return;
+    }
     const controller = new AbortController();
     setState("loading");
     api.listResourceRelations(resource.projectId, resource, undefined, controller.signal)
@@ -64,7 +67,7 @@ export function ResourceRelationsPanel({ resource, actionAdapters }: { resource:
       <h3 id="resource-relations-title"><Link2 size={15} /> Connections</h3>
       {state === "loading" && <p role="status">Loading connections…</p>}
       {state === "failed" && <p role="alert">Connections are temporarily unavailable. The resource is still usable.</p>}
-      {state === "ready" && !ordered.length && <p>No connected resources yet.</p>}
+      {state === "ready" && !ordered.length && <p>{resource.projectId ? "No connected resources yet." : "Global resources gain project backlinks when used in a project."}</p>}
       {state === "ready" && ordered.length > 0 && (
         <ol className="resource-lineage" aria-label="Resource lineage">
           {ordered.map((item) => {
