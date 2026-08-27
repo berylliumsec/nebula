@@ -7202,12 +7202,39 @@ class HarnessRuntimeService:
         turn = self.store.get(HarnessTurn, harness_turn_id)
         if turn.status in {
             HarnessTurnStatus.COMPLETE,
+            HarnessTurnStatus.CANCELLED,
             HarnessTurnStatus.FAILED,
             HarnessTurnStatus.INTERRUPTED,
         }:
-            raise HarnessStateError(
-                f"harness turn is already terminal ({turn.status.value})"
-            )
+            # Stop is an operator recovery control. A late click or retry can race
+            # with transport failure and terminal persistence, so acknowledge the
+            # authoritative terminal state instead of surfacing a stale-state
+            # error. If teardown is still in flight, finish releasing the live
+            # connection and owner task without rewriting the saved outcome.
+            active = self._active.get(turn.harness_session_id)
+            if active is not None and active.turn_id == turn.id:
+                try:
+                    await active.connection.interrupt()
+                except Exception as caught_error:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.terminal_turn_stop_interrupt_failed",
+                        "A terminal harness turn still had a live connection during stop recovery.",
+                        caught_error,
+                        stage="turn-stop-recovery",
+                    )
+                task = (
+                    self._chat_turn_tasks.get(turn.id)
+                    if turn.origin == HarnessTurnOrigin.CHAT
+                    else self._mission_tasks.get(turn.run_id or "")
+                )
+                if (
+                    task is not None
+                    and task is not asyncio.current_task()
+                    and not task.done()
+                ):
+                    task.cancel()
+            return self.store.get(HarnessTurn, turn.id)
         cancellation_recorded = bool(
             turn.metadata.get("cancellation_activity_recorded")
         )

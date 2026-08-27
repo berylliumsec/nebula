@@ -914,7 +914,11 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         async def run_turn(
             self, prompt: str, *, model: str
         ) -> AsyncIterator[HarnessEvent]:
-            del prompt, model
+            if self.prompts:
+                async for event in super().run_turn(prompt, model=model):
+                    yield event
+                return
+            self.prompts.append(prompt)
             yield HarnessEvent(type="started")
             await asyncio.Event().wait()
 
@@ -934,7 +938,7 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
         adapter = BlockingAdapter()
         runtime.adapter_factory = lambda _: adapter
-        _, chat_turn, turn = runtime.prepare_chat(
+        chat, chat_turn, turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
             model=None,
@@ -961,6 +965,39 @@ def test_explicit_stop_cancels_detached_work_without_completing_it(tmp_path):
         replay = runtime.activity_events(turn.id)
         assert replay.events[-1].type == "turn_status"
         assert replay.events[-1].item_status == "cancelled"
+
+        stopped_again = await runtime.cancel_turn(
+            turn.id, reason="Late duplicate operator stop"
+        )
+        assert stopped_again.status == HarnessTurnStatus.CANCELLED
+
+        interrupted = store.update(
+            HarnessTurn,
+            turn.id,
+            {"status": HarnessTurnStatus.INTERRUPTED},
+            expected_revision=stopped_again.revision,
+        )
+        recovered_stop = await runtime.cancel_turn(
+            interrupted.id, reason="Stop after transport interruption"
+        )
+        assert recovered_stop.status == HarnessTurnStatus.INTERRUPTED
+
+        _, follow_up_owner, follow_up_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Handle the replacement direction",
+            chat_session_id=chat.id,
+            harness_session_id=turn.harness_session_id,
+            mcp_server_ids=[],
+        )
+        await runtime.start_chat_turn(follow_up_turn.id)
+        assert (
+            store.get(HarnessTurn, follow_up_turn.id).status
+            == HarnessTurnStatus.COMPLETE
+        )
+        assert store.get(ChatTurn, follow_up_owner.id).status.value == "complete"
+        assert len(adapter.connections[0].prompts) == 2
 
         run = await runtime.start_mission(
             engagement_id=engagement.id,
