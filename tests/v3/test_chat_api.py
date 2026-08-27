@@ -133,7 +133,9 @@ def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
         turn = store.get(ChatTurn, turn_id)
         assert turn.status.value == "complete"
         assert turn.final_message_id
-        assert [message.content for message in service.session_messages(turn.session_id)] == [
+        assert [
+            message.content for message in service.session_messages(turn.session_id)
+        ] == [
             "Keep going",
             "Still working. Finished safely.",
         ]

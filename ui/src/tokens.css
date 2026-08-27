@@ -29,6 +29,7 @@
   --content-track: 1200px;
   --settings-track: 1040px;
   --reading-track: 720px;
+  --chat-reading-track: 840px;
   --dialog-track: 560px;
   --motion-fast: 120ms;
   --motion-standard: 180ms;
@@ -91,7 +92,7 @@
   --radius: var(--radius-panel);
 }
 
-:root[data-theme="zero-light"] {
+:root[data-theme="light"] {
   color-scheme: light;
   --canvas: #eef3f8;
   --surface: #f9fbfd;

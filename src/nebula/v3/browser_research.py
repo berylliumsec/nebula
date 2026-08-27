@@ -123,7 +123,17 @@ class CrawlCreateRequest(NebulaModel):
 
 class CrawlStateRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
-    action: Literal["queue", "start", "progress", "pause", "resume", "retry", "complete", "cancel", "fail"]
+    action: Literal[
+        "queue",
+        "start",
+        "progress",
+        "pause",
+        "resume",
+        "retry",
+        "complete",
+        "cancel",
+        "fail",
+    ]
     actor_id: str = Field(min_length=1, max_length=200)
     requests_completed: int | None = Field(default=None, ge=0)
     nodes_discovered: int | None = Field(default=None, ge=0)
@@ -193,7 +203,9 @@ class RepeaterResultRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
     exchange_id: str | None = Field(default=None, max_length=200)
     status_code: int | None = Field(default=None, ge=100, le=999)
-    response_headers: list[tuple[str, str]] = Field(default_factory=list, max_length=200)
+    response_headers: list[tuple[str, str]] = Field(
+        default_factory=list, max_length=200
+    )
     response_bytes: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
     response_body_artifact_id: str | None = Field(default=None, max_length=200)
@@ -254,7 +266,11 @@ class AttackCreateRequest(NebulaModel):
         ):
             raise ValueError("Intruder positions must be unique non-empty names")
         templates = "\n".join(
-            [self.url_template, self.body_template, *(value for _, value in self.headers_template)]
+            [
+                self.url_template,
+                self.body_template,
+                *(value for _, value in self.headers_template),
+            ]
         )
         missing = [
             position for position in self.positions if f"§{position}§" not in templates
@@ -263,7 +279,9 @@ class AttackCreateRequest(NebulaModel):
             raise ValueError(
                 f"Intruder templates are missing position markers: {sorted(missing)}"
             )
-        expected_sets = 1 if self.strategy in {"sniper", "battering_ram"} else len(self.positions)
+        expected_sets = (
+            1 if self.strategy in {"sniper", "battering_ram"} else len(self.positions)
+        )
         if len(self.payload_sets) != expected_sets:
             raise ValueError(
                 f"{self.strategy} requires {expected_sets} payload set(s) for {len(self.positions)} position(s)"
@@ -273,7 +291,9 @@ class AttackCreateRequest(NebulaModel):
 
 class AttackStateRequest(NebulaModel):
     expected_revision: int = Field(ge=1)
-    action: Literal["queue", "start", "pause", "resume", "retry", "cancel", "complete", "fail"]
+    action: Literal[
+        "queue", "start", "pause", "resume", "retry", "cancel", "complete", "fail"
+    ]
     actor_id: str = Field(min_length=1, max_length=200)
     error: str | None = Field(default=None, max_length=4_000)
 
@@ -465,7 +485,9 @@ class BrowserResearchService:
         crawl = self.store.get(BrowserCrawlJob, crawl_id)
         if crawl.state in {"queued", "running", "paused"}:
             raise BrowserWorkflowError("cancel the crawl before deleting it")
-        self.store.delete(BrowserCrawlJob, crawl.id, expected_revision=expected_revision)
+        self.store.delete(
+            BrowserCrawlJob, crawl.id, expected_revision=expected_revision
+        )
 
     def record_site_node(
         self, request: SiteNodeRecordRequest, actor_id: str
@@ -750,7 +772,9 @@ class BrowserResearchService:
     ) -> BrowserRepeaterTab:
         tab = self.store.get(BrowserRepeaterTab, tab_id)
         if tab.state in {"queued", "running"}:
-            raise BrowserWorkflowError("a queued or running Repeater tab cannot be edited")
+            raise BrowserWorkflowError(
+                "a queued or running Repeater tab cannot be edited"
+            )
         self.security._require_in_scope(
             self.security._scope(tab.engagement_id),
             request.url,
@@ -839,7 +863,9 @@ class BrowserResearchService:
             response_body_artifact_id=request.response_body_artifact_id,
             error=request.error,
         )
-        created = self._create(result, "browser_repeater_result.created", request.actor_id)
+        created = self._create(
+            result, "browser_repeater_result.created", request.actor_id
+        )
         history = list(dict.fromkeys([*tab.history_exchange_ids, created.id]))[-500:]
         updated, _ = self.store.update_with_operation_event(
             BrowserRepeaterTab,
@@ -870,7 +896,9 @@ class BrowserResearchService:
         ):
             if result.tab_id == tab.id:
                 self.store.delete(BrowserRepeaterResult, result.id)
-        self.store.delete(BrowserRepeaterTab, tab.id, expected_revision=expected_revision)
+        self.store.delete(
+            BrowserRepeaterTab, tab.id, expected_revision=expected_revision
+        )
 
     def create_attack(
         self, request: AttackCreateRequest, actor_id: str

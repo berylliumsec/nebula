@@ -33,6 +33,7 @@
   .main-content { grid-column: 1; grid-row: 2; }
   .page { padding: 18px 14px calc(76px + env(safe-area-inset-bottom)); }
   .sessions-page { padding: 8px 8px calc(68px + env(safe-area-inset-bottom)); }
+  .sessions-page.full-screen > .session-toolbar { padding-block: 4px; }
   .session-layout.chat,
   .session-layout.chat.inspector-open,
   .session-layout.chat.conversation-panel-open,
@@ -48,6 +49,8 @@
   .chat-message { max-width: 100%; }
   .chat-message.operator { max-width: 88%; margin-right: 0; }
   .chat-composer { width: calc(100% - 12px); margin-inline: 6px; }
+  .harness-status-rail { width: calc(100% - 12px); }
+  .harness-status-summary { min-height: var(--touch-target); }
   .session-conversations-toggle,
   .session-scope,
   .workbench-actions { display: none; }

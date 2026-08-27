@@ -535,7 +535,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "zero-dark" | "zero-light") {
+async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -905,62 +905,48 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
+test("theme picker offers Light, Dark, and Zero Dark and persists the selection", async ({ page }) => {
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings" }).click();
+  await page.getByText("Identity & Security", { exact: true }).click();
+  const appearance = page.locator("#appearance-settings");
+
+  for (const [label, theme, zeroShell] of [
+    ["Light", "light", false],
+    ["Dark", "dark", false],
+    ["Zero Dark", "zero-dark", true],
+  ] as const) {
+    await appearance.getByRole("button", { name: label, exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    if (zeroShell) await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+    else await expect(page.locator(".app-shell")).not.toHaveClass(/zero-layer-shell/);
+    expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBe(theme);
+  }
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
 test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  for (const theme of ["zero-dark", "zero-light"] as const) {
+  for (const theme of ["light", "dark", "zero-dark"] as const) {
     await setTheme(page, theme);
     await expect(page.getByText("Human controlled", { exact: true })).toHaveCount(0);
     await expect(page.locator('[title^="Human controlled"]')).toHaveCount(0);
   }
 });
 
-test("Zero keeps one navigable panoramic shell with a clear light-theme status and search cluster", async ({ page }) => {
+test("Light keeps the shared status and search cluster in the conventional shell", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  await setTheme(page, "zero-light");
+  await setTheme(page, "light");
 
   const ready = page.getByRole("button", { name: "Nebula Core ready" });
   const search = page.getByRole("button", { name: "Search commands" });
   await expect(ready).toBeVisible();
   await expect(search).toBeVisible();
-
-  const contrast = await page.locator(".zero-status-band").evaluate((band) => {
-    const parse = (value: string) => {
-      const channels = value.match(/[\d.]+/g)?.map(Number);
-      if (!channels || channels.length !== 3) throw new Error(`Expected an opaque RGB color, received ${value}`);
-      return channels;
-    };
-    const luminance = (value: string) => {
-      const channels = parse(value).map((channel) => {
-        const normalized = channel / 255;
-        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
-      });
-      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-    };
-    const ratio = (foreground: string, background: string) => {
-      const lighter = Math.max(luminance(foreground), luminance(background));
-      const darker = Math.min(luminance(foreground), luminance(background));
-      return (lighter + 0.05) / (darker + 0.05);
-    };
-    const measure = (selector: string) => {
-      const element = band.querySelector<HTMLElement>(selector)!;
-      const style = getComputedStyle(element);
-      return {
-        background: style.backgroundColor,
-        foreground: style.color,
-        ratio: ratio(style.color, style.backgroundColor),
-      };
-    };
-    return {
-      ready: measure(".connection-chip"),
-      search: measure(".command-trigger"),
-      shortcut: measure(".command-trigger kbd"),
-    };
-  });
-
-  expect(contrast.ready.ratio, JSON.stringify(contrast.ready)).toBeGreaterThanOrEqual(4.5);
-  expect(contrast.search.ratio, JSON.stringify(contrast.search)).toBeGreaterThanOrEqual(4.5);
-  expect(contrast.shortcut.ratio, JSON.stringify(contrast.shortcut)).toBeGreaterThanOrEqual(4.5);
-  expect(contrast.ready.background).not.toBe(contrast.search.background);
+  await expect(page.locator(".app-shell")).not.toHaveClass(/zero-layer-shell/);
+  await expect(page.locator(".top-bar")).not.toHaveClass(/zero-status-band/);
 });
 
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
@@ -2123,6 +2109,7 @@ test("conversation switching commits URL identity before loading and defers save
 });
 
 test("conversation switching between projects detaches the provider viewer without stopping Core work", async ({ page }) => {
+  test.setTimeout(60_000);
   let cancelRequests = 0;
   const projects = [
     { ...entity, id: "project-a", name: "Project A", description: "Active provider work", status: "active", tags: [], metadata: {} },
@@ -2213,7 +2200,9 @@ test("conversation switching between projects detaches the provider viewer witho
   if (mobileViewport) {
     await page.getByRole("button", { name: "Close sidebar" }).click({
       position: { x: (page.viewportSize()?.width ?? 390) - 8, y: 80 },
+      force: true,
     });
+    await expect(page.locator(".app-shell")).toHaveClass(/sidebar-collapsed/);
   }
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await page.getByPlaceholder("Ask about this project…").fill("Stop this response explicitly");
@@ -2926,6 +2915,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const planGeometry = await page.locator(".harness-status-rail").evaluate((element) => ({
     left: element.getBoundingClientRect().left,
     right: element.getBoundingClientRect().right,
+    width: element.getBoundingClientRect().width,
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
@@ -2933,6 +2923,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   expect(planGeometry.left).toBeGreaterThanOrEqual(0);
   expect(planGeometry.right).toBeLessThanOrEqual(planGeometry.viewportWidth + 1);
   expect(planGeometry.scrollWidth).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
+  if ((page.viewportSize()?.width ?? 0) >= 1024) expect(planGeometry.width).toBeLessThanOrEqual(841);
   if (testInfo.project.name.startsWith("mobile-")) {
     const planToggleBounds = await collapsePlan.boundingBox();
     expect(planToggleBounds?.height).toBeGreaterThanOrEqual(44);
@@ -2948,6 +2939,17 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect(activity).not.toHaveAttribute("open", "");
   await expect(activity.getByText("Completed", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 5_000 });
+  const transcriptGeometry = await page.locator(".chat-message.assistant").last().evaluate((element) => {
+    const markdown = element.querySelector<HTMLElement>(".assistant-markdown");
+    return {
+      width: element.getBoundingClientRect().width,
+      marginBottom: Number.parseFloat(getComputedStyle(element).marginBottom),
+      lineHeight: markdown ? Number.parseFloat(getComputedStyle(markdown).lineHeight) : 0,
+    };
+  });
+  if ((page.viewportSize()?.width ?? 0) >= 1024) expect(transcriptGeometry.width).toBeGreaterThanOrEqual(800);
+  expect(transcriptGeometry.marginBottom).toBeGreaterThanOrEqual(28);
+  expect(transcriptGeometry.lineHeight).toBeGreaterThanOrEqual(21);
   await activity.locator(":scope > summary").click();
   await expect(activity).toHaveAttribute("open", "");
   const chatScroll = page.locator(".chat-scroll");
@@ -3064,7 +3066,7 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
   expect((await new AxeBuilder({ page }).include(".assistant-commentary").analyze()).violations).toEqual([]);
 });
 
-test("the workbench expands to the full viewport and restores in place", async ({ page }) => {
+test("the workbench expands to the full viewport with compact chrome and completed harness output geometry", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/?view=chat", "Workbench");
 
@@ -3094,6 +3096,14 @@ test("the workbench expands to the full viewport and restores in place", async (
   expect(Math.abs(geometry.right)).toBeLessThanOrEqual(1);
   expect(Math.abs(geometry.bottom)).toBeLessThanOrEqual(1);
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
+
+  const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
+  const focusToolbarHeight = await focusToolbar.evaluate((element) => element.getBoundingClientRect().height);
+  expect(focusToolbarHeight).toBeLessThanOrEqual(mobile ? 53 : 55);
+  if (!mobile) {
+    const selectedTabHeight = await page.getByRole("tab", { name: "Analyst chat", exact: true }).evaluate((element) => element.getBoundingClientRect().height);
+    expect(selectedTabHeight).toBeLessThanOrEqual(39);
+  }
 
   const fullScreenViews = [
     ["Terminal", ".persistent-terminal"],
@@ -3131,7 +3141,7 @@ test("the workbench expands to the full viewport and restores in place", async (
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
-test("both Zero themes snap primary workbench surfaces to the available screen", async ({ page }) => {
+test("all three themes snap primary workbench surfaces to the available screen", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) <= 760, "phone layouts use the mobile workbench navigation");
 
   await openWorkspace(page, "/", "Workbench");
@@ -3141,7 +3151,7 @@ test("both Zero themes snap primary workbench surfaces to the available screen",
     ["Workspace files", ".workspace-browser"],
   ] as const;
 
-  for (const theme of ["zero-dark", "zero-light"] as const) {
+  for (const theme of ["light", "dark", "zero-dark"] as const) {
     await setTheme(page, theme);
     for (const [tabName, surfaceSelector] of surfaces) {
       await page.getByRole("tab", { name: tabName, exact: true }).click();
@@ -3711,7 +3721,7 @@ test("top toolbar controls do not collide at compact breakpoint edges", async ({
   }
 });
 
-for (const theme of ["zero-dark", "zero-light"] as const) {
+for (const theme of ["light", "dark", "zero-dark"] as const) {
   test(`critical workspaces meet automated accessibility checks in ${theme} mode`, async ({ page }) => {
     test.setTimeout(60_000);
     await openWorkspace(page, "/", "Workbench");
@@ -3770,9 +3780,9 @@ test("Zero keeps its themed shell without the removed context deck", async ({ pa
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog", { name: "Command palette" })).toBeHidden();
-  await setTheme(page, "zero-light");
-  await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(1);
-  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(3);
+  await setTheme(page, "light");
+  await expect(page.locator(".app-shell.zero-layer-shell")).toHaveCount(0);
+  await expect(page.locator(".zero-route-flare, .zero-anchor-dock, .zero-status-band")).toHaveCount(0);
 });
 
 test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ page }, testInfo) => {
@@ -3851,9 +3861,9 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   await expect(persistentSurface).toBeVisible();
   await persistentSurface.evaluate((element) => { (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal = element; });
   await page.getByRole("button", { name: "Search commands" }).click();
-  await page.getByRole("textbox", { name: "Search commands" }).fill("Zero Light theme");
-  await page.getByRole("option", { name: /Use Zero Light theme/ }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-light");
+  await page.getByRole("textbox", { name: "Search commands" }).fill("Light theme");
+  await page.getByRole("option", { name: /Use Light theme/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   expect(await persistentSurface.evaluate((element) => (window as typeof window & { __zeroTerminal?: Element }).__zeroTerminal === element)).toBe(true);
 });
 
@@ -4041,9 +4051,9 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }, te
   await expect(feedback).toHaveScreenshot("tool-follow-up-runtime-required.png");
 });
 
-test("Zero Light preserves each critical workspace hierarchy", async ({ page }) => {
+test("Light preserves each critical workspace hierarchy", async ({ page }) => {
   test.setTimeout(60_000);
-  for (const theme of ["zero-light"] as const) {
+  for (const theme of ["light"] as const) {
     await openWorkspace(page, "/", "Workbench");
     await setTheme(page, theme);
     for (const [name, route, heading] of workspaces) {

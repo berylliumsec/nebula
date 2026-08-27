@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 
-export type ThemePreference = "zero-dark" | "zero-light";
+export type ThemePreference = "light" | "dark" | "zero-dark";
 
 interface ThemeContextValue {
   preference: ThemePreference;
@@ -22,9 +22,9 @@ const STORAGE_KEY = "nebula.theme";
 const DEFAULT_PREFERENCE: ThemePreference = "zero-dark";
 
 function normalizePreference(value: string | null): ThemePreference | undefined {
-  if (value === "zero-dark" || value === "zero-light") return value;
-  if (value === "light") return "zero-light";
-  if (value === "zero" || value === "dark" || value === "high-contrast" || value === "system") return "zero-dark";
+  if (value === "light" || value === "dark" || value === "zero-dark") return value;
+  if (value === "zero" || value === "zero-light") return value === "zero" ? "zero-dark" : "light";
+  if (value === "high-contrast" || value === "system") return "dark";
   return undefined;
 }
 
@@ -54,7 +54,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
-    document.documentElement.style.colorScheme = resolvedTheme === "zero-light" ? "light" : "dark";
+    document.documentElement.style.colorScheme = resolvedTheme === "light" ? "light" : "dark";
   }, [resolvedTheme]);
 
   const setPreference = useCallback((value: ThemePreference) => {
@@ -63,7 +63,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, []);
 
   const cycleTheme = useCallback(() => {
-    setPreference(preference === "zero-dark" ? "zero-light" : "zero-dark");
+    setPreference(preference === "light" ? "dark" : preference === "dark" ? "zero-dark" : "light");
   }, [preference, setPreference]);
 
   const value = useMemo(
