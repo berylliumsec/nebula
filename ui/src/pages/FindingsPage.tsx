@@ -6,6 +6,7 @@ import { PageHeader } from "../components/PageHeader";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
 
 function parseIdentifiers(
   value: string,
@@ -120,6 +121,7 @@ export function FindingsPage() {
   const [severity, setSeverity] = useState<"all" | FindingSummary["severity"]>("all");
   const [status, setStatus] = useState<"all" | FindingStatus>("all");
   const [selected, setSelected] = useState<FindingSummary>();
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("finding", findings, selected, setSelected);
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -154,6 +156,13 @@ export function FindingsPage() {
     !validatedEdit.value || !findingEditMatches(validatedEdit.value, selected)
   ));
   const findingEditError = validatedEdit.error ?? findingActionError;
+
+  useEffect(() => {
+    if (selected && !editDraft) {
+      setEditDraft(findingEditDraft(selected));
+      setReportId(reports.find((report) => report.status !== "final")?.id ?? "");
+    }
+  }, [editDraft, reports, selected]);
 
   const openCandidate = () => {
     setTitle("");
@@ -239,6 +248,7 @@ export function FindingsPage() {
   const inspectFinding = async (finding: FindingSummary) => {
     if (selected?.id === finding.id) return;
     if (!await allowDiscardFinding()) return;
+    openResource(finding);
     setSelected(finding);
     setEditDraft(findingEditDraft(finding));
     setReportId(reports.find((report) => report.status !== "final")?.id ?? "");
@@ -248,6 +258,7 @@ export function FindingsPage() {
   const closeFinding = async () => {
     if (!await allowDiscardFinding()) return;
     setSelected(undefined);
+    closeResource();
     setEditDraft(undefined);
     setFindingActionError(undefined);
   };
@@ -331,6 +342,7 @@ export function FindingsPage() {
         <div className="table-scroll" tabIndex={0} role="region" aria-label="Findings table"><table className="data-table findings-table"><thead><tr><th scope="col">Severity</th><th scope="col">Finding</th><th scope="col">Status</th><th scope="col">Assets</th><th scope="col">Evidence</th><th scope="col">Updated</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{visibleFindings.map((finding) => <tr key={finding.id}><td><span className={`severity-label ${finding.severity}`}><span />{finding.severity}</span></td><td><div className="finding-title"><strong>{finding.title}</strong><small>{finding.cveIds.length ? finding.cveIds.join(", ") : finding.cweIds.join(", ") || "No advisory identifier"}</small></div></td><td><span className={`lifecycle-badge ${finding.status}`}>{finding.status.replaceAll("_", " ")}</span></td><td>{finding.affectedAssetCount}</td><td>{finding.evidenceCount}</td><td>{new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(finding.updatedAt))}</td><td><button className="text-link" type="button" aria-label={`Edit ${finding.title}`} onClick={() => void inspectFinding(finding)}>Edit</button></td></tr>)}{visibleFindings.length === 0 && <tr><td colSpan={7}>{query || activeFilters ? "No findings match the current search and filters." : "No findings have been recorded for this project."}</td></tr>}</tbody></table></div>
         <footer className="table-footer"><span>{visibleFindings.length} of {findings.length} findings</span></footer>
       </section>
+      {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Finding unavailable</strong><small>The linked finding was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={closeResource}>Return to findings</button></div>}
       {adding && <ModalSurface as="form" className="provider-dialog resource-dialog finding-create-dialog" labelledBy="finding-create-title" onClose={() => setAdding(false)} onSubmit={(event) => void submitCandidate(event)}><header><div><small>Manual analyst entry</small><h2 id="finding-create-title">Create candidate finding</h2></div><button className="icon-button subtle" type="button" aria-label="Close candidate finding dialog" onClick={() => setAdding(false)}><X size={17} /></button></header><p className="provider-dialog-note">This records an unverified candidate only. It will not be treated as validated or confirmed until supporting evidence and independent verification are recorded.</p><label htmlFor="finding-create-name">Title</label><input id="finding-create-name" required data-autofocus maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Concise security observation" /><label htmlFor="finding-create-description">Description</label><textarea id="finding-create-description" rows={4} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="What was observed, where, and why it matters" /><div className="resource-form-grid"><label>Severity<select value={candidateSeverity} onChange={(event) => setCandidateSeverity(event.target.value as FindingSummary["severity"])}>{(["critical", "high", "medium", "low", "info"] as const).map((value) => <option value={value} key={value}>{value}</option>)}</select></label><label>Lifecycle status<input value="Candidate (unverified)" readOnly aria-readonly="true" /></label></div><label>Severity rationale<textarea rows={3} value={severityRationale} onChange={(event) => setSeverityRationale(event.target.value)} placeholder="Explain impact and likelihood" /></label><fieldset className="resource-checklist"><legend>Affected assets</legend>{assets.length ? assets.map((asset) => <label key={asset.id}><input type="checkbox" checked={assetIds.includes(asset.id)} onChange={() => toggleAsset(asset.id)} /><span>{asset.displayName}</span></label>) : <p>No assets have been added to this project. You can create the candidate without one and link an asset later.</p>}</fieldset><div className="resource-form-grid"><label>CVE identifiers<input value={cveText} onChange={(event) => setCveText(event.target.value)} placeholder="CVE-2026-1234, …" autoCapitalize="characters" spellCheck={false} /></label><label>CWE identifiers<input value={cweText} onChange={(event) => setCweText(event.target.value)} placeholder="CWE-79, …" autoCapitalize="characters" spellCheck={false} /></label></div>{formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !title.trim()}>{saving ? "Creating…" : "Create candidate"}</button></footer></ModalSurface>}
       {selected && editDraft && <aside className="resource-inspector finding-dialog" role="complementary" aria-labelledby="finding-detail-title">
         <header>

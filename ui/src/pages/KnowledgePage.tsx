@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { useSearchParams } from "react-router-dom";
 import {
   BookOpen,
   Database,
@@ -21,6 +20,7 @@ import { PageHeader } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
 
 const MAX_SOURCE_BYTES = 20 * 1024 * 1024;
 
@@ -58,7 +58,6 @@ function formatModelBytes(value: number): string {
 
 export function KnowledgePage() {
   const confirm = useConfirmation();
-  const [searchParams] = useSearchParams();
   const {
     api,
     coreState,
@@ -80,21 +79,12 @@ export function KnowledgePage() {
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<KnowledgeSource>();
   const sources = knowledgeSources;
-  const requestedSourceId = searchParams.get("source");
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("source", sources, selected, setSelected);
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return sources;
     return sources.filter((source) => `${source.name} ${source.sourceType} ${source.citation ?? ""}`.toLowerCase().includes(needle));
   }, [query, sources]);
-
-  useEffect(() => {
-    if (!requestedSourceId) return;
-    const requested = sources.find((source) => source.id === requestedSourceId);
-    if (requested) {
-      setQuery(requested.name);
-      setSelected(requested);
-    }
-  }, [requestedSourceId, sources]);
 
   useEffect(() => {
     if (!api || coreState !== "online") return;
@@ -341,7 +331,7 @@ export function KnowledgePage() {
                   <span className={`source-state ${busy ? "indexing" : source.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : source.status}</span>
                   <span className="source-updated">{displayTime(source.updatedAt)}</span>
                   <div className="source-actions">
-                    <button className="text-link" type="button" onClick={() => setSelected(source)}>Inspect</button>
+                    <button className="text-link" type="button" onClick={() => openResource(source)}>Inspect</button>
                     <button className="icon-button subtle" type="button" title="Reindex source" aria-label={`Reindex ${source.name}`} disabled={!canMutate || busy} onClick={() => void reindex(source)}><RefreshCw size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${source.name}`} disabled={!source.artifactId || !api || busy} onClick={() => void download(source)}><Download size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Remove from retrieval" aria-label={`Remove ${source.name}`} disabled={!canMutate || busy} onClick={() => void remove(source)}><Trash2 size={14} /></button>
@@ -361,7 +351,8 @@ export function KnowledgePage() {
         </aside>
       </div>
       {addingUrl && <ModalSurface as="form" className="provider-dialog" labelledBy="knowledge-url-dialog-title" onClose={closeUrlDialog} onSubmit={(event) => void addUrl(event)}><header><div><small>Public web source</small><h2 id="knowledge-url-dialog-title">Add source from URL</h2></div><button className="icon-button subtle" type="button" aria-label="Close URL source dialog" disabled={uploading} onClick={closeUrlDialog}><X size={17} /></button></header><p className="provider-dialog-note">Nebula opens the page in an isolated browser, captures its rendered text once, and indexes that immutable snapshot. Every requested address must remain on the public internet.</p><label>URL<input required autoFocus type="url" inputMode="url" maxLength={2048} placeholder="https://docs.example.com/guide" value={sourceUrl} onChange={(event) => { setSourceUrl(event.target.value); if (error) setError(undefined); }} /></label>{error && <DiagnosticErrorNotice error={error} fallback="The URL source could not be added." compact />}<footer><button className="button secondary" type="button" disabled={uploading} onClick={closeUrlDialog}>Cancel</button><button className="button primary" type="submit" disabled={uploading || !sourceUrl.trim()}>{uploading ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />} {uploading ? "Rendering and indexing…" : "Add URL source"}</button></footer></ModalSurface>}
-      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={() => setSelected(undefined)}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div>{typeof selected.metadata.sourceUrl === "string" && <div><dt>Source URL</dt><dd>{selected.metadata.sourceUrl}</dd></div>}<div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
+      {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Source unavailable</strong><small>The linked source was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={closeResource}>Return to sources</button></div>}
+      {selected && <aside className="resource-inspector" role="complementary" aria-labelledby="knowledge-detail-title"><header><div><small>{sourceType(selected)}</small><h2 id="knowledge-detail-title">{selected.name}</h2></div><button className="icon-button subtle" type="button" aria-label="Close knowledge details" onClick={closeResource}><X size={17} /></button></header><dl className="resource-details"><div><dt>Status</dt><dd>{selected.status}</dd></div><div><dt>Chunks</dt><dd>{selected.documentCount || "Not indexed"}</dd></div><div><dt>Citation</dt><dd>{selected.citation || selected.name}</dd></div>{typeof selected.metadata.sourceUrl === "string" && <div><dt>Source URL</dt><dd>{selected.metadata.sourceUrl}</dd></div>}<div><dt>Updated</dt><dd>{displayTime(selected.updatedAt)}</dd></div><div><dt>Source type</dt><dd>{sourceType(selected)}</dd></div></dl><section><h3>Retrieval boundary</h3><p>Content is untrusted data and cannot grant tools, expand scope, or modify system policy.</p></section><div className="inspector-actions"><button className="button secondary full" type="button" disabled={!canMutate || busyIds.has(selected.id)} onClick={() => void reindex(selected)}><RefreshCw size={14} /> Reindex source</button></div></aside>}
     </div>
   );
 }

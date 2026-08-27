@@ -122,6 +122,14 @@ function sourceForRoute(pathname: string, element: Element | null): SelectionSou
     };
   }
   if (pathname === "/") return { kind: "workbench", label: "Workbench" };
+  const canonicalProject = /^\/projects\/[^/]+(?:\/([^/]+))?/.exec(pathname);
+  if (canonicalProject) {
+    const surface = canonicalProject[1];
+    if (!surface) return { kind: "project", label: "Project selection" };
+    if (surface === "workbench") return { kind: "workbench", label: "Workbench selection" };
+    const singular = surface === "evidence" ? "evidence" : surface.replace(/s$/, "");
+    return { kind: singular, label: `${singular[0]?.toUpperCase() ?? ""}${singular.slice(1)} selection` };
+  }
   const kind = pathname.replace(/^\/+|\/+$/g, "").replace(/[^a-z0-9._-]+/g, "-") || "document";
   return { kind, label: `${kind[0]?.toUpperCase() ?? ""}${kind.slice(1)} selection` };
 }

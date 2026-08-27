@@ -16,6 +16,7 @@ import { browserAuthorizationRecovery } from "../api/runtime";
 import { BrowserAutomationWorker } from "./BrowserAutomationWorker";
 import { SettingsLens } from "./SettingsLens";
 import type { SettingCatalogEntry } from "../settingsCatalog";
+import { projectSurface } from "../resourceRoutes";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", providerCatalog: "Provider setup",
@@ -31,6 +32,7 @@ export function AppShell() {
   const {
     approvals,
     coreError,
+    engagement,
     reconnect,
     resourceStatus,
     runtime,
@@ -70,9 +72,9 @@ export function AppShell() {
     if (command === "toggle-sidebar") toggleSidebar();
     if (command === "toggle-inspector") toggleActivity();
     if (command === "settings") navigate("/settings");
-    if (command === "home") navigate("/");
+    if (command === "home") navigate(engagement ? projectSurface(engagement.id, "workbench") : "/");
     if (command === "new-contextual") runContextualNew();
-  }, [navigate, openPalette, runContextualNew, toggleActivity, toggleSidebar]);
+  }, [engagement, navigate, openPalette, runContextualNew, toggleActivity, toggleSidebar]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -87,7 +89,7 @@ export function AppShell() {
       }
       if (modifier && !event.altKey && event.key === "1") {
         event.preventDefault();
-        navigate("/");
+        navigate(engagement ? projectSurface(engagement.id, "workbench") : "/");
       }
       if (modifier && !event.altKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
@@ -105,7 +107,7 @@ export function AppShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate, paletteOpen, runContextualNew, toggleActivity, toggleSidebar]);
+  }, [engagement, navigate, paletteOpen, runContextualNew, toggleActivity, toggleSidebar]);
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;

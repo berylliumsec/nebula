@@ -1,5 +1,25 @@
 export type Identifier = string;
 
+export type ResourceKind =
+  | "project" | "conversation" | "note" | "source" | "library_item"
+  | "workspace_file" | "asset" | "evidence" | "finding" | "report"
+  | "terminal_session" | "terminal_command" | "browser_session" | "browser_tab"
+  | "browser_exchange" | "mission" | "execution" | "approval" | "receipt" | "artifact";
+
+export interface ResourceRef {
+  projectId?: Identifier;
+  kind: ResourceKind;
+  id: Identifier;
+  revision?: number;
+}
+
+export interface ResourceResolution {
+  ref: ResourceRef;
+  label: string;
+  state: "available" | "deleted" | "inaccessible" | "wrong_project";
+  actualProjectId?: Identifier;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;
