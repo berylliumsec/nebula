@@ -76,6 +76,66 @@ class ResourceResolution(BaseModel):
     actual_project_id: str | None = None
 
 
+class RelationPredicate(StringEnum):
+    AFFECTS = "affects"
+    SUPPORTS = "supports"
+    INCLUDES = "includes"
+    REFERENCES = "references"
+    PRODUCED_BY = "produced_by"
+    DERIVED_FROM = "derived_from"
+
+
+class ResourceRelation(BaseModel):
+    """One authoritative, revision-aware edge between two project resources."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=lambda: str(uuid4()), max_length=200)
+    project_id: str = Field(max_length=200)
+    source: ResourceRef
+    predicate: RelationPredicate
+    target: ResourceRef
+    attribution: str | None = Field(default=None, max_length=200)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    revision: int = Field(default=1, ge=1)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def endpoints_belong_to_relation_project(self) -> "ResourceRelation":
+        if self.source.project_id != self.project_id:
+            raise ValueError("relation source must belong to the relation project")
+        if self.target.project_id != self.project_id:
+            raise ValueError("relation target must belong to the relation project")
+        if self.source.kind == self.target.kind and self.source.id == self.target.id:
+            raise ValueError("resource relations cannot be self-referential")
+        return self
+
+
+class ResourceRelationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: ResourceRef
+    predicate: RelationPredicate
+    target: ResourceRef
+    attribution: str | None = Field(default=None, max_length=200)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceRelationSet(BaseModel):
+    """Atomic desired-edge reconciliation for one source and predicate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str = Field(max_length=200)
+    source: ResourceRef
+    predicate: RelationPredicate
+    targets: list[ResourceRef] = Field(default_factory=list, max_length=500)
+    expected_source_revision: int | None = Field(default=None, ge=1)
+    attribution: str | None = Field(default=None, max_length=200)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
 class EngagementStatus(StringEnum):
     DRAFT = "draft"
     ACTIVE = "active"

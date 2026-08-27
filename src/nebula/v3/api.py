@@ -242,8 +242,12 @@ from .domain import (
     ProviderVerificationStatus,
     Report,
     ReportStatus,
+    RelationPredicate,
     ResourceKind,
     ResourceRef,
+    ResourceRelation,
+    ResourceRelationCreate,
+    ResourceRelationSet,
     ResourceResolution,
     Task,
     ReportRender,
@@ -369,6 +373,7 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
 from .terminal_history import (
     TerminalAuditImmutableError,
     TerminalCommandHistory,
@@ -1032,6 +1037,7 @@ def create_app(
         store = NebulaStore(location)
     elif database is not None:
         raise ValueError("pass either store or database, not both")
+    relation_service = ResourceRelationService(store)
     token = auth_token or secrets.token_urlsafe(32)
     if not token and not allow_unauthenticated:
         raise ValueError("auth_token cannot be empty")
@@ -2937,6 +2943,78 @@ def create_app(
             state="available",
             actual_project_id=actual_project_id,
         )
+
+    @app.get(
+        f"{API_PREFIX}/projects/{{project_id}}/relations",
+        response_model=list[ResourceRelation],
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_resource_relations(
+        project_id: str,
+        resource_kind: ResourceKind | None = None,
+        resource_id: str | None = None,
+        predicate: RelationPredicate | None = None,
+        limit: int = Query(default=200, ge=1, le=500),
+    ) -> list[ResourceRelation]:
+        if (resource_kind is None) != (resource_id is None):
+            raise HTTPException(
+                status_code=422,
+                detail="resource_kind and resource_id must be supplied together",
+            )
+        resource = (
+            ResourceRef(project_id=project_id, kind=resource_kind, id=resource_id)
+            if resource_kind is not None and resource_id is not None
+            else None
+        )
+        return relation_service.list_relations(
+            project_id, resource=resource, predicate=predicate, limit=limit
+        )
+
+    @app.post(
+        f"{API_PREFIX}/projects/{{project_id}}/relations",
+        response_model=ResourceRelation,
+        status_code=201,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_resource_relation(
+        project_id: str, request: ResourceRelationCreate
+    ) -> ResourceRelation:
+        try:
+            return relation_service.create(project_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.put(
+        f"{API_PREFIX}/projects/{{project_id}}/relations/set",
+        response_model=list[ResourceRelation],
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reconcile_resource_relations(
+        project_id: str, request: ResourceRelationSet
+    ) -> list[ResourceRelation]:
+        if request.project_id != project_id:
+            raise HTTPException(status_code=422, detail="project identity mismatch")
+        try:
+            return relation_service.reconcile(request)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/projects/{{project_id}}/relations/{{relation_id}}",
+        status_code=204,
+        tags=["resources"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_resource_relation(
+        project_id: str,
+        relation_id: str,
+        expected_revision: int = Query(ge=1),
+    ) -> Response:
+        relation_service.delete(project_id, relation_id, expected_revision)
+        return Response(status_code=204)
 
     @app.get(
         f"{API_PREFIX}/harness-catalog",
@@ -8671,6 +8749,7 @@ def create_app(
         _register_crud_routes(
             app,
             store,
+            relation_service,
             require_auth,
             entity_validator,
             resource,
@@ -9035,6 +9114,7 @@ def _assert_unique_api_operations(app: FastAPI) -> None:
 def _register_crud_routes(
     app: FastAPI,
     store: NebulaStore,
+    relation_service: ResourceRelationService,
     require_auth: Callable[..., Any],
     entity_validator: ApiEntityValidator,
     resource: str,
@@ -9090,6 +9170,8 @@ def _register_crud_routes(
             created = (
                 create_engagement_with_default_scope(store, entity)
                 if isinstance(entity, Engagement)
+                else relation_service.create_legacy_entity(entity)
+                if isinstance(entity, LEGACY_RELATION_MODELS)
                 else store.create(entity)
             )
             if after_create is not None:
@@ -9118,7 +9200,7 @@ def _register_crud_routes(
                     for entity in entities
                     if isinstance(entity, KnowledgeSource)
                 ]
-            return entities
+            return [relation_service.project_legacy(entity) for entity in entities]
 
         list_entities.__name__ = f"list_{resource.replace('-', '_')}"
         list_entities.__annotations__["return"] = list[model]  # type: ignore[valid-type]
@@ -9127,11 +9209,12 @@ def _register_crud_routes(
     def make_get() -> Callable[..., Any]:
         async def get_entity(entity_id: str) -> Entity:
             entity = store.get(model, entity_id)
-            return (
+            entity = (
                 knowledge_summary(entity)
                 if isinstance(entity, KnowledgeSource)
                 else entity
             )
+            return relation_service.project_legacy(entity)
 
         get_entity.__name__ = f"get_{resource.replace('-', '_')}"
         get_entity.__annotations__["return"] = model
@@ -9155,13 +9238,14 @@ def _register_crud_routes(
                 entity, ProviderProfile
             ):
                 entity = _invalidate_provider_verification(current, entity)
-            replaced = store.replace(
-                model,
-                entity_id,
-                entity,
-                expected_revision=current.revision if if_match is None else if_match,
+            expected_revision = current.revision if if_match is None else if_match
+            if isinstance(current, LEGACY_RELATION_MODELS):
+                return relation_service.replace_legacy_entity(
+                    current, entity, expected_revision=expected_revision
+                )
+            return store.replace(
+                model, entity_id, entity, expected_revision=expected_revision
             )
-            return replaced
 
         replace_entity.__name__ = f"replace_{resource.replace('-', '_')}"
         replace_entity.__annotations__["entity"] = model
@@ -9199,17 +9283,21 @@ def _register_crud_routes(
                     and value != getattr(current, key)
                 }
             entity_validator.validate_update(current, candidate)
-            updated = store.update(
+            expected_revision = (
+                current.revision
+                if patch.expected_revision is None
+                else patch.expected_revision
+            )
+            if isinstance(current, LEGACY_RELATION_MODELS):
+                return relation_service.replace_legacy_entity(
+                    current, candidate, expected_revision=expected_revision
+                )
+            return store.update(
                 model,
                 entity_id,
                 changes,
-                expected_revision=(
-                    current.revision
-                    if patch.expected_revision is None
-                    else patch.expected_revision
-                ),
+                expected_revision=expected_revision,
             )
-            return updated
 
         patch_entity.__name__ = f"patch_{resource.replace('-', '_')}"
         patch_entity.__annotations__["return"] = model

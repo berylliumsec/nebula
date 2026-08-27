@@ -1412,6 +1412,14 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .resource-inspector > section,
 .resource-inspector > .scope-chip-list { margin: 0; padding: 18px 22px 0; }
 .resource-inspector > .resource-details { padding: 10px 22px; }
+.resource-relations h3 { display: flex; align-items: center; gap: 7px; margin: 0 0 10px; font-size: 13px; }
+.resource-relations > p { margin: 0; color: var(--muted); font-size: 12px; }
+.resource-lineage { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.resource-lineage li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }
+.resource-lineage li > span { display: grid; min-width: 0; }
+.resource-lineage small { color: var(--muted); font-size: 10px; }
+.resource-lineage strong { overflow: hidden; color: var(--text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.resource-lineage time { color: var(--muted); font-size: 10px; }
 .artifact-actions { display: flex; gap: 10px; }
 .inspector-actions { padding: 18px 22px; }
 @keyframes inspector-in { from { opacity: 0; transform: translateX(18px); } }

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import MetaData, Table, create_engine, delete, inspect, update
+from sqlalchemy import MetaData, Table, create_engine, delete, inspect, select, update
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
@@ -88,6 +88,75 @@ def _exercise_migration_cycle(database_url: str) -> None:
 
 def test_sqlite_upgrade_downgrade_and_immutable_operation_events(tmp_path):
     _exercise_migration_cycle(f"sqlite+pysqlite:///{tmp_path / 'migrations.db'}")
+
+
+def test_relation_migration_backfills_legacy_arrays_and_rejects_dangling_ids(tmp_path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'relations.db'}")
+    _run_migration(engine, command.upgrade, "0010_browser_automation_indexes")
+    metadata = MetaData()
+    entities = Table("entities", metadata, autoload_with=engine)
+    now = datetime.now(timezone.utc)
+
+    def row(entity_id: str, kind: str, project_id: str, payload: dict):
+        envelope = {
+            "id": entity_id,
+            "revision": 1,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            **payload,
+        }
+        return {
+            "id": entity_id,
+            "kind": kind,
+            "engagement_id": project_id,
+            "revision": 1,
+            "payload": envelope,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    with engine.begin() as connection:
+        connection.execute(
+            entities.insert(),
+            [
+                row("asset-1", "assets", "project-1", {"name": "Gateway"}),
+                row(
+                    "finding-1",
+                    "findings",
+                    "project-1",
+                    {"title": "Issue", "asset_ids": ["asset-1"]},
+                ),
+            ],
+        )
+    _run_migration(engine, command.upgrade, "head")
+    relations = Table("resource_relations", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        edge = connection.execute(select(relations)).mappings().one()
+    assert (edge["source_kind"], edge["predicate"], edge["target_kind"]) == (
+        "finding",
+        "affects",
+        "asset",
+    )
+    engine.dispose()
+
+    dangling = create_engine(f"sqlite+pysqlite:///{tmp_path / 'dangling.db'}")
+    _run_migration(dangling, command.upgrade, "0010_browser_automation_indexes")
+    entities = Table("entities", MetaData(), autoload_with=dangling)
+    with dangling.begin() as connection:
+        connection.execute(
+            entities.insert(),
+            [
+                row(
+                    "finding-2",
+                    "findings",
+                    "project-1",
+                    {"title": "Issue", "asset_ids": ["missing"]},
+                )
+            ],
+        )
+    with pytest.raises(RuntimeError, match="dangling legacy relation"):
+        _run_migration(dangling, command.upgrade, "head")
+    dangling.dispose()
 
 
 @pytest.mark.skipif(
