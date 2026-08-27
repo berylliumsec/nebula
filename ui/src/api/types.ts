@@ -53,6 +53,24 @@ export interface ActionDescriptor {
   disabledReason?: string;
 }
 
+export interface SearchResult {
+  ref: ResourceRef;
+  project: string;
+  label: string;
+  description: string;
+  snippet: string;
+  breadcrumb: string;
+  updatedAt: string;
+  score: number;
+  actions: ActionDescriptor[];
+}
+
+export interface SearchResponse {
+  items: SearchResult[];
+  nextCursor?: string;
+  partialIndex: boolean;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;

@@ -188,6 +188,30 @@ class ResourceRelationRow(Base):
     )
 
 
+class SearchDocumentRow(Base):
+    """Privacy-filtered metadata projection used by the universal omnibox."""
+
+    __tablename__ = "search_documents"
+    __table_args__ = (
+        Index("ix_search_documents_project_kind", "project_id", "resource_kind"),
+        Index("ix_search_documents_updated", "updated_at"),
+        Index("ix_search_documents_label", "label"),
+    )
+
+    id: Mapped[str] = mapped_column(String(4096), primary_key=True)
+    project_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    resource_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(4096), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
+    breadcrumb: Mapped[str] = mapped_column(String(1000), nullable=False, default="")
+    content: Mapped[str] = mapped_column(String(8000), nullable=False, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class RunEventRow(Base):
     __tablename__ = "run_events"
     __table_args__ = (

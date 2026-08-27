@@ -115,6 +115,7 @@ import type {
   ResourceRef,
   ResourceRelation,
   ResourceResolution,
+  SearchResponse,
   RunStopRequest,
   RunnerProfile,
   RunnerProfileUpdateRequest,
@@ -190,6 +191,16 @@ interface WireActionDescriptor {
   confirmation_policy: ActionDescriptor["confirmationPolicy"];
   available: boolean;
   disabled_reason?: string | null;
+}
+
+interface WireSearchResponse {
+  items: Array<{
+    ref: WireResourceRef; project: string; label: string; description: string;
+    snippet: string; breadcrumb: string; updated_at: string; score: number;
+    actions: WireActionDescriptor[];
+  }>;
+  next_cursor?: string | null;
+  partial_index: boolean;
 }
 
 interface WireActionIntent {
@@ -4032,6 +4043,31 @@ export class ApiClient {
         device_capabilities: deviceCapabilities,
       }),
     }).then((items) => items.map(mapActionDescriptor));
+  }
+
+  searchResources(request: {
+    query: string;
+    activeProject?: string;
+    scope?: "active" | "all";
+    resourceKinds?: ResourceKind[];
+    cursor?: string;
+    limit?: number;
+  }, signal?: AbortSignal): Promise<SearchResponse> {
+    const query = new URLSearchParams({ query: request.query, scope: request.scope ?? "active" });
+    if (request.activeProject) query.set("active_project", request.activeProject);
+    request.resourceKinds?.forEach((kind) => query.append("resource_kind", kind));
+    if (request.cursor) query.set("cursor", request.cursor);
+    query.set("limit", String(request.limit ?? 30));
+    return this.request<WireSearchResponse>(`search?${query.toString()}`, { signal }).then((value) => ({
+      items: value.items.map((item) => ({
+        ref: mapResourceRef(item.ref), project: item.project, label: item.label,
+        description: item.description, snippet: item.snippet, breadcrumb: item.breadcrumb,
+        updatedAt: item.updated_at, score: item.score,
+        actions: item.actions.map(mapActionDescriptor),
+      })),
+      nextCursor: value.next_cursor ?? undefined,
+      partialIndex: value.partial_index,
+    }));
   }
 
   createResourceRelation(

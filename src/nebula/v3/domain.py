@@ -186,6 +186,31 @@ class ActionResolutionRequest(BaseModel):
     device_capabilities: list[str] = Field(default_factory=list, max_length=200)
 
 
+class SearchScope(StringEnum):
+    ACTIVE = "active"
+    ALL = "all"
+
+
+class SearchResult(BaseModel):
+    """One ranked, canonical omnibox result with resolved applicable actions."""
+
+    ref: ResourceRef
+    project: str
+    label: str
+    description: str = ""
+    snippet: str = ""
+    breadcrumb: str = ""
+    updated_at: datetime
+    score: float
+    actions: list[ActionDescriptor] = Field(default_factory=list)
+
+
+class SearchResponse(BaseModel):
+    items: list[SearchResult]
+    next_cursor: str | None = None
+    partial_index: bool = False
+
+
 class EngagementStatus(StringEnum):
     DRAFT = "draft"
     ACTIVE = "active"

@@ -31,6 +31,7 @@ export function AppShell() {
   const { resolvedTheme } = useTheme();
   const {
     approvals,
+    api,
     coreError,
     engagement,
     reconnect,
@@ -187,6 +188,8 @@ export function AppShell() {
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />
               <CommandPalette
+                api={api}
+                activeProjectId={engagement?.id}
                 contextualCommands={contextualCommands}
                 open={paletteOpen}
                 onClose={() => setPaletteOpen(false)}

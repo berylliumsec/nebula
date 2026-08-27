@@ -20,6 +20,7 @@ from .database import (
     OperationEventRow,
     RunBudgetCounterRow,
     RunEventRow,
+    SearchDocumentRow,
 )
 from .domain import (
     ChatTurn,
@@ -133,6 +134,10 @@ class StoreTransaction:
                 stage="storage",
             )
             raise ConflictError(f"entity already exists: {entity.id}") from exc
+        from .search import upsert_search_document
+
+        upsert_search_document(self.session, row)
+        self.session.flush()
         return entity
 
     def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
@@ -187,6 +192,12 @@ class StoreTransaction:
             raise ConflictError(
                 f"entity {entity_id} changed while the update was in progress"
             )
+        self.session.flush()
+        refreshed = self.session.get(EntityRow, entity_id)
+        if refreshed is not None:
+            from .search import upsert_search_document
+
+            upsert_search_document(self.session, refreshed)
         return updated
 
     def delete(
@@ -206,6 +217,15 @@ class StoreTransaction:
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
         self.session.delete(row)
+        document = self.session.get(SearchDocumentRow, entity_id)
+        if document is not None:
+            self.session.delete(document)
+        for child in self.session.scalars(
+            select(SearchDocumentRow).where(
+                SearchDocumentRow.id.like(f"{entity_id}::tab::%")
+            )
+        ):
+            self.session.delete(child)
         self.session.flush()
 
 
