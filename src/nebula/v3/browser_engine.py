@@ -173,6 +173,7 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
                 raise ValueError("browserd returned an incompatible adapter contract")
             return capability
         except Exception:
+            # diagnostic-expected: converted to an actionable readiness receipt.
             return BrowserEngineCapability(
                 adapter="managed-chromium",
                 display_name="Managed Chromium",
@@ -206,6 +207,7 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
                 raise ValueError("browserd returned a receipt for another action")
             return receipt
         except Exception:
+            # diagnostic-expected: converted to a non-replayable action receipt.
             ambiguous = action.side_effect != "none"
             return BrowserEngineReceipt(
                 action_token=action.action_token,

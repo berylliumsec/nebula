@@ -74,6 +74,7 @@ def _safe_page_url(value: str) -> str | None:
     try:
         port = parsed.port
     except ValueError:
+        # diagnostic-expected: invalid receipt URLs are redacted.
         return None
     netloc = f"{host}:{port}" if port is not None else host
     return urlunsplit((parsed.scheme, netloc, parsed.path or "/", "", ""))
@@ -256,6 +257,7 @@ class BrowserdManager:
             self._playwright = await self._playwright_factory().start()
             self._capability = self._verify_runtime()
         except Exception:
+            # diagnostic-expected: converted to unavailable readiness.
             self._capability = BrowserEngineCapability(
                 adapter="managed-chromium",
                 display_name="Managed Chromium",
@@ -337,6 +339,7 @@ class BrowserdManager:
             try:
                 await context.close()
             except Exception:
+                # diagnostic-expected: shutdown continues through remaining contexts.
                 pass
         self._contexts.clear()
         self._tabs.clear()
@@ -344,6 +347,7 @@ class BrowserdManager:
             try:
                 await self._playwright.stop()
             except Exception:
+                # diagnostic-expected: process shutdown is already in progress.
                 pass
 
     async def readiness(self) -> BrowserEngineCapability:
@@ -569,6 +573,7 @@ class BrowserdManager:
                 ),
             )
         except Exception:
+            # diagnostic-expected: converted to a normalized action receipt.
             if trace_started and action.identity_id in self._contexts:
                 try:
                     trace_dir = self._identity_path(action.identity_id) / "traces"
@@ -576,6 +581,7 @@ class BrowserdManager:
                         path=str(trace_dir / f"{trace_id}.zip")
                     )
                 except Exception:
+                    # diagnostic-expected: primary receipt retains the trace failure.
                     pass
             ambiguous = action.side_effect != "none" and dispatched
             receipt = BrowserEngineReceipt(
@@ -698,6 +704,7 @@ def create_browserd_app(
                         encoded + "=" * (-len(encoded) % 4)
                     ).decode("utf-8")
                 except (ValueError, UnicodeDecodeError):
+                    # diagnostic-expected: malformed auth is rejected below.
                     supplied = ""
                 break
         if not supplied or not hmac.compare_digest(supplied, settings.token):
@@ -708,6 +715,7 @@ def create_browserd_app(
         try:
             page = await runtime.page_for_screencast(identity_id, tab_id)
         except Exception:
+            # diagnostic-expected: missing tabs receive a bounded protocol close.
             await websocket.close(code=4404, reason="managed browser tab not found")
             return
         await websocket.accept(
@@ -723,6 +731,7 @@ def create_browserd_app(
                 try:
                     frames.get_nowait()
                 except asyncio.QueueEmpty:
+                    # diagnostic-expected: another callback drained the bounded queue.
                     pass
             frames.put_nowait(event)
 
@@ -776,7 +785,9 @@ def create_browserd_app(
                         "Input.insertText", {"text": str(event.get("text", ""))}
                     )
 
+        # diagnostic-expected: both pumps are cancelled and drained in finally.
         sender = asyncio.create_task(send_frames())
+        # diagnostic-expected: paired with sender in the same wait set and cleanup.
         receiver = asyncio.create_task(receive_input())
         try:
             done, pending = await asyncio.wait(
@@ -787,13 +798,16 @@ def create_browserd_app(
             for task in done:
                 task.result()
         except (WebSocketDisconnect, asyncio.CancelledError):
+            # diagnostic-expected: normal viewer detach.
             pass
         finally:
             sender.cancel()
             receiver.cancel()
+            await asyncio.gather(sender, receiver, return_exceptions=True)
             try:
                 await cdp.send("Page.stopScreencast")
             except Exception:
+                # diagnostic-expected: the detached target may already be closed.
                 pass
             await cdp.detach()
 

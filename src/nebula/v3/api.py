@@ -8561,6 +8561,7 @@ def create_app(
                     encoded + "=" * (-len(encoded) % 4)
                 ).decode("utf-8")
             except (ValueError, UnicodeDecodeError):
+                # diagnostic-expected: malformed auth is rejected below.
                 subprotocol_token = None
             break
         if (
@@ -8580,6 +8581,7 @@ def create_app(
         try:
             store.get(BrowserAssessment, assessment_id)
         except NotFoundError:
+            # diagnostic-expected: a missing assessment is a bounded protocol close.
             await websocket.close(code=4404, reason="assessment not found")
             return
         event_protocol = (
@@ -8621,6 +8623,7 @@ def create_app(
                     await websocket.send_json({"kind": "heartbeat", "sequence": cursor})
                     idle_ticks = 0
         except WebSocketDisconnect:
+            # diagnostic-expected: disconnect only detaches this viewer.
             return
 
     @app.post(
