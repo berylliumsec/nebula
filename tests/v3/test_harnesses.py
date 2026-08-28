@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
+from nebula.v3.automation_tools import AutomationToolComponents, command_specs
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.browser_automation import (
     BrowserAutomationService,
@@ -1259,6 +1260,110 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
 
     assert session.metadata["command_runtime_enabled"] is False
     assert "command_runtime_snapshot" not in session.metadata
+
+
+def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
+    tmp_path,
+):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
+
+        class Commands:
+            def __init__(self, digest: str) -> None:
+                self.store = store
+                self.digest = digest
+
+            def chat_components(self, *, engagement_id: str):
+                return AutomationToolComponents(
+                    broker=object(),
+                    scope=ScopePolicy(
+                        id=f"scope:{engagement_id}", engagement_id=engagement_id
+                    ),
+                    workspace=tmp_path,
+                    specs=command_specs(),
+                    runtime_digest=self.digest,
+                )
+
+        old_digest = "sha256:" + "a" * 64
+        new_digest = "sha256:" + "b" * 64
+        first_runtime.bind_automation_tool_platform(Commands(old_digest))  # type: ignore[arg-type]
+        chat, _, first_turn = first_runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Remember the original request",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        _ = [event async for event in first_runtime.stream_turn(first_turn.id)]
+        frozen_session = store.get(HarnessSession, first_turn.harness_session_id)
+        assert (
+            store.get(HarnessTurn, first_turn.id).status == HarnessTurnStatus.COMPLETE
+        )
+        await first_runtime.shutdown()
+
+        adapter = FakeAdapter()
+        restarted_runtime = HarnessRuntimeService(
+            store,
+            credential_store=CredentialStore(),
+            workspace_resolver=lambda _: tmp_path,
+            adapter_factory=lambda _: adapter,
+        )
+        restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        rebound_chat, owner, replacement_turn = restarted_runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Continue after the runtime update",
+            chat_session_id=chat.id,
+            harness_session_id=frozen_session.id,
+            mcp_server_ids=[],
+        )
+
+        replacement_session = store.get(
+            HarnessSession, replacement_turn.harness_session_id
+        )
+        assert replacement_session.id != frozen_session.id
+        assert rebound_chat.harness_session_id == replacement_session.id
+        assert (
+            store.get(HarnessSession, frozen_session.id).metadata[
+                "command_runtime_snapshot"
+            ]["runtime_digest"]
+            == old_digest
+        )
+        assert (
+            replacement_session.metadata["command_runtime_snapshot"]["runtime_digest"]
+            == new_digest
+        )
+        assert rebound_chat.metadata["harness_session_rollovers"][-1]["reason"] == (
+            "command_runtime_changed"
+        )
+        assert owner.request_snapshot["session_rollover_reason"] == (
+            "command_runtime_changed"
+        )
+        assert replacement_turn.metadata["session_rollover_reason"] == (
+            "command_runtime_changed"
+        )
+        assert "Remember the original request" in replacement_turn.prompt
+        assert "handoff after a command runtime update" in replacement_turn.prompt
+
+        events = [
+            event async for event in restarted_runtime.stream_turn(replacement_turn.id)
+        ]
+        rollover = next(
+            event
+            for event in events
+            if event.payload.get("phase") == "command_runtime_session_created"
+        )
+        assert rollover.payload["previous_session_id"] == frozen_session.id
+        assert "preserved the prior session" in rollover.payload["detail"]
+        assert store.get(HarnessTurn, replacement_turn.id).status == (
+            HarnessTurnStatus.COMPLETE
+        )
+        await restarted_runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
