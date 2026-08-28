@@ -647,6 +647,27 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
       expected_revision: scope.revision,
     } });
     expect(update.ok(), await update.text()).toBe(true);
+    const browserWorkspaceResponse = await api.get(`engagements/${projectId}/browser-workspace`);
+    expect(browserWorkspaceResponse.ok(), await browserWorkspaceResponse.text()).toBe(true);
+    const browserWorkspace = await browserWorkspaceResponse.json() as {
+      identities: Array<{ id: string }>;
+      sessions: Array<{ id: string }>;
+    };
+    const assessmentResponse = await api.post(
+      `engagements/${projectId}/browser-assessments`,
+      { data: {
+        name: "LAN guided assessment",
+        objective: "Map the authorized account surface and preserve evidence.",
+        profile: "explore",
+        session_id: browserWorkspace.sessions[0].id,
+        identity_ids: [browserWorkspace.identities[0].id],
+        primary_identity_id: browserWorkspace.identities[0].id,
+        target_urls: ["https://example.com/"],
+      } },
+    );
+    expect(assessmentResponse.ok(), await assessmentResponse.text()).toBe(true);
+    const assessment = await assessmentResponse.json() as { id: string; status: string };
+    expect(assessment.status).toBe("draft");
 
     await page.addInitScript(() => {
       window.open = () => ({}) as Window;
@@ -663,6 +684,10 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "Research workbench" }).click();
+    await expect(page.getByRole("heading", { name: "LAN guided assessment" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Prepare / Retry" })).toBeVisible();
+    await expect(page.getByText(/Manual legacy browsing remains available/)).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.get("assessment")).toBe(assessment.id);
     await page.getByRole("button", { name: "Repeater", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
     await page.getByLabel("Name").fill("Durable account request");
@@ -674,6 +699,8 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Research workbench" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("tool")).toBe("repeater");
+    expect(new URL(page.url()).searchParams.has("browserTool")).toBe(false);
     await page.getByRole("button", { name: "Repeater", exact: true }).click();
     await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);

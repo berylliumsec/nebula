@@ -1,4 +1,5 @@
 import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -40,7 +41,10 @@ def test_nebula3_version_is_synchronized_across_every_package():
 def test_native_launcher_and_admin_command_contract():
     with (ROOT / "pyproject.toml").open("rb") as stream:
         scripts = tomli.load(stream)["tool"]["poetry"]["scripts"]
-    assert scripts == {"nebula-core": "nebula.v3.cli:main"}
+    assert scripts == {
+        "nebula-core": "nebula.v3.cli:main",
+        "nebula-browserd": "nebula.v3.browserd:main",
+    }
 
     linux_launcher = (ROOT / "packaging/linux/nebula").read_text(encoding="utf-8")
     assert 'exec /usr/bin/nebula-ui "$@"' in linux_launcher
@@ -404,13 +408,11 @@ def test_playwright_runtime_staging_keeps_only_verified_generated_payload(tmp_pa
         assert check is True
         assert text is True
         runtime = Path(env["PLAYWRIGHT_BROWSERS_PATH"])
-        executable = (
-            runtime / "chromium_headless_shell-test" / "chrome-linux" / "headless_shell"
-        )
+        executable = runtime / "chromium-test" / "chrome-linux" / "chrome"
         executable.parent.mkdir(parents=True)
         executable.write_bytes(b"browser")
         executable.chmod(0o755)
-        (executable.parent / "LICENSE.headless_shell").write_text(
+        (executable.parent / "LICENSE.chromium").write_text(
             "Chromium license\n",
             encoding="utf-8",
         )
@@ -425,14 +427,10 @@ def test_playwright_runtime_staging_keeps_only_verified_generated_payload(tmp_pa
 
     assert not (destination / "stale-browser").exists()
     assert (destination / ".gitignore").is_file()
-    assert manifest["browser"] == "chromium-headless-shell"
-    assert manifest["executables"] == [
-        "chromium_headless_shell-test/chrome-linux/headless_shell"
-    ]
-    assert manifest["licenses"] == [
-        "chromium_headless_shell-test/chrome-linux/LICENSE.headless_shell"
-    ]
-    assert commands[0][0][-3:] == ["install", "--only-shell", "chromium"]
+    assert manifest["browser"] == "chromium"
+    assert manifest["executables"] == ["chromium-test/chrome-linux/chrome"]
+    assert manifest["licenses"] == ["chromium-test/chrome-linux/LICENSE.chromium"]
+    assert commands[0][0][-3:] == ["install", "--no-shell", "chromium"]
     assert commands[0][1] == str(destination.resolve())
 
 
@@ -553,11 +551,8 @@ def test_artifact_member_audit_rejects_build_residue():
 def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_path):
     binary = tmp_path / "usr/bin"
     legal = tmp_path / "usr/share/doc/nebula"
-    playwright = (
-        tmp_path
-        / "usr/lib/nebula/playwright-browsers"
-        / "chromium_headless_shell-test/chrome-linux"
-    )
+    playwright_root = tmp_path / "usr/lib/nebula/playwright-browsers"
+    playwright = playwright_root / "chromium-test/chrome-linux"
     binary.mkdir(parents=True)
     legal.mkdir(parents=True)
     playwright.mkdir(parents=True)
@@ -565,11 +560,16 @@ def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_pat
         (binary / name).write_bytes(b"binary")
     (legal / "LICENSE").write_text("BSD\n", encoding="utf-8")
     (legal / "THIRD_PARTY_NOTICES.txt").write_text("Notices\n", encoding="utf-8")
-    browser = playwright / "headless_shell"
+    browser = playwright / "chrome"
     browser.write_bytes(b"browser")
     browser.chmod(0o755)
-    (playwright / "LICENSE.headless_shell").write_text(
+    browser_sha256 = hashlib.sha256(b"browser").hexdigest()
+    (playwright / "LICENSE.chromium").write_text(
         "Chromium license\n",
+        encoding="utf-8",
+    )
+    (playwright_root / "nebula-playwright-sbom.spdx.json").write_text(
+        json.dumps({"spdxVersion": "SPDX-2.3"}),
         encoding="utf-8",
     )
     (
@@ -578,16 +578,21 @@ def test_installer_tree_gate_requires_legal_files_and_rejects_toolchains(tmp_pat
         json.dumps(
             {
                 "schema": 1,
-                "browser": "chromium-headless-shell",
+                "browser": "chromium",
                 "playwright_version": "1.61.0",
                 "target": "x86_64-unknown-linux-gnu",
                 "payload_bytes": 7,
-                "executables": [
-                    "chromium_headless_shell-test/chrome-linux/headless_shell"
-                ],
-                "licenses": [
-                    "chromium_headless_shell-test/chrome-linux/LICENSE.headless_shell"
-                ],
+                "executables": ["chromium-test/chrome-linux/chrome"],
+                "executable_sha256": {
+                    "chromium-test/chrome-linux/chrome": browser_sha256
+                },
+                "licenses": ["chromium-test/chrome-linux/LICENSE.chromium"],
+                "sbom": "nebula-playwright-sbom.spdx.json",
+                "provenance": {
+                    "installer": "python -m playwright install chromium",
+                    "browser_revision": "chromium-test",
+                    "target": "x86_64-unknown-linux-gnu",
+                },
             }
         ),
         encoding="utf-8",

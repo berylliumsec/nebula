@@ -228,6 +228,80 @@ class StoreTransaction:
             self.session.delete(child)
         self.session.flush()
 
+    def append_operation_event(
+        self,
+        operation_id: str,
+        operation_kind: str,
+        engagement_id: str,
+        event_type: str,
+        payload: dict[str, Any] | None = None,
+        *,
+        actor_id: str | None = None,
+        idempotency_key: str | None = None,
+        occurred_at: datetime | None = None,
+    ) -> OperationEvent:
+        """Append a receipt in the same transaction as its authoritative state."""
+
+        if not all((operation_id, operation_kind, engagement_id, event_type)):
+            raise ValueError("operation event identifiers and type are required")
+        existing = None
+        if idempotency_key:
+            existing = self.session.scalar(
+                select(OperationEventRow).where(
+                    OperationEventRow.operation_id == operation_id,
+                    OperationEventRow.idempotency_key == idempotency_key,
+                )
+            )
+        if existing is not None:
+            existing_time = existing.occurred_at
+            if existing_time.tzinfo is None:
+                existing_time = existing_time.replace(tzinfo=timezone.utc)
+            event = OperationEvent(
+                id=existing.id,
+                operation_id=existing.operation_id,
+                operation_kind=existing.operation_kind,
+                engagement_id=existing.engagement_id,
+                sequence=existing.sequence,
+                event_type=existing.event_type,
+                payload=existing.payload,
+                actor_id=existing.actor_id,
+                occurred_at=existing_time,
+                idempotency_key=existing.idempotency_key,
+            )
+            if (
+                event.operation_kind != operation_kind
+                or event.engagement_id != engagement_id
+                or event.event_type != event_type
+                or event.payload != (payload or {})
+                or event.actor_id != actor_id
+            ):
+                raise ConflictError(
+                    "idempotency key was reused for a different operation event"
+                )
+            return event
+        last_sequence = self.session.scalar(
+            select(func.max(OperationEventRow.sequence)).where(
+                OperationEventRow.operation_id == operation_id
+            )
+        )
+        event = OperationEvent(
+            operation_id=operation_id,
+            operation_kind=operation_kind,
+            engagement_id=engagement_id,
+            sequence=int(last_sequence or 0) + 1,
+            event_type=event_type,
+            payload=payload or {},
+            actor_id=actor_id,
+            occurred_at=occurred_at or utc_now(),
+            idempotency_key=idempotency_key,
+        )
+        self.session.add(OperationEventRow(**event.model_dump(mode="python")))
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            raise ConflictError("operation event already exists") from exc
+        return event
+
 
 class NebulaStore:
     """Persistence boundary for typed Nebula entities and run events."""

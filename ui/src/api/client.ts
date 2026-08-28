@@ -46,6 +46,13 @@ import type {
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
   SecurityBrowserAction,
+  SecurityBrowserAssessment,
+  SecurityBrowserAssessmentProfile,
+  SecurityBrowserAssessmentWorkspace,
+  SecurityBrowserEngineCapability,
+  SecurityBrowserIssueCandidate,
+  SecurityBrowserValidationGrant,
+  SecurityBrowserScanProfile,
   SecurityBrowserAutomationStatus,
   SecurityBrowserAutomationLease,
   SecurityBrowserCommand,
@@ -738,6 +745,127 @@ interface WireBrowserWorkspace {
   frames: WireBrowserWebSocketFrame[];
   actions: WireBrowserAction[];
   handoffs: WireBrowserHandoff[];
+}
+
+interface WireBrowserEngineCapability {
+  adapter: string;
+  display_name: string;
+  contract_version: string;
+  state: SecurityBrowserEngineCapability["state"];
+  installed_version?: string | null;
+  digest?: string | null;
+  actions: string[];
+  protocols: string[];
+  check_families: string[];
+  unavailability_reason?: string | null;
+  recovery_action?: string | null;
+  desktop_only: boolean;
+}
+
+interface WireBrowserAssessment extends WireEntity {
+  engagement_id: string;
+  name: string;
+  objective: string;
+  profile: SecurityBrowserAssessmentProfile;
+  session_id: string;
+  identity_ids: string[];
+  primary_identity_id: string;
+  target_urls: string[];
+  scope_policy_id: string;
+  scope_policy_revision: number;
+  risk_classes: string[];
+  validation_grant_id?: string | null;
+  status: SecurityBrowserAssessment["status"];
+  phase: SecurityBrowserAssessment["phase"];
+  progress: number;
+  budget: {
+    max_requests: number;
+    max_actions: number;
+    max_duration_seconds: number;
+    max_concurrency: number;
+    requests_used: number;
+    actions_used: number;
+  };
+  coverage: {
+    discovered_urls: number;
+    visited_urls: number;
+    analyzed_exchanges: number;
+    discovered_forms: number;
+    discovered_apis: number;
+    websocket_channels: number;
+  };
+  engines: WireBrowserEngineCapability[];
+  evidence_ids: string[];
+  candidate_ids: string[];
+  active_step_id?: string | null;
+  control_owner: "nebula" | "operator";
+  pause_reason?: string | null;
+  failure?: string | null;
+  recovery_action?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+interface WireBrowserAssessmentStep extends WireEntity {
+  assessment_id: string;
+  sequence: number;
+  title: string;
+  intent: string;
+  capability: string;
+  target: string;
+  status: SecurityBrowserAssessmentWorkspace["steps"][number]["status"];
+  retry_classification: SecurityBrowserAssessmentWorkspace["steps"][number]["retryClassification"];
+  trace_ids: string[];
+  evidence_ids: string[];
+  error?: string | null;
+  recovery_action?: string | null;
+}
+
+interface WireBrowserScanProfile {
+  id: SecurityBrowserAssessmentProfile;
+  name: string;
+  summary: string;
+  risk_classes: string[];
+  required_adapters: string[];
+  default_budget: WireBrowserAssessment["budget"];
+  validation_locked: boolean;
+}
+
+interface WireBrowserIssueCandidate extends WireEntity {
+  assessment_id: string;
+  rule_id: string;
+  check_family: string;
+  title: string;
+  cwe?: string | null;
+  target_url: string;
+  insertion_point?: string | null;
+  severity: SecurityBrowserIssueCandidate["severity"];
+  confidence: SecurityBrowserIssueCandidate["confidence"];
+  evidence_ids: string[];
+  validation_status: SecurityBrowserIssueCandidate["validationStatus"];
+  validation_grant_id?: string | null;
+  promoted_finding_id?: string | null;
+}
+
+interface WireBrowserValidationGrant extends WireEntity {
+  assessment_id: string;
+  candidate_id: string;
+  target_url: string;
+  technique: string;
+  max_requests: number;
+  requests_used: number;
+  duration_seconds: number;
+  expires_at: string;
+  status: SecurityBrowserValidationGrant["status"];
+}
+
+interface WireBrowserAssessmentWorkspace {
+  assessments: WireBrowserAssessment[];
+  steps: WireBrowserAssessmentStep[];
+  profiles: WireBrowserScanProfile[];
+  engines: WireBrowserEngineCapability[];
+  candidates: WireBrowserIssueCandidate[];
+  validation_grants: WireBrowserValidationGrant[];
 }
 
 interface WireAgentRun extends WireEntity {
@@ -3644,6 +3772,147 @@ function mapBrowserWorkspace(value: WireBrowserWorkspace): SecurityBrowserWorksp
     frames: value.frames.map(mapBrowserWebSocketFrame),
     actions: value.actions.map(mapBrowserAction),
     handoffs: value.handoffs.map(mapBrowserHandoff),
+  };
+}
+
+function mapBrowserEngineCapability(value: WireBrowserEngineCapability): SecurityBrowserEngineCapability {
+  return {
+    adapter: value.adapter,
+    displayName: value.display_name,
+    contractVersion: value.contract_version,
+    state: value.state,
+    installedVersion: value.installed_version ?? undefined,
+    digest: value.digest ?? undefined,
+    actions: value.actions,
+    protocols: value.protocols,
+    checkFamilies: value.check_families,
+    unavailabilityReason: value.unavailability_reason ?? undefined,
+    recoveryAction: value.recovery_action ?? undefined,
+    desktopOnly: value.desktop_only,
+  };
+}
+
+function mapBrowserBudget(value: WireBrowserAssessment["budget"]): SecurityBrowserAssessment["budget"] {
+  return {
+    maxRequests: value.max_requests,
+    maxActions: value.max_actions,
+    maxDurationSeconds: value.max_duration_seconds,
+    maxConcurrency: value.max_concurrency,
+    requestsUsed: value.requests_used,
+    actionsUsed: value.actions_used,
+  };
+}
+
+function mapBrowserAssessment(value: WireBrowserAssessment): SecurityBrowserAssessment {
+  return {
+    id: value.id,
+    revision: value.revision,
+    engagementId: value.engagement_id,
+    name: value.name,
+    objective: value.objective,
+    profile: value.profile,
+    sessionId: value.session_id,
+    identityIds: value.identity_ids,
+    primaryIdentityId: value.primary_identity_id,
+    targetUrls: value.target_urls,
+    scopePolicyId: value.scope_policy_id,
+    scopePolicyRevision: value.scope_policy_revision,
+    riskClasses: value.risk_classes,
+    validationGrantId: value.validation_grant_id ?? undefined,
+    status: value.status,
+    phase: value.phase,
+    progress: value.progress,
+    budget: mapBrowserBudget(value.budget),
+    coverage: {
+      discoveredUrls: value.coverage.discovered_urls,
+      visitedUrls: value.coverage.visited_urls,
+      analyzedExchanges: value.coverage.analyzed_exchanges,
+      discoveredForms: value.coverage.discovered_forms,
+      discoveredApis: value.coverage.discovered_apis,
+      websocketChannels: value.coverage.websocket_channels,
+    },
+    engines: value.engines.map(mapBrowserEngineCapability),
+    evidenceIds: value.evidence_ids,
+    candidateIds: value.candidate_ids,
+    activeStepId: value.active_step_id ?? undefined,
+    controlOwner: value.control_owner,
+    pauseReason: value.pause_reason ?? undefined,
+    failure: value.failure ?? undefined,
+    recoveryAction: value.recovery_action ?? undefined,
+    startedAt: value.started_at ?? undefined,
+    completedAt: value.completed_at ?? undefined,
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+  };
+}
+
+function mapBrowserCandidate(value: WireBrowserIssueCandidate): SecurityBrowserIssueCandidate {
+  return {
+    id: value.id,
+    revision: value.revision,
+    assessmentId: value.assessment_id,
+    ruleId: value.rule_id,
+    checkFamily: value.check_family,
+    title: value.title,
+    cwe: value.cwe ?? undefined,
+    targetUrl: value.target_url,
+    insertionPoint: value.insertion_point ?? undefined,
+    severity: value.severity,
+    confidence: value.confidence,
+    evidenceIds: value.evidence_ids,
+    validationStatus: value.validation_status,
+    validationGrantId: value.validation_grant_id ?? undefined,
+    promotedFindingId: value.promoted_finding_id ?? undefined,
+  };
+}
+
+function mapBrowserValidationGrant(value: WireBrowserValidationGrant): SecurityBrowserValidationGrant {
+  return {
+    id: value.id,
+    revision: value.revision,
+    assessmentId: value.assessment_id,
+    candidateId: value.candidate_id,
+    targetUrl: value.target_url,
+    technique: value.technique,
+    maxRequests: value.max_requests,
+    requestsUsed: value.requests_used,
+    durationSeconds: value.duration_seconds,
+    expiresAt: value.expires_at,
+    status: value.status,
+  };
+}
+
+function mapBrowserAssessmentWorkspace(value: WireBrowserAssessmentWorkspace): SecurityBrowserAssessmentWorkspace {
+  return {
+    assessments: value.assessments.map(mapBrowserAssessment),
+    steps: value.steps.map((item) => ({
+      id: item.id,
+      revision: item.revision,
+      assessmentId: item.assessment_id,
+      sequence: item.sequence,
+      title: item.title,
+      intent: item.intent,
+      capability: item.capability,
+      target: item.target,
+      status: item.status,
+      retryClassification: item.retry_classification,
+      traceIds: item.trace_ids,
+      evidenceIds: item.evidence_ids,
+      error: item.error ?? undefined,
+      recoveryAction: item.recovery_action ?? undefined,
+    })),
+    profiles: value.profiles.map((profile): SecurityBrowserScanProfile => ({
+      id: profile.id,
+      name: profile.name,
+      summary: profile.summary,
+      riskClasses: profile.risk_classes,
+      requiredAdapters: profile.required_adapters,
+      defaultBudget: mapBrowserBudget(profile.default_budget),
+      validationLocked: profile.validation_locked,
+    })),
+    engines: value.engines.map(mapBrowserEngineCapability),
+    candidates: value.candidates.map(mapBrowserCandidate),
+    validationGrants: value.validation_grants.map(mapBrowserValidationGrant),
   };
 }
 
@@ -7466,6 +7735,158 @@ export class ApiClient {
       `engagements/${encodeURIComponent(engagementId)}/browser-workspace`,
       { signal },
     ).then(mapBrowserWorkspace);
+  }
+
+  getSecurityBrowserAssessments(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SecurityBrowserAssessmentWorkspace> {
+    return this.request<WireBrowserAssessmentWorkspace>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-assessments`,
+      { signal },
+    ).then(mapBrowserAssessmentWorkspace);
+  }
+
+  createSecurityBrowserAssessment(
+    engagementId: string,
+    body: {
+      name: string;
+      objective: string;
+      profile: SecurityBrowserAssessmentProfile;
+      sessionId: string;
+      identityIds: string[];
+      primaryIdentityId: string;
+      targetUrls: string[];
+      credentialRefs?: string[];
+      validationGrantId?: string;
+      budget?: SecurityBrowserAssessment["budget"];
+    },
+  ): Promise<SecurityBrowserAssessment> {
+    return this.request<WireBrowserAssessment>(
+      `engagements/${encodeURIComponent(engagementId)}/browser-assessments`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          name: body.name,
+          objective: body.objective,
+          profile: body.profile,
+          session_id: body.sessionId,
+          identity_ids: body.identityIds,
+          primary_identity_id: body.primaryIdentityId,
+          target_urls: body.targetUrls,
+          credential_refs: body.credentialRefs ?? [],
+          validation_grant_id: body.validationGrantId,
+          budget: body.budget ? {
+            max_requests: body.budget.maxRequests,
+            max_actions: body.budget.maxActions,
+            max_duration_seconds: body.budget.maxDurationSeconds,
+            max_concurrency: body.budget.maxConcurrency,
+            requests_used: body.budget.requestsUsed,
+            actions_used: body.budget.actionsUsed,
+          } : undefined,
+        }),
+      },
+    ).then(mapBrowserAssessment);
+  }
+
+  transitionSecurityBrowserAssessment(
+    assessment: SecurityBrowserAssessment,
+    action: "start" | "pause" | "resume" | "takeover" | "return_control" | "stop" | "complete" | "fail" | "retry" | "revoke",
+    options?: { reason?: string; recoveryAction?: string },
+  ): Promise<SecurityBrowserAssessment> {
+    return this.request<WireBrowserAssessment>(
+      `browser-assessments/${encodeURIComponent(assessment.id)}/transition`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: assessment.revision,
+          action,
+          reason: options?.reason,
+          recovery_action: options?.recoveryAction,
+          idempotency_key: `${action}:${assessment.id}:${assessment.revision}`,
+        }),
+      },
+    ).then(mapBrowserAssessment);
+  }
+
+  refreshSecurityBrowserAssessmentReadiness(
+    assessment: SecurityBrowserAssessment,
+  ): Promise<SecurityBrowserAssessment> {
+    return this.request<WireBrowserAssessment>(
+      `browser-assessments/${encodeURIComponent(assessment.id)}/readiness?expected_revision=${assessment.revision}`,
+      { method: "POST" },
+    ).then(mapBrowserAssessment);
+  }
+
+  deleteSecurityBrowserAssessment(
+    assessment: SecurityBrowserAssessment,
+  ): Promise<void> {
+    return this.request<void>(
+      `browser-assessments/${encodeURIComponent(assessment.id)}?expected_revision=${assessment.revision}`,
+      { method: "DELETE" },
+    );
+  }
+
+  grantSecurityBrowserCandidateValidation(
+    candidate: SecurityBrowserIssueCandidate,
+    body: { technique: string; maxRequests: number; durationSeconds: number },
+  ): Promise<SecurityBrowserValidationGrant> {
+    return this.request<WireBrowserValidationGrant>(
+      `browser-issue-candidates/${encodeURIComponent(candidate.id)}/validation-grant`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_candidate_revision: candidate.revision,
+          technique: body.technique,
+          max_requests: body.maxRequests,
+          duration_seconds: body.durationSeconds,
+          idempotency_key: `validation-grant:${candidate.id}:${candidate.revision}`,
+        }),
+      },
+    ).then(mapBrowserValidationGrant);
+  }
+
+  revokeSecurityBrowserCandidateValidation(
+    candidate: SecurityBrowserIssueCandidate,
+    grant: SecurityBrowserValidationGrant,
+    reason: string,
+  ): Promise<SecurityBrowserValidationGrant> {
+    return this.request<WireBrowserValidationGrant>(
+      `browser-issue-candidates/${encodeURIComponent(candidate.id)}/validation-revoke`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_grant_revision: grant.revision,
+          reason,
+          idempotency_key: `validation-revoke:${grant.id}:${grant.revision}`,
+        }),
+      },
+    ).then(mapBrowserValidationGrant);
+  }
+
+  completeSecurityBrowserCandidateValidation(
+    candidate: SecurityBrowserIssueCandidate,
+    grant: SecurityBrowserValidationGrant,
+    body: {
+      result: "confirmed" | "rejected" | "inconclusive";
+      controlResults: Array<Record<string, unknown>>;
+      evidenceIds: string[];
+    },
+  ): Promise<SecurityBrowserIssueCandidate> {
+    return this.request<WireBrowserIssueCandidate>(
+      `browser-issue-candidates/${encodeURIComponent(candidate.id)}/validation-result`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_candidate_revision: candidate.revision,
+          expected_grant_revision: grant.revision,
+          result: body.result,
+          control_results: body.controlResults,
+          evidence_ids: body.evidenceIds,
+          idempotency_key: `validation-result:${grant.id}:${grant.revision}`,
+        }),
+      },
+    ).then(mapBrowserCandidate);
   }
 
   getSecurityBrowserResearch(

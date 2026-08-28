@@ -44,6 +44,7 @@ INDEXED_ENTITY_KINDS = (
     "command_executions",
     "automation_sessions",
     "browser_sessions",
+    "browser_assessments",
     "runs",
     "operator_executions",
     "approvals",
@@ -218,6 +219,27 @@ def project_search_document(
             status,
             "Browser sessions",
             tab_text[:8000],
+        )
+    if kind == "browser_assessments":
+        raw_targets = payload.get("target_urls")
+        targets = raw_targets if isinstance(raw_targets, list) else []
+        safe_targets = " ".join(_safe_url(target) for target in targets)
+        return SearchProjection(
+            ResourceKind.BROWSER_ASSESSMENT,
+            _text(payload.get("name"), 500) or "Security Browser assessment",
+            _text(payload.get("objective")),
+            "Security Browser",
+            " ".join(
+                filter(
+                    None,
+                    [
+                        status,
+                        _text(payload.get("phase"), 100),
+                        _text(payload.get("profile"), 100),
+                        safe_targets,
+                    ],
+                )
+            )[:8000],
         )
     if kind == "runs":
         return SearchProjection(

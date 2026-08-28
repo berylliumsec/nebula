@@ -77,6 +77,16 @@ from .browser_automation import (
     BrowserCommandCreateRequest,
     BrowserProxyRuleRequest,
 )
+from .browser_assessments import (
+    BrowserAssessmentCreateRequest,
+    BrowserAssessmentService,
+    BrowserAssessmentTransitionRequest,
+    BrowserAssessmentWorkspace,
+    BrowserIssueCandidateCreateRequest,
+    BrowserValidationGrantRequest,
+    BrowserValidationRevokeRequest,
+    BrowserValidationResultRequest,
+)
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
@@ -212,12 +222,15 @@ from .domain import (
     ActionResolutionRequest,
     Artifact,
     BrowserAction,
+    BrowserAssessment,
     BrowserCommand,
     BrowserProxyRule,
     BrowserHandoff,
     BrowserIdentity,
+    BrowserIssueCandidate,
     BrowserSession,
     BrowserTrafficExchange,
+    BrowserValidationGrant,
     BrowserWebSocketFrame,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
@@ -482,6 +495,10 @@ CUSTOM_RESOURCES = {
     "browser_attacks",
     "browser_attack_results",
     "browser_token_analyses",
+    "browser_assessments",
+    "browser_assessment_steps",
+    "browser_issue_candidates",
+    "browser_validation_grants",
 }
 
 API_PREFIX = "/api/v1"
@@ -1197,6 +1214,7 @@ def create_app(
 
     credentials = credential_store or CredentialStore()
     browser_automation = BrowserAutomationService(store)
+    browser_assessments = BrowserAssessmentService(store)
     browser_automation_platform = BrowserAutomationToolPlatform(
         store, browser_automation
     )
@@ -2960,6 +2978,7 @@ def create_app(
             ResourceKind.REPORT: "reports",
             ResourceKind.TERMINAL_COMMAND: "command_executions",
             ResourceKind.BROWSER_SESSION: "browser_sessions",
+            ResourceKind.BROWSER_ASSESSMENT: "browser_assessments",
             ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
             ResourceKind.MISSION: "runs",
             ResourceKind.TERMINAL_SESSION: "automation_sessions",
@@ -8417,6 +8436,254 @@ def create_app(
 
     browser_security = BrowserSecurityService(store, artifact_store)
     browser_research = BrowserResearchService(store, browser_security, artifact_store)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-assessments",
+        response_model=BrowserAssessmentWorkspace,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_assessment_workspace(
+        engagement_id: str,
+    ) -> BrowserAssessmentWorkspace:
+        """Return the authoritative snapshot used for load and stream recovery."""
+
+        return await browser_assessments.workspace(engagement_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-assessments",
+        response_model=BrowserAssessment,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_assessment(
+        engagement_id: str,
+        request: BrowserAssessmentCreateRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserAssessment:
+        return await browser_assessments.create(engagement_id, request, x_nebula_actor)
+
+    @app.get(
+        f"{API_PREFIX}/browser-assessments/{{assessment_id}}",
+        response_model=BrowserAssessment,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_assessment_detail(assessment_id: str) -> BrowserAssessment:
+        return store.get(BrowserAssessment, assessment_id)
+
+    @app.post(
+        f"{API_PREFIX}/browser-assessments/{{assessment_id}}/transition",
+        response_model=BrowserAssessment,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def transition_browser_assessment(
+        assessment_id: str,
+        request: BrowserAssessmentTransitionRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserAssessment:
+        return await browser_assessments.transition(
+            assessment_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-assessments/{{assessment_id}}/readiness",
+        response_model=BrowserAssessment,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def refresh_browser_assessment_readiness(
+        assessment_id: str,
+        expected_revision: int = Query(ge=1),
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserAssessment:
+        return await browser_assessments.refresh_readiness(
+            assessment_id, expected_revision, x_nebula_actor
+        )
+
+    @app.delete(
+        f"{API_PREFIX}/browser-assessments/{{assessment_id}}",
+        status_code=204,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_browser_assessment(
+        assessment_id: str,
+        expected_revision: int = Query(ge=1),
+    ) -> Response:
+        browser_assessments.delete(assessment_id, expected_revision)
+        return Response(status_code=204)
+
+    @app.get(
+        f"{API_PREFIX}/browser-assessments/{{assessment_id}}/events",
+        response_model=OperationEventList,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def replay_browser_assessment_events(
+        assessment_id: str,
+        after: int = Query(default=0, ge=0),
+        limit: int = Query(default=1000, ge=1, le=10_000),
+    ) -> OperationEventList:
+        store.get(BrowserAssessment, assessment_id)
+        events = store.replay_operation_events(
+            assessment_id, after_sequence=after, limit=limit
+        )
+        return OperationEventList(
+            events=events,
+            next_sequence=events[-1].sequence if events else after,
+        )
+
+    @app.websocket(f"{API_PREFIX}/browser-assessments/{{assessment_id}}/events/ws")
+    async def browser_assessment_event_socket(
+        websocket: WebSocket,
+        assessment_id: str,
+        after: int = Query(default=0, ge=0),
+    ) -> None:
+        supplied: str | None = None
+        authorization = websocket.headers.get("authorization", "")
+        if authorization.lower().startswith("bearer "):
+            supplied = authorization[7:]
+        offered_protocols = [
+            value.strip()
+            for value in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if value.strip()
+        ]
+        subprotocol_token: str | None = None
+        for protocol in offered_protocols:
+            if not protocol.startswith("nebula.auth."):
+                continue
+            encoded = protocol.removeprefix("nebula.auth.")
+            try:
+                subprotocol_token = base64.urlsafe_b64decode(
+                    encoded + "=" * (-len(encoded) % 4)
+                ).decode("utf-8")
+            except (ValueError, UnicodeDecodeError):
+                # diagnostic-expected: malformed auth is rejected below.
+                subprotocol_token = None
+            break
+        if (
+            supplied
+            and subprotocol_token
+            and not hmac.compare_digest(supplied, subprotocol_token)
+        ):
+            await websocket.close(code=4401, reason="conflicting authentication tokens")
+            return
+        supplied = subprotocol_token or supplied
+        if not allow_unauthenticated and (
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
+        ):
+            await websocket.close(code=4401, reason="valid bearer token required")
+            return
+        try:
+            store.get(BrowserAssessment, assessment_id)
+        except NotFoundError:
+            # diagnostic-expected: a missing assessment is a bounded protocol close.
+            await websocket.close(code=4404, reason="assessment not found")
+            return
+        event_protocol = (
+            "nebula.events.v1" if "nebula.events.v1" in offered_protocols else None
+        )
+        await websocket.accept(subprotocol=event_protocol)
+        cursor = after
+        try:
+            while True:
+                events = store.replay_operation_events(
+                    assessment_id, after_sequence=cursor, limit=1000
+                )
+                for event in events:
+                    await websocket.send_json(
+                        {"kind": "event", "event": event.model_dump(mode="json")}
+                    )
+                    cursor = event.sequence
+                if not events:
+                    await websocket.send_json(
+                        {"kind": "replay_complete", "after_sequence": cursor}
+                    )
+                    break
+            idle_ticks = 0
+            while True:
+                await asyncio.sleep(0.25)
+                events = store.replay_operation_events(
+                    assessment_id, after_sequence=cursor, limit=1000
+                )
+                if events:
+                    idle_ticks = 0
+                    for event in events:
+                        await websocket.send_json(
+                            {"kind": "event", "event": event.model_dump(mode="json")}
+                        )
+                        cursor = event.sequence
+                    continue
+                idle_ticks += 1
+                if idle_ticks >= 80:
+                    await websocket.send_json({"kind": "heartbeat", "sequence": cursor})
+                    idle_ticks = 0
+        except WebSocketDisconnect:
+            # diagnostic-expected: disconnect only detaches this viewer.
+            return
+
+    @app.post(
+        f"{API_PREFIX}/browser-issue-candidates",
+        response_model=BrowserIssueCandidate,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_browser_issue_candidate(
+        request: BrowserIssueCandidateCreateRequest,
+        x_nebula_actor: str = Header(default="engine", alias="X-Nebula-Actor"),
+    ) -> BrowserIssueCandidate:
+        return browser_assessments.create_candidate(request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/browser-issue-candidates/{{candidate_id}}/validation-grant",
+        response_model=BrowserValidationGrant,
+        status_code=201,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def grant_browser_issue_validation(
+        candidate_id: str,
+        request: BrowserValidationGrantRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserValidationGrant:
+        return browser_assessments.grant_validation(
+            candidate_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-issue-candidates/{{candidate_id}}/validation-revoke",
+        response_model=BrowserValidationGrant,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def revoke_browser_issue_validation(
+        candidate_id: str,
+        request: BrowserValidationRevokeRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserValidationGrant:
+        return browser_assessments.revoke_validation(
+            candidate_id, request, x_nebula_actor
+        )
+
+    @app.post(
+        f"{API_PREFIX}/browser-issue-candidates/{{candidate_id}}/validation-result",
+        response_model=BrowserIssueCandidate,
+        tags=["security-browser"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def finish_browser_issue_validation(
+        candidate_id: str,
+        request: BrowserValidationResultRequest,
+        x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
+    ) -> BrowserIssueCandidate:
+        return browser_assessments.finish_validation(
+            candidate_id, request, x_nebula_actor
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-automation",
