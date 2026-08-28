@@ -19,6 +19,7 @@ from = "src"
 
 [tool.poetry.scripts]
 nebula-core = "nebula.v3.cli:main"
+nebula-browserd = "nebula.v3.browserd:main"
 
 [tool.poetry.dependencies]
 python = ">=3.11,<3.14"

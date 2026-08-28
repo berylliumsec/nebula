@@ -38,6 +38,7 @@ RESOURCE_ENTITY_KINDS: dict[ResourceKind, str] = {
     ResourceKind.REPORT: "reports",
     ResourceKind.TERMINAL_COMMAND: "command_executions",
     ResourceKind.BROWSER_SESSION: "browser_sessions",
+    ResourceKind.BROWSER_ASSESSMENT: "browser_assessments",
     ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
     ResourceKind.MISSION: "runs",
     ResourceKind.TERMINAL_SESSION: "automation_sessions",

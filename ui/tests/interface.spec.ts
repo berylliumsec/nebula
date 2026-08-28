@@ -280,6 +280,27 @@ async function installTruthfulCore(page: Page) {
         actions: [],
         handoffs: [],
       };
+    } else if (path.endsWith("/engagements/scratch-project/browser-assessments")) {
+      const budget = { max_requests: 2000, max_actions: 500, max_duration_seconds: 3600, max_concurrency: 2, requests_used: 0, actions_used: 0 };
+      body = {
+        assessments: [],
+        steps: [],
+        login_flows: [],
+        recipes: [],
+        candidates: [],
+        validation_grants: [],
+        profiles: [
+          { id: "explore", name: "Explore", summary: "Guided manual exploration.", risk_classes: ["passive"], required_adapters: ["managed-chromium"], default_budget: budget, validation_locked: false },
+          { id: "standard", name: "Standard", summary: "Crawl and passive analysis.", risk_classes: ["passive"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
+          { id: "deep", name: "Deep", summary: "Bounded active checks.", risk_classes: ["passive", "active_scan"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
+          { id: "api", name: "API", summary: "API import and testing.", risk_classes: ["passive", "active_scan"], required_adapters: ["managed-chromium", "zap"], default_budget: budget, validation_locked: false },
+          { id: "validation", name: "Validation", summary: "Issue-specific validation.", risk_classes: ["exploitation"], required_adapters: ["managed-chromium"], default_budget: budget, validation_locked: true },
+        ],
+        engines: [
+          { adapter: "managed-chromium", display_name: "Managed Chromium", contract_version: "1", state: "unavailable", installed_version: null, digest: null, actions: [], protocols: [], check_families: [], unavailability_reason: "Managed runtime is not prepared.", recovery_action: "Prepare the managed browser runtime.", desktop_only: true },
+          { adapter: "legacy-webview", display_name: "Legacy system WebView", contract_version: "1", state: "degraded", installed_version: null, digest: null, actions: ["manual.navigate"], protocols: ["http", "https"], check_families: [], unavailability_reason: "Manual-only fallback.", recovery_action: "Prepare Managed Chromium.", desktop_only: true },
+        ],
+      };
     } else if (path.endsWith("/engagements/scratch-project/browser-research")) {
       body = {
         site_nodes: [],
@@ -4725,7 +4746,7 @@ test("browser research tools expose durable workflows on paired clients", async 
   await page.getByText("Result history (1)").click();
   await expect(page.getByText("128 bytes", { exact: false })).toBeVisible();
 
-  await page.getByRole("button", { name: "Intruder", exact: true }).click();
+  await page.getByRole("button", { name: /Automate/ }).click();
   await expect(page.getByRole("heading", { name: "Intruder" })).toBeVisible();
   await expect(page.getByLabel("Position names")).toBeVisible();
   await expect(page.locator("label", { hasText: "Payload sets" }).locator("small")).toContainText("separate sets with a line containing only");

@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
 import json
 import os
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -253,10 +256,13 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
             "bundled Playwright Chromium manifest is invalid"
         ) from exc
     executables = manifest.get("executables")
+    executable_sha256 = manifest.get("executable_sha256")
     licenses = manifest.get("licenses")
+    sbom = manifest.get("sbom")
+    provenance = manifest.get("provenance")
     if (
         manifest.get("schema") != 1
-        or manifest.get("browser") != "chromium-headless-shell"
+        or manifest.get("browser") != "chromium"
         or not isinstance(manifest.get("playwright_version"), str)
         or not manifest["playwright_version"]
         or not isinstance(manifest.get("target"), str)
@@ -266,9 +272,20 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
         or not isinstance(executables, list)
         or not executables
         or not all(isinstance(value, str) and value for value in executables)
+        or not isinstance(executable_sha256, dict)
+        or set(executable_sha256) != set(executables)
+        or not all(
+            isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in executable_sha256.values()
+        )
         or not isinstance(licenses, list)
         or not licenses
         or not all(isinstance(value, str) and value for value in licenses)
+        or not isinstance(sbom, str)
+        or not sbom
+        or not isinstance(provenance, dict)
+        or provenance.get("installer") != "python -m playwright install chromium"
+        or provenance.get("target") != manifest.get("target")
     ):
         raise ArtifactAuditError(
             "bundled Playwright Chromium manifest has an invalid contract"
@@ -284,6 +301,11 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
             raise ArtifactAuditError(
                 "bundled Playwright Chromium executable is absent or not executable"
             )
+        digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        if not hmac.compare_digest(digest, executable_sha256[relative]):
+            raise ArtifactAuditError(
+                "bundled Playwright Chromium executable failed its digest check"
+            )
     for relative in licenses:
         license_file = (runtime_root / relative).resolve()
         if (
@@ -294,6 +316,19 @@ def inspect_installer_tree(root: Path) -> dict[str, object]:
             raise ArtifactAuditError(
                 "bundled Playwright Chromium license payload is absent"
             )
+    sbom_path = (runtime_root / sbom).resolve()
+    if (
+        not sbom_path.is_relative_to(runtime_root)
+        or not sbom_path.is_file()
+        or sbom_path.stat().st_size == 0
+    ):
+        raise ArtifactAuditError("bundled Playwright Chromium SBOM is absent")
+    try:
+        sbom_payload = json.loads(sbom_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ArtifactAuditError("bundled Playwright Chromium SBOM is invalid") from exc
+    if sbom_payload.get("spdxVersion") != "SPDX-2.3":
+        raise ArtifactAuditError("bundled Playwright Chromium SBOM is invalid")
     return {
         "status": "ok",
         "tree": str(root),
