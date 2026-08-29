@@ -3184,16 +3184,24 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
+    headerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-header")!).paddingLeft),
+    receiptPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-receipt")!).paddingLeft),
+    footerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-footer")!).paddingLeft),
   }));
   expect(geometry.left).toBeGreaterThanOrEqual(0);
   expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.headerPaddingInline).toBeGreaterThanOrEqual(12);
+  expect(geometry.receiptPaddingInline).toBeGreaterThanOrEqual(12);
+  expect(geometry.footerPaddingInline).toBeGreaterThanOrEqual(12);
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
   await showActivity.click();
   await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
   await expect(ledger).not.toContainText("item upsert");
   await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
+  await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-left", "12px");
+  await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-right", "12px");
   expect(activityLoads).toBe(1);
 });
 
