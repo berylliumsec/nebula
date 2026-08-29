@@ -47,6 +47,7 @@ class ResourceKind(StringEnum):
     TERMINAL_SESSION = "terminal_session"
     TERMINAL_COMMAND = "terminal_command"
     BROWSER_SESSION = "browser_session"
+    BROWSER_ASSESSMENT = "browser_assessment"
     BROWSER_TAB = "browser_tab"
     BROWSER_EXCHANGE = "browser_exchange"
     MISSION = "mission"
@@ -309,6 +310,63 @@ class BrowserHandoffStatus(StringEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+
+
+class BrowserAssessmentProfile(StringEnum):
+    EXPLORE = "explore"
+    STANDARD = "standard"
+    DEEP = "deep"
+    API = "api"
+    VALIDATION = "validation"
+
+
+class BrowserAssessmentStatus(StringEnum):
+    DRAFT = "draft"
+    READY = "ready"
+    RUNNING = "running"
+    WAITING_OPERATOR = "waiting_operator"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    REVOKED = "revoked"
+
+
+class BrowserAssessmentPhase(StringEnum):
+    PREFLIGHT = "preflight"
+    DISCOVERY = "discovery"
+    CRAWL = "crawl"
+    PASSIVE_AUDIT = "passive_audit"
+    ACTIVE_AUDIT = "active_audit"
+    VALIDATION = "validation"
+    REPORTING = "reporting"
+    COMPLETE = "complete"
+
+
+class BrowserAssessmentStepStatus(StringEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_OPERATOR = "waiting_operator"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class BrowserIssueValidationStatus(StringEnum):
+    UNVALIDATED = "unvalidated"
+    QUEUED = "queued"
+    VALIDATING = "validating"
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    INCONCLUSIVE = "inconclusive"
+
+
+class BrowserEngineState(StringEnum):
+    READY = "ready"
+    DEGRADED = "degraded"
+    PREPARING = "preparing"
+    UNAVAILABLE = "unavailable"
 
 
 class FindingStatus(StringEnum):
@@ -1096,11 +1154,382 @@ class BrowserSession(Entity):
         return self
 
 
+class BrowserEngineCapability(NebulaModel):
+    """Normalized readiness receipt for one desktop browser or scanner adapter."""
+
+    adapter: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,80}$")
+    display_name: str = Field(min_length=1, max_length=120)
+    contract_version: str = Field(default="1", pattern=r"^[1-9][0-9]*$")
+    state: BrowserEngineState
+    installed_version: str | None = Field(default=None, max_length=120)
+    digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
+    actions: list[str] = Field(default_factory=list, max_length=200)
+    protocols: list[str] = Field(default_factory=list, max_length=40)
+    check_families: list[str] = Field(default_factory=list, max_length=200)
+    unavailability_reason: str | None = Field(default=None, max_length=2_000)
+    recovery_action: str | None = Field(default=None, max_length=500)
+    desktop_only: bool = True
+
+    @model_validator(mode="after")
+    def browser_engine_readiness_is_actionable(self) -> "BrowserEngineCapability":
+        if self.state != BrowserEngineState.READY:
+            if not self.unavailability_reason or not self.recovery_action:
+                raise ValueError(
+                    "unready browser engines require a reason and recovery action"
+                )
+        return self
+
+
+class BrowserAssessmentBudget(NebulaModel):
+    max_requests: int = Field(default=2_000, ge=1, le=1_000_000)
+    max_actions: int = Field(default=500, ge=1, le=100_000)
+    max_duration_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    max_concurrency: int = Field(default=2, ge=1, le=32)
+    requests_used: int = Field(default=0, ge=0)
+    actions_used: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def browser_assessment_budget_is_coherent(self) -> "BrowserAssessmentBudget":
+        if self.requests_used > self.max_requests:
+            raise ValueError("assessment request usage exceeds its budget")
+        if self.actions_used > self.max_actions:
+            raise ValueError("assessment action usage exceeds its budget")
+        return self
+
+
+class BrowserAssessmentCoverage(NebulaModel):
+    discovered_urls: int = Field(default=0, ge=0)
+    visited_urls: int = Field(default=0, ge=0)
+    analyzed_exchanges: int = Field(default=0, ge=0)
+    discovered_forms: int = Field(default=0, ge=0)
+    discovered_apis: int = Field(default=0, ge=0)
+    websocket_channels: int = Field(default=0, ge=0)
+
+
+class BrowserAssessment(Entity):
+    """Durable authority for one guided or expert Security Browser assessment."""
+
+    entity_kind: ClassVar[str] = "browser_assessments"
+    engagement_id: str
+    name: str = Field(min_length=1, max_length=200)
+    objective: str = Field(min_length=1, max_length=4_000)
+    profile: BrowserAssessmentProfile = BrowserAssessmentProfile.STANDARD
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_ids: list[str] = Field(min_length=1, max_length=32)
+    primary_identity_id: str = Field(min_length=1, max_length=200)
+    target_urls: list[str] = Field(min_length=1, max_length=100)
+    scope_policy_id: str = Field(min_length=1, max_length=200)
+    scope_policy_revision: int = Field(ge=1)
+    risk_classes: list[str] = Field(default_factory=list, max_length=40)
+    validation_grant_id: str | None = Field(default=None, max_length=200)
+    credential_refs: list[str] = Field(default_factory=list, max_length=32)
+    status: BrowserAssessmentStatus = BrowserAssessmentStatus.DRAFT
+    phase: BrowserAssessmentPhase = BrowserAssessmentPhase.PREFLIGHT
+    progress: float = Field(default=0, ge=0, le=1)
+    budget: BrowserAssessmentBudget = Field(default_factory=BrowserAssessmentBudget)
+    coverage: BrowserAssessmentCoverage = Field(
+        default_factory=BrowserAssessmentCoverage
+    )
+    engines: list[BrowserEngineCapability] = Field(default_factory=list, max_length=16)
+    run_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=1_000)
+    candidate_ids: list[str] = Field(default_factory=list, max_length=1_000)
+    active_step_id: str | None = Field(default=None, max_length=200)
+    control_owner: Literal["nebula", "operator"] = "nebula"
+    pause_reason: str | None = Field(default=None, max_length=2_000)
+    failure: str | None = Field(default=None, max_length=4_000)
+    recovery_action: str | None = Field(default=None, max_length=1_000)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    last_event_cursor: int = Field(default=0, ge=0)
+    created_by: str = Field(min_length=1, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target_urls")
+    @classmethod
+    def browser_assessment_targets_are_network_urls(
+        cls, values: list[str]
+    ) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise ValueError(
+                    "assessment targets must use credential-free HTTP(S) URLs"
+                )
+            normalized.append(value)
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("credential_refs")
+    @classmethod
+    def browser_assessment_credentials_are_references(
+        cls, values: list[str]
+    ) -> list[str]:
+        if any(
+            not value.strip() or any(char.isspace() for char in value)
+            for value in values
+        ):
+            raise ValueError("assessment credentials must be opaque references")
+        return list(dict.fromkeys(values))
+
+    @field_validator("started_at", "completed_at")
+    @classmethod
+    def browser_assessment_time_is_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("assessment timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_assessment_is_coherent(self) -> "BrowserAssessment":
+        if self.primary_identity_id not in self.identity_ids:
+            raise ValueError("primary assessment identity must be selected")
+        if (
+            self.profile == BrowserAssessmentProfile.VALIDATION
+            and not self.validation_grant_id
+        ):
+            raise ValueError("validation profile requires an issue-specific grant")
+        if self.failure and not self.recovery_action:
+            raise ValueError("assessment failures require a recovery action")
+        return self
+
+
+class BrowserAssessmentStep(Entity):
+    entity_kind: ClassVar[str] = "browser_assessment_steps"
+    engagement_id: str
+    assessment_id: str = Field(min_length=1, max_length=200)
+    sequence: int = Field(ge=0)
+    title: str = Field(min_length=1, max_length=200)
+    intent: str = Field(min_length=1, max_length=4_000)
+    capability: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,80}$")
+    target: str = Field(min_length=1, max_length=16_384)
+    status: BrowserAssessmentStepStatus = BrowserAssessmentStepStatus.QUEUED
+    approval_id: str | None = Field(default=None, max_length=200)
+    retry_classification: Literal[
+        "safe_before_side_effect", "never", "operator_review"
+    ] = "safe_before_side_effect"
+    action_token: str | None = Field(default=None, max_length=300)
+    pre_fingerprint: str | None = Field(default=None, max_length=500)
+    post_fingerprint: str | None = Field(default=None, max_length=500)
+    trace_ids: list[str] = Field(default_factory=list, max_length=100)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=100)
+    error: str | None = Field(default=None, max_length=4_000)
+    recovery_action: str | None = Field(default=None, max_length=1_000)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def browser_assessment_step_is_coherent(self) -> "BrowserAssessmentStep":
+        if self.error and not self.recovery_action:
+            raise ValueError("assessment step failures require a recovery action")
+        if self.post_fingerprint and not self.pre_fingerprint:
+            raise ValueError(
+                "post-action fingerprint requires a pre-action fingerprint"
+            )
+        return self
+
+
+class BrowserLoginFlow(Entity):
+    """Recorded non-secret login workflow bound to a local browser identity."""
+
+    entity_kind: ClassVar[str] = "browser_login_flows"
+    engagement_id: str
+    name: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=200)
+    identity_id: str = Field(min_length=1, max_length=200)
+    steps: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    credential_refs: list[str] = Field(default_factory=list, max_length=32)
+    success_verifier: dict[str, Any] = Field(default_factory=dict)
+    health: Literal["unknown", "healthy", "expired", "failed"] = "unknown"
+    last_validated_at: datetime | None = None
+    failure: str | None = Field(default=None, max_length=4_000)
+    recovery_action: str | None = Field(default=None, max_length=1_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("credential_refs")
+    @classmethod
+    def browser_login_credentials_are_references(cls, values: list[str]) -> list[str]:
+        if any(
+            not value.strip() or any(char.isspace() for char in value)
+            for value in values
+        ):
+            raise ValueError("login credentials must be opaque references")
+        return list(dict.fromkeys(values))
+
+    @field_validator("last_validated_at")
+    @classmethod
+    def browser_login_validation_time_is_aware(
+        cls, value: datetime | None
+    ) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("login validation timestamps must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
+
+    @model_validator(mode="after")
+    def browser_login_flow_is_non_secret_and_actionable(self) -> "BrowserLoginFlow":
+        bound_credentials = set(self.credential_refs)
+        forbidden_keys = {
+            "password",
+            "secret",
+            "access_token",
+            "refresh_token",
+            "authorization",
+            "cookie",
+        }
+        for step in self.steps:
+            if not isinstance(step, dict):
+                raise ValueError("login flow steps must be structured records")
+            if forbidden_keys.intersection(key.lower() for key in step):
+                raise ValueError(
+                    "login flow steps cannot contain secret-bearing fields"
+                )
+            credential_ref = step.get("credential_ref")
+            if credential_ref is not None and credential_ref not in bound_credentials:
+                raise ValueError("login step credential_ref must be bound to the flow")
+        if self.failure and not self.recovery_action:
+            raise ValueError("login flow failures require a recovery action")
+        return self
+
+
+class BrowserRecipeStage(NebulaModel):
+    id: str = Field(min_length=1, max_length=200)
+    kind: Literal[
+        "crawl",
+        "passive_scan",
+        "active_scan",
+        "request",
+        "fuzz",
+        "compare",
+        "validate",
+        "wait_for_operator",
+        "capture_evidence",
+        "export",
+    ]
+    depends_on: list[str] = Field(default_factory=list, max_length=100)
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    risk_class: str = Field(default="safe", max_length=80)
+    request_budget: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class BrowserRecipe(Entity):
+    entity_kind: ClassVar[str] = "browser_recipes"
+    engagement_id: str
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4_000)
+    version: int = Field(default=1, ge=1)
+    builtin: bool = False
+    capability_requirements: list[str] = Field(default_factory=list, max_length=100)
+    stages: list[BrowserRecipeStage] = Field(min_length=1, max_length=200)
+    enabled: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def browser_recipe_is_a_dag(self) -> "BrowserRecipe":
+        ids = [stage.id for stage in self.stages]
+        if len(ids) != len(set(ids)):
+            raise ValueError("browser recipe stage ids must be unique")
+        known: set[str] = set()
+        for stage in self.stages:
+            if any(dependency not in known for dependency in stage.depends_on):
+                raise ValueError(
+                    "browser recipe dependencies must reference earlier stages"
+                )
+            known.add(stage.id)
+        return self
+
+
+class BrowserIssueCandidate(Entity):
+    entity_kind: ClassVar[str] = "browser_issue_candidates"
+    engagement_id: str
+    assessment_id: str = Field(min_length=1, max_length=200)
+    rule_id: str = Field(min_length=1, max_length=200)
+    check_family: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    cwe: str | None = Field(default=None, pattern=r"^CWE-[1-9][0-9]{0,4}$")
+    target_url: str = Field(min_length=1, max_length=16_384)
+    insertion_point: str | None = Field(default=None, max_length=1_000)
+    severity: Severity
+    confidence: Literal["tentative", "firm", "certain"] = "tentative"
+    control_results: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+    deduplication_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    validation_status: BrowserIssueValidationStatus = (
+        BrowserIssueValidationStatus.UNVALIDATED
+    )
+    validation_grant_id: str | None = Field(default=None, max_length=200)
+    promoted_finding_id: str | None = Field(default=None, max_length=200)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target_url")
+    @classmethod
+    def browser_candidate_target_is_network_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("candidate target must be a credential-free HTTP(S) URL")
+        return value
+
+
+class BrowserValidationGrant(Entity):
+    """Issue-specific, target-specific authority for bounded validation traffic."""
+
+    entity_kind: ClassVar[str] = "browser_validation_grants"
+    engagement_id: str
+    assessment_id: str = Field(min_length=1, max_length=200)
+    candidate_id: str = Field(min_length=1, max_length=200)
+    target_url: str = Field(min_length=1, max_length=16_384)
+    technique: str = Field(min_length=1, max_length=1_000)
+    max_requests: int = Field(ge=1, le=10_000)
+    requests_used: int = Field(default=0, ge=0)
+    duration_seconds: int = Field(ge=30, le=3_600)
+    granted_by: str = Field(min_length=1, max_length=200)
+    granted_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    status: Literal["active", "revoked", "expired", "consumed"] = "active"
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("target_url")
+    @classmethod
+    def browser_validation_target_is_network_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise ValueError("validation target must be a credential-free HTTP(S) URL")
+        return value
+
+    @model_validator(mode="after")
+    def browser_validation_grant_is_coherent(self) -> "BrowserValidationGrant":
+        if self.expires_at <= self.granted_at:
+            raise ValueError("validation grant expiry must follow its grant time")
+        if self.requests_used > self.max_requests:
+            raise ValueError("validation grant request usage exceeds its budget")
+        if self.status == "revoked" and self.revoked_at is None:
+            raise ValueError("revoked validation grants require a revocation time")
+        return self
+
+
 class BrowserTrafficExchange(Entity):
     """Bounded traffic index. Raw bodies live only in integrity-checked artifacts."""
 
     entity_kind: ClassVar[str] = "browser_traffic"
     engagement_id: str
+    assessment_id: str | None = Field(default=None, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
     tab_id: str = Field(min_length=1, max_length=200)
     identity_id: str = Field(min_length=1, max_length=200)
@@ -1311,6 +1740,7 @@ class BrowserCommand(Entity):
 
     entity_kind: ClassVar[str] = "browser_commands"
     engagement_id: str
+    assessment_id: str | None = Field(default=None, max_length=200)
     run_id: str = Field(min_length=1, max_length=200)
     lease_id: str = Field(min_length=1, max_length=200)
     session_id: str = Field(min_length=1, max_length=200)
@@ -3489,6 +3919,12 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     Identity,
     BrowserIdentity,
     BrowserSession,
+    BrowserAssessment,
+    BrowserAssessmentStep,
+    BrowserLoginFlow,
+    BrowserRecipe,
+    BrowserIssueCandidate,
+    BrowserValidationGrant,
     BrowserTrafficExchange,
     BrowserWebSocketFrame,
     BrowserAction,

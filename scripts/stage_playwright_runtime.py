@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""Stage the locked Playwright Chromium headless shell for native installers."""
+"""Stage the locked full Playwright Chromium runtime for native installers."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 
 MANIFEST_NAME = "nebula-playwright-runtime.json"
+SBOM_NAME = "nebula-playwright-sbom.spdx.json"
 BROWSER_EXECUTABLE_NAMES = {
     "chrome",
     "chrome.exe",
-    "chrome-headless-shell",
-    "headless_shell",
-    "headless_shell.exe",
 }
 
 
@@ -66,13 +66,21 @@ def _browser_licenses(destination: Path) -> list[Path]:
     )
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def stage_playwright_runtime(
     destination: Path,
     *,
     target: str,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, object]:
-    """Download and verify the headless-only Chromium payload."""
+    """Download and verify full headed Chromium for browserd and headless capture."""
 
     destination = destination.absolute()
     _clear_generated_payload(destination)
@@ -84,7 +92,7 @@ def stage_playwright_runtime(
         "-m",
         "playwright",
         "install",
-        "--only-shell",
+        "--no-shell",
         "chromium",
     ]
     try:
@@ -97,23 +105,76 @@ def stage_playwright_runtime(
     executables = _browser_executables(destination)
     if not executables:
         raise PlaywrightRuntimeStageError(
-            "Playwright did not install an executable Chromium headless shell"
+            "Playwright did not install an executable full Chromium runtime"
         )
     licenses = _browser_licenses(destination)
     if not licenses:
         raise PlaywrightRuntimeStageError(
             "Playwright Chromium did not include its required license payload"
         )
+    playwright_version = importlib.metadata.version("playwright")
+    executable_sha256 = {
+        path.as_posix(): _sha256(destination / path) for path in executables
+    }
+    primary_sha256 = executable_sha256[executables[0].as_posix()]
+    sbom = {
+        "spdxVersion": "SPDX-2.3",
+        "dataLicense": "CC0-1.0",
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "name": f"Nebula Playwright Chromium {target}",
+        "documentNamespace": (
+            "https://nebula.security/sbom/playwright/"
+            f"{playwright_version}/{target}/{primary_sha256}"
+        ),
+        "creationInfo": {
+            "created": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "creators": ["Tool: scripts/stage_playwright_runtime.py"],
+        },
+        "packages": [
+            {
+                "name": "Chrome for Testing",
+                "SPDXID": "SPDXRef-Package-Chromium",
+                "versionInfo": executables[0].parts[0],
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": True,
+                "licenseConcluded": "BSD-3-Clause",
+                "licenseDeclared": "BSD-3-Clause",
+                "checksums": [
+                    {"algorithm": "SHA256", "checksumValue": primary_sha256}
+                ],
+            },
+            {
+                "name": "Playwright Python",
+                "SPDXID": "SPDXRef-Package-Playwright",
+                "versionInfo": playwright_version,
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "licenseConcluded": "Apache-2.0",
+                "licenseDeclared": "Apache-2.0",
+            },
+        ],
+    }
+    (destination / SBOM_NAME).write_text(
+        json.dumps(sbom, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     files = [path for path in destination.rglob("*") if path.is_file()]
     payload_bytes = sum(path.stat().st_size for path in files)
     manifest: dict[str, object] = {
         "schema": 1,
-        "browser": "chromium-headless-shell",
-        "playwright_version": importlib.metadata.version("playwright"),
+        "browser": "chromium",
+        "playwright_version": playwright_version,
         "target": target,
         "payload_bytes": payload_bytes,
         "executables": [path.as_posix() for path in executables],
+        "executable_sha256": executable_sha256,
         "licenses": [path.as_posix() for path in licenses],
+        "sbom": SBOM_NAME,
+        "provenance": {
+            "installer": "python -m playwright install chromium",
+            "browser_revision": executables[0].parts[0],
+            "target": target,
+        },
     }
     (destination / MANIFEST_NAME).write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",

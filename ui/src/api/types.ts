@@ -4,7 +4,8 @@ export type ResourceKind =
   | "project" | "conversation" | "note" | "source" | "library_item"
   | "workspace_file" | "asset" | "evidence" | "finding" | "report"
   | "terminal_session" | "terminal_command" | "browser_session" | "browser_tab"
-  | "browser_exchange" | "mission" | "execution" | "approval" | "receipt" | "artifact";
+  | "browser_assessment" | "browser_exchange" | "mission" | "execution"
+  | "approval" | "receipt" | "artifact";
 
 export interface ResourceRef {
   projectId?: Identifier;
@@ -520,6 +521,144 @@ export interface SecurityBrowserWorkspace {
   frames: SecurityBrowserWebSocketFrame[];
   actions: SecurityBrowserAction[];
   handoffs: SecurityBrowserHandoff[];
+}
+
+export type SecurityBrowserAssessmentProfile = "explore" | "standard" | "deep" | "api" | "validation";
+export type SecurityBrowserAssessmentStatus = "draft" | "ready" | "running" | "waiting_operator" | "paused" | "stopping" | "stopped" | "complete" | "failed" | "revoked";
+
+export interface SecurityBrowserEngineCapability {
+  adapter: string;
+  displayName: string;
+  contractVersion: string;
+  state: "ready" | "degraded" | "preparing" | "unavailable";
+  installedVersion?: string;
+  digest?: string;
+  actions: string[];
+  protocols: string[];
+  checkFamilies: string[];
+  unavailabilityReason?: string;
+  recoveryAction?: string;
+  desktopOnly: boolean;
+}
+
+export interface SecurityBrowserAssessmentBudget {
+  maxRequests: number;
+  maxActions: number;
+  maxDurationSeconds: number;
+  maxConcurrency: number;
+  requestsUsed: number;
+  actionsUsed: number;
+}
+
+export interface SecurityBrowserAssessmentCoverage {
+  discoveredUrls: number;
+  visitedUrls: number;
+  analyzedExchanges: number;
+  discoveredForms: number;
+  discoveredApis: number;
+  websocketChannels: number;
+}
+
+export interface SecurityBrowserAssessment {
+  id: Identifier;
+  revision: number;
+  engagementId: Identifier;
+  name: string;
+  objective: string;
+  profile: SecurityBrowserAssessmentProfile;
+  sessionId: Identifier;
+  identityIds: Identifier[];
+  primaryIdentityId: Identifier;
+  targetUrls: string[];
+  scopePolicyId: Identifier;
+  scopePolicyRevision: number;
+  riskClasses: string[];
+  validationGrantId?: Identifier;
+  status: SecurityBrowserAssessmentStatus;
+  phase: "preflight" | "discovery" | "crawl" | "passive_audit" | "active_audit" | "validation" | "reporting" | "complete";
+  progress: number;
+  budget: SecurityBrowserAssessmentBudget;
+  coverage: SecurityBrowserAssessmentCoverage;
+  engines: SecurityBrowserEngineCapability[];
+  evidenceIds: Identifier[];
+  candidateIds: Identifier[];
+  activeStepId?: Identifier;
+  controlOwner: "nebula" | "operator";
+  pauseReason?: string;
+  failure?: string;
+  recoveryAction?: string;
+  startedAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SecurityBrowserAssessmentStep {
+  id: Identifier;
+  revision: number;
+  assessmentId: Identifier;
+  sequence: number;
+  title: string;
+  intent: string;
+  capability: string;
+  target: string;
+  status: "queued" | "running" | "waiting_operator" | "complete" | "failed" | "cancelled";
+  retryClassification: "safe_before_side_effect" | "never" | "operator_review";
+  traceIds: Identifier[];
+  evidenceIds: Identifier[];
+  error?: string;
+  recoveryAction?: string;
+}
+
+export interface SecurityBrowserScanProfile {
+  id: SecurityBrowserAssessmentProfile;
+  name: string;
+  summary: string;
+  riskClasses: string[];
+  requiredAdapters: string[];
+  defaultBudget: SecurityBrowserAssessmentBudget;
+  validationLocked: boolean;
+}
+
+export interface SecurityBrowserIssueCandidate {
+  id: Identifier;
+  revision: number;
+  assessmentId: Identifier;
+  ruleId: string;
+  checkFamily: string;
+  title: string;
+  cwe?: string;
+  targetUrl: string;
+  insertionPoint?: string;
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  confidence: "tentative" | "firm" | "certain";
+  evidenceIds: Identifier[];
+  validationStatus: "unvalidated" | "queued" | "validating" | "confirmed" | "rejected" | "inconclusive";
+  validationGrantId?: Identifier;
+  promotedFindingId?: Identifier;
+}
+
+export interface SecurityBrowserValidationGrant {
+  id: Identifier;
+  revision: number;
+  assessmentId: Identifier;
+  candidateId: Identifier;
+  targetUrl: string;
+  technique: string;
+  maxRequests: number;
+  requestsUsed: number;
+  durationSeconds: number;
+  expiresAt: string;
+  status: "active" | "revoked" | "expired" | "consumed";
+}
+
+export interface SecurityBrowserAssessmentWorkspace {
+  assessments: SecurityBrowserAssessment[];
+  steps: SecurityBrowserAssessmentStep[];
+  profiles: SecurityBrowserScanProfile[];
+  engines: SecurityBrowserEngineCapability[];
+  candidates: SecurityBrowserIssueCandidate[];
+  validationGrants: SecurityBrowserValidationGrant[];
 }
 
 export interface SecurityBrowserSiteNode {

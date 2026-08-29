@@ -29,9 +29,16 @@ import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
 import { useConfirmation, useDialogOpen } from "./DialogSystem";
 import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
 import { BrowserResearchSuite, type BrowserResearchToolView } from "./BrowserResearchSuite";
+import { SecurityBrowserWorkspacePanel } from "./SecurityBrowserWorkspacePanel";
 
-type ResearchView = "traffic" | "actions" | "identities" | "session" | BrowserResearchToolView;
-const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "intruder", "utilities", "actions", "identities", "session"]);
+type ResearchView = "target" | "traffic" | "intercepts" | "repeater" | "automate" | "analyze" | "actions" | "identities" | "session";
+const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "automate", "analyze", "actions", "identities", "session"]);
+
+function normalizedResearchView(value: string | null): ResearchView {
+  if (value === "intruder") return "automate";
+  if (value === "utilities") return "analyze";
+  return value && RESEARCH_VIEWS.has(value as ResearchView) ? value as ResearchView : "traffic";
+}
 
 interface BrowserTab {
   id: string;
@@ -157,10 +164,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [workspaceError, setWorkspaceError] = useState<string>();
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
-  const [researchView, setResearchView] = useState<ResearchView>(() => {
-    const requested = searchParams.get("browserTool") as ResearchView | null;
-    return requested && RESEARCH_VIEWS.has(requested) ? requested : "traffic";
-  });
+  const [researchView, setResearchView] = useState<ResearchView>(() => normalizedResearchView(searchParams.get("tool") ?? searchParams.get("browserTool")));
   const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>([]);
   const [identityName, setIdentityName] = useState("");
   const [identityBusy, setIdentityBusy] = useState(false);
@@ -186,7 +190,8 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     // another view, while avoiding stale-hook races when Browser is entered.
     if (current.get("view") !== "browser") return;
     const next = new URLSearchParams(current);
-    next.set("browserTool", researchView);
+    next.set("tool", researchView);
+    next.delete("browserTool");
     if (sessionId) next.set("browserSession", sessionId); else next.delete("browserSession");
     if (activeId) next.set("browserTab", activeId); else next.delete("browserTab");
     if (next.toString() !== current.toString()) setSearchParams(next, { replace: true });
@@ -1598,23 +1603,27 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     bytes: selectedExchanges[0].responseBytes === selectedExchanges[1].responseBytes ? "same" : `${selectedExchanges[0].responseBytes ?? "—"} → ${selectedExchanges[1].responseBytes ?? "—"}`,
   } : undefined;
 
-  const researchPanel = researchOpen ? <aside className="browser-research-panel" aria-label="Security research workbench">
-    <header>
-      <div><strong>Research workbench</strong><small>{activeSession?.name ?? "Loading durable session"} · {activeIdentity?.name ?? "No identity"}</small></div>
-      <button type="button" aria-label="Close research workbench" onClick={() => setResearchOpen(false)}><X size={15} /></button>
-    </header>
-    <nav aria-label="Research tools">
+  const researchPanel = researchOpen ? <SecurityBrowserWorkspacePanel
+    api={api}
+    desktop={desktop}
+    projectId={projectId}
+    identity={activeIdentity}
+    session={activeSession}
+    targetOptions={automationTargetOptions}
+    onClose={() => setResearchOpen(false)}
+    toolNavigation={<nav aria-label="Security Browser tools">
       <button type="button" className={researchView === "target" ? "active" : ""} onClick={() => setResearchView("target")}>Target</button>
-      <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Proxy <span>{sessionTraffic.length}</span></button>
+      <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
       <button type="button" className={researchView === "intercepts" ? "active" : ""} onClick={() => setResearchView("intercepts")}>Intercept</button>
       <button type="button" className={researchView === "repeater" ? "active" : ""} onClick={() => setResearchView("repeater")}>Repeater</button>
-      <button type="button" className={researchView === "intruder" ? "active" : ""} onClick={() => setResearchView("intruder")}>Intruder</button>
-      <button type="button" className={researchView === "utilities" ? "active" : ""} onClick={() => setResearchView("utilities")}>Decoder · Comparer · Sequencer</button>
+      <button type="button" className={researchView === "automate" ? "active" : ""} onClick={() => setResearchView("automate")}>Automate <small>Intruder</small></button>
+      <button type="button" className={researchView === "analyze" ? "active" : ""} onClick={() => setResearchView("analyze")}>Analyze</button>
       <button type="button" className={researchView === "actions" ? "active" : ""} onClick={() => setResearchView("actions")}><Sparkles size={14} /> Actions <span>{workspace?.actions.filter((action) => action.sessionId === activeSession?.id).length ?? 0}</span></button>
       <button type="button" className={researchView === "identities" ? "active" : ""} onClick={() => setResearchView("identities")}><UserRound size={14} /> Identities <span>{workspace?.identities.length ?? 0}</span></button>
       <button type="button" className={researchView === "session" ? "active" : ""} onClick={() => setResearchView("session")}><History size={14} /> Session</button>
-    </nav>
-    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : (["target", "intercepts", "repeater", "intruder", "utilities"] as const).includes(researchView as BrowserResearchToolView) ? <BrowserResearchSuite api={api} desktop={desktop} identity={activeIdentity} operatorId={operatorId} projectId={projectId} session={activeSession} view={researchView as BrowserResearchToolView} /> : researchView === "traffic" ? <div className="browser-traffic-workbench">
+    </nav>}
+  >
+    {workspaceLoading ? <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable browser state…</div> : workspaceError ? <div className="browser-research-empty error" role="alert"><strong>Research state is unavailable</strong><span>{workspaceError}</span><button className="button secondary" type="button" onClick={() => void refreshWorkspace()}>Try again</button></div> : (["target", "intercepts", "repeater"] as const).includes(researchView as "target" | "intercepts" | "repeater") || researchView === "automate" || researchView === "analyze" ? <BrowserResearchSuite api={api} desktop={desktop} identity={activeIdentity} operatorId={operatorId} projectId={projectId} session={activeSession} view={(researchView === "automate" ? "intruder" : researchView === "analyze" ? "utilities" : researchView) as BrowserResearchToolView} /> : researchView === "traffic" ? <div className="browser-traffic-workbench">
       <div className="browser-research-toolbar"><span>Metadata and redacted headers</span><button type="button" disabled={selectedExchangeIds.length !== 2} onClick={() => setSelectedExchangeIds([])}><GitCompareArrows size={13} /> {selectedExchangeIds.length === 2 ? "Clear comparison" : "Select two to compare"}</button></div>
       {comparison && <div className="browser-exchange-diff"><strong>Authorization response diff</strong><span>Status: {comparison.status}</span><span>Bytes: {comparison.bytes}</span><span>{comparison.changedHeaders.length ? `${comparison.changedHeaders.length} response headers changed: ${comparison.changedHeaders.join(", ")}` : "Response headers are identical."}</span></div>}
       {sessionTraffic.length ? <ol className="browser-traffic-list">{[...sessionTraffic].reverse().map((exchange) => <li key={exchange.id} className={selectedExchangeIds.includes(exchange.id) ? "selected" : ""}>
@@ -1677,7 +1686,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       {desktop && capabilities?.devtools && <button className="button secondary" type="button" disabled={!activeTab?.created} onClick={() => activeTab && void workbenchBrowser.openDevtools(activeTab.id, projectId).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.devtools_open_failed", "Browser DevTools could not be opened.", caught, "workbench_browser"); setError(errorMessage(caught)); })}><Bug size={14} /> Open DevTools</button>}
       {!desktop && activeSession && activeTab?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: activeTab.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.handoff_create_failed", "A browser navigation handoff could not be queued for the desktop.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Send page to desktop</button>}
     </div>}
-  </aside> : null;
+  </SecurityBrowserWorkspacePanel> : null;
 
   if (!desktop) return <div className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`}>
     <div className="browser-web-research-bar"><button className="button secondary" type="button" aria-expanded={researchOpen} onClick={() => setResearchOpen((value) => !value)}><Network size={14} /> Research workbench</button><span>Durable history and desktop handoff are available on paired devices.</span></div>

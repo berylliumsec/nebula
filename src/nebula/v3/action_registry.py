@@ -28,6 +28,7 @@ CONTENT_KINDS = [
     ResourceKind.TERMINAL_SESSION,
     ResourceKind.TERMINAL_COMMAND,
     ResourceKind.BROWSER_SESSION,
+    ResourceKind.BROWSER_ASSESSMENT,
     ResourceKind.BROWSER_TAB,
     ResourceKind.BROWSER_EXCHANGE,
     ResourceKind.MISSION,
