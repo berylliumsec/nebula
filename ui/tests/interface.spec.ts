@@ -3365,10 +3365,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
       (globalThis as typeof globalThis & { __harnessTurnRequest?: unknown }).__harnessTurnRequest = JSON.parse(String(init?.body ?? "{}"));
       const encoder = new TextEncoder();
       const output = "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80);
-      const answer = "Verification completed successfully. The operator remains in control of the next action.\n\n".repeat(30);
+      const streamingAnswer = "**Streaming Markdown is visible.** Inline `memcpy` is formatted before completion.\n\n```python\nprint('waiting for completion')\n";
+      const answer = "**Verification completed successfully.** The operator remains in control of the next action.\n\n".repeat(30);
       const frames: unknown[] = [
         { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
         { type: "status", harness_session_id: session, harness_turn_id: turn, payload: { phase: "command_runtime_session_created", detail: "The command runtime changed, so Nebula preserved the prior session and continued in a new session with the current runtime.", previous_session_id: "prior-runtime-session" } },
+        { type: "message_delta", harness_session_id: session, harness_turn_id: turn, delta: streamingAnswer },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary-1", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I found the verification path. I’m checking the production behavior before changing anything.", artifact_ids: [], payload: {} },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
@@ -3417,6 +3419,11 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const commentary = page.getByLabel("Assistant commentary");
   await expect(commentary).toContainText("I found the verification path. I’m checking the production behavior before changing anything.");
   await expect(commentary).toBeVisible();
+  const streamingMessage = page.locator(".chat-message.assistant").last();
+  await expect(streamingMessage.locator(".assistant-markdown strong")).toHaveText("Streaming Markdown is visible.");
+  await expect(streamingMessage.locator(".assistant-markdown code")).toHaveText("memcpy");
+  await expect(streamingMessage.locator(".assistant-inert-fence")).toContainText("print('waiting for completion')");
+  await expect(streamingMessage.getByRole("button", { name: /Review and run/ })).toHaveCount(0);
   await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_mode?: string } }).__harnessTurnRequest?.harness_mode)).toBe("plan");
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_skill?: unknown } }).__harnessTurnRequest?.harness_skill)).toEqual({
@@ -3488,6 +3495,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(outerBefore + 2);
   }
   const completedMessage = page.locator(".chat-message.assistant").filter({ hasText: "Verification completed successfully" });
+  await expect(completedMessage.locator(".assistant-markdown strong").first()).toHaveText("Verification completed successfully.");
   const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
   await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);

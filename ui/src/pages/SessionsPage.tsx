@@ -3314,7 +3314,9 @@ export function SessionsPage() {
                       {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
                         {commentaryItems.map((item) => <p key={item.key}>{item.text}</p>)}
                       </div>}
-                      {message.content && (message.role === "assistant" && message.state === "complete" ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable} runnableLanguages={runnableLanguages} onRun={setRunCandidate} /> : <p className={message.role === "assistant" && message.state === "streaming" ? "assistant-streaming-text" : undefined}>{message.content}</p>)}
+                      {message.content && (message.role === "assistant"
+                        ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={runnableLanguages} onRun={setRunCandidate} />
+                        : <p>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {activityLedger && <ActivityLedger
                         model={activityLedger}

@@ -165,7 +165,7 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
           object: "chat.completion.chunk",
           created: 1,
           model: "security-model",
-          choices: [{ index: 0, delta: { role: "assistant", content: "Core is continuing in Project A" }, finish_reason: null }],
+          choices: [{ index: 0, delta: { role: "assistant", content: "**Core is continuing in Project A**" }, finish_reason: null }],
         })}\n\n`);
         setTimeout(() => {
           response.write(`data: ${JSON.stringify({
@@ -503,7 +503,7 @@ test("production assistant work survives a project switch through real Core", as
     await expect(composer).toBeEnabled({ timeout: 20_000 });
     await composer.fill("Keep this response running while I switch projects");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("Core is continuing in Project A")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
 
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Background Project B/ }).click();
@@ -520,13 +520,14 @@ test("production assistant work survives a project switch through real Core", as
       if (!messagesResponse.ok()) return "";
       const messages = await messagesResponse.json() as Array<{ role: string; content: string }>;
       return messages.find((message) => message.role === "assistant")?.content ?? "";
-    }, { timeout: 20_000 }).toBe("Core is continuing in Project A and finished after the viewer detached.");
+    }, { timeout: 20_000 }).toBe("**Core is continuing in Project A** and finished after the viewer detached.");
 
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: new RegExp(projectA.name) }).click();
     await page.getByRole("button", { name: "Show conversations" }).click();
     await page.locator(".session-select").filter({ hasText: "Keep this response running while I switch projects" }).click();
-    await expect(page.getByText("Core is continuing in Project A and finished after the viewer detached.")).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
+    await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("and finished after the viewer detached.");
     expect(new URL(page.url()).hostname).toBe(lanAddress);
   } finally {
     await api.dispose();

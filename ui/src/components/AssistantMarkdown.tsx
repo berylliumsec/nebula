@@ -23,6 +23,7 @@ interface AssistantMarkdownProps {
   content: string;
   messageId?: string;
   durable: boolean;
+  streaming?: boolean;
   runnableLanguages: ReadonlySet<ExecutionLanguage>;
   onRun: (candidate: FencedRunCandidate) => void;
 }
@@ -166,6 +167,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   content,
   messageId,
   durable,
+  streaming = false,
   runnableLanguages,
   onRun,
 }: AssistantMarkdownProps) {
@@ -205,7 +207,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   };
 
   return (
-    <div className="assistant-markdown">
+    <div className={`assistant-markdown${streaming ? " streaming" : ""}`}>
       {renderable && (
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={safeUrl}>
           {renderable}
