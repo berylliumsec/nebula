@@ -2169,9 +2169,7 @@ class ChatService:
             return existing
         summary = run.metadata.get("final_summary")
         if not isinstance(summary, str) or not summary.strip():
-            raise ChatHistoryConflict(
-                "mission has no final result to continue in chat"
-            )
+            raise ChatHistoryConflict("mission has no final result to continue in chat")
         saved_name = run.metadata.get("name")
         title = (
             saved_name.strip()

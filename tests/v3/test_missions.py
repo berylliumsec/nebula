@@ -517,9 +517,7 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         assert provider.requests[0].model == "security-model"
         assert provider.requests[0].tools == []
 
-        discussed = client.post(
-            f"/api/v1/runs/{queued['id']}/discuss", headers=_auth()
-        )
+        discussed = client.post(f"/api/v1/runs/{queued['id']}/discuss", headers=_auth())
         assert discussed.status_code == 200, discussed.text
         chat = discussed.json()
         assert chat["backend"] == "provider"
