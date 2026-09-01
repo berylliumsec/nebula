@@ -1044,6 +1044,8 @@ kbd { font-size: 11px; }
 .mission-result-body .assistant-markdown h3 { margin: 18px 0 7px; padding-top: 14px; border-top: 1px solid var(--border-soft); font-size: 13px; }
 .mission-result-body .assistant-code-block { box-shadow: none; }
 .mission-result > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 18px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }.mission-result > footer a { color: var(--red); font-weight: var(--weight-bold); }
+.mission-result-actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex-wrap: wrap; }
+.mission-result-action-error { padding: 9px 18px; border-top: 1px solid color-mix(in srgb, var(--red) 28%, var(--border-soft)); color: var(--red); background: var(--red-muted); font-size: 11px; }
 .mission-failure-callout { border-color: color-mix(in srgb, var(--red) 34%, var(--border)); background: var(--red-muted); }.mission-failure-callout > svg { flex: 0 0 auto; color: var(--red); }.mission-failure-callout .button { margin-left: auto; white-space: nowrap; }
 .mission-runtime-setup { display: inline-flex; max-width: 390px; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--orange) 32%, var(--border-soft)); border-radius: 8px; color: var(--muted-strong); background: color-mix(in srgb, var(--orange) 7%, var(--surface)); font-size: 11px; line-height: 1.35; }
 .mission-runtime-setup a { flex: 0 0 auto; color: var(--blue); font-weight: var(--weight-semibold); }

@@ -4,6 +4,7 @@ import {
   CircleDashed,
   CircleAlert,
   Clock3,
+  Copy,
   DollarSign,
   FileCheck2,
   GitBranch,
@@ -24,6 +25,7 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { MissionPromotionDialog } from "../components/MissionPromotionDialog";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromMission, type ActivityLedgerEntry } from "../components/activityLedgerModel";
+import { copySelectionText } from "../components/selection/selectionActions";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
@@ -69,14 +71,29 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const [missionQuery, setMissionQuery] = useState("");
   const [missionStatus, setMissionStatus] = useState("all");
   const [visibleMissionCount, setVisibleMissionCount] = useState(12);
+  const [copiedResultId, setCopiedResultId] = useState<string>();
+  const [resultActionError, setResultActionError] = useState<{ runId: string; message: string }>();
+  const [discussingRunId, setDiscussingRunId] = useState<string>();
   const discuss = async () => {
-    if (!api || !run || run.backend !== "harness") return;
-    const chat = await api.discussRun(run.id);
-    const params = new URLSearchParams(window.location.search);
-    params.set("view", "chat");
-    params.set("session", chat.id);
-    window.history.pushState({}, "", `${window.location.pathname}?${params}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    if (!api || !run || discussingRunId) return;
+    setDiscussingRunId(run.id);
+    setResultActionError(undefined);
+    try {
+      const chat = await api.discussRun(run.id);
+      const params = new URLSearchParams(window.location.search);
+      params.set("view", "chat");
+      params.set("session", chat.id);
+      window.history.pushState({}, "", `${window.location.pathname}?${params}`);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.agents_page.mission_discuss", "A mission result could not be continued in assistant chat.", error, "agents_page");
+      setResultActionError({
+        runId: run.id,
+        message: "Assistant chat could not be opened. The mission result is still available; try again.",
+      });
+    } finally {
+      setDiscussingRunId(undefined);
+    }
   };
   const steer = async (event: FormEvent) => {
     event.preventDefault();
@@ -95,11 +112,28 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
     }
   };
   const resultEvent = events.find((event) => event.kind === "run.completed" || event.kind === "run.failed");
+  const copyResult = async () => {
+    if (!run || !resultEvent) return;
+    setResultActionError(undefined);
+    try {
+      await copySelectionText(resultEvent.summary);
+      setCopiedResultId(resultEvent.id);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.agents_page.mission_result_copy", "A mission result could not be copied.", error, "agents_page");
+      setResultActionError({
+        runId: run.id,
+        message: "Copy is unavailable in this browser. Select the result text and copy it manually.",
+      });
+    }
+  };
   const latestEvent = events[0];
   const progress = run?.totalTasks ? Math.min(100, Math.round((run.completedTasks / run.totalTasks) * 100)) : 0;
   const terminal = Boolean(run && ["complete", "failed", "cancelled", "interrupted"].includes(run.status));
   const selectedApprovals = run ? approvals.filter((approval) => approval.runId === run.id) : [];
   const missionLedger = run ? activityLedgerFromMission(run, events) : undefined;
+  const activeResultActionError = resultActionError && resultActionError.runId === run?.id
+    ? resultActionError.message
+    : undefined;
   const filteredRuns = useMemo(() => {
     const query = missionQuery.trim().toLocaleLowerCase();
     return [...runs]
@@ -121,7 +155,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         />}
         <section className="mission-commandbar" aria-label="Mission controls">
           <div><Radio size={15} /><span><strong>{run ? "Mission control" : "No mission selected"}</strong><small>{run ? `Core status: ${run.status.replaceAll("_", " ")} · live feed ${streamState}` : "Start a mission to see its plan and live execution here."}</small></span></div>
-          <div>{run?.backend === "harness" && <button className="button secondary" type="button" onClick={() => void discuss()}><MessageSquare size={15} /> Discuss in chat</button>}{terminal && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
+          <div>{run?.backend === "harness" && <button className="button secondary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={15} /> {discussingRunId === run.id ? "Opening chat…" : "Discuss in chat"}</button>}{terminal && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
         </section>
         <section className="panel mission-picker" aria-label="Missions">
           <header><div><strong>Mission history</strong><small>Select a named mission to inspect its result</small></div><span>{runs.length}</span></header>
@@ -141,7 +175,9 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
           <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>
-          <footer><span>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</span>{resultEvent.kind === "run.completed" && run && <MissionPromotionDialog run={run} summary={resultEvent.summary} />}{resultEvent.kind === "run.failed" && <a href="/settings#diagnostics-settings">View diagnostics</a>}</footer>
+          <footer><span>{resultEvent.actor ?? "Nebula Core"} · {new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(resultEvent.occurredAt))}</span><div className="mission-result-actions">{resultEvent.kind === "run.completed" && run && <MissionPromotionDialog run={run} summary={resultEvent.summary} />}{resultEvent.kind === "run.failed" && <a href="/settings#diagnostics-settings">View diagnostics</a>}<button className="button quiet" type="button" onClick={() => void copyResult()}><Copy size={14} aria-hidden="true" /> {copiedResultId === resultEvent.id ? "Copied" : "Copy result"}</button><button className="button primary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={14} aria-hidden="true" /> {discussingRunId === run?.id ? "Opening chat…" : "Continue in assistant chat"}</button></div></footer>
+          {activeResultActionError && <div className="mission-result-action-error" role="alert">{activeResultActionError}</div>}
+          <span className="sr-only" role="status" aria-live="polite">{copiedResultId === resultEvent.id ? "Mission result copied to clipboard." : ""}</span>
         </section>}
         {missionLedger && <ActivityLedger model={missionLedger} renderEntryDetails={(entry) => <MissionLedgerEntryDetails entry={entry} />} />}
       </div>

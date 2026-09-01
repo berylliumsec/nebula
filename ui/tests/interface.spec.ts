@@ -1286,6 +1286,127 @@ test("mission workflow freezes harness options, stages, and URL identity", async
   expect(accessibility.violations).toEqual([]);
 });
 
+test("mission result actions copy exactly and continue in assistant chat", async ({ page }) => {
+  const runId = "mission-result-actions";
+  const result = "**Verified result**\n\nThe bounded review is complete.";
+  let discussed = false;
+  await page.addInitScript(({ missionId, missionResult }) => {
+    localStorage.setItem("nebula.mission", missionId);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (globalThis as typeof globalThis & { __copiedMissionResult?: string }).__copiedMissionResult = value;
+        },
+      },
+    });
+    class MissionEventWebSocket extends EventTarget {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      readonly url: string;
+      readonly protocol = "nebula.events.v1";
+      readonly extensions = "";
+      readonly bufferedAmount = 0;
+      readonly binaryType = "blob";
+      readyState = MissionEventWebSocket.CONNECTING;
+      constructor(url: string | URL) {
+        super();
+        this.url = String(url);
+        setTimeout(() => {
+          this.readyState = MissionEventWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            kind: "event",
+            event: {
+              id: "mission-result-event",
+              run_id: missionId,
+              sequence: 7,
+              event_type: "run.completed",
+              actor_id: "Nebula Core",
+              occurred_at: "2026-07-14T12:10:00Z",
+              payload: { summary: missionResult },
+            },
+          }) }));
+        }, 10);
+      }
+      send(): void {}
+      close(code = 1000, reason = "closed"): void {
+        this.readyState = MissionEventWebSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent("close", { code, reason, wasClean: true }));
+      }
+    }
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: MissionEventWebSocket });
+  }, { missionId: runId, missionResult: result });
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/runs") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: runId,
+        engagement_id: "scratch-project",
+        objective: "Review the bounded project",
+        status: "complete",
+        backend: "native",
+        supervisor_provider_id: "local-provider",
+        supervisor_model: "security-model",
+        harness_profile_id: null,
+        harness_session_id: null,
+        runtime_snapshot: {},
+        budget: { max_duration_seconds: null, max_tokens: null, max_cost_usd: null, max_tool_calls: null, max_artifact_queries: null, max_concurrency: 1, max_delegation_depth: 0, max_retries_per_task: 0 },
+        started_at: entity.created_at,
+        completed_at: entity.updated_at,
+        metadata: { name: "Bounded project review", total_tasks: 1, completed_tasks: 1, final_summary: result },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/runs/${runId}/discuss`) && request.method() === "POST") {
+      discussed = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "chat-from-mission-result",
+        engagement_id: "scratch-project",
+        title: "Bounded project review",
+        backend: "provider",
+        provider_profile_id: "local-provider",
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: "security-model",
+        metadata: { attached_run_ids: [runId] },
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=missions&mission=${runId}`, "Workbench");
+  const resultRegion = page.getByRole("region", { name: "Mission result" });
+  await expect(resultRegion).toBeVisible();
+  await resultRegion.getByRole("button", { name: "Copy result" }).click();
+  await expect(resultRegion.getByRole("button", { name: "Copied" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __copiedMissionResult?: string }).__copiedMissionResult)).toBe(result);
+
+  const geometry = await resultRegion.evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: innerWidth,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".mission-result").analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await resultRegion.getByRole("button", { name: "Continue in assistant chat" }).click();
+  await expect.poll(() => discussed).toBe(true);
+  await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("chat");
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe("chat-from-mission-result");
+});
+
 test("Diagnostics explains and focuses a requested failure at every breakpoint", async ({ page }) => {
   await openWorkspace(page, "/settings?diagnostic=err_preview_123#diagnostics-settings", "Settings");
   await expect(page.getByRole("heading", { name: "Diagnostics", exact: true })).toBeVisible();

@@ -517,6 +517,28 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
         assert provider.requests[0].model == "security-model"
         assert provider.requests[0].tools == []
 
+        discussed = client.post(
+            f"/api/v1/runs/{queued['id']}/discuss", headers=_auth()
+        )
+        assert discussed.status_code == 200, discussed.text
+        chat = discussed.json()
+        assert chat["backend"] == "provider"
+        assert chat["provider_profile_id"] == profile.id
+        assert chat["model"] == "security-model"
+        transcript = client.get(
+            f"/api/v1/chat/sessions/{chat['id']}/messages", headers=_auth()
+        )
+        assert transcript.status_code == 200, transcript.text
+        assert [message["content"] for message in transcript.json()] == [
+            "Review the explicitly bounded scope",
+            completed["metadata"]["final_summary"],
+        ]
+        discussed_again = client.post(
+            f"/api/v1/runs/{queued['id']}/discuss", headers=_auth()
+        )
+        assert discussed_again.status_code == 200
+        assert discussed_again.json()["id"] == chat["id"]
+
         terminal_stop = client.post(
             f"/api/v1/runs/{queued['id']}/stop",
             headers=_auth(),
