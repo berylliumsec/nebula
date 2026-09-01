@@ -30,6 +30,7 @@ from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 
 from .domain import (
+    AgentRun,
     Approval,
     ApprovalStatus,
     Artifact,
@@ -52,6 +53,7 @@ from .domain import (
     McpServerProfile,
     NebulaModel,
     ProviderProfile,
+    RunBackend,
     ToolCallOrigin,
     ToolCall,
     ToolCallStatus,
@@ -2140,6 +2142,81 @@ class ChatService:
     def session_messages(self, session_id: str) -> list[ChatMessage]:
         session = self.store.get(ChatSession, session_id)
         return self._session_messages(session)
+
+    def attach_native_run_to_chat(self, run_id: str) -> ChatSession:
+        """Create or return the durable provider chat that continues a mission result."""
+
+        run = self.store.get(AgentRun, run_id)
+        if run.backend != RunBackend.NATIVE:
+            raise ChatConfigurationError(
+                "only native runs can be attached to provider chat"
+            )
+        if not run.supervisor_provider_id or not run.supervisor_model:
+            raise ChatConfigurationError(
+                "mission has no provider runtime to continue in chat"
+            )
+        existing = next(
+            (
+                item
+                for item in self.store.list_entities(
+                    ChatSession, engagement_id=run.engagement_id, limit=1_000
+                )
+                if run.id in item.metadata.get("attached_run_ids", [])
+            ),
+            None,
+        )
+        if existing is not None:
+            return existing
+        summary = run.metadata.get("final_summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ChatHistoryConflict("mission has no final result to continue in chat")
+        saved_name = run.metadata.get("name")
+        title = (
+            saved_name.strip()
+            if isinstance(saved_name, str) and saved_name.strip()
+            else run.objective.strip()
+        )
+        chat = ChatSession(
+            id=str(uuid4()),
+            engagement_id=run.engagement_id,
+            title=(title or "Mission discussion")[:300],
+            backend=ChatBackend.PROVIDER,
+            provider_profile_id=run.supervisor_provider_id,
+            model=run.supervisor_model,
+            metadata={
+                "attached_run_ids": [run.id],
+                "context_management": "nebula",
+            },
+        )
+        with self.store.transaction() as transaction:
+            transaction.add(chat)
+            transaction.add(
+                ChatMessage(
+                    id=str(uuid4()),
+                    engagement_id=run.engagement_id,
+                    session_id=chat.id,
+                    sequence=1,
+                    role=ChatRole.USER,
+                    content=run.objective,
+                    provider_profile_id=run.supervisor_provider_id,
+                    model=run.supervisor_model,
+                    metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+                )
+            )
+            transaction.add(
+                ChatMessage(
+                    id=str(uuid4()),
+                    engagement_id=run.engagement_id,
+                    session_id=chat.id,
+                    sequence=2,
+                    role=ChatRole.ASSISTANT,
+                    content=summary,
+                    provider_profile_id=run.supervisor_provider_id,
+                    model=run.supervisor_model,
+                    metadata={"run_id": run.id, "handoff": "mission_to_chat"},
+                )
+            )
+        return chat
 
     def fork_session(
         self,

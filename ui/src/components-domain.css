@@ -560,6 +560,9 @@
   .mission-hero { align-items: flex-start; flex-direction: column; }
   .mission-hero-progress { width: 100%; }
   .mission-hero-progress > span { flex: 1; }
+  .mission-result > footer { align-items: stretch; flex-direction: column; }
+  .mission-result-actions { justify-content: stretch; }
+  .mission-result-actions .button { min-height: 44px; flex: 1 1 180px; justify-content: center; }
   .agent-card-grid, .provider-grid, .settings-bottom-grid { grid-template-columns: 1fr; }
   .secrets-panel { grid-column: auto; }
   .release-panel { grid-column: auto; }

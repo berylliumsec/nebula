@@ -6729,8 +6729,11 @@ def create_app(
         tags=["runs", "chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def discuss_harness_run(run_id: str) -> ChatSession:
-        return harness_runtime.attach_run_to_chat(run_id)
+    async def discuss_run(run_id: str) -> ChatSession:
+        run = store.get(AgentRun, run_id)
+        if run.backend == RunBackend.HARNESS:
+            return harness_runtime.attach_run_to_chat(run_id)
+        return chat_service().attach_native_run_to_chat(run_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/continue-as-mission",
