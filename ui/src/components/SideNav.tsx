@@ -23,7 +23,6 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     activeOperator,
     engagement,
     engagements,
-    selectEngagement,
   } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -82,7 +81,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
         {open && <div className="engagement-menu" role="dialog" aria-label="Project switcher">
           <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
-            {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { selectEngagement(item.id); navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
+            {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
             {engagements.length === 0 && <p>No projects yet.</p>}
           </div>}
           {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}

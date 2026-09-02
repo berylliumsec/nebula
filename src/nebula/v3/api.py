@@ -181,6 +181,7 @@ from .diagnostic_guidance import (
     reason_code_for,
 )
 from .diagnostic_sensitive import SensitiveDetailUnavailable
+from .redaction import sanitize_display_text
 from .debugger import (
     DEBUG_PROTOCOL,
     DebugService,
@@ -7484,6 +7485,48 @@ def create_app(
                         "harness turn completed without a durable message"
                     )
                 message = store.get(ChatMessage, completed_turn.final_message_id)
+                if chat.metadata.get("initial_title_state") == "pending":
+                    try:
+                        naming_turn = await harness_runtime.analyze_structured(
+                            engagement_id=chat.engagement_id,
+                            profile_id=chat.harness_profile_id or "",
+                            model=chat.model,
+                            prompt=(
+                                "Name this conversation from its first exchange. Return only a concise, "
+                                "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
+                                f"Operator request:\n{prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
+                            ),
+                        )
+                        title = sanitize_display_text(naming_turn.response or "").strip().strip("\"'`# ")
+                        title = " ".join(re.sub(r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)).split()[:6])[:120]
+                        if not title:
+                            raise HarnessError("harness returned an empty conversation name")
+                        latest_chat = store.get(ChatSession, chat.id)
+                        if latest_chat.metadata.get("initial_title_state") != "operator":
+                            store.update(
+                                ChatSession,
+                                chat.id,
+                                {"title": title, "metadata": {**latest_chat.metadata, "initial_title_state": "generated"}},
+                                expected_revision=latest_chat.revision,
+                            )
+                    except Exception as exc:
+                        # The first answer is already durable. Naming is an optional
+                        # embellishment and must never turn that success into a failed chat.
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.chat.naming_fallback",
+                            "The harness could not name the conversation; the prompt-based fallback was retained.",
+                            exc,
+                            stage="conversation-naming",
+                        )
+                        latest_chat = store.get(ChatSession, chat.id)
+                        if latest_chat.metadata.get("initial_title_state") != "operator":
+                            store.update(
+                                ChatSession,
+                                chat.id,
+                                {"metadata": {**latest_chat.metadata, "initial_title_state": "failed"}},
+                                expected_revision=latest_chat.revision,
+                            )
                 response = ChatCompletionResponse(
                     turn_id=completed_turn.id,
                     session_id=chat.id,
@@ -7866,7 +7909,7 @@ def create_app(
         return store.update(
             ChatSession,
             session_id,
-            {"title": request.title},
+            {"title": request.title, "metadata": {**current.metadata, "initial_title_state": "operator"}},
             expected_revision=request.expected_revision or current.revision,
         )
 

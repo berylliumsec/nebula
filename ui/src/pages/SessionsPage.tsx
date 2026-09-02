@@ -460,6 +460,8 @@ export function SessionsPage() {
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const activeEngagementIdRef = useRef(engagement?.id);
+  activeEngagementIdRef.current = engagement?.id;
   const [sessionQuery, setSessionQuery] = useState("");
   const [exportingSessionId, setExportingSessionId] = useState<string>();
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
@@ -1155,7 +1157,9 @@ export function SessionsPage() {
 
   const refreshSessions = async (selectedId?: string) => {
     if (!api || !engagement) return;
-    const page = await api.listChatSessions(engagement.id);
+    const requestedEngagementId = engagement.id;
+    const page = await api.listChatSessions(requestedEngagementId);
+    if (activeEngagementIdRef.current !== requestedEngagementId) return;
     setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
     if (selectedId) {
       setSessionId(selectedId);
