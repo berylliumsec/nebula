@@ -1573,7 +1573,9 @@ class ChatService:
                     prepared.turn = turn
                     completion = self._completion(prepared, event.response)
                     self._persist(prepared, completion)
-                    await self._name_initial_session(prepared, completion.message.content)
+                    await self._name_initial_session(
+                        prepared, completion.message.content
+                    )
                     turn = self.store.update(
                         ChatTurn,
                         turn.id,
@@ -3009,13 +3011,18 @@ class ChatService:
             ],
             max_output_tokens=32,
             temperature=0,
-            metadata={"operation": "conversation_naming", "chat_session_id": session.id},
+            metadata={
+                "operation": "conversation_naming",
+                "chat_session_id": session.id,
+            },
         )
         changes: dict[str, Any]
         try:
             response = await prepared.provider.complete(request)
             title = sanitize_display_text(response.text).strip().strip("\"'`# ")
-            title = " ".join(re.sub(r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)).split()[:6])[:120]
+            title = " ".join(
+                re.sub(r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)).split()[:6]
+            )[:120]
             if not title:
                 raise ChatError("provider returned an empty conversation name")
             changes = {

@@ -7497,16 +7497,35 @@ def create_app(
                                 f"Operator request:\n{prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
                             ),
                         )
-                        title = sanitize_display_text(naming_turn.response or "").strip().strip("\"'`# ")
-                        title = " ".join(re.sub(r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)).split()[:6])[:120]
+                        title = (
+                            sanitize_display_text(naming_turn.response or "")
+                            .strip()
+                            .strip("\"'`# ")
+                        )
+                        title = " ".join(
+                            re.sub(
+                                r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)
+                            ).split()[:6]
+                        )[:120]
                         if not title:
-                            raise HarnessError("harness returned an empty conversation name")
+                            raise HarnessError(
+                                "harness returned an empty conversation name"
+                            )
                         latest_chat = store.get(ChatSession, chat.id)
-                        if latest_chat.metadata.get("initial_title_state") != "operator":
+                        if (
+                            latest_chat.metadata.get("initial_title_state")
+                            != "operator"
+                        ):
                             store.update(
                                 ChatSession,
                                 chat.id,
-                                {"title": title, "metadata": {**latest_chat.metadata, "initial_title_state": "generated"}},
+                                {
+                                    "title": title,
+                                    "metadata": {
+                                        **latest_chat.metadata,
+                                        "initial_title_state": "generated",
+                                    },
+                                },
                                 expected_revision=latest_chat.revision,
                             )
                     except Exception as exc:
@@ -7520,11 +7539,19 @@ def create_app(
                             stage="conversation-naming",
                         )
                         latest_chat = store.get(ChatSession, chat.id)
-                        if latest_chat.metadata.get("initial_title_state") != "operator":
+                        if (
+                            latest_chat.metadata.get("initial_title_state")
+                            != "operator"
+                        ):
                             store.update(
                                 ChatSession,
                                 chat.id,
-                                {"metadata": {**latest_chat.metadata, "initial_title_state": "failed"}},
+                                {
+                                    "metadata": {
+                                        **latest_chat.metadata,
+                                        "initial_title_state": "failed",
+                                    }
+                                },
                                 expected_revision=latest_chat.revision,
                             )
                 response = ChatCompletionResponse(
@@ -7909,7 +7936,10 @@ def create_app(
         return store.update(
             ChatSession,
             session_id,
-            {"title": request.title, "metadata": {**current.metadata, "initial_title_state": "operator"}},
+            {
+                "title": request.title,
+                "metadata": {**current.metadata, "initial_title_state": "operator"},
+            },
             expected_revision=request.expected_revision or current.revision,
         )
 
