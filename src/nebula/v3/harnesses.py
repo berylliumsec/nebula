@@ -5868,6 +5868,7 @@ class HarnessRuntimeService:
                     model=session.model,
                     metadata={
                         "context_management": "runtime_managed",
+                        "initial_title_state": "pending",
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),

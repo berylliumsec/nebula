@@ -86,7 +86,7 @@ from .providers import (
     ToolDefinition,
     provider_from_profile,
 )
-from .redaction import redact_text
+from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
 from .tools import ApprovalRequired, PolicyDenied, ToolInvocation
 from .tool_results import (
@@ -1237,6 +1237,7 @@ class ChatService:
         response = await prepared.provider.complete(prepared.model_request)
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
+        await self._name_initial_session(prepared, completion.message.content)
         self._complete_turn(prepared, completion)
         return completion
 
@@ -1283,6 +1284,7 @@ class ChatService:
                     raise ChatError("provider stream completed without a response")
                 completion = self._completion(prepared, event.response)
                 self._persist(prepared, completion)
+                await self._name_initial_session(prepared, completion.message.content)
                 self._complete_turn(prepared, completion)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
@@ -1571,6 +1573,9 @@ class ChatService:
                     prepared.turn = turn
                     completion = self._completion(prepared, event.response)
                     self._persist(prepared, completion)
+                    await self._name_initial_session(
+                        prepared, completion.message.content
+                    )
                     turn = self.store.update(
                         ChatTurn,
                         turn.id,
@@ -2965,6 +2970,86 @@ class ChatService:
             "Analyst chat",
         )
         return re.sub(r"\s+", " ", first).strip()[:120] or "Analyst chat"
+
+    async def _name_initial_session(
+        self, prepared: PreparedChat, assistant_response: str
+    ) -> None:
+        """Ask the selected provider for a durable first-turn conversation name.
+
+        Naming is best-effort and deliberately separate from the visible answer.
+        A provider failure must never discard or delay persistence of that answer.
+        """
+
+        session_id = self._session_id(prepared)
+        if not session_id or not prepared.engagement_id:
+            return
+        session = self.store.get(ChatSession, session_id)
+        if session.metadata.get("initial_title_state") in {"generated", "failed"}:
+            return
+        first_prompt = next(
+            (
+                message.content
+                for message in prepared.model_request.messages
+                if message.role == "user"
+            ),
+            "",
+        )
+        request = ModelRequest(
+            model=prepared.resolved_model,
+            instructions=(
+                "Name this conversation from its first exchange. Return only a concise, "
+                "specific 2-6 word title with no quotes, markdown, or trailing punctuation."
+            ),
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content=(
+                        f"Operator request:\n{first_prompt[:4_000]}\n\n"
+                        f"Assistant response:\n{assistant_response[:4_000]}"
+                    ),
+                )
+            ],
+            max_output_tokens=32,
+            temperature=0,
+            metadata={
+                "operation": "conversation_naming",
+                "chat_session_id": session.id,
+            },
+        )
+        changes: dict[str, Any]
+        try:
+            response = await prepared.provider.complete(request)
+            title = sanitize_display_text(response.text).strip().strip("\"'`# ")
+            title = " ".join(
+                re.sub(r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)).split()[:6]
+            )[:120]
+            if not title:
+                raise ChatError("provider returned an empty conversation name")
+            changes = {
+                "title": title,
+                "metadata": {**session.metadata, "initial_title_state": "generated"},
+            }
+        except Exception as exc:
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.naming.fallback",
+                "The provider could not name the conversation; the prompt-based fallback was retained.",
+                outcome="fallback",
+                stage="conversation-naming",
+                retryable=False,
+                safe_failure_cause="The naming response was unavailable or invalid.",
+                exception=exc,
+            )
+            changes = {
+                "metadata": {**session.metadata, "initial_title_state": "failed"}
+            }
+        prepared.session = self.store.update(
+            ChatSession,
+            session.id,
+            changes,
+            expected_revision=session.revision,
+        )
 
     @staticmethod
     def _completion(

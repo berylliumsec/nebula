@@ -2593,7 +2593,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         discussed = client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
         assert discussed.status_code == 200
         assert discussed.json()["id"] == body["session_id"]
-        assert len(adapter.opens) == 1
+        assert len(adapter.opens) == 2
 
 
 def test_harness_export_closes_references_without_machine_credentials(tmp_path):

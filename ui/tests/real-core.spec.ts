@@ -156,6 +156,18 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
         }));
         return;
       }
+      const messages = Array.isArray(body.messages) ? body.messages as Array<{ content?: unknown }> : [];
+      if (messages.some((message) => typeof message.content === "string" && message.content.includes("Name this conversation from its first exchange"))) {
+        response.end(JSON.stringify({
+          id: "chatcmpl-real-core-name",
+          object: "chat.completion",
+          created: 1,
+          model: "security-model",
+          choices: [{ index: 0, message: { role: "assistant", content: "Expired HTTPS Certificate Review" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 14, completion_tokens: 5, total_tokens: 19 },
+        }));
+        return;
+      }
       if (body.stream === true && options.streamDelayMs !== undefined) {
         response.setHeader("Content-Type", "text/event-stream");
         response.setHeader("Cache-Control", "no-cache");
@@ -339,7 +351,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
     const completion = await completionResponse.json() as { session_id: string };
     expect(completion.session_id).toBeTruthy();
-    expect(modelStub.requests).toHaveLength(1);
+    expect(modelStub.requests).toHaveLength(2);
     const deliveredMessages = modelStub.requests[0].messages as Array<{ content?: string }>;
     const deliveredContent = deliveredMessages.at(-1)?.content ?? "";
     const deliveredContextJson = deliveredContent.match(
@@ -353,6 +365,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
       sha256: selectedContextHash,
       truncated: false,
     }]);
+    expect(JSON.stringify(modelStub.requests[1])).toContain("Name this conversation from its first exchange");
 
     const messagesResponse = await api.get(`chat/sessions/${completion.session_id}/messages`);
     expect(messagesResponse.ok(), await messagesResponse.text()).toBe(true);
@@ -423,7 +436,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     const sessions = await sessionsResponse.json() as Array<{ id: string; title: string }>;
     const savedSession = sessions.find((session) => session.id === completion.session_id);
     expect(savedSession).toBeTruthy();
-    expect(savedSession!.title).toBe("Review the exact 443/tcp observation.");
+    expect(savedSession!.title).toBe("Expired HTTPS Certificate Review");
     await page.locator(".session-select").filter({ hasText: "Switch target conversation" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(switchTarget.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Switch target conversation", { exact: true })).toBeVisible();
