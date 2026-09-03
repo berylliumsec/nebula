@@ -251,10 +251,12 @@ from .domain import (
     Entity,
     Evidence,
     GeneratedDraft,
+    HarnessProfile,
     HarnessInteraction,
     HarnessInteractionStatus,
     HarnessSession,
     HarnessTurn,
+    HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
     MissionGrant,
@@ -9785,6 +9787,20 @@ def _register_crud_routes(
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas."""
 
+    def enforce_harness_command_boundary(entity: Any) -> Any:
+        if not isinstance(entity, HarnessProfile):
+            return entity
+        return entity.model_copy(
+            update={
+                "native_capabilities": entity.native_capabilities.model_copy(
+                    update={
+                        "workspace_access": HarnessWorkspaceAccess.NONE,
+                        "shell": False,
+                    }
+                )
+            }
+        )
+
     def make_create() -> Callable[..., Any]:
         async def create_entity(entity: Any) -> Entity:
             protected = {"id", "created_at", "updated_at", "revision"}.intersection(
@@ -9807,6 +9823,7 @@ def _register_crud_routes(
                         ),
                     }
                 )
+            entity = enforce_harness_command_boundary(entity)
             if isinstance(entity, Engagement) and entity.workspace_path:
                 try:
                     linked_workspace = (
@@ -9897,6 +9914,7 @@ def _register_crud_routes(
                 entity, ProviderProfile
             ):
                 entity = _invalidate_provider_verification(current, entity)
+            entity = enforce_harness_command_boundary(entity)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
                 return relation_service.replace_legacy_entity(
@@ -9930,11 +9948,19 @@ def _register_crud_routes(
             payload = current.model_dump(mode="python")
             payload.update(patch.changes)
             candidate = model.model_validate(payload)
+            candidate = enforce_harness_command_boundary(candidate)
             changes = dict(patch.changes)
             if isinstance(current, ProviderProfile) and isinstance(
                 candidate, ProviderProfile
             ):
                 candidate = _invalidate_provider_verification(current, candidate)
+                changes = {
+                    key: value
+                    for key, value in candidate.model_dump(mode="python").items()
+                    if key not in {"id", "created_at", "updated_at", "revision"}
+                    and value != getattr(current, key)
+                }
+            elif isinstance(current, HarnessProfile):
                 changes = {
                     key: value
                     for key, value in candidate.model_dump(mode="python").items()

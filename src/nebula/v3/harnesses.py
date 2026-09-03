@@ -292,13 +292,32 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+def _container_only_native_capabilities(
+    capabilities: HarnessNativeCapabilities,
+) -> HarnessNativeCapabilities:
+    # Nebula owns project command execution.  The vendor harness may still use
+    # explicitly enabled research/skill capabilities, but it must never receive
+    # a host-backed project filesystem or shell.  Keeping this enforcement at
+    # the permission/config boundary also protects sessions created from legacy
+    # profiles that persisted these flags before the container-only policy.
+    return capabilities.model_copy(
+        update={
+            "workspace_access": HarnessWorkspaceAccess.NONE,
+            "shell": False,
+        }
+    )
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
     raw = session.metadata.get("native_capabilities")
-    if isinstance(raw, dict):
-        return HarnessNativeCapabilities.model_validate(raw)
-    return profile.native_capabilities
+    capabilities = (
+        HarnessNativeCapabilities.model_validate(raw)
+        if isinstance(raw, dict)
+        else profile.native_capabilities
+    )
+    return _container_only_native_capabilities(capabilities)
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -322,9 +341,6 @@ def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[st
 
 def _supported_native_capabilities(kind: HarnessKind) -> list[str]:
     common = [
-        "isolated_workspace_read",
-        "isolated_workspace_write",
-        "shell",
         "web_search",
         "skills",
         "subagents",
@@ -408,9 +424,8 @@ def _harness_developer_instructions(
         "an unrestricted vendor workspace agent. Vendor-native capabilities are "
         "available only when named in the trusted native inventory below. Never "
         "advertise or imply access to any other vendor-native capability. Native "
-        "shell and file capabilities operate only in an isolated scratch workspace; "
-        "they must not be used to act on engagement targets or replace Nebula's "
-        "scoped command runtime. Native web and browser capabilities are for research, not "
+        "shell and project-file capabilities are not provided. Native web and browser "
+        "capabilities are for research, not "
         "target scanning. Use the session-scoped Nebula command runtime for project "
         "work; it runs Bash in a pinned isolated container. "
         "Use only the Nebula MCP gateway tools actually supplied in this thread. "
@@ -4448,10 +4463,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     hooks=True,
                     subagent_activity=True,
                     subagent_control=profile.native_capabilities.subagents,
-                    checkpoint_rewind=(
-                        profile.native_capabilities.workspace_access
-                        == HarnessWorkspaceAccess.WRITE
-                    ),
+                    checkpoint_rewind=False,
                     models=list(
                         dict.fromkeys(
                             [
@@ -5432,7 +5444,9 @@ class HarnessRuntimeService:
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
-            "native_capabilities": profile.native_capabilities.model_dump(mode="json"),
+            "native_capabilities": _container_only_native_capabilities(
+                profile.native_capabilities
+            ).model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             "runtime_options": {
                 "reasoning_effort": resolved_reasoning_effort,
@@ -5482,9 +5496,7 @@ class HarnessRuntimeService:
             model=selected_model,
             mcp_server_ids=[],
         )
-        native = profile.native_capabilities.model_copy(
-            update={"workspace_access": HarnessWorkspaceAccess.WRITE}
-        )
+        native = _container_only_native_capabilities(profile.native_capabilities)
         session = self.store.update(
             HarnessSession,
             session.id,
@@ -8825,11 +8837,6 @@ class HarnessRuntimeService:
                         )
 
         try:
-            adapter_workspace = (
-                isolated_workspace
-                if analysis_only
-                else self.workspace_resolver(session.engagement_id)
-            )
             catalog = self._gateway_catalog(session)
             gateway_tools = tuple(
                 {
@@ -8843,7 +8850,7 @@ class HarnessRuntimeService:
                 AdapterOpenRequest(
                     profile=profile,
                     session=session,
-                    workspace=adapter_workspace,
+                    workspace=isolated_workspace,
                     mcp_profiles=(),
                     gateway_config=launch.runtime_config(),
                     gateway_tools=gateway_tools,
