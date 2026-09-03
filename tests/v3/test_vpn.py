@@ -25,6 +25,14 @@ def test_admits_inline_tun_profile_and_forces_full_tunnel():
     assert "redirect-gateway ipv6" in parsed.config
 
 
+def test_admits_ping_timer_rem_without_arguments():
+    parsed = parse_openvpn_profile(BASE + "ping 10\nping-restart 60\nping-timer-rem\n")
+
+    assert "ping-timer-rem\n" in parsed.config
+    with pytest.raises(VpnProfileError, match="does not accept arguments"):
+        parse_openvpn_profile(BASE + "ping-timer-rem unexpected\n")
+
+
 @pytest.mark.parametrize(
     "directive",
     [

@@ -815,6 +815,7 @@ dev tun
 proto udp
 remote vpn.example.test 1194
 remote-cert-tls server
+ping-timer-rem
 <ca>
 certificate
 </ca>

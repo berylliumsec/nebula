@@ -38,6 +38,7 @@ _SAFE_OPTIONS = {
     "persist-tun",
     "ping",
     "ping-restart",
+    "ping-timer-rem",
     "proto",
     "pull",
     "remote",
@@ -142,6 +143,8 @@ def parse_openvpn_profile(
             remotes.append((fields[1], port))
         elif option == "client":
             has_client = True
+        elif option == "ping-timer-rem" and len(fields) != 1:
+            raise VpnProfileError("ping-timer-rem does not accept arguments")
         elif option in {"remote-cert-tls", "verify-x509-name"}:
             has_server_verification = True
         elif option == "setenv" and fields[1:] == ["opt", "block-outside-dns"]:
