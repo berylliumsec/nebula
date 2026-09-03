@@ -1788,6 +1788,11 @@ class ContainerTerminalService:
             "security": prepared.security.model_dump(mode="json"),
             "limits": _terminal_limits().model_dump(mode="json"),
             "workspace": "/workspace",
+            # Bind the reviewed session to the resolved host workspace without
+            # disclosing that host path to the remote browser.
+            "workspace_identity": hashlib.sha256(
+                os.fsencode(prepared.resolution.workspace)
+            ).hexdigest(),
             "policy_rule": prepared.policy_rule,
             "fresh_container": True,
             "idle_timeout_seconds": int(self.idle_timeout_seconds),

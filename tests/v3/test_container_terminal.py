@@ -648,6 +648,29 @@ async def test_unrestricted_kali_terminal_needs_no_runtime_or_scope_policy(tmp_p
     await service.finish(created.session_id, outcome="closed")
 
 
+@async_test
+async def test_terminal_preview_is_bound_to_the_resolved_project_workspace(tmp_path):
+    _store, engagement, _runner, platform, service = continuity_fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    replacement = tmp_path / "replacement-workspace"
+    replacement.mkdir()
+    platform.workspace = replacement
+
+    with pytest.raises(ContainerTerminalError) as changed:
+        await service.start(
+            ContainerTerminalStartRequest(
+                **request.model_dump(),
+                preview_token=preview.preview_token,
+                preview_fingerprint=preview.preview_fingerprint,
+                client_idempotency_key="workspace-changed",
+            )
+        )
+
+    assert changed.value.code == "preview_stale"
+    assert "changed after review" in changed.value.detail
+
+
 def test_terminal_request_rejects_client_selected_network_boundary():
     with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
         ContainerTerminalPreflightRequest(

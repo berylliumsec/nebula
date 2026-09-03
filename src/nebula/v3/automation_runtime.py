@@ -1329,7 +1329,7 @@ class AutomationRuntimeManager:
                 backend = await self.session_factory(
                     SessionLaunch(
                         session_id=session.id,
-                        runner=self._runner(profile),
+                        runner=self._runner(profile, workspace=workspace),
                         image=self.runtime_image,
                         workspace=workspace,
                         limits=SandboxLimits(
@@ -1405,7 +1405,11 @@ class AutomationRuntimeManager:
         return sorted(profiles, key=lambda item: (item.created_at, item.id))[0]
 
     def _runner(
-        self, stored: StoredRunnerProfile, *, helper_image: str | None = None
+        self,
+        stored: StoredRunnerProfile,
+        *,
+        helper_image: str | None = None,
+        workspace: Path | None = None,
     ) -> ContainerSandboxRunner:
         platform = (
             RunnerPlatform.LINUX
@@ -1435,12 +1439,21 @@ class AutomationRuntimeManager:
             if stored.seccomp_profile
             else None,
         )
+        workspace_roots = [self.data_root]
+        if workspace is not None:
+            resolved_workspace = workspace.expanduser().resolve(strict=True)
+            if not resolved_workspace.is_dir():
+                raise AutomationRuntimeUnavailable(
+                    "configured project workspace is not a directory"
+                )
+            if resolved_workspace not in workspace_roots:
+                workspace_roots.append(resolved_workspace)
         return ContainerSandboxRunner(
             profile=profile,
             egress_controller=ContainerEgressController(
                 helper_image=helper_image or self.runtime_image
             ),
-            workspace_roots=[self.data_root],
+            workspace_roots=workspace_roots,
         )
 
     @staticmethod

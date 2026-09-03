@@ -272,6 +272,7 @@ class RuntimePlatform:
         """Prepare and return the one Kali image shared with agent automation."""
 
         profile = self.resolve_human_terminal_profile(engagement_id)
+        workspace = self.workspace_for(engagement_id)
         key = (profile.id, profile.revision)
         image = self._prepared_images.get(key)
         if image is None:
@@ -303,8 +304,8 @@ class RuntimePlatform:
                     self._prepared_images[key] = image
         return HumanTerminalRuntimeResolution(
             profile=profile,
-            runner=self._runner(profile),
-            workspace=self.workspace_for(engagement_id),
+            runner=self._runner(profile, workspace=workspace),
+            workspace=workspace,
             image=image,
         )
 
@@ -544,6 +545,7 @@ class RuntimePlatform:
         if runtime is None:
             raise RuntimePlatformError(f"Kali does not expose runtime {language!r}")
         image = metadata["image"]
+        workspace = self.workspace_for(engagement_id)
         return OperatorRuntimeResolution(
             canonical_language=canonical,
             runtime=runtime,
@@ -553,8 +555,9 @@ class RuntimePlatform:
             runner=self._runner(
                 profile,
                 egress_helper_image=image if network else None,
+                workspace=workspace,
             ),
-            workspace=self.workspace_for(engagement_id),
+            workspace=workspace,
         )
 
     def _runner(
@@ -562,6 +565,7 @@ class RuntimePlatform:
         stored: StoredRunnerProfile,
         *,
         egress_helper_image: str | None = None,
+        workspace: Path | None = None,
     ) -> ContainerSandboxRunner:
         if stored.isolation == RunnerIsolation.ROOTLESS:
             host = RunnerPlatform.LINUX
@@ -594,10 +598,22 @@ class RuntimePlatform:
             if egress_helper_image is not None
             else NoEgressController()
         )
+        workspace_roots = [self.workspace_root, self.parser_root]
+        if workspace is not None:
+            resolved_workspace = workspace.expanduser().resolve(strict=True)
+            if not resolved_workspace.is_dir():
+                raise RuntimePlatformError(
+                    "configured project workspace is not a directory"
+                )
+            if resolved_workspace not in workspace_roots:
+                # Admit the selected project's exact durable workspace, never its
+                # parent. ContainerSandboxRunner resolves the path again at launch,
+                # so a later symlink retarget fails closed.
+                workspace_roots.append(resolved_workspace)
         return ContainerSandboxRunner(
             profile=profile,
             egress_controller=egress,
-            workspace_roots=[self.workspace_root, self.parser_root],
+            workspace_roots=workspace_roots,
         )
 
 

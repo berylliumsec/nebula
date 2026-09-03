@@ -695,6 +695,8 @@ def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
 def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_path):
     async def scenario():
         manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager.data_root = tmp_path / "core-data"
+        manager.data_root.mkdir()
         credentials = CredentialStore()
         secret = credentials.create(
             CredentialCreateRequest(secret="client\ndev tun0\n", persistence="session")
@@ -741,6 +743,8 @@ def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_pa
         )
 
         assert launches[0].vpn_config == "client\ndev tun0"
+        assert launches[0].workspace.resolve() in launches[0].runner.workspace_roots
+        assert tmp_path.resolve() not in launches[0].runner.workspace_roots
         session = store.get(AutomationSession, result.session_id)
         assert (session.vpn_profile_id, session.vpn_profile_revision) == (
             vpn.id,
