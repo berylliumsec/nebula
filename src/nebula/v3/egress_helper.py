@@ -215,6 +215,7 @@ def _vpn_log_detail(config: str, path: Path = VPN_LOG_PATH) -> str:
     try:
         raw = path.read_bytes()[-VPN_LOG_BYTES:]
     except OSError:
+        # diagnostic-expected: the optional VPN log may not exist after early startup failure.
         return ""
     detail = raw.decode("utf-8", errors="replace").strip()
     in_credentials = False
@@ -308,12 +309,14 @@ def _start_vpn(config: str) -> subprocess.Popen[bytes]:
             ):
                 return process
         except subprocess.CalledProcessError:
+            # diagnostic-expected: readiness polling continues until the bounded deadline.
             pass
         time.sleep(0.1)
     process.terminate()
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
+        # diagnostic-expected: escalation to kill is the bounded shutdown fallback.
         process.kill()
         process.wait(timeout=5)
     detail = _vpn_log_detail(config)

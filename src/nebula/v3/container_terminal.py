@@ -497,6 +497,7 @@ class ContainerTerminalService:
         try:
             policy = self.store.get(AutomationProjectPolicy, policy_id)
         except NotFoundError:
+            # diagnostic-expected: projects without a saved policy use direct networking.
             return None
         if policy.vpn_profile_id is None:
             return None

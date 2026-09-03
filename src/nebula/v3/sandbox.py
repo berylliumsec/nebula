@@ -705,6 +705,7 @@ class ContainerEgressController(EgressController):
                     process.stdout.readline(), timeout=remaining
                 )
             except asyncio.TimeoutError:
+                # diagnostic-expected: handled below as a bounded readiness failure.
                 timed_out = True
                 break
             if not line:
