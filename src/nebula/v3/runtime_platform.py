@@ -304,7 +304,11 @@ class RuntimePlatform:
                     self._prepared_images[key] = image
         return HumanTerminalRuntimeResolution(
             profile=profile,
-            runner=self._runner(profile, workspace=workspace),
+            runner=self._runner(
+                profile,
+                egress_helper_image=image.resolved_reference,
+                workspace=workspace,
+            ),
             workspace=workspace,
             image=image,
         )

@@ -394,6 +394,7 @@ def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
     resolution = asyncio.run(platform.resolve_human_terminal_runtime(engagement.id))
 
     assert resolution.workspace == linked_workspace.resolve()
+    assert resolution.runner.egress_controller.certified is True
     assert linked_workspace.resolve() in resolution.runner.workspace_roots
     assert (tmp_path / "linked").resolve() not in resolution.runner.workspace_roots
     allowed = SandboxRequest(
