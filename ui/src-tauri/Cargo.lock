@@ -2564,7 +2564,7 @@ dependencies = [
 
 [[package]]
 name = "nebula-ui"
-version = "3.0.0-alpha.11"
+version = "3.0.0-alpha.12"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
