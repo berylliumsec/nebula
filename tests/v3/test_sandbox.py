@@ -947,7 +947,10 @@ def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
             self.stdout = asyncio.StreamReader() if ready else None
             self.stdin = FakeInput() if ready else None
             if self.stdout is not None:
-                self.stdout.feed_data(b"READY\n")
+                self.stdout.feed_data(
+                    b"WARNING: IPv4 forwarding is disabled. Networking will not work.\n"
+                    b"READY\n"
+                )
 
         async def wait(self):
             self.returncode = 0
@@ -987,6 +990,56 @@ def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
     assert "--vpn-stdin" in helper_argv
     assert "secret material" not in " ".join(helper_argv)
     assert written == b"client\ndev tun0\nsecret material\n"
+
+
+def test_failed_egress_helper_is_removed_after_bounded_startup_error(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self, *, helper=False):
+            self.stdout = asyncio.StreamReader() if helper else None
+            self.stdin = None
+            if self.stdout is not None:
+                self.stdout.feed_data(b"RuntimeError: OpenVPN exited before ready\n")
+                self.stdout.feed_eof()
+
+        async def wait(self):
+            self.returncode = 1
+            return 1
+
+        def kill(self):
+            self.returncode = -9
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(helper=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64
+    )
+
+    async def scenario():
+        with pytest.raises(SandboxUnavailable, match="OpenVPN exited before ready"):
+            await controller.acquire(
+                runtime_argv=["/usr/bin/podman"],
+                runtime_environment={"HOME": "/tmp/home"},
+                request=_request(
+                    tmp_path,
+                    network=SandboxNetwork.SCOPED,
+                    execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+                    egress_rules=[EgressRule(address="203.0.113.1", ports=[443])],
+                ),
+                container_name="nebula-failed-egress",
+                seccomp_profile=None,
+            )
+
+    asyncio.run(scenario())
+    assert calls[1][0][-3:] == ["rm", "--force", "nebula-failed-egress-egress"]
 
 
 def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(

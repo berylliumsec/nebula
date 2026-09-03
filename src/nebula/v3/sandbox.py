@@ -654,6 +654,83 @@ class ContainerEgressController(EgressController):
         self.helper_executable = helper_executable
         self.readiness_timeout_seconds = readiness_timeout_seconds
 
+    async def _remove_failed_helper(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        helper_name: str,
+    ) -> None:
+        try:
+            cleanup = await asyncio.create_subprocess_exec(
+                *runtime_argv,
+                "rm",
+                "--force",
+                helper_name,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=runtime_environment,
+            )
+            await asyncio.wait_for(cleanup.wait(), timeout=10)
+        except (OSError, asyncio.TimeoutError) as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.egress_failed_cleanup",
+                "A failed egress helper container could not be removed.",
+                caught_error,
+                stage="sandbox",
+            )
+
+    async def _await_ready(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        helper_name: str,
+        label: str,
+    ) -> None:
+        assert process.stdout is not None
+        deadline = asyncio.get_running_loop().time() + self.readiness_timeout_seconds
+        detail = bytearray()
+        timed_out = False
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                timed_out = True
+                break
+            if not line:
+                break
+            if line.rstrip(b"\r\n") == b"READY" and process.returncode is None:
+                return
+            detail.extend(line)
+            if len(detail) > 4_096:
+                del detail[:-4_096]
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        await self._remove_failed_helper(
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+        )
+        message = detail.decode("utf-8", errors="replace").strip()
+        if timed_out:
+            raise SandboxUnavailable(
+                f"{label} did not become ready" + (f": {message}" if message else "")
+            )
+        raise SandboxUnavailable(
+            f"{label} failed closed before readiness: {message or 'no status'}"
+        )
+
     async def acquire_loopback(
         self,
         *,
@@ -697,25 +774,14 @@ class ContainerEgressController(EgressController):
             raise SandboxUnavailable(
                 f"could not start loopback namespace helper: {exc}"
             ) from exc
+        await self._await_ready(
+            process,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+            label="loopback namespace helper",
+        )
         assert process.stdout is not None
-        try:
-            line = await asyncio.wait_for(
-                process.stdout.readline(), timeout=self.readiness_timeout_seconds
-            )
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
-            raise SandboxUnavailable(
-                "loopback namespace helper did not become ready"
-            ) from exc
-        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
-            process.kill()
-            await process.wait()
-            detail = line.decode("utf-8", errors="replace").strip()
-            raise SandboxUnavailable(
-                "loopback namespace failed closed before readiness: "
-                + (detail or "no status")
-            )
         drain_task = create_diagnostic_task(
             _discard_stream(process.stdout),
             feature="sandbox",
@@ -850,28 +916,14 @@ class ContainerEgressController(EgressController):
             process.stdin.write(vpn_config.encode("utf-8"))
             await process.stdin.drain()
             process.stdin.close()
-        try:
-            line = await asyncio.wait_for(
-                process.stdout.readline(), timeout=self.readiness_timeout_seconds
-            )
-        except asyncio.TimeoutError as exc:
-            record_caught_exception(
-                "sandbox",
-                "sandbox.sandbox.caught_failure_005",
-                "A handled sandbox operation raised an exception.",
-                exc,
-                stage="sandbox",
-            )
-            process.kill()
-            await process.wait()
-            raise SandboxUnavailable("egress helper did not become ready") from exc
-        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
-            process.kill()
-            await process.wait()
-            detail = line.decode("utf-8", errors="replace").strip()
-            raise SandboxUnavailable(
-                f"egress helper failed closed before readiness: {detail or 'no status'}"
-            )
+        await self._await_ready(
+            process,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+            label="egress helper",
+        )
+        assert process.stdout is not None
         drain_task = create_diagnostic_task(
             _discard_stream(process.stdout),
             feature="sandbox",
