@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, TerminalSquare } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
-import type { AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime } from "../api/types";
+import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -26,11 +26,20 @@ function profileSetup(profile: RunnerProfile): RunnerSetupKind {
 }
 
 export function AutomationRuntimeSettings() {
-  const { api, coreState, previewMode } = useWorkspace();
+  const { api, coreState, engagement, previewMode } = useWorkspace();
   const [runtime, setRuntime] = useState<AutomationRuntimeInfo>();
   const [loading, setLoading] = useState(true);
   const [preparing, setPreparing] = useState(false);
   const [error, setError] = useState<string>();
+  const [vpnProfiles, setVpnProfiles] = useState<VpnProfile[]>([]);
+  const [vpnFile, setVpnFile] = useState<File>();
+  const [vpnName, setVpnName] = useState("");
+  const [vpnUsername, setVpnUsername] = useState("");
+  const [vpnPassword, setVpnPassword] = useState("");
+  const [vpnPersistence, setVpnPersistence] = useState<"vault" | "session">("vault");
+  const [savingVpn, setSavingVpn] = useState(false);
+  const [projectPolicy, setProjectPolicy] = useState<AutomationProjectPolicy>();
+  const [selectingVpn, setSelectingVpn] = useState<string>();
 
   const load = useCallback(async () => {
     if (!api || coreState !== "online") {
@@ -40,14 +49,25 @@ export function AutomationRuntimeSettings() {
     setLoading(true);
     setError(undefined);
     try {
-      setRuntime(await api.getAutomationRuntime());
+      const [nextRuntime, nextVpnProfiles, nextProjectPolicy] = await Promise.all([
+        api.getAutomationRuntime(),
+        api.listVpnProfiles().catch((vpnError) => {
+          if (unavailable(vpnError)) return [];
+          void logCaughtDiagnostic("interface.automation_runtime.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "automation_runtime");
+          return Promise.reject(vpnError);
+        }),
+        engagement ? api.getAutomationPolicy(engagement.id) : Promise.resolve(undefined),
+      ]);
+      setRuntime(nextRuntime);
+      setVpnProfiles(nextVpnProfiles);
+      setProjectPolicy(nextProjectPolicy);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.automation_runtime.caught_failure_01", "A handled interface operation failed.", loadError, "automation_runtime");
       setError(loadError instanceof Error ? loadError.message : "Could not load the automation runtime.");
     } finally {
       setLoading(false);
     }
-  }, [api, coreState]);
+  }, [api, coreState, engagement?.id]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -65,11 +85,72 @@ export function AutomationRuntimeSettings() {
     }
   };
 
+  const uploadVpn = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!api || !vpnFile) return;
+    setSavingVpn(true); setError(undefined);
+    try {
+      const saved = await api.createVpnProfile({
+        name: vpnName.trim() || vpnFile.name.replace(/\.ovpn$/i, ""), filename: vpnFile.name,
+        config: await vpnFile.text(), username: vpnUsername || undefined, password: vpnPassword || undefined,
+        persistence: vpnPersistence,
+      });
+      setVpnProfiles((items) => [saved, ...items]); setVpnFile(undefined); setVpnName(""); setVpnUsername(""); setVpnPassword("");
+      announceSettingsSaved("VPN profile saved. Select it from a project's command runtime policy.");
+    } catch (uploadError) {
+      void logCaughtDiagnostic("interface.automation_runtime.vpn_upload_failed", "VPN profile could not be saved.", uploadError, "automation_runtime");
+      setError(uploadError instanceof Error ? uploadError.message : "Could not save the VPN profile.");
+    } finally { setSavingVpn(false); }
+  };
+
+  const removeVpn = async (profile: VpnProfile) => {
+    if (!api) return;
+    setError(undefined);
+    try { await api.deleteVpnProfile(profile.id, profile.revision); setVpnProfiles((items) => items.filter((item) => item.id !== profile.id)); }
+    catch (deleteError) {
+      void logCaughtDiagnostic("interface.automation_runtime.vpn_delete_failed", "VPN profile could not be removed.", deleteError, "automation_runtime");
+      setError(deleteError instanceof Error ? deleteError.message : "Could not remove the VPN profile.");
+    }
+  };
+
+  const useVpnForProject = async (profile: VpnProfile) => {
+    if (!api || !engagement || !projectPolicy) return;
+    setSelectingVpn(profile.id); setError(undefined);
+    try {
+      const updated = await api.updateAutomationPolicy(engagement.id, {
+        approvalPolicy: projectPolicy.approvalPolicy,
+        networkEnabled: true,
+        runnerProfileId: projectPolicy.runnerProfileId,
+        vpnProfileId: profile.id,
+        maxTimeoutMs: projectPolicy.maxTimeoutMs,
+        expectedRevision: projectPolicy.revision,
+      });
+      setProjectPolicy(updated);
+      announceSettingsSaved(`${profile.name} will protect new terminals in ${engagement.name}.`);
+    } catch (selectError) {
+      void logCaughtDiagnostic("interface.automation_runtime.vpn_select_failed", "VPN profile could not be selected for this project.", selectError, "automation_runtime");
+      setError(selectError instanceof Error ? selectError.message : "Could not select the VPN profile for this project.");
+    } finally { setSelectingVpn(undefined); }
+  };
+
   return <section className="settings-section" id="automation-runtime-settings">
     <div className="section-heading"><div><h2>Automation runtime</h2><p>One digest-pinned Bash container per agent session. Commands use ordinary binaries on PATH.</p></div><button className="button secondary" type="button" disabled={loading || preparing} onClick={() => void load()}><RefreshCw size={14} /> Refresh</button></div>
     {error && <DiagnosticErrorNotice error={error} fallback="The automation runtime could not be inspected." compact />}
     {!runtime ? <div className="feature-unavailable" role="status"><AlertTriangle size={22} /><div><strong>{loading ? "Checking runtime…" : "Runtime unavailable"}</strong><p>Configure a pinned automation image and a verified local runner.</p></div></div> :
       <div className="runner-layout"><section className="panel runner-status"><header className="panel-header compact"><div><h3>{runtime.ready ? "Ready" : "Preparation required"}</h3><p>{runtime.detail}</p></div>{runtime.ready ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}</header><article><TerminalSquare size={17} /><div><strong>{runtime.digest ?? "No prepared digest"}</strong><small>{runtime.runnerProfileId ? `Runner ${runtime.runnerProfileId}` : "No healthy runner selected"}</small><p>{runtime.image ?? "Prepare Nebula's existing Kali headless image."}</p></div></article><footer><button className="button primary" type="button" disabled={previewMode || preparing || !runtime.configured} onClick={() => void prepare()}>{preparing ? "Preparing Kali…" : runtime.ready ? "Verify Kali runtime" : "Prepare Kali runtime"}</button></footer></section><section className="panel inventory-panel"><details className="inventory-disclosure"><summary><div><h3>Binary inventory</h3><p>Generated from the exact prepared Kali image.</p></div><span className="inventory-count">{runtime.inventory.length.toLocaleString()}</span><ChevronDown className="inventory-chevron" size={18} aria-hidden="true" /></summary><div className="runtime-resource-list">{runtime.inventory.length ? runtime.inventory.map((binary) => <article className="runtime-resource-card" key={`${binary.path}-${binary.name}`}><header><div><strong>{binary.name}</strong><code>{binary.path}</code></div><small>{binary.version}</small></header></article>) : <div className="empty-state compact"><TerminalSquare size={21} /><strong>No verified inventory</strong><p>Prepare the Kali runtime to validate its installed binaries.</p></div>}</div></details></section></div>}
+    <div className="section-heading vpn-heading"><div><h2>VPN egress</h2><p>Reusable OpenVPN profiles for project command containers. Traffic remains scope-limited inside the tunnel.</p></div><ShieldCheck size={20} /></div>
+    <div className="runner-layout">
+      <form className="panel runner-form vpn-profile-form" onSubmit={(event) => void uploadVpn(event)}>
+        <label className="vpn-file-drop"><UploadCloud size={22} /><span><strong>{vpnFile?.name ?? "Choose an OpenVPN profile"}</strong><small>.ovpn · TUN client · inline certificates · up to 15 KB</small></span><input type="file" accept=".ovpn,application/x-openvpn-profile" required onChange={(event) => { const file = event.target.files?.[0]; setVpnFile(file); if (file && !vpnName) setVpnName(file.name.replace(/\.ovpn$/i, "")); }} /></label>
+        <label>Profile name<input value={vpnName} placeholder="Company VPN" onChange={(event) => setVpnName(event.target.value)} /></label>
+        <details className="inventory-disclosure vpn-options"><summary><span><strong>Credentials and storage</strong><small>Only needed when the profile requests username/password authentication.</small></span><ChevronDown size={17} /></summary><div className="policy-form-body"><label>Username<input autoComplete="username" value={vpnUsername} onChange={(event) => setVpnUsername(event.target.value)} /></label><label>Password<input type="password" autoComplete="new-password" value={vpnPassword} onChange={(event) => setVpnPassword(event.target.value)} /></label><label>Storage<select value={vpnPersistence} onChange={(event) => setVpnPersistence(event.target.value as "vault" | "session")}><option value="vault">Operating-system vault</option><option value="session">This Core session only</option></select></label></div></details>
+        <footer><span>Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : "Save profile"}</button></footer>
+      </form>
+      <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>{engagement ? `Choose the route for new terminals in ${engagement.name}.` : "Open a project to choose where a profile is used."}</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => {
+        const selected = projectPolicy?.vpnProfileId === profile.id;
+        return <article key={profile.id}><span className={`status-dot ${profile.available ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.protocol.toUpperCase()} · {profile.remoteHost}:{profile.remotePort}</small><p>{!profile.available ? "Secret is unavailable; upload the profile again." : selected ? `Selected for ${engagement?.name ?? "this project"}. New terminals wait for the tunnel before opening.` : "Saved only — not connected to this project."}</p></div><div className="vpn-profile-actions">{profile.available && engagement && !selected && <button className="button quiet" type="button" disabled={!projectPolicy || selectingVpn === profile.id || previewMode} onClick={() => void useVpnForProject(profile)}>{selectingVpn === profile.id ? "Selecting…" : "Use for this project"}</button>}{selected && <span className="vpn-selected-label"><CheckCircle2 size={14} /> In use</span>}<button className="icon-button" type="button" aria-label={`Remove ${profile.name}`} disabled={selected} title={selected ? "Choose a different route before removing this profile." : undefined} onClick={() => void removeVpn(profile)}><Trash2 size={15} /></button></div></article>;
+      }) : <div className="empty-state compact"><ShieldCheck size={21} /><strong>No VPN profiles</strong><p>Upload one here, then select it for the open project.</p></div>}</section>
+    </div>
   </section>;
 }
 

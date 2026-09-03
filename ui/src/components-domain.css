@@ -448,9 +448,24 @@
 .policy-form-body > footer > .button { flex: 0 0 auto; white-space: nowrap; }
 .runner-status { overflow: hidden; }
 .runner-status article { display: flex; align-items: flex-start; gap: 8px; padding: 11px 13px; border-top: 1px solid var(--border-soft); }
+.vpn-heading { margin-top: 24px; }
+.vpn-profile-form { grid-template-columns: 1fr; }
+.vpn-profile-form > * { grid-column: 1 / -1; }
+.vpn-file-drop { display: flex !important; align-items: center; gap: 11px; min-height: 76px; padding: 14px; border: 1px dashed var(--border); border-radius: var(--radius-panel); background: color-mix(in srgb, var(--accent) 4%, var(--surface-raised)); cursor: pointer; }
+.vpn-file-drop:hover { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--surface-raised)); }
+.vpn-file-drop input { position: absolute; width: 1px !important; height: 1px; opacity: 0; pointer-events: none; }
+.vpn-file-drop span, .vpn-options summary span { display: grid; gap: 3px; }
+.vpn-file-drop small, .vpn-options small { color: var(--muted); font-weight: var(--weight-regular); }
+.vpn-options { border: 1px solid var(--border-soft); border-radius: var(--radius-control); }
+.vpn-options summary { display: flex; align-items: center; justify-content: space-between; padding: 10px; cursor: pointer; }
+.vpn-options .policy-form-body { padding: 0 10px 10px; }
+.runner-status article .icon-button { margin-left: auto; flex: 0 0 auto; }
 .runner-status article > div { display: flex; min-width: 0; flex-direction: column; }
 .runner-status article strong { font-size: 11px; }
 .runner-status article small, .runner-status article p { margin: 3px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.runner-status article .vpn-profile-actions { align-items: flex-end; margin-left: auto; gap: 6px; flex: 0 0 auto; }
+.vpn-profile-actions .icon-button { margin-left: 0 !important; }
+.vpn-selected-label { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; color: var(--success); font-size: 11px; font-weight: var(--weight-semibold); }
 .policy-revision { color: var(--muted); font-size: 11px; }
 .policy-editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 12px; }
 .policy-form { min-width: 0; max-width: 100%; overflow: hidden; }
@@ -604,6 +619,8 @@
   .resource-form-grid { grid-template-columns: 1fr; }
   .runner-form { grid-template-columns: 1fr; }
   .runner-form label, .runner-form label:nth-of-type(3), .runner-form label:nth-of-type(5), .runner-form footer { grid-column: auto; }
+  .runner-status article:has(.vpn-profile-actions) { flex-wrap: wrap; }
+  .runner-status article .vpn-profile-actions { width: 100%; align-items: center; flex-direction: row; justify-content: flex-end; }
   .operator-profile-list article { grid-template-columns: 36px minmax(0, 1fr) 30px 30px; }
   .operator-profile-list article > .operator-active,
   .operator-profile-list article > .button.quiet { grid-column: 2; grid-row: 2; justify-self: start; }

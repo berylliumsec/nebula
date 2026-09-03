@@ -215,7 +215,21 @@ export interface AutomationProjectPolicy {
   approvalPolicy: "always" | "on_boundary" | "never";
   networkEnabled: boolean;
   runnerProfileId?: Identifier;
+  vpnProfileId?: Identifier;
   maxTimeoutMs: number;
+  revision: number;
+}
+
+export interface VpnProfile {
+  id: Identifier;
+  name: string;
+  filename: string;
+  remoteHost: string;
+  remotePort: number;
+  protocol: "udp" | "tcp";
+  fingerprint: string;
+  requiresCredentials: boolean;
+  available: boolean;
   revision: number;
 }
 
@@ -2281,8 +2295,11 @@ export interface ContainerTerminalRuntimeSnapshot {
 }
 
 export interface ContainerTerminalNetworkSnapshot {
-  mode: "unrestricted";
-  runtimeNetwork: "bridge";
+  mode: "unrestricted" | "vpn";
+  runtimeNetwork: "bridge" | "private_namespace";
+  vpnProfileId?: Identifier;
+  vpnProfileRevision?: number;
+  vpnProfileName?: string;
   publishedPorts: ContainerTerminalPublishedPort[];
 }
 
@@ -2345,11 +2362,13 @@ export interface ContainerTerminalRecovery {
   active: boolean;
   session?: ContainerTerminalSession;
   runtime?: ContainerTerminalRuntimeSnapshot;
+  network?: ContainerTerminalNetworkSnapshot;
 }
 
 export interface ContainerTerminalRecoveredSession {
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
+  network: ContainerTerminalNetworkSnapshot;
 }
 
 export interface ContainerTerminalRecoveryList {

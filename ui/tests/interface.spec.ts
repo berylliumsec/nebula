@@ -844,6 +844,45 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
+test("terminal VPN boundary stays visible in the live shell", async ({ page }) => {
+  const vpnNetwork = {
+    mode: "vpn",
+    runtime_network: "private_namespace",
+    vpn_profile_id: "vpn-preview",
+    vpn_profile_revision: 3,
+    vpn_profile_name: "Company VPN",
+    published_ports: [],
+  };
+  await page.route("**/api/v1/container-terminal/preflight", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        allowed: true,
+        detail: "All terminal egress is fail-closed through Company VPN.",
+        runtime,
+        network: vpnNetwork,
+        security,
+        limits,
+        workspace: "/workspace",
+        policy_rule: "human_terminal_vpn",
+        preview_fingerprint: "d".repeat(64),
+        preview_token: "preview.signed",
+        expires_at: "2026-07-13T21:00:00Z",
+        idle_timeout_seconds: 1800,
+        fresh_container: true,
+      }),
+    });
+  });
+
+  await openWorkspace(page, "/", "Workbench");
+
+  const liveTerminal = page.locator(".container-terminal-live");
+  await expect(liveTerminal.getByText(/VPN enforced · Company VPN/)).toBeVisible();
+  await expect(liveTerminal.getByText(/blocked until OpenVPN is ready/)).toBeVisible();
+  await expect(liveTerminal.getByText(/Bridge networking is permitted/)).toHaveCount(0);
+});
+
 test("terminal pointer selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Canvas selection rendering needs one desktop visual run.");
   await openWorkspace(page, "/", "Workbench");
@@ -1914,6 +1953,67 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await expect(page.getByLabel("All targets and ports")).toBeChecked();
   await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
   await expect(page.getByLabel("Allowed domains")).toBeDisabled();
+});
+
+test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {
+  let selectedVpnProfile: string | null = null;
+  await page.route("**/api/v1/vpn-profiles", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      ...entity,
+      id: "vpn-preview",
+      name: "Company VPN",
+      filename: "company.ovpn",
+      remote_host: "vpn.example.test",
+      remote_port: 1194,
+      protocol: "udp",
+      fingerprint: "a".repeat(64),
+      requires_credentials: true,
+      available: true,
+    }]),
+  }));
+  await page.route("**/api/v1/engagements/*/automation-policy", async (route) => {
+    if (route.request().method() === "PUT") {
+      selectedVpnProfile = String(route.request().postDataJSON().vpn_profile_id);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...entity,
+        id: "runtime-policy-preview",
+        engagement_id: "engagement-1",
+        approval_policy: "on_boundary",
+        network_enabled: selectedVpnProfile !== null,
+        runner_profile_id: "local",
+        vpn_profile_id: selectedVpnProfile,
+        max_timeout_ms: 300000,
+      }),
+    });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
+  const section = page.locator("#automation-runtime-settings");
+  await expect(section.getByRole("heading", { name: "VPN egress" })).toBeVisible();
+  await expect(section.getByText("Choose an OpenVPN profile")).toBeVisible();
+  await expect(section.getByText("Credentials and storage")).toBeVisible();
+  await expect(section.getByLabel("Username")).not.toBeVisible();
+  await expect(section.getByText("Saved only — not connected to this project.")).toBeVisible();
+  await section.getByRole("button", { name: "Use for this project" }).click();
+  await expect(section.getByText("In use", { exact: true })).toBeVisible();
+  await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
+  expect(selectedVpnProfile).toBe("vpn-preview");
+  const geometry = await section.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    buttonHeights: [...element.querySelectorAll<HTMLElement>("button")].map((button) => button.getBoundingClientRect().height),
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.buttonHeights.every((height) => height >= 30)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include("#automation-runtime-settings").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {

@@ -41,6 +41,7 @@ from .domain import (
     RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
+    VpnProfile,
     ToolCallOrigin,
     WorkspaceChange,
     utc_now,
@@ -66,6 +67,7 @@ from .sandbox import (
     _runtime_environment,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .credentials import CredentialStore
 
 
 MAX_COMMAND_CHARACTERS = 200_000
@@ -221,6 +223,7 @@ class SessionLaunch:
     workspace_access: SandboxWorkspaceAccess = SandboxWorkspaceAccess.WRITE
     container_user: SandboxContainerUser = SandboxContainerUser.NON_ROOT
     loopback_only: bool = False
+    vpn_config: str | None = None
 
 
 class _ContainerProcess(RuntimeBackendProcess):
@@ -358,6 +361,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
                     if launch.runner.profile is not None
                     else None
                 ),
+                vpn_config=launch.vpn_config,
             )
         elif launch.loopback_only:
             # The prepared runtime image is digest-pinned and its loopback helper
@@ -576,6 +580,7 @@ class AutomationRuntimeManager:
         runtime_resolver: RuntimeResolver | None = None,
         cached_runtime_provider: CachedRuntimeProvider | None = None,
         session_factory: SessionFactory | None = None,
+        credential_store: CredentialStore | None = None,
     ) -> None:
         if runtime_image is None and runtime_resolver is None:
             raise ValueError("automation runtime requires an image or Kali resolver")
@@ -595,6 +600,7 @@ class AutomationRuntimeManager:
         self.runtime_resolver = runtime_resolver
         self.cached_runtime_provider = cached_runtime_provider
         self.session_factory = session_factory or ContainerRuntimeSession.start
+        self.credential_store = credential_store
         self.capture_root = self.data_root / "automation-runtime" / "captures"
         self.capture_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.capture_root.chmod(0o700)
@@ -760,6 +766,7 @@ class AutomationRuntimeManager:
         approval_policy: AutomationApprovalPolicy,
         network_enabled: bool,
         runner_profile_id: str | None,
+        vpn_profile_id: str | None = None,
         max_timeout_ms: int,
         expected_revision: int | None = None,
     ) -> AutomationProjectPolicy:
@@ -770,6 +777,19 @@ class AutomationRuntimeManager:
                 raise AutomationRuntimeUnavailable(
                     "selected runner is not verified healthy"
                 )
+        if vpn_profile_id is not None:
+            if not network_enabled:
+                raise AutomationRuntimeUnavailable(
+                    "enable project networking before selecting a VPN profile"
+                )
+            vpn = self.store.get(VpnProfile, vpn_profile_id)
+            if (
+                self.credential_store is None
+                or not self.credential_store.status(vpn.secret_ref).available
+            ):
+                raise AutomationRuntimeUnavailable(
+                    "selected VPN profile is unavailable"
+                )
         return self.store.update(
             AutomationProjectPolicy,
             current.id,
@@ -777,6 +797,7 @@ class AutomationRuntimeManager:
                 "approval_policy": approval_policy,
                 "network_enabled": network_enabled,
                 "runner_profile_id": runner_profile_id,
+                "vpn_profile_id": vpn_profile_id,
                 "max_timeout_ms": max_timeout_ms,
             },
             expected_revision=expected_revision or current.revision,
@@ -1261,6 +1282,17 @@ class AutomationRuntimeManager:
                 else None
             )
             rules, domains = self._network_boundary(policy, scope)
+            vpn: VpnProfile | None = None
+            vpn_config = None
+            if policy.vpn_profile_id is not None:
+                if self.credential_store is None:
+                    raise AutomationRuntimeUnavailable(
+                        "VPN secret storage is unavailable"
+                    )
+                vpn = self.store.get(VpnProfile, policy.vpn_profile_id)
+                vpn_config = self.credential_store.resolve(
+                    vpn.secret_ref
+                ).get_secret_value()
             has_network_boundary = bool(rules or domains)
             session = AutomationSession(
                 engagement_id=engagement_id,
@@ -1274,6 +1306,8 @@ class AutomationRuntimeManager:
                 policy_revision=policy.revision,
                 scope_policy_id=scope.id if scope is not None else None,
                 scope_policy_revision=scope.revision if scope is not None else None,
+                vpn_profile_id=vpn.id if vpn is not None else None,
+                vpn_profile_revision=vpn.revision if vpn is not None else None,
                 # Even an automatic project never receives egress until a
                 # command explicitly asks for project_scope.
                 network_granted=False,
@@ -1295,7 +1329,7 @@ class AutomationRuntimeManager:
                 backend = await self.session_factory(
                     SessionLaunch(
                         session_id=session.id,
-                        runner=self._runner(profile),
+                        runner=self._runner(profile, workspace=workspace),
                         image=self.runtime_image,
                         workspace=workspace,
                         limits=SandboxLimits(
@@ -1308,6 +1342,7 @@ class AutomationRuntimeManager:
                         else (),
                         resolv_conf=resolver_file,
                         network_granted=session.network_granted,
+                        vpn_config=vpn_config,
                     )
                 )
             except Exception as exc:
@@ -1370,7 +1405,11 @@ class AutomationRuntimeManager:
         return sorted(profiles, key=lambda item: (item.created_at, item.id))[0]
 
     def _runner(
-        self, stored: StoredRunnerProfile, *, helper_image: str | None = None
+        self,
+        stored: StoredRunnerProfile,
+        *,
+        helper_image: str | None = None,
+        workspace: Path | None = None,
     ) -> ContainerSandboxRunner:
         platform = (
             RunnerPlatform.LINUX
@@ -1400,12 +1439,21 @@ class AutomationRuntimeManager:
             if stored.seccomp_profile
             else None,
         )
+        workspace_roots = [self.data_root]
+        if workspace is not None:
+            resolved_workspace = workspace.expanduser().resolve(strict=True)
+            if not resolved_workspace.is_dir():
+                raise AutomationRuntimeUnavailable(
+                    "configured project workspace is not a directory"
+                )
+            if resolved_workspace not in workspace_roots:
+                workspace_roots.append(resolved_workspace)
         return ContainerSandboxRunner(
             profile=profile,
             egress_controller=ContainerEgressController(
                 helper_image=helper_image or self.runtime_image
             ),
-            workspace_roots=[self.data_root],
+            workspace_roots=workspace_roots,
         )
 
     @staticmethod

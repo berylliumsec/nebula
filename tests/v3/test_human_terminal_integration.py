@@ -165,6 +165,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
             b"getent hosts kali.org >/dev/null && echo network-ok\n"
             b"command -v nmap >/dev/null && echo nmap-ok\n"
             b"command -v ping >/dev/null && echo ping-installed\n"
+            b"command -v openvpn >/dev/null && echo openvpn-installed\n"
             b"apt-get update -qq && echo apt-ok\n"
             b"exit\n",
             before_commands=lambda: (workspace / "editor-script.py").write_text(
@@ -175,6 +176,7 @@ def test_real_kali_terminal_is_root_writable_networked_and_ephemeral(tmp_path):
         assert b"network-ok" in first
         assert b"nmap-ok" in first
         assert b"ping-installed" in first
+        assert b"openvpn-installed" in first
         assert b"apt-ok" in first
         assert b"editor-volume-ok" in first
         assert (workspace / "kali-workspace.txt").read_text() == "persisted"
