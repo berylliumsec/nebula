@@ -9,6 +9,7 @@ import subprocess
 import time
 import zipfile
 from functools import wraps
+from uuid import NAMESPACE_URL, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +17,7 @@ from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.container_terminal import (
     ContainerTerminalError,
     ContainerTerminalExit,
@@ -30,10 +32,12 @@ from nebula.v3.container_terminal import (
     terminal_ps0,
 )
 from nebula.v3.domain import (
+    AutomationProjectPolicy,
     Engagement,
     RunnerIsolation,
     RunnerProfile,
     RunnerRuntime,
+    VpnProfile,
 )
 from nebula.v3.exporter import export_engagement
 from nebula.v3.sandbox import (
@@ -97,12 +101,20 @@ class RecordingTerminalRunner:
     def __init__(self, *, chunks: list[bytes] | None = None) -> None:
         self.requests: list[tuple[object, str, int, int]] = []
         self.processes: list[RecordingTerminalProcess] = []
+        self.vpn_configs: list[str | None] = []
         self.chunks = chunks
 
     async def open_terminal(
-        self, request, *, container_name: str, columns: int, rows: int
+        self,
+        request,
+        *,
+        container_name: str,
+        columns: int,
+        rows: int,
+        vpn_config: str | None = None,
     ) -> RecordingTerminalProcess:
         self.requests.append((request, container_name, columns, rows))
+        self.vpn_configs.append(vpn_config)
         process = RecordingTerminalProcess(self.chunks)
         process.container_name = container_name
         self.processes.append(process)
@@ -161,11 +173,19 @@ class ControllableTerminalRunner:
     def __init__(self) -> None:
         self.requests: list[tuple[object, str, int, int]] = []
         self.processes: list[ControllableTerminalProcess] = []
+        self.vpn_configs: list[str | None] = []
 
     async def open_terminal(
-        self, request, *, container_name: str, columns: int, rows: int
+        self,
+        request,
+        *,
+        container_name: str,
+        columns: int,
+        rows: int,
+        vpn_config: str | None = None,
     ) -> ControllableTerminalProcess:
         self.requests.append((request, container_name, columns, rows))
+        self.vpn_configs.append(vpn_config)
         process = ControllableTerminalProcess()
         process.container_name = container_name
         self.processes.append(process)
@@ -612,6 +632,9 @@ async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
             {"port": 8080, "protocol": "tcp"},
         ],
         "runtime_network": "bridge",
+        "vpn_profile_id": None,
+        "vpn_profile_name": None,
+        "vpn_profile_revision": None,
     }
     assert pending["security"]["container_user"] == "root"
     await service.shutdown()
@@ -646,6 +669,72 @@ async def test_unrestricted_kali_terminal_needs_no_runtime_or_scope_policy(tmp_p
     await service.launch(created.session_id)
     assert runner.requests[0][0].network == SandboxNetwork.UNRESTRICTED
     await service.finish(created.session_id, outcome="closed")
+
+
+@async_test
+async def test_selected_vpn_is_frozen_into_new_human_terminal_and_recovery(tmp_path):
+    store = NebulaStore(tmp_path / "vpn-terminal.db")
+    engagement = store.create(Engagement(name="VPN Terminal Lab"))
+    runner = RecordingTerminalRunner()
+    platform = StubTerminalPlatform(tmp_path / "workspace", runner)
+    credentials = CredentialStore()
+    admitted_config = "client\ndev tun0\nremote 203.0.113.8 1194\n"
+    secret = credentials.create(
+        CredentialCreateRequest(secret=admitted_config, persistence="session")
+    )
+    profile = store.create(
+        VpnProfile(
+            name="Company VPN",
+            filename="company.ovpn",
+            remote_host="vpn.example.test",
+            remote_port=1194,
+            protocol="udp",
+            fingerprint="a" * 64,
+            secret_ref=secret.reference,
+        )
+    )
+    store.create(
+        AutomationProjectPolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement.id}")),
+            engagement_id=engagement.id,
+            network_enabled=True,
+            vpn_profile_id=profile.id,
+        )
+    )
+    service = ContainerTerminalService(
+        store=store,
+        tool_platform=platform,  # type: ignore[arg-type]
+        credential_store=credentials,
+        operator_id=lambda: "operator-1",
+    )
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+
+    preview = await service.preflight(request)
+
+    assert preview.allowed is True
+    assert preview.policy_rule == "human_terminal_vpn"
+    assert preview.network.mode == "vpn"
+    assert preview.network.runtime_network == "private_namespace"
+    assert preview.network.vpn_profile_id == profile.id
+    assert preview.network.vpn_profile_revision == profile.revision
+    assert preview.network.vpn_profile_name == "Company VPN"
+    created = await service.start(
+        ContainerTerminalStartRequest(
+            **request.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="vpn-terminal",
+        )
+    )
+    await service.claim(created.session_id, created.websocket_ticket)
+    await service.launch(created.session_id)
+    assert runner.requests[0][0].network == SandboxNetwork.VPN
+    assert runner.vpn_configs == [admitted_config.rstrip()]
+    assert service.uses_vpn_profile(profile.id) is True
+    recovered = await service.recover(engagement.id)
+    assert recovered.network == preview.network
+    await service.finish(created.session_id, outcome="closed")
+    assert service.uses_vpn_profile(profile.id) is False
 
 
 @async_test
@@ -995,6 +1084,9 @@ def test_container_terminal_api_streams_container_output_with_one_use_ticket(tmp
             "mode": "unrestricted",
             "runtime_network": "bridge",
             "published_ports": [],
+            "vpn_profile_id": None,
+            "vpn_profile_name": None,
+            "vpn_profile_revision": None,
         }
         assert reviewed["security"]["container_user"] == "root"
         started = client.post(
@@ -1261,6 +1353,7 @@ def test_container_terminal_websocket_reconnects_to_the_same_process(tmp_path):
             "active": False,
             "session": None,
             "runtime": None,
+            "network": None,
         }
 
     assert len(runner.processes) == 1

@@ -46,7 +46,7 @@ export default defineConfig({
     {
       name: "mobile-chromium",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|VPN settings keep|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /universal search opens|VPN settings keep|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"] },
     },
     {
@@ -58,31 +58,31 @@ export default defineConfig({
     {
       name: "mobile-chromium-small",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"], viewport: { width: 320, height: 700 } },
     },
     {
       name: "mobile-chromium-wide",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|theme picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output/,
+      grep: /universal search opens|theme picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output|terminal VPN boundary/,
       use: { ...devices["Pixel 5"], viewport: { width: 430, height: 932 } },
     },
     {
       name: "mobile-webkit-small",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|theme picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output/,
+      grep: /universal search opens|theme picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output|terminal VPN boundary/,
       use: { ...devices["iPhone 13"], viewport: { width: 320, height: 700 } },
     },
     {
       name: "mobile-webkit",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"] },
     },
     {
       name: "mobile-webkit-wide",
       testMatch: "**/interface.spec.ts",
-      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /universal search opens|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["iPhone 13"], viewport: { width: 430, height: 932 } },
     },
     {

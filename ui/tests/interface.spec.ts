@@ -844,6 +844,45 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
+test("terminal VPN boundary stays visible in the live shell", async ({ page }) => {
+  const vpnNetwork = {
+    mode: "vpn",
+    runtime_network: "private_namespace",
+    vpn_profile_id: "vpn-preview",
+    vpn_profile_revision: 3,
+    vpn_profile_name: "Company VPN",
+    published_ports: [],
+  };
+  await page.route("**/api/v1/container-terminal/preflight", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        allowed: true,
+        detail: "All terminal egress is fail-closed through Company VPN.",
+        runtime,
+        network: vpnNetwork,
+        security,
+        limits,
+        workspace: "/workspace",
+        policy_rule: "human_terminal_vpn",
+        preview_fingerprint: "d".repeat(64),
+        preview_token: "preview.signed",
+        expires_at: "2026-07-13T21:00:00Z",
+        idle_timeout_seconds: 1800,
+        fresh_container: true,
+      }),
+    });
+  });
+
+  await openWorkspace(page, "/", "Workbench");
+
+  const liveTerminal = page.locator(".container-terminal-live");
+  await expect(liveTerminal.getByText(/VPN enforced · Company VPN/)).toBeVisible();
+  await expect(liveTerminal.getByText(/blocked until OpenVPN is ready/)).toBeVisible();
+  await expect(liveTerminal.getByText(/Bridge networking is permitted/)).toHaveCount(0);
+});
+
 test("terminal pointer selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Canvas selection rendering needs one desktop visual run.");
   await openWorkspace(page, "/", "Workbench");

@@ -40,7 +40,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -1412,6 +1412,7 @@ def create_app(
             tool_platform=tool_platform,
             execution_service=executions,
             command_history=terminal_commands,
+            credential_store=credentials,
             operator_id=active_operator_id,
         )
     if container_terminals is not None and container_terminals.store is not store:
@@ -1424,6 +1425,8 @@ def create_app(
         container_terminals.bind_execution_service(executions)
     if container_terminals is not None and container_terminals.command_history is None:
         container_terminals.bind_command_history(terminal_commands)
+    if container_terminals is not None and container_terminals.credential_store is None:
+        container_terminals.bind_credential_store(credentials)
     workspaces = workspace_service
     if workspaces is None and artifact_store is not None and tool_platform is not None:
         workspaces = WorkspaceService(
@@ -6391,7 +6394,7 @@ def create_app(
                 )
             secret = credentials.create(
                 CredentialCreateRequest(
-                    secret=parsed.config, persistence=request.persistence
+                    secret=SecretStr(parsed.config), persistence=request.persistence
                 )
             )
             try:
@@ -6441,6 +6444,13 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail="close active command sessions using this VPN profile first",
+            )
+        if container_terminals is not None and container_terminals.uses_vpn_profile(
+            profile_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="close active terminal sessions using this VPN profile first",
             )
         store.delete(
             VpnProfile, profile_id, expected_revision=request.expected_revision

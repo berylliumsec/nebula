@@ -587,10 +587,13 @@ def serve(
     *,
     disabled: bool,
     vpn_config: str | None = None,
+    vpn_unrestricted: bool = False,
 ) -> int:
     legacy = list(map(_rule, values))
     rules = [*legacy, *[_cidr_rule(value) for value in cidr_values]]
-    if not rules and not domains:
+    if vpn_unrestricted and vpn_config is None:
+        raise ValueError("unrestricted VPN egress requires a VPN profile")
+    if not vpn_unrestricted and not rules and not domains:
         raise ValueError("at least one allow rule or domain is required")
     _base("iptables")
     _base("ip6tables")
@@ -611,7 +614,11 @@ def serve(
     if resolver is not None:
         resolver.start()
     if not disabled:
-        _install_rules(rules, "tun0" if vpn_config is not None else None)
+        if vpn_unrestricted:
+            _run("iptables", "-A", "OUTPUT", "-o", "tun0", "-j", "ACCEPT")
+            _run("ip6tables", "-A", "OUTPUT", "-o", "tun0", "-j", "ACCEPT")
+        else:
+            _install_rules(rules, "tun0" if vpn_config is not None else None)
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
@@ -621,7 +628,11 @@ def serve(
             if disabled and ENABLE_REQUEST.exists():
                 if vpn_config is not None:
                     vpn_process = _start_vpn(vpn_config)
-                _install_rules(rules, "tun0" if vpn_config is not None else None)
+                if vpn_unrestricted:
+                    _run("iptables", "-A", "OUTPUT", "-o", "tun0", "-j", "ACCEPT")
+                    _run("ip6tables", "-A", "OUTPUT", "-o", "tun0", "-j", "ACCEPT")
+                else:
+                    _install_rules(rules, "tun0" if vpn_config is not None else None)
                 if resolver is not None:
                     resolver.enable()
                 disabled = False
@@ -657,6 +668,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--domain-port", action="append", type=int, default=[])
     serve_parser.add_argument("--disabled", action="store_true")
     serve_parser.add_argument("--vpn-stdin", action="store_true")
+    serve_parser.add_argument("--vpn-unrestricted", action="store_true")
     subparsers.add_parser("enable")
     subparsers.add_parser("loopback")
     options = parser.parse_args(argv)
@@ -674,6 +686,7 @@ def main(argv: list[str] | None = None) -> int:
             options.domain_port,
             disabled=options.disabled,
             vpn_config=sys.stdin.read() if options.vpn_stdin else None,
+            vpn_unrestricted=options.vpn_unrestricted,
         )
     except Exception as exc:
         # diagnostic-expected: this isolated helper reports startup failure to its supervisor.

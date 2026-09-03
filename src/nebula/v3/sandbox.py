@@ -50,6 +50,7 @@ class SandboxNetwork(str, Enum):
     NONE = "none"
     SCOPED = "scoped"
     UNRESTRICTED = "unrestricted"
+    VPN = "vpn"
 
 
 class SandboxExecutionKind(str, Enum):
@@ -372,9 +373,12 @@ class SandboxRequest(BaseModel):
                     "or certified egress rules"
                 )
         elif self.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL:
-            if self.network != SandboxNetwork.UNRESTRICTED:
+            if self.network not in {
+                SandboxNetwork.UNRESTRICTED,
+                SandboxNetwork.VPN,
+            }:
                 raise ValueError(
-                    "human terminals require unrestricted bridge networking"
+                    "human terminals require direct bridge or VPN networking"
                 )
             if self.container_user != SandboxContainerUser.ROOT:
                 raise ValueError("human terminals require the container root user")
@@ -515,8 +519,16 @@ class NoEgressController(EgressController):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
-        del runtime_argv, runtime_environment, request, container_name, seccomp_profile
+        del (
+            runtime_argv,
+            runtime_environment,
+            request,
+            container_name,
+            seccomp_profile,
+            vpn_config,
+        )
         raise SandboxUnavailable(
             "network tool execution requires a certified per-invocation egress helper"
         )
@@ -731,9 +743,20 @@ class ContainerEgressController(EgressController):
         seccomp_profile: Path | None,
         vpn_config: str | None = None,
     ) -> EgressLease:
-        if request.execution_kind != SandboxExecutionKind.NETWORK_TOOL:
-            raise SandboxError("egress leases are only valid for network tools")
-        if not request.egress_rules and not request.egress_domains:
+        vpn_terminal = (
+            request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+            and request.network == SandboxNetwork.VPN
+        )
+        if (
+            request.execution_kind != SandboxExecutionKind.NETWORK_TOOL
+            and not vpn_terminal
+        ):
+            raise SandboxError(
+                "egress leases are valid only for network tools or VPN terminals"
+            )
+        if vpn_terminal and vpn_config is None:
+            raise SandboxError("VPN terminal egress requires an admitted VPN profile")
+        if not vpn_terminal and not request.egress_rules and not request.egress_domains:
             raise SandboxUnavailable(
                 "network execution requires broker-approved egress rules or domains"
             )
@@ -760,6 +783,11 @@ class ContainerEgressController(EgressController):
             argv.append(f"--security-opt=seccomp={seccomp_profile}")
         if vpn_config is not None:
             argv.extend(["--device=/dev/net/tun", "--interactive"])
+        if vpn_terminal:
+            for publication in request.published_ports:
+                argv.append(
+                    f"--publish=127.0.0.1:{publication.port}:{publication.port}/{publication.protocol}"
+                )
         # Containers joining this helper's network namespace cannot accept
         # their own --add-host flags. Put the approved host mappings on the
         # namespace owner so Docker/Podman can share the complete pinned
@@ -769,6 +797,8 @@ class ContainerEgressController(EgressController):
         argv.extend([self.helper_image, "serve"])
         if vpn_config is not None:
             argv.append("--vpn-stdin")
+        if vpn_terminal:
+            argv.append("--vpn-unrestricted")
         if request.start_egress_disabled:
             argv.append("--disabled")
         for rule in request.egress_rules:
@@ -1705,7 +1735,7 @@ class ContainerSandboxRunner(SandboxRunner):
             if network_mode is None:
                 for host, address in sorted(request.pinned_hosts.items()):
                     argv.append(f"--add-host={host}:{_bracket_ip(address)}")
-        if request.published_ports:
+        if request.published_ports and network_mode is None:
             if request.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
                 raise SandboxError("published ports are reserved for human terminals")
             for publication in request.published_ports:
@@ -1727,6 +1757,7 @@ class ContainerSandboxRunner(SandboxRunner):
         container_name: str,
         columns: int,
         rows: int,
+        vpn_config: str | None = None,
     ) -> SandboxTerminalProcess:
         """Launch one fixed-command container with an interactive PTY."""
 
@@ -1751,8 +1782,12 @@ class ContainerSandboxRunner(SandboxRunner):
             raise SandboxError("terminal dimensions must be between 1 and 1000")
 
         lease: EgressLease | None = None
-        if request.network == SandboxNetwork.SCOPED:
-            if not request.egress_rules and not request.egress_domains:
+        if request.network in {SandboxNetwork.SCOPED, SandboxNetwork.VPN}:
+            if (
+                request.network == SandboxNetwork.SCOPED
+                and not request.egress_rules
+                and not request.egress_domains
+            ):
                 raise SandboxUnavailable(
                     "network terminal execution requires an explicit broker-approved boundary"
                 )
@@ -1766,6 +1801,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 request=request,
                 container_name=container_name,
                 seccomp_profile=self.profile.seccomp_profile if self.profile else None,
+                vpn_config=vpn_config,
             )
         master_fd: int | None = None
         slave_fd: int | None = None
@@ -2123,7 +2159,7 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v6"
+    _recipe_version = "v7"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",

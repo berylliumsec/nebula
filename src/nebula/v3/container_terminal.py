@@ -22,19 +22,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from time import monotonic
 from typing import AsyncIterator, Callable, Literal
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import Field, field_validator
 
 from .domain import (
+    AutomationProjectPolicy,
     Engagement,
     ExecutionLimitsSnapshot,
     NebulaModel,
     OperationEvent,
     RunnerIsolation,
     RunnerRuntime,
+    VpnProfile,
     utc_now,
 )
+from .credentials import CredentialStore
 from .executions import (
     ExecutionService,
     _WorkspaceLimitError,
@@ -54,7 +57,7 @@ from .sandbox import (
     SandboxTerminalProcess,
     SandboxWorkspaceAccess,
 )
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 from .terminal_history import (
     CapturedTerminalCommand,
     Osc633CommandParser,
@@ -204,8 +207,11 @@ class ContainerTerminalRuntimeSnapshot(NebulaModel):
 
 
 class ContainerTerminalNetworkSnapshot(NebulaModel):
-    mode: Literal["unrestricted"] = "unrestricted"
-    runtime_network: Literal["bridge"] = "bridge"
+    mode: Literal["unrestricted", "vpn"] = "unrestricted"
+    runtime_network: Literal["bridge", "private_namespace"] = "bridge"
+    vpn_profile_id: str | None = Field(default=None, max_length=200)
+    vpn_profile_revision: int | None = Field(default=None, ge=1)
+    vpn_profile_name: str | None = Field(default=None, max_length=120)
     published_ports: list[ContainerTerminalPublishedPort] = Field(
         default_factory=list, max_length=16
     )
@@ -290,11 +296,13 @@ class ContainerTerminalRecoveryResponse(NebulaModel):
     active: bool
     session: ContainerTerminalStartResponse | None = None
     runtime: ContainerTerminalRuntimeSnapshot | None = None
+    network: ContainerTerminalNetworkSnapshot | None = None
 
 
 class ContainerTerminalRecoveredSession(NebulaModel):
     session: ContainerTerminalStartResponse
     runtime: ContainerTerminalRuntimeSnapshot
+    network: ContainerTerminalNetworkSnapshot
 
 
 class ContainerTerminalRecoveryListResponse(NebulaModel):
@@ -316,6 +324,7 @@ class _PreparedTerminal:
     sandbox_request: SandboxRequest
     policy_rule: str
     policy_detail: str
+    vpn_config: str | None = None
 
 
 @dataclass
@@ -325,6 +334,7 @@ class _TerminalReservation:
     request_fingerprint: str
     preview_fingerprint: str
     runtime: ContainerTerminalRuntimeSnapshot
+    network: ContainerTerminalNetworkSnapshot
     operator_id: str
     websocket_ticket: str
     ticket_expires_at: datetime | None
@@ -397,6 +407,7 @@ class ContainerTerminalService:
         tool_platform: RuntimePlatform | None,
         execution_service: ExecutionService | None = None,
         command_history: TerminalCommandHistory | None = None,
+        credential_store: CredentialStore | None = None,
         operator_id: Callable[[], str] | None = None,
         audit_nonce_factory: Callable[[], str] | None = None,
         max_active: int = 32,
@@ -421,6 +432,7 @@ class ContainerTerminalService:
         self.tool_platform = tool_platform
         self.execution_service = execution_service
         self.command_history = command_history
+        self.credential_store = credential_store
         self.operator_id = operator_id or (lambda: "system")
         self.audit_nonce_factory = audit_nonce_factory or (
             lambda: secrets.token_urlsafe(24)
@@ -463,6 +475,56 @@ class ContainerTerminalService:
         if self._sessions:
             raise ValueError("cannot bind command history after terminal startup")
         self.command_history = history
+
+    def bind_credential_store(self, credentials: CredentialStore) -> None:
+        if self._sessions:
+            raise ValueError("cannot bind credential storage after terminal startup")
+        self.credential_store = credentials
+
+    def uses_vpn_profile(self, profile_id: str) -> bool:
+        return any(
+            session.network.vpn_profile_id == profile_id
+            for session in (
+                *self._sessions.values(),
+                *self._finishing_sessions.values(),
+            )
+        )
+
+    def _selected_vpn(self, engagement_id: str) -> tuple[VpnProfile, str] | None:
+        policy_id = str(
+            uuid5(NAMESPACE_URL, f"nebula:automation-policy:{engagement_id}")
+        )
+        try:
+            policy = self.store.get(AutomationProjectPolicy, policy_id)
+        except NotFoundError:
+            return None
+        if policy.vpn_profile_id is None:
+            return None
+        if not policy.network_enabled:
+            raise ContainerTerminalError(
+                "vpn_unavailable",
+                "enable project networking before starting a VPN terminal",
+            )
+        try:
+            profile = self.store.get(VpnProfile, policy.vpn_profile_id)
+        except NotFoundError as exc:
+            raise ContainerTerminalError(
+                "vpn_unavailable",
+                "the selected VPN profile no longer exists; choose another profile",
+            ) from exc
+        if self.credential_store is None:
+            raise ContainerTerminalError(
+                "vpn_unavailable", "VPN secret storage is unavailable"
+            )
+        status = self.credential_store.status(profile.secret_ref)
+        if not status.available:
+            raise ContainerTerminalError(
+                "vpn_unavailable",
+                "the selected VPN profile is unavailable; upload it again or choose another profile",
+            )
+        return profile, self.credential_store.resolve(
+            profile.secret_ref
+        ).get_secret_value()
 
     def workspace_lock(self, engagement_id: str) -> asyncio.Lock:
         if self.execution_service is not None:
@@ -548,6 +610,7 @@ class ContainerTerminalService:
         error_code: str | None = None
         workspace_entries: int | None = None
         workspace_max_entries: int | None = None
+        network = ContainerTerminalNetworkSnapshot()
         if self.tool_platform is None:
             detail = "human terminal container execution is not configured"
         else:
@@ -562,10 +625,20 @@ class ContainerTerminalService:
                 workspace_max_entries = 50_000
                 if report.allowed:
                     ready = True
+                    selected_vpn = self._selected_vpn(engagement_id)
+                    if selected_vpn is not None:
+                        profile, _config = selected_vpn
+                        network = ContainerTerminalNetworkSnapshot(
+                            mode="vpn",
+                            runtime_network="private_namespace",
+                            vpn_profile_id=profile.id,
+                            vpn_profile_revision=profile.revision,
+                            vpn_profile_name=profile.name,
+                        )
                 else:
                     detail = report.detail
                     error_code = report.error_code or "workspace_limit"
-            except RuntimePlatformError as exc:
+            except (RuntimePlatformError, ContainerTerminalError) as exc:
                 record_caught_exception(
                     "terminal",
                     "terminal.container_terminal.caught_failure_001",
@@ -573,7 +646,14 @@ class ContainerTerminalService:
                     exc,
                     stage="container_terminal",
                 )
-                detail = str(exc)
+                detail = (
+                    exc.detail if isinstance(exc, ContainerTerminalError) else str(exc)
+                )
+                error_code = (
+                    exc.code
+                    if isinstance(exc, ContainerTerminalError)
+                    else "runner_unavailable"
+                )
         return ContainerTerminalCapabilities(
             engagement_id=engagement_id,
             ready=ready,
@@ -581,6 +661,7 @@ class ContainerTerminalService:
             error_code=error_code,
             workspace_entries=workspace_entries,
             workspace_max_entries=workspace_max_entries,
+            network=network,
             idle_timeout_seconds=int(self.idle_timeout_seconds),
         )
 
@@ -710,6 +791,7 @@ class ContainerTerminalService:
                 request_fingerprint=request_fingerprint,
                 preview_fingerprint=request.preview_fingerprint,
                 runtime=prepared.runtime,
+                network=prepared.network,
                 operator_id=operator_id,
                 websocket_ticket=ticket,
                 ticket_expires_at=expires,
@@ -814,10 +896,12 @@ class ContainerTerminalService:
                 response = self._recover_session_locked(session, now)
                 assert response.session is not None
                 assert response.runtime is not None
+                assert response.network is not None
                 recovered.append(
                     ContainerTerminalRecoveredSession(
                         session=response.session,
                         runtime=response.runtime,
+                        network=response.network,
                     )
                 )
             return ContainerTerminalRecoveryListResponse(sessions=recovered)
@@ -894,6 +978,7 @@ class ContainerTerminalService:
             active=True,
             session=recovered,
             runtime=session.runtime,
+            network=session.network,
         )
 
     async def claim(self, session_id: str, ticket: str) -> str:
@@ -1299,6 +1384,7 @@ class ContainerTerminalService:
                 container_name="nebula-terminal-" + session.id.replace("-", "")[:40],
                 columns=session.request.columns,
                 rows=session.request.rows,
+                vpn_config=prepared.vpn_config,
             )
         except (SandboxError, RuntimePlatformError) as exc:
             record_caught_exception(
@@ -1877,9 +1963,22 @@ class ContainerTerminalService:
                 default_tools=resolution.image.security_tools,
             )
         runtime = _runtime_snapshot(resolution)
-        network = ContainerTerminalNetworkSnapshot(
-            published_ports=request.published_ports
-        )
+        selected_vpn = self._selected_vpn(request.engagement_id)
+        vpn_config: str | None = None
+        if selected_vpn is None:
+            network = ContainerTerminalNetworkSnapshot(
+                published_ports=request.published_ports
+            )
+        else:
+            vpn_profile, vpn_config = selected_vpn
+            network = ContainerTerminalNetworkSnapshot(
+                mode="vpn",
+                runtime_network="private_namespace",
+                vpn_profile_id=vpn_profile.id,
+                vpn_profile_revision=vpn_profile.revision,
+                vpn_profile_name=vpn_profile.name,
+                published_ports=request.published_ports,
+            )
         security = ContainerTerminalSecuritySnapshot()
         sandbox_request = SandboxRequest(
             image=resolution.image.resolved_reference,
@@ -1893,7 +1992,11 @@ class ContainerTerminalService:
                 "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
                 "TERM": "xterm-256color",
             },
-            network=SandboxNetwork.UNRESTRICTED,
+            network=(
+                SandboxNetwork.VPN
+                if selected_vpn is not None
+                else SandboxNetwork.UNRESTRICTED
+            ),
             published_ports=[
                 SandboxPublishedPort.model_validate(item.model_dump(mode="json"))
                 for item in request.published_ports
@@ -1915,9 +2018,18 @@ class ContainerTerminalService:
             network=network,
             security=security,
             sandbox_request=sandbox_request,
-            policy_rule="human_terminal_unrestricted",
+            policy_rule=(
+                "human_terminal_vpn"
+                if selected_vpn is not None
+                else "human_terminal_unrestricted"
+            ),
             policy_detail=(
-                f"{resolution.image.detail}; human terminal has unrestricted outbound bridge networking"
+                f"{resolution.image.detail}; "
+                + (
+                    f"all terminal egress is fail-closed through VPN profile {vpn_profile.name!r}"
+                    if selected_vpn is not None
+                    else "human terminal has unrestricted outbound bridge networking"
+                )
                 + (
                     "; inbound ports "
                     + ", ".join(
@@ -1929,6 +2041,7 @@ class ContainerTerminalService:
                     else "; no inbound ports are published"
                 )
             ),
+            vpn_config=vpn_config,
         )
 
     def _recover_interrupted_events(self) -> None:

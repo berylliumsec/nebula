@@ -1673,8 +1673,11 @@ interface WireContainerTerminalRuntime extends JsonObject {
 }
 
 interface WireContainerTerminalNetwork extends JsonObject {
-  mode: "unrestricted";
-  runtime_network: "bridge";
+  mode: "unrestricted" | "vpn";
+  runtime_network: "bridge" | "private_namespace";
+  vpn_profile_id?: string | null;
+  vpn_profile_revision?: number | null;
+  vpn_profile_name?: string | null;
   published_ports: Array<{ port: number; protocol: "tcp" | "udp" }>;
 }
 
@@ -1720,12 +1723,14 @@ interface WireContainerTerminalRecovery extends JsonObject {
   active: boolean;
   session?: WireContainerTerminalSession | null;
   runtime?: WireContainerTerminalRuntime | null;
+  network?: WireContainerTerminalNetwork | null;
 }
 
 interface WireContainerTerminalRecoveryList extends JsonObject {
   sessions: Array<{
     session: WireContainerTerminalSession;
     runtime: WireContainerTerminalRuntime;
+    network?: WireContainerTerminalNetwork | null;
   }>;
 }
 
@@ -2872,6 +2877,9 @@ function mapContainerTerminalNetwork(value: WireContainerTerminalNetwork) {
   return {
     mode: value.mode,
     runtimeNetwork: value.runtime_network,
+    vpnProfileId: value.vpn_profile_id ?? undefined,
+    vpnProfileRevision: value.vpn_profile_revision ?? undefined,
+    vpnProfileName: value.vpn_profile_name ?? undefined,
     publishedPorts: value.published_ports,
   };
 }
@@ -6668,6 +6676,9 @@ export class ApiClient {
       runtime: value.runtime
         ? mapContainerTerminalRuntime(value.runtime)
         : undefined,
+      network: value.network
+        ? mapContainerTerminalNetwork(value.network)
+        : undefined,
     }));
   }
 
@@ -6682,6 +6693,9 @@ export class ApiClient {
       sessions: value.sessions.map((item) => ({
         session: mapContainerTerminalSession(item.session),
         runtime: mapContainerTerminalRuntime(item.runtime),
+        network: item.network
+          ? mapContainerTerminalNetwork(item.network)
+          : { mode: "unrestricted", runtimeNetwork: "bridge", publishedPorts: [] },
       })),
     }));
   }

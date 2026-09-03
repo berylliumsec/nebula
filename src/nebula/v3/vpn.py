@@ -30,9 +30,11 @@ _SAFE_OPTIONS = {
     "data-ciphers-fallback",
     "explicit-exit-notify",
     "float",
+    "fast-io",
     "key-direction",
     "mssfix",
     "mute",
+    "mute-replay-warnings",
     "nobind",
     "persist-key",
     "persist-tun",
@@ -42,16 +44,45 @@ _SAFE_OPTIONS = {
     "proto",
     "pull",
     "remote",
+    "remote-random",
+    "remote-random-hostname",
     "remote-cert-tls",
     "resolv-retry",
+    "reneg-bytes",
+    "reneg-pkts",
+    "reneg-sec",
+    "route-delay",
     "sndbuf",
+    "suppress-timestamps",
     "rcvbuf",
     "tls-client",
+    "tls-cipher",
+    "tls-ciphersuites",
     "tls-version-min",
     "tun-mtu",
     "verb",
     "verify-x509-name",
+    "x509-username-field",
 }
+
+_NO_ARGUMENT_OPTIONS = {
+    "auth-nocache",
+    "client",
+    "fast-io",
+    "float",
+    "mute-replay-warnings",
+    "nobind",
+    "persist-key",
+    "persist-tun",
+    "ping-timer-rem",
+    "pull",
+    "remote-random",
+    "remote-random-hostname",
+    "suppress-timestamps",
+    "tls-client",
+}
+
+_NONNEGATIVE_INTEGER_OPTIONS = {"reneg-bytes", "reneg-pkts", "reneg-sec"}
 
 
 class VpnProfileError(ValueError):
@@ -143,8 +174,19 @@ def parse_openvpn_profile(
             remotes.append((fields[1], port))
         elif option == "client":
             has_client = True
-        elif option == "ping-timer-rem" and len(fields) != 1:
-            raise VpnProfileError("ping-timer-rem does not accept arguments")
+        elif option in _NO_ARGUMENT_OPTIONS and len(fields) != 1:
+            raise VpnProfileError(f"{option} does not accept arguments")
+        elif option in _NONNEGATIVE_INTEGER_OPTIONS:
+            if len(fields) != 2:
+                raise VpnProfileError(f"{option} requires one non-negative integer")
+            try:
+                value = int(fields[1])
+            except ValueError as exc:
+                raise VpnProfileError(
+                    f"{option} requires one non-negative integer"
+                ) from exc
+            if not 0 <= value <= 2_147_483_647:
+                raise VpnProfileError(f"{option} requires one non-negative integer")
         elif option in {"remote-cert-tls", "verify-x509-name"}:
             has_server_verification = True
         elif option == "setenv" and fields[1:] == ["opt", "block-outside-dns"]:

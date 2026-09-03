@@ -2295,8 +2295,11 @@ export interface ContainerTerminalRuntimeSnapshot {
 }
 
 export interface ContainerTerminalNetworkSnapshot {
-  mode: "unrestricted";
-  runtimeNetwork: "bridge";
+  mode: "unrestricted" | "vpn";
+  runtimeNetwork: "bridge" | "private_namespace";
+  vpnProfileId?: Identifier;
+  vpnProfileRevision?: number;
+  vpnProfileName?: string;
   publishedPorts: ContainerTerminalPublishedPort[];
 }
 
@@ -2359,11 +2362,13 @@ export interface ContainerTerminalRecovery {
   active: boolean;
   session?: ContainerTerminalSession;
   runtime?: ContainerTerminalRuntimeSnapshot;
+  network?: ContainerTerminalNetworkSnapshot;
 }
 
 export interface ContainerTerminalRecoveredSession {
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
+  network: ContainerTerminalNetworkSnapshot;
 }
 
 export interface ContainerTerminalRecoveryList {

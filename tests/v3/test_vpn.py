@@ -33,6 +33,23 @@ def test_admits_ping_timer_rem_without_arguments():
         parse_openvpn_profile(BASE + "ping-timer-rem unexpected\n")
 
 
+def test_common_safe_client_timing_options_are_admitted():
+    parsed = parse_openvpn_profile(
+        BASE
+        + "reneg-sec 0\nreneg-bytes 0\nreneg-pkts 0\n"
+        + "remote-random\nfast-io\nmute-replay-warnings\nsuppress-timestamps\n"
+    )
+
+    assert "reneg-sec 0\n" in parsed.config
+    assert "remote-random\n" in parsed.config
+
+
+@pytest.mark.parametrize("value", ["-1", "forever", "1 2"])
+def test_renegotiation_options_reject_invalid_values(value):
+    with pytest.raises(VpnProfileError, match="reneg-sec requires"):
+        parse_openvpn_profile(BASE + f"reneg-sec {value}\n")
+
+
 @pytest.mark.parametrize(
     "directive",
     [
