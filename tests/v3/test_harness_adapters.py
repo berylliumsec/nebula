@@ -1896,7 +1896,7 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
     asyncio.run(scenario())
 
 
-def test_claude_native_capabilities_use_an_explicit_toolset_and_pretool_gate(
+def test_claude_native_capabilities_exclude_project_files_and_shell(
     tmp_path, monkeypatch
 ):
     async def scenario() -> None:
@@ -1951,10 +1951,6 @@ def test_claude_native_capabilities_use_an_explicit_toolset_and_pretool_gate(
         )
         options = FakeClaudeClient.latest.options.kwargs
         assert set(options["tools"]) == {
-            "Read",
-            "Glob",
-            "Grep",
-            "Bash",
             "WebSearch",
             "WebFetch",
             "Skill",
@@ -1962,7 +1958,15 @@ def test_claude_native_capabilities_use_an_explicit_toolset_and_pretool_gate(
         }
         assert options["setting_sources"] == ["user"]
         assert options["skills"] == "all"
-        assert {"Write", "Edit", "NotebookEdit"}.issubset(options["disallowed_tools"])
+        assert {
+            "Read",
+            "Glob",
+            "Grep",
+            "Bash",
+            "Write",
+            "Edit",
+            "NotebookEdit",
+        }.issubset(options["disallowed_tools"])
         assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES" in options["system_prompt"]
 
         pre_tool_use = options["hooks"]["PreToolUse"][0].hooks[0]
@@ -1981,15 +1985,13 @@ def test_claude_native_capabilities_use_an_explicit_toolset_and_pretool_gate(
             None,
             None,
         )
-        assert read_result["hookSpecificOutput"]["permissionDecision"] == "ask"
+        assert read_result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert skill_result["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert write_result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-        allowed = await options["can_use_tool"](
-            "Read", {"file_path": "README.md"}, None
-        )
+        allowed = await options["can_use_tool"]("Skill", {"skill": "review"}, None)
         assert allowed.behavior == "allow"
-        assert observed_permissions[-1].vendor_name == "Read"
+        assert observed_permissions[-1].vendor_name == "Skill"
         await connection.close()
 
     asyncio.run(scenario())

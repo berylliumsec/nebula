@@ -27,7 +27,7 @@ const api = {
   listHarnesses: vi.fn().mockResolvedValue([harness]),
   listMcpServers: vi.fn().mockResolvedValue([]),
   listHarnessSessions: vi.fn().mockResolvedValue([]),
-  getAutomationRuntime: vi.fn().mockResolvedValue({ configured: false, ready: false, detail: "Optional command runtime unavailable" }),
+  getAutomationRuntime: vi.fn().mockResolvedValue({ configured: true, ready: true, detail: "Pinned automation runtime ready" }),
 };
 
 vi.mock("../state/WorkspaceContext", () => ({
@@ -55,7 +55,8 @@ describe("NewMissionButton", () => {
     await user.type(screen.getByLabelText("Objective"), "Review the bounded project");
     await user.click(screen.getByText("Advanced"));
     expect(screen.getByText("Supervised security automation")).toBeInTheDocument();
-    expect(screen.getByText("Harness native")).toBeInTheDocument();
+    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.getByText("Bash and process I/O use Nebula's pinned automation runtime.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol"));
     expect(screen.getByLabelText("Mission harness effort")).toHaveValue("high");
     expect(screen.getByLabelText("Mission harness speed")).toHaveValue("priority");

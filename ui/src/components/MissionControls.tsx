@@ -150,11 +150,10 @@ export function NewMissionButton({ className = "button primary", children, showS
 
   const verification = providerModelVerification(provider, model);
   const providerSupportsTools = verification?.status === "verified";
-  const automaticTools = useMemo(() => providerSupportsTools && runtimeReady
+  const automaticTools = useMemo(() => runtimeReady && (runtimeKind === "harness" || providerSupportsTools)
     ? ["run_command", "process_io"]
-    : [], [providerSupportsTools, runtimeReady]);
-  const harnessHasNativeShell = runtimeKind === "harness" && selectedHarness?.nativeCapabilities?.shell === true;
-  const runtimeCanExecute = harnessHasNativeShell || automaticTools.length > 0 || selectedMcpIds.length > 0;
+    : [], [providerSupportsTools, runtimeKind, runtimeReady]);
+  const runtimeCanExecute = automaticTools.length > 0 || selectedMcpIds.length > 0;
   const toolSelectionMessage = toolVerificationBusy
     ? `Checking tool support for ${model.trim()}…`
     : toolPreparation === "preparing"
@@ -163,7 +162,7 @@ export function NewMissionButton({ className = "button primary", children, showS
     ? coreState !== "online"
       ? "Nebula Core is offline; reconnect Core before using command execution."
       : "The pinned automation runtime is not configured."
-    : !providerSupportsTools
+    : runtimeKind !== "harness" && !providerSupportsTools
       ? verification?.status === "failed"
         ? `Tool verification failed for ${model}: ${verification.failureDetail ?? "the provider did not return a valid structured call"}. Reverify it in Settings.`
         : model
@@ -386,10 +385,8 @@ export function NewMissionButton({ className = "button primary", children, showS
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
             <section className="mission-tool-selection">
-              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>{harnessHasNativeShell ? "The selected harness owns its frozen shell capability." : "Bash and process I/O use Nebula's pinned automation runtime."}</small></span></div><span>{harnessHasNativeShell ? "Harness native" : automaticTools.length ? "Ready" : "Analysis only"}</span></header>
-              {harnessHasNativeShell
-                ? <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>Native shell access is available through the selected harness and remains governed by its saved capability profile.</p></div>
-                : runtimeReady && providerSupportsTools && automaticTools.length
+              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O use Nebula's pinned automation runtime.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>
+              {runtimeReady && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
               {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<small id="mission-tool-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Maximum execution calls" aria-describedby="mission-tool-unlimited-help" type="number" min={1} max={100} placeholder="Unlimited" value={maxToolCalls ?? ""} onChange={(event) => setMaxToolCalls(event.target.value === "" ? null : Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
