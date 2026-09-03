@@ -166,6 +166,25 @@ def test_vpn_remote_is_resolved_once_and_rewritten_to_the_pinned_address(monkeyp
     assert (port, protocol) == (1194, "udp")
 
 
+def test_vpn_log_detail_is_bounded_and_redacts_inline_credentials(tmp_path):
+    log = tmp_path / "openvpn.log"
+    log.write_text(
+        "operator-secret-user\noperator-secret-password\nAUTH_FAILED\n",
+        encoding="utf-8",
+    )
+    config = """client
+<auth-user-pass>
+operator-secret-user
+operator-secret-password
+</auth-user-pass>
+"""
+
+    detail = egress_helper._vpn_log_detail(config, log)
+
+    assert detail == "[REDACTED]\n[REDACTED]\nAUTH_FAILED"
+    assert "operator-secret" not in detail
+
+
 def test_vpn_scoped_dns_rules_are_bound_to_the_tunnel(monkeypatch):
     monkeypatch.setattr(egress_helper, "_upstream_resolvers", lambda: ["8.8.8.8"])
     resolver = egress_helper.PolicyResolver(

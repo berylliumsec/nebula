@@ -1956,6 +1956,42 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
 });
 
 test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {
+  let selectedVpnProfile: string | null = null;
+  await page.route("**/api/v1/vpn-profiles", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      ...entity,
+      id: "vpn-preview",
+      name: "Company VPN",
+      filename: "company.ovpn",
+      remote_host: "vpn.example.test",
+      remote_port: 1194,
+      protocol: "udp",
+      fingerprint: "a".repeat(64),
+      requires_credentials: true,
+      available: true,
+    }]),
+  }));
+  await page.route("**/api/v1/engagements/*/automation-policy", async (route) => {
+    if (route.request().method() === "PUT") {
+      selectedVpnProfile = String(route.request().postDataJSON().vpn_profile_id);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...entity,
+        id: "runtime-policy-preview",
+        engagement_id: "engagement-1",
+        approval_policy: "on_boundary",
+        network_enabled: selectedVpnProfile !== null,
+        runner_profile_id: "local",
+        vpn_profile_id: selectedVpnProfile,
+        max_timeout_ms: 300000,
+      }),
+    });
+  });
   await openWorkspace(page, "/settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
@@ -1964,6 +2000,11 @@ test("VPN settings keep upload and project routing calm at every width", async (
   await expect(section.getByText("Choose an OpenVPN profile")).toBeVisible();
   await expect(section.getByText("Credentials and storage")).toBeVisible();
   await expect(section.getByLabel("Username")).not.toBeVisible();
+  await expect(section.getByText("Saved only — not connected to this project.")).toBeVisible();
+  await section.getByRole("button", { name: "Use for this project" }).click();
+  await expect(section.getByText("In use", { exact: true })).toBeVisible();
+  await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
+  expect(selectedVpnProfile).toBe("vpn-preview");
   const geometry = await section.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,

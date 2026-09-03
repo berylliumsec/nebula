@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
-import type { AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
+import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -26,7 +26,7 @@ function profileSetup(profile: RunnerProfile): RunnerSetupKind {
 }
 
 export function AutomationRuntimeSettings() {
-  const { api, coreState, previewMode } = useWorkspace();
+  const { api, coreState, engagement, previewMode } = useWorkspace();
   const [runtime, setRuntime] = useState<AutomationRuntimeInfo>();
   const [loading, setLoading] = useState(true);
   const [preparing, setPreparing] = useState(false);
@@ -38,6 +38,8 @@ export function AutomationRuntimeSettings() {
   const [vpnPassword, setVpnPassword] = useState("");
   const [vpnPersistence, setVpnPersistence] = useState<"vault" | "session">("vault");
   const [savingVpn, setSavingVpn] = useState(false);
+  const [projectPolicy, setProjectPolicy] = useState<AutomationProjectPolicy>();
+  const [selectingVpn, setSelectingVpn] = useState<string>();
 
   const load = useCallback(async () => {
     if (!api || coreState !== "online") {
@@ -47,23 +49,25 @@ export function AutomationRuntimeSettings() {
     setLoading(true);
     setError(undefined);
     try {
-      const [nextRuntime, nextVpnProfiles] = await Promise.all([
+      const [nextRuntime, nextVpnProfiles, nextProjectPolicy] = await Promise.all([
         api.getAutomationRuntime(),
         api.listVpnProfiles().catch((vpnError) => {
           if (unavailable(vpnError)) return [];
           void logCaughtDiagnostic("interface.automation_runtime.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "automation_runtime");
           return Promise.reject(vpnError);
         }),
+        engagement ? api.getAutomationPolicy(engagement.id) : Promise.resolve(undefined),
       ]);
       setRuntime(nextRuntime);
       setVpnProfiles(nextVpnProfiles);
+      setProjectPolicy(nextProjectPolicy);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.automation_runtime.caught_failure_01", "A handled interface operation failed.", loadError, "automation_runtime");
       setError(loadError instanceof Error ? loadError.message : "Could not load the automation runtime.");
     } finally {
       setLoading(false);
     }
-  }, [api, coreState]);
+  }, [api, coreState, engagement?.id]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -109,6 +113,26 @@ export function AutomationRuntimeSettings() {
     }
   };
 
+  const useVpnForProject = async (profile: VpnProfile) => {
+    if (!api || !engagement || !projectPolicy) return;
+    setSelectingVpn(profile.id); setError(undefined);
+    try {
+      const updated = await api.updateAutomationPolicy(engagement.id, {
+        approvalPolicy: projectPolicy.approvalPolicy,
+        networkEnabled: true,
+        runnerProfileId: projectPolicy.runnerProfileId,
+        vpnProfileId: profile.id,
+        maxTimeoutMs: projectPolicy.maxTimeoutMs,
+        expectedRevision: projectPolicy.revision,
+      });
+      setProjectPolicy(updated);
+      announceSettingsSaved(`${profile.name} will protect new terminals in ${engagement.name}.`);
+    } catch (selectError) {
+      void logCaughtDiagnostic("interface.automation_runtime.vpn_select_failed", "VPN profile could not be selected for this project.", selectError, "automation_runtime");
+      setError(selectError instanceof Error ? selectError.message : "Could not select the VPN profile for this project.");
+    } finally { setSelectingVpn(undefined); }
+  };
+
   return <section className="settings-section" id="automation-runtime-settings">
     <div className="section-heading"><div><h2>Automation runtime</h2><p>One digest-pinned Bash container per agent session. Commands use ordinary binaries on PATH.</p></div><button className="button secondary" type="button" disabled={loading || preparing} onClick={() => void load()}><RefreshCw size={14} /> Refresh</button></div>
     {error && <DiagnosticErrorNotice error={error} fallback="The automation runtime could not be inspected." compact />}
@@ -122,7 +146,10 @@ export function AutomationRuntimeSettings() {
         <details className="inventory-disclosure vpn-options"><summary><span><strong>Credentials and storage</strong><small>Only needed when the profile requests username/password authentication.</small></span><ChevronDown size={17} /></summary><div className="policy-form-body"><label>Username<input autoComplete="username" value={vpnUsername} onChange={(event) => setVpnUsername(event.target.value)} /></label><label>Password<input type="password" autoComplete="new-password" value={vpnPassword} onChange={(event) => setVpnPassword(event.target.value)} /></label><label>Storage<select value={vpnPersistence} onChange={(event) => setVpnPersistence(event.target.value as "vault" | "session")}><option value="vault">Operating-system vault</option><option value="session">This Core session only</option></select></label></div></details>
         <footer><span>Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : "Save profile"}</button></footer>
       </form>
-      <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>Raw configuration and credentials are never displayed again.</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => <article key={profile.id}><span className={`status-dot ${profile.available ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.protocol.toUpperCase()} · {profile.remoteHost}:{profile.remotePort}</small><p>{profile.available ? "Stored securely; the tunnel is verified when a new session starts." : "Secret is unavailable; upload the profile again."}</p></div><button className="icon-button" type="button" aria-label={`Remove ${profile.name}`} onClick={() => void removeVpn(profile)}><Trash2 size={15} /></button></article>) : <div className="empty-state compact"><ShieldCheck size={21} /><strong>No VPN profiles</strong><p>Upload one here, then select it in a project’s command runtime policy.</p></div>}</section>
+      <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>{engagement ? `Choose the route for new terminals in ${engagement.name}.` : "Open a project to choose where a profile is used."}</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => {
+        const selected = projectPolicy?.vpnProfileId === profile.id;
+        return <article key={profile.id}><span className={`status-dot ${profile.available ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.protocol.toUpperCase()} · {profile.remoteHost}:{profile.remotePort}</small><p>{!profile.available ? "Secret is unavailable; upload the profile again." : selected ? `Selected for ${engagement?.name ?? "this project"}. New terminals wait for the tunnel before opening.` : "Saved only — not connected to this project."}</p></div><div className="vpn-profile-actions">{profile.available && engagement && !selected && <button className="button quiet" type="button" disabled={!projectPolicy || selectingVpn === profile.id || previewMode} onClick={() => void useVpnForProject(profile)}>{selectingVpn === profile.id ? "Selecting…" : "Use for this project"}</button>}{selected && <span className="vpn-selected-label"><CheckCircle2 size={14} /> In use</span>}<button className="icon-button" type="button" aria-label={`Remove ${profile.name}`} disabled={selected} title={selected ? "Choose a different route before removing this profile." : undefined} onClick={() => void removeVpn(profile)}><Trash2 size={15} /></button></div></article>;
+      }) : <div className="empty-state compact"><ShieldCheck size={21} /><strong>No VPN profiles</strong><p>Upload one here, then select it for the open project.</p></div>}</section>
     </div>
   </section>;
 }

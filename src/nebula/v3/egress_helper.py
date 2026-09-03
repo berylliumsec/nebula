@@ -24,6 +24,8 @@ DNS_PORT = 53
 SIOCGIFFLAGS = 0x8913
 SIOCSIFFLAGS = 0x8914
 IFF_UP = 0x1
+VPN_LOG_PATH = Path("/run/nebula-openvpn.log")
+VPN_LOG_BYTES = 4_096
 
 
 def _rule(value: str) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]:
@@ -207,6 +209,28 @@ def _vpn_material(
     return rewritten, address, port, protocol
 
 
+def _vpn_log_detail(config: str, path: Path = VPN_LOG_PATH) -> str:
+    """Return a bounded diagnostic tail without disclosing inline credentials."""
+
+    try:
+        raw = path.read_bytes()[-VPN_LOG_BYTES:]
+    except OSError:
+        return ""
+    detail = raw.decode("utf-8", errors="replace").strip()
+    in_credentials = False
+    for line in config.splitlines():
+        normalized = line.strip().lower()
+        if normalized == "<auth-user-pass>":
+            in_credentials = True
+            continue
+        if normalized == "</auth-user-pass>":
+            in_credentials = False
+            continue
+        if in_credentials and line:
+            detail = detail.replace(line, "[REDACTED]")
+    return detail.replace(str(Path("/run/nebula-client.ovpn")), "[VPN profile]")
+
+
 def _start_vpn(config: str) -> subprocess.Popen[bytes]:
     rewritten, address, port, protocol = _vpn_material(config)
     binary = "iptables" if address.version == 4 else "ip6tables"
@@ -232,25 +256,30 @@ def _start_vpn(config: str) -> subprocess.Popen[bytes]:
     path = Path("/run/nebula-client.ovpn")
     path.write_text(rewritten, encoding="utf-8")
     path.chmod(0o600)
-    process = subprocess.Popen(
-        [
-            "openvpn",
-            "--config",
-            str(path),
-            "--dev",
-            "tun0",
-            "--auth-nocache",
-            "--script-security",
-            "1",
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.STDOUT,
-    )
+    with VPN_LOG_PATH.open("wb") as vpn_log:
+        process = subprocess.Popen(
+            [
+                "openvpn",
+                "--config",
+                str(path),
+                "--dev",
+                "tun0",
+                "--auth-nocache",
+                "--script-security",
+                "1",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=vpn_log,
+            stderr=subprocess.STDOUT,
+        )
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError("OpenVPN exited before the tunnel became ready")
+            detail = _vpn_log_detail(config)
+            raise RuntimeError(
+                "OpenVPN exited before the tunnel became ready"
+                + (f": {detail}" if detail else "")
+            )
         try:
             link = subprocess.run(
                 ["ip", "-o", "link", "show", "tun0"],
@@ -276,7 +305,15 @@ def _start_vpn(config: str) -> subprocess.Popen[bytes]:
             pass
         time.sleep(0.1)
     process.terminate()
-    raise RuntimeError("OpenVPN tunnel readiness timed out")
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+    detail = _vpn_log_detail(config)
+    raise RuntimeError(
+        "OpenVPN tunnel readiness timed out" + (f": {detail}" if detail else "")
+    )
 
 
 def _read_name(packet: bytes, offset: int) -> tuple[str, int]:
