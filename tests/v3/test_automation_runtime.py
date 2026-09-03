@@ -39,9 +39,11 @@ from nebula.v3.domain import (
     ToolCall,
     ToolCallOrigin,
     ToolCallStatus,
+    VpnProfile,
     RiskClass,
     utc_now,
 )
+from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import (
@@ -690,6 +692,65 @@ def test_domain_scope_resolver_is_readable_by_the_non_root_runtime(tmp_path):
     asyncio.run(scenario())
 
 
+def test_selected_vpn_is_frozen_and_streamed_only_to_the_namespace_launch(tmp_path):
+    async def scenario():
+        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        credentials = CredentialStore()
+        secret = credentials.create(
+            CredentialCreateRequest(secret="client\ndev tun0\n", persistence="session")
+        )
+        vpn = store.create(
+            VpnProfile(
+                name="Assessment VPN",
+                filename="assessment.ovpn",
+                remote_host="vpn.example.test",
+                remote_port=1194,
+                protocol="udp",
+                fingerprint="f" * 64,
+                secret_ref=secret.reference,
+            )
+        )
+        manager.credential_store = credentials
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            vpn_profile_id=vpn.id,
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        launches = []
+
+        async def launch(configuration):
+            launches.append(configuration)
+            return FakeSession(
+                network_granted=configuration.network_granted,
+                workspace=configuration.workspace,
+            )
+
+        manager.session_factory = launch
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="vpn-session",
+            request=RunCommandRequest(
+                command="curl https://example.test", network="project_scope"
+            ),
+        )
+
+        assert launches[0].vpn_config == "client\ndev tun0"
+        session = store.get(AutomationSession, result.session_id)
+        assert (session.vpn_profile_id, session.vpn_profile_revision) == (
+            vpn.id,
+            vpn.revision,
+        )
+        assert "client" not in session.model_dump_json()
+
+    asyncio.run(scenario())
+
+
 def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
     manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
     app = create_app(
@@ -734,6 +795,70 @@ def test_api_exposes_only_the_fixed_runtime_command_surface(tmp_path):
             for path in paths
             for marker in ("tool-packs", "tool-catalog", "tool-assignment")
         )
+
+
+def test_api_saves_vpn_secret_outside_public_profile_and_selects_it(tmp_path):
+    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="runtime-test-token",
+        automation_runtime=manager,
+    )
+    headers = {"Authorization": "Bearer runtime-test-token"}
+    config = """client
+dev tun
+proto udp
+remote vpn.example.test 1194
+remote-cert-tls server
+<ca>
+certificate
+</ca>
+"""
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/vpn-profiles",
+            headers=headers,
+            json={
+                "name": "Assessment VPN",
+                "filename": "assessment.ovpn",
+                "config": config,
+                "persistence": "session",
+            },
+        )
+        assert created.status_code == 201, created.text
+        profile = created.json()
+        assert "secret_ref" not in profile
+        assert "config" not in profile
+        assert profile["available"] is True
+
+        current = client.get(
+            f"/api/v1/engagements/{engagement.id}/automation-policy",
+            headers=headers,
+        ).json()
+        updated = client.put(
+            f"/api/v1/engagements/{engagement.id}/automation-policy",
+            headers=headers,
+            json={
+                "approval_policy": "on_boundary",
+                "network_enabled": True,
+                "runner_profile_id": "runner",
+                "vpn_profile_id": profile["id"],
+                "max_timeout_ms": 30000,
+                "expected_revision": current["revision"],
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["vpn_profile_id"] == profile["id"]
+
+        blocked = client.request(
+            "DELETE",
+            f"/api/v1/vpn-profiles/{profile['id']}",
+            headers=headers,
+            json={"expected_revision": profile["revision"]},
+        )
+        assert blocked.status_code == 409
 
 
 def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(

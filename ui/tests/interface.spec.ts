@@ -1916,6 +1916,26 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await expect(page.getByLabel("Allowed domains")).toBeDisabled();
 });
 
+test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
+  const section = page.locator("#automation-runtime-settings");
+  await expect(section.getByRole("heading", { name: "VPN egress" })).toBeVisible();
+  await expect(section.getByText("Choose an OpenVPN profile")).toBeVisible();
+  await expect(section.getByText("Credentials and storage")).toBeVisible();
+  await expect(section.getByLabel("Username")).not.toBeVisible();
+  const geometry = await section.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    buttonHeights: [...element.querySelectorAll<HTMLElement>("button")].map((button) => button.getBoundingClientRect().height),
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.buttonHeights.every((height) => height >= 30)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include("#automation-runtime-settings").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
   test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Scroll intent needs one desktop interaction run.");
   const provider = {

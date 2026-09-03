@@ -143,13 +143,16 @@ def _base(binary: str) -> None:
 
 
 def _install_rule(
-    network: ipaddress.IPv4Network | ipaddress.IPv6Network, port: str
+    network: ipaddress.IPv4Network | ipaddress.IPv6Network,
+    port: str,
+    interface: str | None = None,
 ) -> None:
     binary = "iptables" if network.version == 4 else "ip6tables"
+    arguments = [binary, "-A", "OUTPUT"]
+    if interface is not None:
+        arguments.extend(["-o", interface])
     _run(
-        binary,
-        "-A",
-        "OUTPUT",
+        *arguments,
         "-p",
         "tcp",
         "-d",
@@ -163,9 +166,117 @@ def _install_rule(
 
 def _install_rules(
     rules: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]],
+    interface: str | None = None,
 ) -> None:
     for network, port in rules:
-        _install_rule(network, port)
+        _install_rule(network, port, interface)
+
+
+def _vpn_material(
+    config: str,
+) -> tuple[str, ipaddress.IPv4Address | ipaddress.IPv6Address, int, str]:
+    remote_line = next(
+        (
+            line
+            for line in config.splitlines()
+            if line.strip().lower().startswith("remote ")
+        ),
+        None,
+    )
+    protocol_line = next(
+        (
+            line
+            for line in config.splitlines()
+            if line.strip().lower().startswith("proto ")
+        ),
+        "proto udp",
+    )
+    if remote_line is None:
+        raise ValueError("VPN profile has no remote")
+    fields = remote_line.split()
+    host = fields[1]
+    port = int(fields[2]) if len(fields) > 2 else 1194
+    protocol = "tcp" if protocol_line.split()[1].lower().startswith("tcp") else "udp"
+    addresses = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM if protocol == "tcp" else socket.SOCK_DGRAM
+    )
+    if not addresses:
+        raise ValueError("VPN remote could not be resolved")
+    address = ipaddress.ip_address(addresses[0][4][0])
+    rewritten = config.replace(remote_line, f"remote {address} {port}", 1)
+    return rewritten, address, port, protocol
+
+
+def _start_vpn(config: str) -> subprocess.Popen[bytes]:
+    rewritten, address, port, protocol = _vpn_material(config)
+    binary = "iptables" if address.version == 4 else "ip6tables"
+    _run(
+        binary,
+        "-A",
+        "OUTPUT",
+        "-o",
+        "eth0",
+        "-p",
+        protocol,
+        "-d",
+        str(address),
+        "--dport",
+        str(port),
+        "-m",
+        "owner",
+        "--uid-owner",
+        "0",
+        "-j",
+        "ACCEPT",
+    )
+    path = Path("/run/nebula-client.ovpn")
+    path.write_text(rewritten, encoding="utf-8")
+    path.chmod(0o600)
+    process = subprocess.Popen(
+        [
+            "openvpn",
+            "--config",
+            str(path),
+            "--dev",
+            "tun0",
+            "--auth-nocache",
+            "--script-security",
+            "1",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.STDOUT,
+    )
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("OpenVPN exited before the tunnel became ready")
+        try:
+            link = subprocess.run(
+                ["ip", "-o", "link", "show", "tun0"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            routes = subprocess.run(
+                ["ip", "route", "show", "dev", "tun0"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            if (
+                "UP" in link.stdout
+                and "0.0.0.0/1" in routes.stdout
+                and "128.0.0.0/1" in routes.stdout
+            ):
+                return process
+        except subprocess.CalledProcessError:
+            pass
+        time.sleep(0.1)
+    process.terminate()
+    raise RuntimeError("OpenVPN tunnel readiness timed out")
 
 
 def _read_name(packet: bytes, offset: int) -> tuple[str, int]:
@@ -320,6 +431,7 @@ class PolicyResolver:
         ports: list[int],
         explicit_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network],
         enabled: bool,
+        interface: str | None = None,
     ) -> None:
         self.domains = domains
         self.ports = [str(port) for port in ports] or ["1:65535"]
@@ -329,6 +441,7 @@ class PolicyResolver:
         self.lock = threading.Lock()
         self.stopped = threading.Event()
         self.enabled = threading.Event()
+        self.interface = interface
         if enabled:
             self.enabled.set()
         self.sockets: list[socket.socket] = []
@@ -397,7 +510,7 @@ class PolicyResolver:
                     for port in self.ports:
                         key = (str(network), port)
                         if key not in self.installed:
-                            _install_rule(network, port)
+                            _install_rule(network, port, self.interface)
                             self.installed.add(key)
             return response
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -473,6 +586,7 @@ def serve(
     domain_ports: list[int],
     *,
     disabled: bool,
+    vpn_config: str | None = None,
 ) -> int:
     legacy = list(map(_rule, values))
     rules = [*legacy, *[_cidr_rule(value) for value in cidr_values]]
@@ -480,12 +594,16 @@ def serve(
         raise ValueError("at least one allow rule or domain is required")
     _base("iptables")
     _base("ip6tables")
+    vpn_process = (
+        _start_vpn(vpn_config) if vpn_config is not None and not disabled else None
+    )
     resolver = (
         PolicyResolver(
             domains=domains,
             ports=domain_ports,
             explicit_networks=[network for network, _port in rules],
             enabled=not disabled,
+            interface="tun0" if vpn_config is not None else None,
         )
         if domains
         else None
@@ -493,7 +611,7 @@ def serve(
     if resolver is not None:
         resolver.start()
     if not disabled:
-        _install_rules(rules)
+        _install_rules(rules, "tun0" if vpn_config is not None else None)
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
     signal.signal(signal.SIGINT, lambda *_: stopped.set())
@@ -501,14 +619,20 @@ def serve(
     try:
         while not stopped.wait(0.1):
             if disabled and ENABLE_REQUEST.exists():
-                _install_rules(rules)
+                if vpn_config is not None:
+                    vpn_process = _start_vpn(vpn_config)
+                _install_rules(rules, "tun0" if vpn_config is not None else None)
                 if resolver is not None:
                     resolver.enable()
                 disabled = False
                 ENABLE_ACK.touch(mode=0o600, exist_ok=True)
+            if vpn_process is not None and vpn_process.poll() is not None:
+                raise RuntimeError("OpenVPN tunnel stopped; egress remains blocked")
     finally:
         if resolver is not None:
             resolver.close()
+        if vpn_process is not None and vpn_process.poll() is None:
+            vpn_process.terminate()
     return 0
 
 
@@ -532,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--domain", action="append", default=[])
     serve_parser.add_argument("--domain-port", action="append", type=int, default=[])
     serve_parser.add_argument("--disabled", action="store_true")
+    serve_parser.add_argument("--vpn-stdin", action="store_true")
     subparsers.add_parser("enable")
     subparsers.add_parser("loopback")
     options = parser.parse_args(argv)
@@ -548,6 +673,7 @@ def main(argv: list[str] | None = None) -> int:
             options.domain,
             options.domain_port,
             disabled=options.disabled,
+            vpn_config=sys.stdin.read() if options.vpn_stdin else None,
         )
     except Exception as exc:
         # diagnostic-expected: this isolated helper reports startup failure to its supervisor.

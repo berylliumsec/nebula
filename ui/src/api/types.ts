@@ -215,7 +215,21 @@ export interface AutomationProjectPolicy {
   approvalPolicy: "always" | "on_boundary" | "never";
   networkEnabled: boolean;
   runnerProfileId?: Identifier;
+  vpnProfileId?: Identifier;
   maxTimeoutMs: number;
+  revision: number;
+}
+
+export interface VpnProfile {
+  id: Identifier;
+  name: string;
+  filename: string;
+  remoteHost: string;
+  remotePort: number;
+  protocol: "udp" | "tcp";
+  fingerprint: string;
+  requiresCredentials: boolean;
+  available: boolean;
   revision: number;
 }
 

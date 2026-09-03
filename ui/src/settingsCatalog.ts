@@ -66,6 +66,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["automation", "runtime", "command", "container", "execution"],
   },
   {
+    id: "settings.vpn-egress",
+    label: "VPN egress profiles",
+    description: "Upload OpenVPN profiles and route project command containers through a tunnel",
+    category: "Automation",
+    scope: "Security",
+    target: "automation-runtime-settings",
+    keywords: ["vpn", "openvpn", "ovpn", "tunnel", "egress", "profile", "kill switch"],
+  },
+  {
     id: "settings.runners",
     label: "Sandbox runners",
     description: "Configure trusted Docker or Podman execution profiles",

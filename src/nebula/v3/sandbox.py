@@ -501,6 +501,7 @@ class EgressController(ABC):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
         raise NotImplementedError
 
@@ -728,6 +729,7 @@ class ContainerEgressController(EgressController):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
         if request.execution_kind != SandboxExecutionKind.NETWORK_TOOL:
             raise SandboxError("egress leases are only valid for network tools")
@@ -756,6 +758,8 @@ class ContainerEgressController(EgressController):
         ]
         if seccomp_profile is not None:
             argv.append(f"--security-opt=seccomp={seccomp_profile}")
+        if vpn_config is not None:
+            argv.extend(["--device=/dev/net/tun", "--interactive"])
         # Containers joining this helper's network namespace cannot accept
         # their own --add-host flags. Put the approved host mappings on the
         # namespace owner so Docker/Podman can share the complete pinned
@@ -763,6 +767,8 @@ class ContainerEgressController(EgressController):
         for host, address in sorted(request.pinned_hosts.items()):
             argv.append(f"--add-host={host}:{_bracket_ip(address)}")
         argv.extend([self.helper_image, "serve"])
+        if vpn_config is not None:
+            argv.append("--vpn-stdin")
         if request.start_egress_disabled:
             argv.append("--disabled")
         for rule in request.egress_rules:
@@ -790,7 +796,11 @@ class ContainerEgressController(EgressController):
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if vpn_config is not None
+                    else asyncio.subprocess.DEVNULL
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=runtime_environment,
@@ -805,6 +815,11 @@ class ContainerEgressController(EgressController):
             )
             raise SandboxUnavailable(f"could not start egress helper: {exc}") from exc
         assert process.stdout is not None
+        if vpn_config is not None:
+            assert process.stdin is not None
+            process.stdin.write(vpn_config.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
         try:
             line = await asyncio.wait_for(
                 process.stdout.readline(), timeout=self.readiness_timeout_seconds
@@ -2108,7 +2123,7 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v5"
+    _recipe_version = "v6"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",
@@ -2117,6 +2132,7 @@ class ContainerImagePreparer:
         "ripgrep",
         "git",
         "curl",
+        "openvpn",
     )
     _security_tool_manifest_path = "/usr/local/share/nebula/security-tools.json"
     _base_label = "org.nebula.human-terminal.base"

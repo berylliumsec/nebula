@@ -97,7 +97,7 @@ def test_policy_dns_opens_only_configured_ports_for_public_answers(monkeypatch):
     monkeypatch.setattr(
         egress_helper,
         "_install_rule",
-        lambda network, port: installed.append((str(network), port)),
+        lambda network, port, interface=None: installed.append((str(network), port)),
     )
 
     result = resolver.resolve(_query("api.example.test"))
@@ -125,7 +125,7 @@ def test_policy_dns_blocks_private_rebinding_unless_cidr_is_explicit(monkeypatch
     monkeypatch.setattr(
         egress_helper,
         "_install_rule",
-        lambda network, port: installed.append((str(network), port)),
+        lambda network, port, interface=None: installed.append((str(network), port)),
     )
     assert allowed.resolve(_query("api.example.test")) == private
     assert installed == [("10.20.30.40/32", "443")]
@@ -140,3 +140,51 @@ def test_policy_dns_stays_closed_until_the_session_grant_is_enabled(monkeypatch)
     resolver._forward = lambda _request: response  # type: ignore[method-assign]
     monkeypatch.setattr(egress_helper, "_install_rule", lambda *_args: None)
     assert resolver.resolve(_query("api.example.test")) == response
+
+
+def test_vpn_remote_is_resolved_once_and_rewritten_to_the_pinned_address(monkeypatch):
+    monkeypatch.setattr(
+        egress_helper.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                egress_helper.socket.AF_INET,
+                egress_helper.socket.SOCK_DGRAM,
+                17,
+                "",
+                ("203.0.113.9", 1194),
+            )
+        ],
+    )
+
+    rewritten, address, port, protocol = egress_helper._vpn_material(
+        "client\ndev tun0\nproto udp\nremote vpn.example.test 1194\n"
+    )
+
+    assert "remote 203.0.113.9 1194" in rewritten
+    assert str(address) == "203.0.113.9"
+    assert (port, protocol) == (1194, "udp")
+
+
+def test_vpn_scoped_dns_rules_are_bound_to_the_tunnel(monkeypatch):
+    monkeypatch.setattr(egress_helper, "_upstream_resolvers", lambda: ["8.8.8.8"])
+    resolver = egress_helper.PolicyResolver(
+        domains=["api.example.test"],
+        ports=[443],
+        explicit_networks=[],
+        enabled=True,
+        interface="tun0",
+    )
+    resolver._forward = lambda _request: _response("api.example.test", "8.8.4.4")  # type: ignore[method-assign]
+    installed = []
+    monkeypatch.setattr(
+        egress_helper,
+        "_install_rule",
+        lambda network, port, interface=None: installed.append(
+            (str(network), port, interface)
+        ),
+    )
+
+    resolver.resolve(_query("api.example.test"))
+
+    assert installed == [("8.8.4.4/32", "443", "tun0")]
