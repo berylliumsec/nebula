@@ -6436,7 +6436,7 @@ def create_app(
             session.vpn_profile_id == profile_id
             and session.status
             not in {AutomationSessionStatus.CLOSED, AutomationSessionStatus.FAILED}
-            for session in store.list_entities(AutomationSession, limit=10_000)
+            for session in store.list_entities(AutomationSession, limit=1_000)
         ):
             raise HTTPException(
                 status_code=409,

@@ -860,6 +860,25 @@ certificate
         )
         assert blocked.status_code == 409
 
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=policy.approval_policy,
+            network_enabled=policy.network_enabled,
+            runner_profile_id=policy.runner_profile_id,
+            vpn_profile_id=None,
+            max_timeout_ms=policy.max_timeout_ms,
+            expected_revision=policy.revision,
+        )
+        removed = client.request(
+            "DELETE",
+            f"/api/v1/vpn-profiles/{profile['id']}",
+            headers=headers,
+            json={"expected_revision": profile["revision"]},
+        )
+        assert removed.status_code == 204
+        assert client.get("/api/v1/vpn-profiles", headers=headers).json() == []
+
 
 def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(
     tmp_path,
