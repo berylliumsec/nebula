@@ -21,8 +21,7 @@ def test_admits_inline_tun_profile_and_forces_full_tunnel():
     assert parsed.remote_port == 1194
     assert parsed.protocol == "udp"
     assert "dev tun0" in parsed.config
-    assert "redirect-gateway def1" in parsed.config
-    assert "redirect-gateway ipv6" in parsed.config
+    assert "redirect-gateway def1 ipv6" in parsed.config
 
 
 def test_admits_ping_timer_rem_without_arguments():

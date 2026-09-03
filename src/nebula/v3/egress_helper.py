@@ -231,6 +231,21 @@ def _vpn_log_detail(config: str, path: Path = VPN_LOG_PATH) -> str:
     return detail.replace(str(Path("/run/nebula-client.ovpn")), "[VPN profile]")
 
 
+def _openvpn_arguments(path: Path) -> list[str]:
+    return [
+        "openvpn",
+        "--config",
+        str(path),
+        "--dev",
+        "tun0",
+        "--auth-nocache",
+        "--script-security",
+        "1",
+        "--tmp-dir",
+        "/run",
+    ]
+
+
 def _start_vpn(config: str) -> subprocess.Popen[bytes]:
     rewritten, address, port, protocol = _vpn_material(config)
     binary = "iptables" if address.version == 4 else "ip6tables"
@@ -258,16 +273,7 @@ def _start_vpn(config: str) -> subprocess.Popen[bytes]:
     path.chmod(0o600)
     with VPN_LOG_PATH.open("wb") as vpn_log:
         process = subprocess.Popen(
-            [
-                "openvpn",
-                "--config",
-                str(path),
-                "--dev",
-                "tun0",
-                "--auth-nocache",
-                "--script-security",
-                "1",
-            ],
+            _openvpn_arguments(path),
             stdin=subprocess.DEVNULL,
             stdout=vpn_log,
             stderr=subprocess.STDOUT,

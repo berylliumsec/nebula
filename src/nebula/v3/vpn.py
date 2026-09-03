@@ -219,8 +219,7 @@ def parse_openvpn_profile(
         [
             "auth-nocache",
             "script-security 1",
-            "redirect-gateway def1",
-            "redirect-gateway ipv6",
+            "redirect-gateway def1 ipv6",
         ]
     )
     admitted = "\n".join(output).rstrip() + "\n"

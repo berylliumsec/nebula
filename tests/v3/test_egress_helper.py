@@ -185,6 +185,14 @@ operator-secret-password
     assert "operator-secret" not in detail
 
 
+def test_openvpn_uses_the_writable_private_runtime_directory():
+    arguments = egress_helper._openvpn_arguments(
+        egress_helper.Path("/run/nebula-client.ovpn")
+    )
+
+    assert arguments[-2:] == ["--tmp-dir", "/run"]
+
+
 def test_vpn_scoped_dns_rules_are_bound_to_the_tunnel(monkeypatch):
     monkeypatch.setattr(egress_helper, "_upstream_resolvers", lambda: ["8.8.8.8"])
     resolver = egress_helper.PolicyResolver(
