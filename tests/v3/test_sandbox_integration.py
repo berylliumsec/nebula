@@ -90,7 +90,7 @@ print('x' * 70000)
             on_chunk=capture,
             container_name="nebula-integration-python",
         )
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.stderr
         assert result.stdout.startswith("stdin=''\n")
         assert result.stdout.count("x") == 70_000
         assert result.stderr == ""
