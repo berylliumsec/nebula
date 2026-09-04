@@ -505,12 +505,14 @@ async def test_public_ip_comes_from_the_live_project_terminal(tmp_path):
     _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
     request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     preview = await service.preflight(request)
-    started = await service.start(ContainerTerminalStartRequest(
-        **request.model_dump(),
-        preview_token=preview.preview_token,
-        preview_fingerprint=preview.preview_fingerprint,
-        client_idempotency_key="public-ip-status",
-    ))
+    started = await service.start(
+        ContainerTerminalStartRequest(
+            **request.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="public-ip-status",
+        )
+    )
     attachment = await service.attach(started.session_id, started.websocket_ticket)
 
     status = await service.engagement_public_ip(engagement.id)

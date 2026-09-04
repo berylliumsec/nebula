@@ -1223,10 +1223,10 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
         "python3",
         "python3-debugpy",
         "ripgrep",
-            "git",
-            "curl",
-            "cron",
-            "openvpn",
+        "git",
+        "curl",
+        "cron",
+        "openvpn",
     )
     assert image.security_tools == ("hashcat", "nmap")
     assert image.security_tool_provenance == (
@@ -1376,7 +1376,10 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert "COPY egress_helper.py /usr/local/bin/nebula-egress" in dockerfiles[0]
-    assert "COPY public_ip_update.py /usr/local/lib/nebula-public-ip-update" in dockerfiles[0]
+    assert (
+        "COPY public_ip_update.py /usr/local/lib/nebula-public-ip-update"
+        in dockerfiles[0]
+    )
     assert "COPY public_ip.cron /etc/cron.d/nebula-public-ip" in dockerfiles[0]
     assert "cron" in dockerfiles[0]
     assert "setcap -r /usr/lib/nmap/nmap" in dockerfiles[0]

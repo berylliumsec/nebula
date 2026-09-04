@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ContainerTerminalPublicIpStatus } from "../api/types";
@@ -55,8 +56,16 @@ export function TopBar({
       try {
         const status = await api.engagementContainerTerminalPublicIp(engagement.id, controller.signal);
         if (!controller.signal.aborted) setPublicIp(status);
-      } catch {
-        if (!controller.signal.aborted) setPublicIp(undefined);
+      } catch (caught) {
+        if (!controller.signal.aborted) {
+          setPublicIp(undefined);
+          void logCaughtDiagnostic(
+            "interface.container_terminal.public_ip_load_failed",
+            "The terminal container public IP could not be refreshed.",
+            caught,
+            "container_terminal",
+          );
+        }
       } finally {
         if (!controller.signal.aborted) timer = globalThis.setTimeout(refresh, 15_000);
       }
