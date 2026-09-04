@@ -1985,10 +1985,8 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
 
 test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {
   let selectedVpnProfile: string | null = null;
-  await page.route("**/api/v1/vpn-profiles", async (route) => route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    body: JSON.stringify([{
+  let savedPersistence: string | null = null;
+  const savedProfiles = [{
       ...entity,
       id: "vpn-preview",
       name: "Company VPN",
@@ -1999,8 +1997,29 @@ test("VPN settings keep upload and project routing calm at every width", async (
       fingerprint: "a".repeat(64),
       requires_credentials: true,
       available: true,
-    }]),
-  }));
+  }];
+  await page.route("**/api/v1/vpn-profiles", async (route) => {
+    if (route.request().method() === "POST") {
+      const request = route.request().postDataJSON();
+      savedPersistence = String(request.persistence);
+      const uploaded = {
+        ...entity,
+        id: "vpn-uploaded",
+        name: request.name,
+        filename: request.filename,
+        remote_host: "uk.example.test",
+        remote_port: 1194,
+        protocol: "udp",
+        fingerprint: "b".repeat(64),
+        requires_credentials: true,
+        available: true,
+      };
+      savedProfiles.unshift(uploaded);
+      await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify(uploaded) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(savedProfiles) });
+  });
   await page.route("**/api/v1/engagements/*/automation-policy", async (route) => {
     if (route.request().method() === "PUT") {
       selectedVpnProfile = String(route.request().postDataJSON().vpn_profile_id);
@@ -2033,6 +2052,19 @@ test("VPN settings keep upload and project routing calm at every width", async (
   await expect(section.getByText("In use", { exact: true })).toBeVisible();
   await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
   expect(selectedVpnProfile).toBe("vpn-preview");
+  await section.locator('input[type="file"]').setInputFiles({
+    name: "project.ovpn",
+    mimeType: "application/x-openvpn-profile",
+    buffer: Buffer.from("client\ndev tun\nremote uk.example.test 1194\nremote-cert-tls server\n"),
+  });
+  await section.getByText("Credentials and storage").click();
+  await section.getByLabel("Username").fill("project-user");
+  await section.getByLabel("Password").fill("project-password");
+  await section.getByRole("button", { name: "Save for project" }).click();
+  await expect(section.getByText("project", { exact: true })).toBeVisible();
+  await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
+  expect(savedPersistence).toBe("vault");
+  expect(selectedVpnProfile).toBe("vpn-uploaded");
   const geometry = await section.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,

@@ -58,6 +58,23 @@ from nebula.v3.tool_results import (
 IMAGE = "registry.invalid/nebula-automation@sha256:" + "a" * 64
 
 
+class DurableTestKeyring:
+    __module__ = "keyring.backends.SecretService"
+    priority = 1
+
+    def __init__(self):
+        self.values = {}
+
+    def set_password(self, service_name, username, password):
+        self.values[(service_name, username)] = password
+
+    def get_password(self, service_name, username):
+        return self.values.get((service_name, username))
+
+    def delete_password(self, service_name, username):
+        self.values.pop((service_name, username), None)
+
+
 def test_all_target_scope_compiles_to_dual_stack_all_port_egress():
     rules, domains = AutomationRuntimeManager._network_boundary(
         AutomationProjectPolicy(engagement_id="eng-1", network_enabled=True),
@@ -883,6 +900,79 @@ certificate
         )
         assert removed.status_code == 204
         assert client.get("/api/v1/vpn-profiles", headers=headers).json() == []
+
+
+def test_project_vpn_selection_and_vault_secret_survive_core_restart(tmp_path):
+    manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+    backend = DurableTestKeyring()
+    credentials = CredentialStore(backend)
+    app = create_app(
+        store,
+        artifact_store=artifacts,
+        auth_token="runtime-test-token",
+        automation_runtime=manager,
+        credential_store=credentials,
+    )
+    headers = {"Authorization": "Bearer runtime-test-token"}
+    config = """client
+dev tun
+proto udp
+remote vpn.example.test 1194
+remote-cert-tls server
+auth-user-pass
+<ca>
+certificate
+</ca>
+"""
+
+    with TestClient(app) as client:
+        profile = client.post(
+            "/api/v1/vpn-profiles",
+            headers=headers,
+            json={
+                "name": "Persistent project VPN",
+                "filename": "project.ovpn",
+                "config": config,
+                "username": "project-user",
+                "password": "project-password",
+                "persistence": "vault",
+            },
+        ).json()
+        policy = client.get(
+            f"/api/v1/engagements/{engagement.id}/automation-policy",
+            headers=headers,
+        ).json()
+        selected = client.put(
+            f"/api/v1/engagements/{engagement.id}/automation-policy",
+            headers=headers,
+            json={
+                "approval_policy": policy["approval_policy"],
+                "network_enabled": True,
+                "runner_profile_id": policy["runner_profile_id"],
+                "vpn_profile_id": profile["id"],
+                "max_timeout_ms": policy["max_timeout_ms"],
+                "expected_revision": policy["revision"],
+            },
+        )
+        assert selected.status_code == 200, selected.text
+
+    restarted_store = NebulaStore(tmp_path / "nebula.db")
+    restarted_credentials = CredentialStore(backend)
+    persisted_profile = restarted_store.get(VpnProfile, profile["id"])
+    persisted_policy = restarted_store.get(
+        AutomationProjectPolicy, selected.json()["id"]
+    )
+
+    assert persisted_policy.engagement_id == engagement.id
+    assert persisted_policy.vpn_profile_id == persisted_profile.id
+    assert restarted_credentials.status(persisted_profile.secret_ref).available is True
+    assert (
+        "project-user\nproject-password"
+        in restarted_credentials.resolve(
+            persisted_profile.secret_ref
+        ).get_secret_value()
+    )
+    assert b"project-password" not in (tmp_path / "nebula.db").read_bytes()
 
 
 def test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared(
