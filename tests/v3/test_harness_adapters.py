@@ -342,6 +342,48 @@ def test_grok_probe_negotiates_cached_token_without_credentials():
     asyncio.run(scenario())
 
 
+def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_path):
+    observed: dict[str, Any] = {}
+
+    class Process:
+        stdin = SimpleNamespace()
+        stdout = SimpleNamespace()
+        stderr = SimpleNamespace()
+
+    async def create_process(*argv: str, **kwargs: Any) -> Process:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(_AcpRpc, "start", lambda self: asyncio.sleep(0))
+    executable = tmp_path / "grok"
+    executable.write_text("", encoding="utf-8")
+    profile = HarnessProfile(
+        id="grok-a",
+        name="Grok",
+        kind=HarnessKind.GROK_ACP,
+        executable=str(executable),
+    )
+    session = HarnessSession(
+        id="session-a",
+        engagement_id="eng-a",
+        harness_profile_id=profile.id,
+        model="grok-test",
+    )
+
+    rpc = asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
+
+    argv = observed["argv"]
+    disallowed = argv[argv.index("--disallowed-tools") + 1].split(",")
+    assert "run_terminal_command" in disallowed
+    assert "read_file" in disallowed
+    assert "write" in disallowed
+    assert argv[argv.index("--disallowed-tools") + 2] == "agent"
+    assert observed["kwargs"]["cwd"] == str(tmp_path)
+    assert isinstance(rpc, _AcpRpc)
+
+
 def test_grok_connection_normalizes_mode_plan_and_streamed_message():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()

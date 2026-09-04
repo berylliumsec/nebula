@@ -4213,6 +4213,21 @@ async def _grok_model_catalog(
 class GrokAcpAdapter(HarnessAdapter):
     kind = HarnessKind.GROK_ACP
 
+    # ACP's terminal capability flag describes client-provided terminals. Grok also
+    # ships its own host-backed workspace tools, so remove those at process launch;
+    # project I/O and commands must cross the audited Nebula MCP gateway instead.
+    _DISALLOWED_HOST_TOOLS = (
+        "get_command_or_subagent_output",
+        "grep",
+        "kill_command_or_subagent",
+        "list_dir",
+        "monitor",
+        "read_file",
+        "run_terminal_command",
+        "search_replace",
+        "write",
+    )
+
     async def _connect(
         self,
         profile: HarnessProfile,
@@ -4226,7 +4241,12 @@ class GrokAcpAdapter(HarnessAdapter):
             raise HarnessConfigurationError(
                 "Grok executable must be an existing absolute file"
             )
-        command = [str(executable), "agent"]
+        command = [
+            str(executable),
+            "--disallowed-tools",
+            ",".join(self._DISALLOWED_HOST_TOOLS),
+            "agent",
+        ]
         if session is not None:
             command.extend(["--model", session.model])
             raw_options = session.metadata.get("runtime_options")
