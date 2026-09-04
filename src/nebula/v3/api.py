@@ -582,6 +582,26 @@ class CodeCompletionResponse(NebulaModel):
     items: list[dict[str, Any]] = Field(default_factory=list, max_length=30)
 
 
+class HostWorkspaceFolderCreateRequest(NebulaModel):
+    parent_path: str = Field(min_length=1, max_length=4096)
+    name: str = Field(min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def folder_name_is_one_portable_component(
+        self,
+    ) -> "HostWorkspaceFolderCreateRequest":
+        if (
+            self.name in {".", ".."}
+            or "/" in self.name
+            or "\\" in self.name
+            or any(ord(character) < 32 for character in self.name)
+        ):
+            raise ValueError("folder name must be one path component")
+        if len(self.name.encode("utf-8")) > 255:
+            raise ValueError("folder name is too long for the host filesystem")
+        return self
+
+
 class EventList(NebulaModel):
     events: list[RunEvent]
     next_sequence: int
@@ -5142,6 +5162,52 @@ def create_app(
             "directories": directories,
             "truncated": len(directories) >= 500,
         }
+
+    @app.post(
+        f"{API_PREFIX}/workspace-folders",
+        status_code=201,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_host_workspace_folder(
+        request: HostWorkspaceFolderCreateRequest,
+    ) -> dict[str, Any]:
+        requested_parent = Path(request.parent_path).expanduser()
+        if not requested_parent.is_absolute():
+            raise HTTPException(
+                status_code=422, detail="parent folder path must be absolute"
+            )
+        try:
+            parent = requested_parent.resolve(strict=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=404, detail="parent folder is unavailable"
+            ) from exc
+        if not parent.is_dir():
+            raise HTTPException(status_code=422, detail="parent path is not a folder")
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                parent,
+                os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            os.mkdir(request.name, mode=0o700, dir_fd=descriptor)
+        except FileExistsError as exc:
+            raise HTTPException(
+                status_code=409, detail="folder already exists"
+            ) from exc
+        except PermissionError as exc:
+            raise HTTPException(
+                status_code=403, detail="folder cannot be created"
+            ) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status_code=422, detail="folder cannot be created"
+            ) from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return await list_host_workspace_folders(str(parent / request.name))
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",

@@ -7161,6 +7161,26 @@ export class ApiClient {
     }));
   }
 
+  createHostWorkspaceFolder(parentPath: string, name: string): Promise<{
+    path: string;
+    parent?: string;
+    directories: Array<{ name: string; path: string }>;
+    truncated: boolean;
+  }> {
+    return this.request<{
+      path: string;
+      parent?: string | null;
+      directories: Array<{ name: string; path: string }>;
+      truncated: boolean;
+    }>("workspace-folders", {
+      method: "POST",
+      body: JSON.stringify({ parent_path: parentPath, name }),
+    }).then((value) => ({
+      ...value,
+      parent: value.parent ?? undefined,
+    }));
+  }
+
   previewWorkspaceFile(
     engagementId: string,
     path: string,

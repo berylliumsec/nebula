@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { ModalSurface } from "./DialogSystem";
+import { DialogProvider, ModalSurface, useDialogOpen } from "./DialogSystem";
 
 function DialogHarness() {
   const [open, setOpen] = useState(false);
@@ -14,6 +14,10 @@ function DialogHarness() {
       <button type="submit">Save</button>
     </ModalSurface>}
   </>;
+}
+
+function DialogState() {
+  return <output aria-label="Dialog state">{useDialogOpen() ? "open" : "closed"}</output>;
 }
 
 describe("ModalSurface", () => {
@@ -36,5 +40,15 @@ describe("ModalSurface", () => {
     await user.click(screen.getByRole("button", { name: "Open dialog" }));
     await user.click(container.querySelector(".dialog-backdrop") as HTMLElement);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("publishes ordinary modal presence to native-surface consumers", async () => {
+    const user = userEvent.setup();
+    render(<DialogProvider><DialogState /><DialogHarness /></DialogProvider>);
+    expect(screen.getByLabelText("Dialog state")).toHaveTextContent("closed");
+    await user.click(screen.getByRole("button", { name: "Open dialog" }));
+    expect(screen.getByLabelText("Dialog state")).toHaveTextContent("open");
+    await user.keyboard("{Escape}");
+    expect(screen.getByLabelText("Dialog state")).toHaveTextContent("closed");
   });
 });
