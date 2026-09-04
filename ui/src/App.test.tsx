@@ -101,7 +101,7 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
   });
 
-  it("defaults to Zero Dark and preserves the three supported preferences", () => {
+  it("defaults to Zero Dark and preserves all four supported preferences", () => {
     const firstRender = renderApp();
     expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
     expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
@@ -126,8 +126,10 @@ describe("Nebula workspace", () => {
 
     localStorage.setItem("nebula.theme", "zero-light");
     renderApp();
-    expect(document.documentElement).toHaveAttribute("data-theme", "light");
-    expect(localStorage.getItem("nebula.theme")).toBe("light");
+    expect(document.documentElement).toHaveAttribute("data-theme", "zero-light");
+    expect(document.documentElement.style.colorScheme).toBe("light");
+    expect(document.querySelector(".app-shell")).toHaveClass("zero-layer-shell");
+    expect(localStorage.getItem("nebula.theme")).toBe("zero-light");
   });
 
   it("restores legacy mission links to the Workbench mission view", async () => {
@@ -146,16 +148,17 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
   });
 
-  it("offers Light, Dark, and Zero Dark", async () => {
+  it("offers Light, Dark, Zero Light, and Zero Dark", async () => {
     const user = userEvent.setup();
     renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     await user.click(screen.getByRole("link", { name: "Advanced settings" }));
     await user.click(screen.getByText("Identity & Security", { selector: "summary strong" }));
     const options = screen.getByRole("heading", { name: "Appearance" }).closest("section")!;
-    expect(within(options).getAllByRole("button")).toHaveLength(3);
+    expect(within(options).getAllByRole("button")).toHaveLength(4);
     expect(within(options).getByRole("button", { name: /^Light$/ })).toBeVisible();
     expect(within(options).getByRole("button", { name: /^Dark$/ })).toBeVisible();
+    expect(within(options).getByRole("button", { name: /^Zero Light$/ })).toBeVisible();
     await user.click(within(options).getByRole("button", { name: /Zero Dark/ }));
     expect(document.documentElement).toHaveAttribute("data-theme", "zero-dark");
     expect(localStorage.getItem("nebula.theme")).toBe("zero-dark");

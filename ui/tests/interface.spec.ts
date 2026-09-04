@@ -1098,7 +1098,7 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("theme picker offers Light, Dark, and Zero Dark and persists the selection", async ({ page }) => {
+test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
   await openWorkspace(page, "/settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
@@ -1107,6 +1107,7 @@ test("theme picker offers Light, Dark, and Zero Dark and persists the selection"
   for (const [label, theme, zeroShell] of [
     ["Light", "light", false],
     ["Dark", "dark", false],
+    ["Zero Light", "zero-light", true],
     ["Zero Dark", "zero-dark", true],
   ] as const) {
     await appearance.getByRole("button", { name: label, exact: true }).click();

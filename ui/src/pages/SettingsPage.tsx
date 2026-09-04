@@ -22,6 +22,7 @@ import { isTauriRuntime } from "../api/runtime";
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "Light", icon: Sun },
   { value: "dark", label: "Dark", icon: Moon },
+  { value: "zero-light", label: "Zero Light", icon: Sun },
   { value: "zero-dark", label: "Zero Dark", icon: Moon },
 ];
 
