@@ -561,7 +561,8 @@
   :root { --side-width: 58px; }
   .page { padding: 20px 15px 42px; }
   .top-bar { padding-inline: 11px; }
-  .top-bar-title, .command-trigger span, .connection-chip span { display: none; }
+  .top-bar-title, .command-trigger span, .connection-chip span, .top-bar-public-ip > span { display: none; }
+  .top-bar-public-ip { max-width: 142px; padding-inline: 7px; }
   .connection-chip { width: 32px; justify-content: center; padding-inline: 0; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .mission-stage-builder > header { align-items: flex-start; flex-direction: column; }

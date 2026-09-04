@@ -152,6 +152,7 @@ from .container_terminal import (
     ContainerTerminalOutput,
     ContainerTerminalPreflightRequest,
     ContainerTerminalPreflightResponse,
+    ContainerTerminalPublicIpStatus,
     ContainerTerminalRecoveryListResponse,
     ContainerTerminalRecoveryResponse,
     ContainerTerminalService,
@@ -4007,6 +4008,32 @@ def create_app(
     ) -> ContainerTerminalCapacity:
         response.headers["Cache-Control"] = "private, no-store"
         return await require_container_terminal_service().capacity()
+
+    @app.get(
+        f"{API_PREFIX}/container-terminals/{{session_id}}/public-ip",
+        response_model=ContainerTerminalPublicIpStatus,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def container_terminal_public_ip(
+        session_id: str, response: Response
+    ) -> ContainerTerminalPublicIpStatus:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await require_container_terminal_service().public_ip(session_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/public-ip",
+        response_model=ContainerTerminalPublicIpStatus,
+        tags=["container-terminal"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def engagement_container_terminal_public_ip(
+        engagement_id: str, response: Response
+    ) -> ContainerTerminalPublicIpStatus:
+        response.headers["Cache-Control"] = "private, no-store"
+        return await require_container_terminal_service().engagement_public_ip(
+            engagement_id
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/container-terminal/recover",

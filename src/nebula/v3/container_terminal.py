@@ -12,6 +12,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -19,7 +20,7 @@ import secrets
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from time import monotonic
 from typing import AsyncIterator, Callable, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -315,6 +316,12 @@ class ContainerTerminalCapacity(NebulaModel):
     max_active_sessions: int = Field(ge=1, le=32)
 
 
+class ContainerTerminalPublicIpStatus(NebulaModel):
+    address: str
+    observed_at: datetime
+    stale: bool = False
+
+
 @dataclass(frozen=True)
 class _PreparedTerminal:
     resolution: HumanTerminalRuntimeResolution
@@ -553,6 +560,55 @@ class ContainerTerminalService:
                 available_sessions=max(0, self.max_active - active),
                 max_active_sessions=self.max_active,
             )
+
+    async def public_ip(self, session_id: str) -> ContainerTerminalPublicIpStatus:
+        async with self._lock:
+            session = self._require_session_locked(session_id)
+            process = session.process
+            if process is None or session.state != "running":
+                raise ContainerTerminalError(
+                    "public_ip_pending",
+                    "public IP is still being checked inside the container",
+                    status_code=503,
+                )
+        try:
+            raw = await process.read_public_ip_status()
+            lines = raw.splitlines()
+            if len(lines) != 2:
+                raise ValueError("unexpected public IP status shape")
+            address = str(ipaddress.ip_address(lines[0].strip()))
+            observed_at = datetime.fromtimestamp(int(lines[1]), tz=timezone.utc)
+        except (OSError, ValueError, SandboxError) as exc:
+            raise ContainerTerminalError(
+                "public_ip_unavailable",
+                "the container has not reported a valid public IP yet",
+                status_code=503,
+            ) from exc
+        return ContainerTerminalPublicIpStatus(
+            address=address,
+            observed_at=observed_at,
+            stale=(utc_now() - observed_at).total_seconds() > 600,
+        )
+
+    async def engagement_public_ip(
+        self, engagement_id: str
+    ) -> ContainerTerminalPublicIpStatus:
+        async with self._lock:
+            candidates = [
+                session
+                for session in self._sessions.values()
+                if session.request.engagement_id == engagement_id
+                and session.state == "running"
+                and session.process is not None
+            ]
+            if not candidates:
+                raise ContainerTerminalError(
+                    "public_ip_unavailable",
+                    "start a terminal to observe its container public IP",
+                    status_code=404,
+                )
+            session_id = max(candidates, key=lambda item: item.created_at).id
+        return await self.public_ip(session_id)
 
     @asynccontextmanager
     async def guard_workspace_operation(
@@ -2257,6 +2313,7 @@ __all__ = [
     "ContainerTerminalOutput",
     "ContainerTerminalPreflightRequest",
     "ContainerTerminalPreflightResponse",
+    "ContainerTerminalPublicIpStatus",
     "ContainerTerminalRecoveryResponse",
     "ContainerTerminalRuntimeSnapshot",
     "ContainerTerminalSecuritySnapshot",

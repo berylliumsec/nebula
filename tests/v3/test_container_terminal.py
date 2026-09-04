@@ -150,6 +150,9 @@ class ControllableTerminalProcess:
         await self._exited.wait()
         return self._exit_code
 
+    async def read_public_ip_status(self) -> str:
+        return "203.0.113.42\n1788518400\n"
+
     async def emit(self, data: bytes) -> None:
         await self._chunks.put(data)
 
@@ -495,6 +498,27 @@ async def test_concurrent_same_project_starts_reserve_unique_sessions_atomically
     assert (await service.capacity()).active_sessions == 8
     for item in started:
         await service.close(item.session_id)
+
+
+@async_test
+async def test_public_ip_comes_from_the_live_project_terminal(tmp_path):
+    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    started = await service.start(ContainerTerminalStartRequest(
+        **request.model_dump(),
+        preview_token=preview.preview_token,
+        preview_fingerprint=preview.preview_fingerprint,
+        client_idempotency_key="public-ip-status",
+    ))
+    attachment = await service.attach(started.session_id, started.websocket_ticket)
+
+    status = await service.engagement_public_ip(engagement.id)
+
+    assert status.address == "203.0.113.42"
+    assert status.observed_at.isoformat() == "2026-09-04T10:40:00+00:00"
+    await service.detach(attachment)
+    await service.close(started.session_id)
 
 
 @async_test

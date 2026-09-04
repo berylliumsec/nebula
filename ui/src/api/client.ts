@@ -16,6 +16,7 @@ import type {
   ContainerTerminalCapacity,
   ContainerTerminalCapabilities,
   ContainerTerminalPreflight,
+  ContainerTerminalPublicIpStatus,
   ContainerTerminalRequest,
   ContainerTerminalRecovery,
   ContainerTerminalRecoveryList,
@@ -1738,6 +1739,12 @@ interface WireContainerTerminalCapacity extends JsonObject {
   active_sessions: number;
   available_sessions: number;
   max_active_sessions: number;
+}
+
+interface WireContainerTerminalPublicIpStatus extends JsonObject {
+  address: string;
+  observed_at: string;
+  stale: boolean;
 }
 
 interface WireWorkspaceListing extends JsonObject {
@@ -6710,6 +6717,34 @@ export class ApiClient {
       activeSessions: value.active_sessions,
       availableSessions: value.available_sessions,
       maxActiveSessions: value.max_active_sessions,
+    }));
+  }
+
+  containerTerminalPublicIp(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalPublicIpStatus> {
+    return this.request<WireContainerTerminalPublicIpStatus>(
+      `container-terminals/${encodeURIComponent(sessionId)}/public-ip`,
+      { signal },
+    ).then((value) => ({
+      address: value.address,
+      observedAt: value.observed_at,
+      stale: value.stale,
+    }));
+  }
+
+  engagementContainerTerminalPublicIp(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ContainerTerminalPublicIpStatus> {
+    return this.request<WireContainerTerminalPublicIpStatus>(
+      `engagements/${encodeURIComponent(engagementId)}/container-terminal/public-ip`,
+      { signal },
+    ).then((value) => ({
+      address: value.address,
+      observedAt: value.observed_at,
+      stale: value.stale,
     }));
   }
 

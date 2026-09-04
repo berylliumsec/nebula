@@ -159,6 +159,25 @@ describe("ApiClient", () => {
     });
   });
 
+  it("maps the active terminal container public IP status", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      address: "203.0.113.42",
+      observed_at: "2026-09-04T10:40:00Z",
+      stale: false,
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", token: "test-token", fetch: fetchMock });
+
+    await expect(client.engagementContainerTerminalPublicIp("project/one")).resolves.toEqual({
+      address: "203.0.113.42",
+      observedAt: "2026-09-04T10:40:00Z",
+      stale: false,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8765/api/v1/engagements/project%2Fone/container-terminal/public-ip",
+      expect.objectContaining({ credentials: "same-origin" }),
+    );
+  });
+
   it("summarizes validation arrays without copying oversized inputs into the error", async () => {
     const client = new ApiClient({
       fetch: vi.fn<typeof fetch>().mockResolvedValue(
