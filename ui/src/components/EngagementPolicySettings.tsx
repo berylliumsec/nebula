@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { AutomationProjectPolicy, EngagementScopePolicy } from "../api/types";
+import type { AutomationProjectPolicy, EngagementScopePolicy, VpnProfile } from "../api/types";
+import { ApiError } from "../api/client";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -88,6 +89,8 @@ export function EngagementPolicySettings() {
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [approvalPolicy, setApprovalPolicy] = useState<AutomationProjectPolicy["approvalPolicy"]>("on_boundary");
   const [networkEnabled, setNetworkEnabled] = useState(false);
+  const [vpnProfileId, setVpnProfileId] = useState("");
+  const [vpnProfiles, setVpnProfiles] = useState<VpnProfile[]>([]);
   const [maxTimeoutMs, setMaxTimeoutMs] = useState(300_000);
   const [saving, setSaving] = useState<"scope" | "runtime">();
   const [error, setError] = useState<unknown>();
@@ -111,6 +114,7 @@ export function EngagementPolicySettings() {
     setPolicy(next);
     setApprovalPolicy(next.approvalPolicy);
     setNetworkEnabled(next.networkEnabled);
+    setVpnProfileId(next.vpnProfileId ?? "");
     setMaxTimeoutMs(next.maxTimeoutMs);
   };
 
@@ -118,12 +122,18 @@ export function EngagementPolicySettings() {
     if (!api || coreState !== "online" || !engagement) return;
     setError(undefined);
     try {
-      const [nextScope, nextPolicy] = await Promise.all([
+      const [nextScope, nextPolicy, nextVpnProfiles] = await Promise.all([
         api.getEngagementScope(engagement.id),
         api.getAutomationPolicy(engagement.id),
+        api.listVpnProfiles().catch((vpnError) => {
+          if (vpnError instanceof ApiError && (vpnError.status === 404 || vpnError.status === 501)) return [];
+          void logCaughtDiagnostic("interface.engagement_policy.vpn_profiles_unavailable", "VPN profiles are unavailable in this Core build.", vpnError, "engagement_policy");
+          return Promise.reject(vpnError);
+        }),
       ]);
       applyScope(nextScope);
       applyPolicy(nextPolicy);
+      setVpnProfiles(nextVpnProfiles);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.execution_policy.caught_failure_01", "A handled interface operation failed.", loadError, "execution_policy");
       setError(loadError instanceof Error ? loadError.message : "Could not load project execution policy.");
@@ -200,6 +210,7 @@ export function EngagementPolicySettings() {
         approvalPolicy,
         networkEnabled,
         runnerProfileId: policy.runnerProfileId,
+        vpnProfileId: vpnProfileId || undefined,
         maxTimeoutMs,
         expectedRevision: policy.revision,
       }));
@@ -221,6 +232,7 @@ export function EngagementPolicySettings() {
           <label>Approval policy<select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as AutomationProjectPolicy["approvalPolicy"])}><option value="on_boundary">On boundary · prompt once for project networking</option><option value="always">Always · prompt before every command</option><option value="never">Never · run without prompts</option></select></label>
           <label>Maximum command timeout (milliseconds)<input type="number" min={1000} max={86400000} value={maxTimeoutMs} onChange={(event) => setMaxTimeoutMs(Number(event.target.value))} /></label>
           <label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Make project-scoped networking available</strong><small>The session receives the complete validated CIDR/domain/port policy. An approval never expands that scope.</small></span></label>
+          <label>VPN route<select value={vpnProfileId} disabled={!networkEnabled} onChange={(event) => setVpnProfileId(event.target.value)}><option value="">Direct, scope-filtered egress</option>{vpnProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.available}>{profile.name} · {profile.protocol.toUpperCase()} {profile.remoteHost}</option>)}</select><small>{vpnProfileId ? "New command sessions must establish this tunnel before network access is released." : "Select a saved profile to route authorized container traffic through OpenVPN."}</small></label>
           <footer><span>Existing sessions keep their frozen policy revision.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime"}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
         </div>
       </form>

@@ -870,7 +870,23 @@ class AutomationProjectPolicy(Entity):
     approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
+    vpn_profile_id: str | None = Field(default=None, max_length=200)
     max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class VpnProfile(Entity):
+    """Public metadata for an OpenVPN profile; secret material stays in the vault."""
+
+    entity_kind: ClassVar[str] = "vpn_profiles"
+    name: str = Field(min_length=1, max_length=120)
+    filename: str = Field(min_length=1, max_length=255)
+    remote_host: str = Field(min_length=1, max_length=253)
+    remote_port: int = Field(ge=1, le=65_535)
+    protocol: str = Field(pattern=r"^(udp|tcp)$")
+    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    requires_credentials: bool = False
+    secret_ref: str = Field(min_length=1, max_length=200)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -889,6 +905,8 @@ class AutomationSession(Entity):
     policy_revision: int = Field(ge=1)
     scope_policy_id: str | None = Field(default=None, max_length=200)
     scope_policy_revision: int | None = Field(default=None, ge=1)
+    vpn_profile_id: str | None = Field(default=None, max_length=200)
+    vpn_profile_revision: int | None = Field(default=None, ge=1)
     status: AutomationSessionStatus = AutomationSessionStatus.STARTING
     network_granted: bool = False
     started_at: datetime = Field(default_factory=utc_now)
@@ -900,6 +918,8 @@ class AutomationSession(Entity):
     def scope_snapshot_is_complete(self) -> "AutomationSession":
         if (self.scope_policy_id is None) != (self.scope_policy_revision is None):
             raise ValueError("automation scope id and revision must be stored together")
+        if (self.vpn_profile_id is None) != (self.vpn_profile_revision is None):
+            raise ValueError("automation VPN id and revision must be stored together")
         return self
 
 
@@ -3911,6 +3931,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     Engagement,
     ScopePolicy,
     AutomationProjectPolicy,
+    VpnProfile,
     AutomationSession,
     CommandExecution,
     RunnerProfile,

@@ -28,8 +28,6 @@ export function HarnessSettings() {
   const [harnessSessionCredential, setHarnessSessionCredential] = useState(false);
   const [harnessLocalOnly, setHarnessLocalOnly] = useState(false);
   const [harnessSensitiveData, setHarnessSensitiveData] = useState(false);
-  const [nativeWorkspaceAccess, setNativeWorkspaceAccess] = useState<"none" | "read" | "write">("none");
-  const [nativeShell, setNativeShell] = useState(false);
   const [nativeWebSearch, setNativeWebSearch] = useState(false);
   const [nativeBrowser, setNativeBrowser] = useState(false);
   const [nativeComputerUse, setNativeComputerUse] = useState(false);
@@ -89,8 +87,6 @@ export function HarnessSettings() {
     setHarnessSessionCredential(false);
     setHarnessLocalOnly(profile?.localOnly ?? false);
     setHarnessSensitiveData(profile?.permitsSensitiveData ?? false);
-    setNativeWorkspaceAccess(profile?.nativeCapabilities.workspaceAccess ?? "write");
-    setNativeShell(profile?.nativeCapabilities.shell ?? nextKind === "grok_acp");
     setNativeWebSearch(profile?.nativeCapabilities.webSearch ?? false);
     setNativeBrowser(profile?.nativeCapabilities.browser ?? false);
     setNativeComputerUse(profile?.nativeCapabilities.computerUse ?? false);
@@ -130,8 +126,8 @@ export function HarnessSettings() {
           permits_sensitive_data: harnessSensitiveData,
         },
         native_capabilities: {
-          workspace_access: nativeWorkspaceAccess,
-          shell: nativeShell,
+          workspace_access: "none",
+          shell: false,
           web_search: nativeWebSearch,
           web_fetch: false,
           browser: kind === "codex_app_server" && nativeBrowser,
@@ -248,8 +244,8 @@ export function HarnessSettings() {
     const capabilities = { ...profile.nativeCapabilities, ...changes };
     return updateHarness(profile, {
       native_capabilities: {
-        workspace_access: capabilities.workspaceAccess,
-        shell: capabilities.shell,
+        workspace_access: "none",
+        shell: false,
         web_search: capabilities.webSearch,
         web_fetch: false,
         browser: profile.kind === "codex_app_server" && capabilities.browser,
@@ -276,9 +272,7 @@ export function HarnessSettings() {
         <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
         <details className="provider-capability-policy">
           <summary>Vendor-native capabilities</summary>
-          <p className="provider-dialog-note">Opt-in capabilities are frozen when a new harness session starts. Project actions use the session-scoped command runtime.</p>
-          <label>Project workspace<select value={profile.nativeCapabilities.workspaceAccess} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { workspaceAccess: event.target.value as HarnessNativeCapabilities["workspaceAccess"] })}><option value="none">Disabled</option><option value="read">Read only</option><option value="write">Read and write</option></select></label>
-          <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.shell} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { shell: event.target.checked })} /><span><strong>Native shell</strong><small>Commands run from the selected project folder with Nebula approval.</small></span></label>
+          <p className="provider-dialog-note"><ShieldAlert size={14} /> Project files and commands use Nebula's pinned automation container at <code>/workspace</code>. The vendor harness has no host workspace or native shell access.</p>
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.webSearch} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { webSearch: event.target.checked })} /><span><strong>Web search</strong><small>Vendor-hosted research, never target scanning.</small></span></label>
           {profile.kind === "codex_app_server" && <><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.browser} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { browser: event.target.checked })} /><span><strong>Browser</strong><small>Browser-driven research with action approvals.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.computerUse} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { computerUse: event.target.checked })} /><span><strong>Computer use</strong><small>Interactive vendor computer-use surface.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.imageGeneration} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { imageGeneration: event.target.checked })} /><span><strong>Image generation</strong><small>Vendor-hosted analyst image generation.</small></span></label></>}
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
@@ -316,7 +310,7 @@ export function HarnessSettings() {
         <p className="provider-dialog-note">{harnessModelOptions.length ? "Choose a model reported by the harness, or use its automatic default." : "Saving runs a harness check and discovers available models and modes."}</p>
         <label className="provider-consent"><input type="checkbox" checked={harnessLocalOnly} onChange={(event) => setHarnessLocalOnly(event.target.checked)} /><span><strong>Model runtime is local</strong><small>Only enable when prompts and outputs do not leave this machine.</small></span></label>
         <label className="provider-consent"><input type="checkbox" checked={harnessSensitiveData} onChange={(event) => setHarnessSensitiveData(event.target.checked)} /><span><strong>Permit project/document data</strong><small>Allow bounded excerpts in knowledge-enabled requests. Local-only items remain blocked.</small></span></label>
-        <p className="provider-dialog-note">Nebula launches absolute executables directly, never through a shell or ambient PATH search. Native workspace, shell, web, skills, and subagent capabilities remain disabled until explicitly enabled and are frozen per session.</p>
+        <p className="provider-dialog-note">Nebula launches the harness executable directly, but project files and commands are available only through the pinned automation container. Optional web, skills, and subagent capabilities are frozen per session.</p>
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer><button className="button secondary" type="button" onClick={() => setHarnessDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(busy) || !name.trim()}>{busy ? "Saving and checking…" : "Save harness"}</button></footer>
     </ModalSurface>}

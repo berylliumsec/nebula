@@ -20,6 +20,7 @@ import type {
   ContainerTerminalRequest,
   ContainerTerminalPublishedPort,
   ContainerTerminalRuntimeSnapshot,
+  ContainerTerminalNetworkSnapshot,
   ContainerTerminalSession,
   EvidenceSummary,
   EvidenceUploadRequest,
@@ -59,6 +60,7 @@ interface StartingTerminalTab {
   imagePreparation?: SetupImagePreparation;
   error?: string;
   publishedPorts: ContainerTerminalPublishedPort[];
+  network?: ContainerTerminalNetworkSnapshot;
 }
 
 interface LiveTerminalTab {
@@ -67,12 +69,19 @@ interface LiveTerminalTab {
   ordinal: number;
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
+  network: ContainerTerminalNetworkSnapshot;
   socketState: ContainerTerminalSocketState;
   exit?: ContainerTerminalExit;
   error?: string;
 }
 
 type TerminalTab = StartingTerminalTab | LiveTerminalTab;
+
+const DIRECT_TERMINAL_NETWORK: ContainerTerminalNetworkSnapshot = {
+  mode: "unrestricted",
+  runtimeNetwork: "bridge",
+  publishedPorts: [],
+};
 
 function idempotencyKey(): string {
   return `container-terminal-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`;
@@ -114,6 +123,7 @@ function LiveContainerTerminal({
   onUploadEvidence,
   session,
   runtime,
+  network,
 }: {
   api: ApiClient;
   active: boolean;
@@ -128,6 +138,7 @@ function LiveContainerTerminal({
   onUploadEvidence?: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
+  network: ContainerTerminalNetworkSnapshot;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const selectionActions = useOptionalSelectionActions();
@@ -346,7 +357,9 @@ function LiveContainerTerminal({
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
       {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
       <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
-      {networkBoundaryVisible && <p className="terminal-network-warning"><AlertTriangle size={14} /><span>Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</span><button className="icon-button subtle" type="button" aria-label="Dismiss network boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>}
+      {networkBoundaryVisible && (network.mode === "vpn"
+        ? <p className="terminal-network-warning"><ShieldCheck size={14} /><span><strong>VPN enforced · {network.vpnProfileName ?? "Selected profile"}</strong> All container traffic remains blocked until OpenVPN is ready and fails closed if the tunnel stops. No VPN capability or profile secret is exposed to this shell.</span><button className="icon-button subtle" type="button" aria-label="Dismiss VPN boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>
+        : <p className="terminal-network-warning"><AlertTriangle size={14} /><span>Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</span><button className="icon-button subtle" type="button" aria-label="Dismiss network boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>)}
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
     <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
@@ -396,7 +409,7 @@ function StartingTerminalPanel({
     <section className="container-terminal-intro">
       <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
       <div><small>Kali shell · {engagementName}</small><h2>Terminal {tab.ordinal}</h2><p><code>kali-linux-headless</code> · disposable · shared <code>/workspace</code></p></div>
-      <span className="terminal-boundary"><AlertTriangle size={15} /> Root · bridge permitted</span>
+      <span className="terminal-boundary">{tab.network?.mode === "vpn" ? <><ShieldCheck size={15} /> VPN · {tab.network.vpnProfileName ?? "selected profile"}</> : <><AlertTriangle size={15} /> Root · bridge permitted</>}</span>
     </section>
     <section className="terminal-auto-start" aria-live="polite">
       {tab.error ? <><SquareTerminal size={27} /><strong>Terminal could not start</strong><DiagnosticErrorNotice error={tab.error} fallback="The terminal operation could not be completed." compact /><div className="terminal-start-actions"><button className="button secondary" type="button" onClick={onClose}>Close</button><button className="button primary" type="button" onClick={onRetry}><RotateCcw size={15} /> Retry</button></div></> : <><LoaderCircle className="spin" size={27} /><strong>{status}</strong><div
@@ -591,7 +604,8 @@ export function ContainerTerminalPanel({
       if (!preview.allowed || !preview.previewToken || !preview.previewFingerprint || !preview.runtime) {
         throw new Error(preview.detail || "Core denied the terminal preflight.");
       }
-      updateStartingTab(key, { phase: "starting" });
+      const previewNetwork = preview.network ?? DIRECT_TERMINAL_NETWORK;
+      updateStartingTab(key, { phase: "starting", network: previewNetwork, phaseDetail: previewNetwork.mode === "vpn" ? `Establishing ${previewNetwork.vpnProfileName ?? "the selected VPN"} before opening the shell.` : undefined });
       const created = await api.startContainerTerminal(
         request,
         preview,
@@ -605,6 +619,7 @@ export function ContainerTerminalPanel({
           ordinal,
           session: created,
           runtime: preview.runtime!,
+          network: previewNetwork,
           socketState: "connecting",
         } : tab));
         setupReadyRef.current = true;
@@ -690,6 +705,7 @@ export function ContainerTerminalPanel({
           ordinal: index + 1,
           session: item.session,
           runtime: item.runtime,
+          network: item.network ?? DIRECT_TERMINAL_NETWORK,
           socketState: "connecting",
         }));
         nextOrdinalRef.current = recoveredTabs.length + 1;
@@ -942,6 +958,7 @@ export function ContainerTerminalPanel({
         onSocketState={(socketState) => setTabs((current) => current.map((item) => item.key === tab.key && item.kind === "live" ? { ...item, socketState } : item))}
         onUploadEvidence={onUploadEvidence}
         runtime={tab.runtime}
+        network={tab.network}
         session={tab.session}
       />}
     </div>)}

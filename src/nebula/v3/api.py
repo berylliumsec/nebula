@@ -40,7 +40,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import Field, ValidationError, model_validator
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
@@ -181,6 +181,7 @@ from .diagnostic_guidance import (
     reason_code_for,
 )
 from .diagnostic_sensitive import SensitiveDetailUnavailable
+from .redaction import sanitize_display_text
 from .debugger import (
     DEBUG_PROTOCOL,
     DebugService,
@@ -211,6 +212,7 @@ from .credentials import (
     CredentialStore,
     CredentialUnavailableError,
 )
+from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
     ENTITY_MODEL_BY_KIND,
     AgentAttempt,
@@ -235,6 +237,8 @@ from .domain import (
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
     AutomationSession,
+    AutomationSessionStatus,
+    VpnProfile,
     CommandExecution,
     ChatBackend,
     ChatMessage,
@@ -250,10 +254,12 @@ from .domain import (
     Entity,
     Evidence,
     GeneratedDraft,
+    HarnessProfile,
     HarnessInteraction,
     HarnessInteractionStatus,
     HarnessSession,
     HarnessTurn,
+    HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
     MissionGrant,
@@ -480,6 +486,7 @@ CUSTOM_RESOURCES = {
     "library_items",
     "operator_profiles",
     "runner_profiles",
+    "vpn_profiles",
     "browser_actions",
     "browser_handoffs",
     "browser_identities",
@@ -747,8 +754,22 @@ class AutomationPolicyUpdateRequest(NebulaModel):
     approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
+    vpn_profile_id: str | None = Field(default=None, max_length=200)
     max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class VpnProfileCreateRequest(NebulaModel):
+    name: str = Field(min_length=1, max_length=120)
+    filename: str = Field(min_length=1, max_length=255, pattern=r"^[^/\\]+\.ovpn$")
+    config: str = Field(min_length=1, max_length=15_000)
+    username: str | None = Field(default=None, max_length=512)
+    password: str | None = Field(default=None, max_length=4_096)
+    persistence: Literal["vault", "session"] = "vault"
+
+
+class VpnProfileDeleteRequest(NebulaModel):
+    expected_revision: int = Field(ge=1)
 
 
 class AutomationCommandRequest(RunCommandRequest):
@@ -1237,7 +1258,10 @@ def create_app(
                 workspace_resolver=tool_platform.workspace_for,
                 runtime_resolver=tool_platform.resolve_human_terminal_runtime,
                 cached_runtime_provider=tool_platform.last_automation_runtime_metadata,
+                credential_store=credentials,
             )
+    elif automation_runtime.credential_store is None:
+        automation_runtime.credential_store = credentials
     automation_tool_platform = (
         AutomationToolPlatform(
             manager=automation_runtime,
@@ -1388,6 +1412,7 @@ def create_app(
             tool_platform=tool_platform,
             execution_service=executions,
             command_history=terminal_commands,
+            credential_store=credentials,
             operator_id=active_operator_id,
         )
     if container_terminals is not None and container_terminals.store is not store:
@@ -1400,6 +1425,8 @@ def create_app(
         container_terminals.bind_execution_service(executions)
     if container_terminals is not None and container_terminals.command_history is None:
         container_terminals.bind_command_history(terminal_commands)
+    if container_terminals is not None and container_terminals.credential_store is None:
+        container_terminals.bind_credential_store(credentials)
     workspaces = workspace_service
     if workspaces is None and artifact_store is not None and tool_platform is not None:
         workspaces = WorkspaceService(
@@ -6331,6 +6358,106 @@ def create_app(
             )
         return await automation_runtime.prepare()
 
+    def public_vpn_profile(profile: VpnProfile) -> dict[str, Any]:
+        value = profile.model_dump(exclude={"secret_ref"})
+        value["available"] = credentials.status(profile.secret_ref).available
+        return value
+
+    @app.get(
+        f"{API_PREFIX}/vpn-profiles",
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_vpn_profiles() -> list[dict[str, Any]]:
+        return [
+            public_vpn_profile(profile)
+            for profile in store.list_entities(VpnProfile, limit=1_000)
+        ]
+
+    @app.post(
+        f"{API_PREFIX}/vpn-profiles",
+        status_code=201,
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_vpn_profile(request: VpnProfileCreateRequest) -> dict[str, Any]:
+        try:
+            parsed = parse_openvpn_profile(
+                request.config, username=request.username, password=request.password
+            )
+            if any(
+                item.fingerprint == parsed.fingerprint
+                for item in store.list_entities(VpnProfile, limit=1_000)
+            ):
+                raise HTTPException(
+                    status_code=409, detail="this VPN profile is already saved"
+                )
+            secret = credentials.create(
+                CredentialCreateRequest(
+                    secret=SecretStr(parsed.config), persistence=request.persistence
+                )
+            )
+            try:
+                profile = store.create(
+                    VpnProfile(
+                        name=request.name.strip(),
+                        filename=request.filename,
+                        remote_host=parsed.remote_host,
+                        remote_port=parsed.remote_port,
+                        protocol=parsed.protocol,
+                        fingerprint=parsed.fingerprint,
+                        requires_credentials=parsed.requires_credentials,
+                        secret_ref=secret.reference,
+                    )
+                )
+            except Exception:
+                credentials.delete(secret.reference)
+                raise
+            return public_vpn_profile(profile)
+        except VpnProfileError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/vpn-profiles/{{profile_id}}",
+        status_code=204,
+        tags=["automation"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_vpn_profile(
+        profile_id: str, request: VpnProfileDeleteRequest
+    ) -> Response:
+        profile = store.get(VpnProfile, profile_id)
+        if any(
+            policy.vpn_profile_id == profile_id
+            for policy in store.list_entities(AutomationProjectPolicy, limit=1_000)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="remove this VPN profile from project command policies first",
+            )
+        if any(
+            session.vpn_profile_id == profile_id
+            and session.status
+            not in {AutomationSessionStatus.CLOSED, AutomationSessionStatus.FAILED}
+            for session in store.list_entities(AutomationSession, limit=1_000)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="close active command sessions using this VPN profile first",
+            )
+        if container_terminals is not None and container_terminals.uses_vpn_profile(
+            profile_id
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="close active terminal sessions using this VPN profile first",
+            )
+        store.delete(
+            VpnProfile, profile_id, expected_revision=request.expected_revision
+        )
+        credentials.delete(profile.secret_ref)
+        return Response(status_code=204)
+
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/automation-policy",
         response_model=AutomationProjectPolicy,
@@ -6364,6 +6491,7 @@ def create_app(
             approval_policy=request.approval_policy,
             network_enabled=request.network_enabled,
             runner_profile_id=request.runner_profile_id,
+            vpn_profile_id=request.vpn_profile_id,
             max_timeout_ms=request.max_timeout_ms,
             expected_revision=request.expected_revision,
         )
@@ -6729,8 +6857,11 @@ def create_app(
         tags=["runs", "chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def discuss_harness_run(run_id: str) -> ChatSession:
-        return harness_runtime.attach_run_to_chat(run_id)
+    async def discuss_run(run_id: str) -> ChatSession:
+        run = store.get(AgentRun, run_id)
+        if run.backend == RunBackend.HARNESS:
+            return harness_runtime.attach_run_to_chat(run_id)
+        return chat_service().attach_native_run_to_chat(run_id)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/continue-as-mission",
@@ -7481,6 +7612,75 @@ def create_app(
                         "harness turn completed without a durable message"
                     )
                 message = store.get(ChatMessage, completed_turn.final_message_id)
+                if chat.metadata.get("initial_title_state") == "pending":
+                    try:
+                        naming_turn = await harness_runtime.analyze_structured(
+                            engagement_id=chat.engagement_id,
+                            profile_id=chat.harness_profile_id or "",
+                            model=chat.model,
+                            prompt=(
+                                "Name this conversation from its first exchange. Return only a concise, "
+                                "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
+                                f"Operator request:\n{prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
+                            ),
+                        )
+                        title = (
+                            sanitize_display_text(naming_turn.response or "")
+                            .strip()
+                            .strip("\"'`# ")
+                        )
+                        title = " ".join(
+                            re.sub(
+                                r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)
+                            ).split()[:6]
+                        )[:120]
+                        if not title:
+                            raise HarnessError(
+                                "harness returned an empty conversation name"
+                            )
+                        latest_chat = store.get(ChatSession, chat.id)
+                        if (
+                            latest_chat.metadata.get("initial_title_state")
+                            != "operator"
+                        ):
+                            store.update(
+                                ChatSession,
+                                chat.id,
+                                {
+                                    "title": title,
+                                    "metadata": {
+                                        **latest_chat.metadata,
+                                        "initial_title_state": "generated",
+                                    },
+                                },
+                                expected_revision=latest_chat.revision,
+                            )
+                    except Exception as exc:
+                        # The first answer is already durable. Naming is an optional
+                        # embellishment and must never turn that success into a failed chat.
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.chat.naming_fallback",
+                            "The harness could not name the conversation; the prompt-based fallback was retained.",
+                            exc,
+                            stage="conversation-naming",
+                        )
+                        latest_chat = store.get(ChatSession, chat.id)
+                        if (
+                            latest_chat.metadata.get("initial_title_state")
+                            != "operator"
+                        ):
+                            store.update(
+                                ChatSession,
+                                chat.id,
+                                {
+                                    "metadata": {
+                                        **latest_chat.metadata,
+                                        "initial_title_state": "failed",
+                                    }
+                                },
+                                expected_revision=latest_chat.revision,
+                            )
                 response = ChatCompletionResponse(
                     turn_id=completed_turn.id,
                     session_id=chat.id,
@@ -7863,7 +8063,10 @@ def create_app(
         return store.update(
             ChatSession,
             session_id,
-            {"title": request.title},
+            {
+                "title": request.title,
+                "metadata": {**current.metadata, "initial_title_state": "operator"},
+            },
             expected_revision=request.expected_revision or current.revision,
         )
 
@@ -9709,6 +9912,20 @@ def _register_crud_routes(
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas."""
 
+    def enforce_harness_command_boundary(entity: Any) -> Any:
+        if not isinstance(entity, HarnessProfile):
+            return entity
+        return entity.model_copy(
+            update={
+                "native_capabilities": entity.native_capabilities.model_copy(
+                    update={
+                        "workspace_access": HarnessWorkspaceAccess.NONE,
+                        "shell": False,
+                    }
+                )
+            }
+        )
+
     def make_create() -> Callable[..., Any]:
         async def create_entity(entity: Any) -> Entity:
             protected = {"id", "created_at", "updated_at", "revision"}.intersection(
@@ -9731,6 +9948,7 @@ def _register_crud_routes(
                         ),
                     }
                 )
+            entity = enforce_harness_command_boundary(entity)
             if isinstance(entity, Engagement) and entity.workspace_path:
                 try:
                     linked_workspace = (
@@ -9821,6 +10039,7 @@ def _register_crud_routes(
                 entity, ProviderProfile
             ):
                 entity = _invalidate_provider_verification(current, entity)
+            entity = enforce_harness_command_boundary(entity)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
                 return relation_service.replace_legacy_entity(
@@ -9854,11 +10073,19 @@ def _register_crud_routes(
             payload = current.model_dump(mode="python")
             payload.update(patch.changes)
             candidate = model.model_validate(payload)
+            candidate = enforce_harness_command_boundary(candidate)
             changes = dict(patch.changes)
             if isinstance(current, ProviderProfile) and isinstance(
                 candidate, ProviderProfile
             ):
                 candidate = _invalidate_provider_verification(current, candidate)
+                changes = {
+                    key: value
+                    for key, value in candidate.model_dump(mode="python").items()
+                    if key not in {"id", "created_at", "updated_at", "revision"}
+                    and value != getattr(current, key)
+                }
+            elif isinstance(current, HarnessProfile):
                 changes = {
                     key: value
                     for key, value in candidate.model_dump(mode="python").items()

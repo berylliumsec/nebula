@@ -1673,8 +1673,11 @@ interface WireContainerTerminalRuntime extends JsonObject {
 }
 
 interface WireContainerTerminalNetwork extends JsonObject {
-  mode: "unrestricted";
-  runtime_network: "bridge";
+  mode: "unrestricted" | "vpn";
+  runtime_network: "bridge" | "private_namespace";
+  vpn_profile_id?: string | null;
+  vpn_profile_revision?: number | null;
+  vpn_profile_name?: string | null;
   published_ports: Array<{ port: number; protocol: "tcp" | "udp" }>;
 }
 
@@ -1720,12 +1723,14 @@ interface WireContainerTerminalRecovery extends JsonObject {
   active: boolean;
   session?: WireContainerTerminalSession | null;
   runtime?: WireContainerTerminalRuntime | null;
+  network?: WireContainerTerminalNetwork | null;
 }
 
 interface WireContainerTerminalRecoveryList extends JsonObject {
   sessions: Array<{
     session: WireContainerTerminalSession;
     runtime: WireContainerTerminalRuntime;
+    network?: WireContainerTerminalNetwork | null;
   }>;
 }
 
@@ -2872,6 +2877,9 @@ function mapContainerTerminalNetwork(value: WireContainerTerminalNetwork) {
   return {
     mode: value.mode,
     runtimeNetwork: value.runtime_network,
+    vpnProfileId: value.vpn_profile_id ?? undefined,
+    vpnProfileRevision: value.vpn_profile_revision ?? undefined,
+    vpnProfileName: value.vpn_profile_name ?? undefined,
     publishedPorts: value.published_ports,
   };
 }
@@ -5273,6 +5281,7 @@ export class ApiClient {
       approvalPolicy: value.approval_policy as "always" | "on_boundary" | "never",
       networkEnabled: value.network_enabled === true,
       runnerProfileId: typeof value.runner_profile_id === "string" ? value.runner_profile_id : undefined,
+      vpnProfileId: typeof value.vpn_profile_id === "string" ? value.vpn_profile_id : undefined,
       maxTimeoutMs: Number(value.max_timeout_ms ?? 300000),
       revision: Number(value.revision ?? 1),
     }));
@@ -5280,7 +5289,7 @@ export class ApiClient {
 
   updateAutomationPolicy(
     engagementId: string,
-    request: { approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; maxTimeoutMs: number; expectedRevision: number },
+    request: { approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; vpnProfileId?: string; maxTimeoutMs: number; expectedRevision: number },
   ): Promise<import("./types").AutomationProjectPolicy> {
     return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`, {
       method: "PUT",
@@ -5288,10 +5297,33 @@ export class ApiClient {
         approval_policy: request.approvalPolicy,
         network_enabled: request.networkEnabled,
         runner_profile_id: request.runnerProfileId ?? null,
+        vpn_profile_id: request.vpnProfileId ?? null,
         max_timeout_ms: request.maxTimeoutMs,
         expected_revision: request.expectedRevision,
       }),
     }).then(() => this.getAutomationPolicy(engagementId));
+  }
+
+  listVpnProfiles(): Promise<import("./types").VpnProfile[]> {
+    return this.request<Array<Record<string, unknown>>>("vpn-profiles").then((items) => items.map((value) => ({
+      id: String(value.id), name: String(value.name), filename: String(value.filename),
+      remoteHost: String(value.remote_host), remotePort: Number(value.remote_port),
+      protocol: value.protocol === "tcp" ? "tcp" : "udp", fingerprint: String(value.fingerprint),
+      requiresCredentials: value.requires_credentials === true, available: value.available === true,
+      revision: Number(value.revision ?? 1),
+    })));
+  }
+
+  createVpnProfile(request: { name: string; filename: string; config: string; username?: string; password?: string; persistence: "vault" | "session" }): Promise<import("./types").VpnProfile> {
+    return this.request<Record<string, unknown>>("vpn-profiles", { method: "POST", body: JSON.stringify(request) }).then((value) => ({
+      id: String(value.id), name: String(value.name), filename: String(value.filename), remoteHost: String(value.remote_host),
+      remotePort: Number(value.remote_port), protocol: value.protocol === "tcp" ? "tcp" : "udp", fingerprint: String(value.fingerprint),
+      requiresCredentials: value.requires_credentials === true, available: value.available === true, revision: Number(value.revision ?? 1),
+    }));
+  }
+
+  deleteVpnProfile(id: string, revision: number): Promise<void> {
+    return this.request<void>(`vpn-profiles/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expected_revision: revision }) });
   }
 
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {
@@ -6644,6 +6676,9 @@ export class ApiClient {
       runtime: value.runtime
         ? mapContainerTerminalRuntime(value.runtime)
         : undefined,
+      network: value.network
+        ? mapContainerTerminalNetwork(value.network)
+        : undefined,
     }));
   }
 
@@ -6658,6 +6693,9 @@ export class ApiClient {
       sessions: value.sessions.map((item) => ({
         session: mapContainerTerminalSession(item.session),
         runtime: mapContainerTerminalRuntime(item.runtime),
+        network: item.network
+          ? mapContainerTerminalNetwork(item.network)
+          : { mode: "unrestricted", runtimeNetwork: "bridge", publishedPorts: [] },
       })),
     }));
   }

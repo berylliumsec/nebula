@@ -5,9 +5,10 @@ import { DialogProvider } from "../components/DialogSystem";
 import { AgentsPage } from "./AgentsPage";
 
 const steerRun = vi.fn().mockResolvedValue(undefined);
+const discussRun = vi.fn().mockResolvedValue({ id: "chat-from-mission" });
 const selectMission = vi.fn();
 const workspace = {
-  api: { steerRun, discussRun: vi.fn() },
+  api: { steerRun, discussRun },
   approvals: [],
   coreState: "offline" as const,
   deleteMission: vi.fn(),
@@ -141,6 +142,70 @@ describe("mission activity", () => {
     const links = screen.getAllByRole("link", { name: "View diagnostics" });
     expect(links).toHaveLength(2);
     links.forEach((link) => expect(link).toHaveAttribute("href", "/settings#diagnostics-settings"));
+    (workspace.run as { status: string }).status = previousStatus;
+    workspace.events = previousEvents;
+  });
+
+  it("copies a mission result and continues it in durable assistant chat", async () => {
+    const user = userEvent.setup();
+    const previousStatus = workspace.run.status;
+    const previousBackend = workspace.run.backend;
+    const previousEvents = workspace.events;
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    discussRun.mockClear();
+    (workspace.run as { status: string }).status = "complete";
+    (workspace.run as { backend: string }).backend = "native";
+    workspace.events = [{
+      id: "event-completed",
+      sequence: 20,
+      kind: "run.completed",
+      actor: "Nebula Core",
+      occurredAt: "2026-07-14T12:10:00Z",
+      summary: "**Result**\n\nThe bounded review is complete.",
+      payload: {},
+    }];
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    await user.click(screen.getByRole("button", { name: "Copy result" }));
+    expect(writeText).toHaveBeenCalledWith("**Result**\n\nThe bounded review is complete.");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Mission result copied to clipboard.");
+
+    await user.click(screen.getByRole("button", { name: "Continue in assistant chat" }));
+    expect(discussRun).toHaveBeenCalledWith("run-1");
+    expect(new URLSearchParams(window.location.search).get("view")).toBe("chat");
+    expect(new URLSearchParams(window.location.search).get("session")).toBe("chat-from-mission");
+
+    (workspace.run as { status: string }).status = previousStatus;
+    (workspace.run as { backend: string }).backend = previousBackend;
+    workspace.events = previousEvents;
+  });
+
+  it("keeps the result usable when clipboard access fails", async () => {
+    const user = userEvent.setup();
+    const previousStatus = workspace.run.status;
+    const previousEvents = workspace.events;
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    (workspace.run as { status: string }).status = "complete";
+    workspace.events = [{
+      id: "event-copy-failed",
+      sequence: 21,
+      kind: "run.completed",
+      actor: "Nebula Core",
+      occurredAt: "2026-07-14T12:11:00Z",
+      summary: "The result remains selectable.",
+      payload: {},
+    }];
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    await user.click(screen.getByRole("button", { name: "Copy result" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Select the result text and copy it manually.");
+    expect(within(screen.getByRole("region", { name: "Mission result" })).getByText("The result remains selectable.")).toBeVisible();
+
     (workspace.run as { status: string }).status = previousStatus;
     workspace.events = previousEvents;
   });

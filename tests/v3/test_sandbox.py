@@ -19,6 +19,7 @@ from nebula.v3.sandbox import (
     SandboxError,
     SandboxExecutionKind,
     SandboxNetwork,
+    SandboxPublishedPort,
     SandboxRequest,
     SandboxRootFilesystem,
     SandboxTerminalProcess,
@@ -923,6 +924,197 @@ def test_egress_helper_creates_one_filtered_namespace_and_cleans_it_up(
     assert calls[1][0][-3:] == ["stop", "--time=0", "nebula-call-egress"]
 
 
+def test_vpn_profile_is_streamed_to_privileged_namespace_without_argv_exposure(
+    tmp_path, monkeypatch
+):
+    calls = []
+    written = bytearray()
+
+    class FakeInput:
+        def write(self, value):
+            written.extend(value)
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self, ready=False):
+            self.stdout = asyncio.StreamReader() if ready else None
+            self.stdin = FakeInput() if ready else None
+            if self.stdout is not None:
+                self.stdout.feed_data(
+                    b"WARNING: IPv4 forwarding is disabled. Networking will not work.\n"
+                    b"READY\n"
+                )
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(ready=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64
+    )
+
+    async def scenario():
+        lease = await controller.acquire(
+            runtime_argv=["/usr/bin/podman"],
+            runtime_environment={"HOME": "/tmp/home"},
+            request=_request(
+                tmp_path,
+                network=SandboxNetwork.SCOPED,
+                execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+                egress_rules=[EgressRule(address="203.0.113.1", ports=[443])],
+            ),
+            container_name="nebula-vpn",
+            seccomp_profile=None,
+            vpn_config="client\ndev tun0\nsecret material\n",
+        )
+        await lease.close()
+
+    asyncio.run(scenario())
+    helper_argv = calls[0][0]
+    assert "--device=/dev/net/tun" in helper_argv
+    assert "--vpn-stdin" in helper_argv
+    assert "secret material" not in " ".join(helper_argv)
+    assert written == b"client\ndev tun0\nsecret material\n"
+
+
+def test_failed_egress_helper_is_removed_after_bounded_startup_error(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self, *, helper=False):
+            self.stdout = asyncio.StreamReader() if helper else None
+            self.stdin = None
+            if self.stdout is not None:
+                self.stdout.feed_data(b"RuntimeError: OpenVPN exited before ready\n")
+                self.stdout.feed_eof()
+
+        async def wait(self):
+            self.returncode = 1
+            return 1
+
+        def kill(self):
+            self.returncode = -9
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(helper=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64
+    )
+
+    async def scenario():
+        with pytest.raises(SandboxUnavailable, match="OpenVPN exited before ready"):
+            await controller.acquire(
+                runtime_argv=["/usr/bin/podman"],
+                runtime_environment={"HOME": "/tmp/home"},
+                request=_request(
+                    tmp_path,
+                    network=SandboxNetwork.SCOPED,
+                    execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+                    egress_rules=[EgressRule(address="203.0.113.1", ports=[443])],
+                ),
+                container_name="nebula-failed-egress",
+                seccomp_profile=None,
+            )
+
+    asyncio.run(scenario())
+    assert calls[1][0][-3:] == ["rm", "--force", "nebula-failed-egress-egress"]
+
+
+def test_vpn_terminal_uses_fail_closed_namespace_and_publishes_on_owner(
+    tmp_path, monkeypatch
+):
+    calls = []
+    written = bytearray()
+
+    class FakeInput:
+        def write(self, value):
+            written.extend(value)
+
+        async def drain(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self, ready=False):
+            self.stdout = asyncio.StreamReader() if ready else None
+            self.stdin = FakeInput() if ready else None
+            if self.stdout is not None:
+                self.stdout.feed_data(b"READY\n")
+
+        async def wait(self):
+            self.returncode = 0
+            return 0
+
+        def kill(self):
+            self.returncode = -9
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(ready=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64
+    )
+    request = _request(
+        tmp_path,
+        network=SandboxNetwork.VPN,
+        execution_kind=SandboxExecutionKind.HUMAN_TERMINAL,
+        container_user=SandboxContainerUser.ROOT,
+        root_filesystem=SandboxRootFilesystem.WRITABLE,
+        published_ports=[SandboxPublishedPort(port=8080)],
+    )
+
+    async def scenario():
+        lease = await controller.acquire(
+            runtime_argv=["/usr/bin/podman"],
+            runtime_environment={"HOME": "/tmp/home"},
+            request=request,
+            container_name="nebula-terminal-vpn",
+            seccomp_profile=None,
+            vpn_config="client\ndev tun0\nsecret material\n",
+        )
+        await lease.close()
+
+    asyncio.run(scenario())
+    helper_argv = calls[0][0]
+    image_index = helper_argv.index("example.invalid/helper@sha256:" + "b" * 64)
+    assert "--device=/dev/net/tun" in helper_argv[:image_index]
+    assert "--publish=127.0.0.1:8080:8080/tcp" in helper_argv[:image_index]
+    assert helper_argv[image_index + 1 :] == [
+        "serve",
+        "--vpn-stdin",
+        "--vpn-unrestricted",
+    ]
+    assert written == b"client\ndev tun0\nsecret material\n"
+
+
 def test_egress_helper_creates_loopback_only_namespace_without_external_network(
     monkeypatch,
 ):
@@ -1008,7 +1200,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v5"}}}',
+            + '"org.nebula.human-terminal.recipe":"v9"}}}',
             "",
             0,
         )
@@ -1033,6 +1225,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
         "ripgrep",
         "git",
         "curl",
+        "openvpn",
     )
     assert image.security_tools == ("hashcat", "nmap")
     assert image.security_tool_provenance == (
@@ -1145,7 +1338,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v5"}}}',
+            + '"org.nebula.human-terminal.recipe":"v9"}}}',
             "",
             0,
         )
@@ -1178,7 +1371,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
     assert build[0][3] == "--quiet"
-    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v5-")
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v9-")
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert "COPY egress_helper.py /usr/local/bin/nebula-egress" in dockerfiles[0]
@@ -1237,7 +1430,7 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v5"}}}',
+            + '"org.nebula.human-terminal.recipe":"v9"}}}',
             "",
             0,
         )

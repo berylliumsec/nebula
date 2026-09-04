@@ -844,6 +844,45 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
+test("terminal VPN boundary stays visible in the live shell", async ({ page }) => {
+  const vpnNetwork = {
+    mode: "vpn",
+    runtime_network: "private_namespace",
+    vpn_profile_id: "vpn-preview",
+    vpn_profile_revision: 3,
+    vpn_profile_name: "Company VPN",
+    published_ports: [],
+  };
+  await page.route("**/api/v1/container-terminal/preflight", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        allowed: true,
+        detail: "All terminal egress is fail-closed through Company VPN.",
+        runtime,
+        network: vpnNetwork,
+        security,
+        limits,
+        workspace: "/workspace",
+        policy_rule: "human_terminal_vpn",
+        preview_fingerprint: "d".repeat(64),
+        preview_token: "preview.signed",
+        expires_at: "2026-07-13T21:00:00Z",
+        idle_timeout_seconds: 1800,
+        fresh_container: true,
+      }),
+    });
+  });
+
+  await openWorkspace(page, "/", "Workbench");
+
+  const liveTerminal = page.locator(".container-terminal-live");
+  await expect(liveTerminal.getByText(/VPN enforced · Company VPN/)).toBeVisible();
+  await expect(liveTerminal.getByText(/blocked until OpenVPN is ready/)).toBeVisible();
+  await expect(liveTerminal.getByText(/Bridge networking is permitted/)).toHaveCount(0);
+});
+
 test("terminal pointer selection has a visible high-contrast highlight", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Canvas selection rendering needs one desktop visual run.");
   await openWorkspace(page, "/", "Workbench");
@@ -1284,6 +1323,127 @@ test("mission workflow freezes harness options, stages, and URL identity", async
   await expect(missionLedger).not.toContainText("item upsert");
   const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("mission result actions copy exactly and continue in assistant chat", async ({ page }) => {
+  const runId = "mission-result-actions";
+  const result = "**Verified result**\n\nThe bounded review is complete.";
+  let discussed = false;
+  await page.addInitScript(({ missionId, missionResult }) => {
+    localStorage.setItem("nebula.mission", missionId);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          (globalThis as typeof globalThis & { __copiedMissionResult?: string }).__copiedMissionResult = value;
+        },
+      },
+    });
+    class MissionEventWebSocket extends EventTarget {
+      static readonly CONNECTING = 0;
+      static readonly OPEN = 1;
+      static readonly CLOSING = 2;
+      static readonly CLOSED = 3;
+      readonly url: string;
+      readonly protocol = "nebula.events.v1";
+      readonly extensions = "";
+      readonly bufferedAmount = 0;
+      readonly binaryType = "blob";
+      readyState = MissionEventWebSocket.CONNECTING;
+      constructor(url: string | URL) {
+        super();
+        this.url = String(url);
+        setTimeout(() => {
+          this.readyState = MissionEventWebSocket.OPEN;
+          this.dispatchEvent(new Event("open"));
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({
+            kind: "event",
+            event: {
+              id: "mission-result-event",
+              run_id: missionId,
+              sequence: 7,
+              event_type: "run.completed",
+              actor_id: "Nebula Core",
+              occurred_at: "2026-07-14T12:10:00Z",
+              payload: { summary: missionResult },
+            },
+          }) }));
+        }, 10);
+      }
+      send(): void {}
+      close(code = 1000, reason = "closed"): void {
+        this.readyState = MissionEventWebSocket.CLOSED;
+        this.dispatchEvent(new CloseEvent("close", { code, reason, wasClean: true }));
+      }
+    }
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: MissionEventWebSocket });
+  }, { missionId: runId, missionResult: result });
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/runs") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
+        ...entity,
+        id: runId,
+        engagement_id: "scratch-project",
+        objective: "Review the bounded project",
+        status: "complete",
+        backend: "native",
+        supervisor_provider_id: "local-provider",
+        supervisor_model: "security-model",
+        harness_profile_id: null,
+        harness_session_id: null,
+        runtime_snapshot: {},
+        budget: { max_duration_seconds: null, max_tokens: null, max_cost_usd: null, max_tool_calls: null, max_artifact_queries: null, max_concurrency: 1, max_delegation_depth: 0, max_retries_per_task: 0 },
+        started_at: entity.created_at,
+        completed_at: entity.updated_at,
+        metadata: { name: "Bounded project review", total_tasks: 1, completed_tasks: 1, final_summary: result },
+      }]) });
+      return;
+    }
+    if (path.endsWith(`/runs/${runId}/discuss`) && request.method() === "POST") {
+      discussed = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...entity,
+        id: "chat-from-mission-result",
+        engagement_id: "scratch-project",
+        title: "Bounded project review",
+        backend: "provider",
+        provider_profile_id: "local-provider",
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: "security-model",
+        metadata: { attached_run_ids: [runId] },
+      }) });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=missions&mission=${runId}`, "Workbench");
+  const resultRegion = page.getByRole("region", { name: "Mission result" });
+  await expect(resultRegion).toBeVisible();
+  await resultRegion.getByRole("button", { name: "Copy result" }).click();
+  await expect(resultRegion.getByRole("button", { name: "Copied" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __copiedMissionResult?: string }).__copiedMissionResult)).toBe(result);
+
+  const geometry = await resultRegion.evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: innerWidth,
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const accessibility = await new AxeBuilder({ page }).include(".mission-result").analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  await resultRegion.getByRole("button", { name: "Continue in assistant chat" }).click();
+  await expect.poll(() => discussed).toBe(true);
+  await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("chat");
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe("chat-from-mission-result");
 });
 
 test("Diagnostics explains and focuses a requested failure at every breakpoint", async ({ page }) => {
@@ -1793,6 +1953,67 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await expect(page.getByLabel("All targets and ports")).toBeChecked();
   await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
   await expect(page.getByLabel("Allowed domains")).toBeDisabled();
+});
+
+test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {
+  let selectedVpnProfile: string | null = null;
+  await page.route("**/api/v1/vpn-profiles", async (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify([{
+      ...entity,
+      id: "vpn-preview",
+      name: "Company VPN",
+      filename: "company.ovpn",
+      remote_host: "vpn.example.test",
+      remote_port: 1194,
+      protocol: "udp",
+      fingerprint: "a".repeat(64),
+      requires_credentials: true,
+      available: true,
+    }]),
+  }));
+  await page.route("**/api/v1/engagements/*/automation-policy", async (route) => {
+    if (route.request().method() === "PUT") {
+      selectedVpnProfile = String(route.request().postDataJSON().vpn_profile_id);
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...entity,
+        id: "runtime-policy-preview",
+        engagement_id: "engagement-1",
+        approval_policy: "on_boundary",
+        network_enabled: selectedVpnProfile !== null,
+        runner_profile_id: "local",
+        vpn_profile_id: selectedVpnProfile,
+        max_timeout_ms: 300000,
+      }),
+    });
+  });
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
+  const section = page.locator("#automation-runtime-settings");
+  await expect(section.getByRole("heading", { name: "VPN egress" })).toBeVisible();
+  await expect(section.getByText("Choose an OpenVPN profile")).toBeVisible();
+  await expect(section.getByText("Credentials and storage")).toBeVisible();
+  await expect(section.getByLabel("Username")).not.toBeVisible();
+  await expect(section.getByText("Saved only — not connected to this project.")).toBeVisible();
+  await section.getByRole("button", { name: "Use for this project" }).click();
+  await expect(section.getByText("In use", { exact: true })).toBeVisible();
+  await expect(section.getByText(/Selected for .* New terminals wait for the tunnel/)).toBeVisible();
+  expect(selectedVpnProfile).toBe("vpn-preview");
+  const geometry = await section.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+    buttonHeights: [...element.querySelectorAll<HTMLElement>("button")].map((button) => button.getBoundingClientRect().height),
+  }));
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.buttonHeights.every((height) => height >= 30)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include("#automation-runtime-settings").analyze();
+  expect(accessibility.violations).toEqual([]);
 });
 
 test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
@@ -3184,16 +3405,24 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
+    headerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-header")!).paddingLeft),
+    receiptPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-receipt")!).paddingLeft),
+    footerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-footer")!).paddingLeft),
   }));
   expect(geometry.left).toBeGreaterThanOrEqual(0);
   expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  expect(geometry.headerPaddingInline).toBeGreaterThanOrEqual(12);
+  expect(geometry.receiptPaddingInline).toBeGreaterThanOrEqual(12);
+  expect(geometry.footerPaddingInline).toBeGreaterThanOrEqual(12);
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
   await showActivity.click();
   await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
   await expect(ledger).not.toContainText("item upsert");
   await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
+  await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-left", "12px");
+  await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-right", "12px");
   expect(activityLoads).toBe(1);
 });
 
@@ -3365,9 +3594,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
       (globalThis as typeof globalThis & { __harnessTurnRequest?: unknown }).__harnessTurnRequest = JSON.parse(String(init?.body ?? "{}"));
       const encoder = new TextEncoder();
       const output = "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80);
-      const answer = "Verification completed successfully. The operator remains in control of the next action.\n\n".repeat(30);
+      const streamingAnswer = "**Streaming Markdown is visible.** Inline `memcpy` is formatted before completion.\n\n```python\nprint('waiting for completion')\n";
+      const answer = "**Verification completed successfully.** The operator remains in control of the next action.\n\n".repeat(30);
       const frames: unknown[] = [
         { type: "started", harness_profile_id: "harness-completion", harness_session_id: session, harness_turn_id: turn, model: "gpt-5-codex", session_id: "chat-harness-completion", turn_id: "chat-turn-completion" },
+        { type: "status", harness_session_id: session, harness_turn_id: turn, payload: { phase: "command_runtime_session_created", detail: "The command runtime changed, so Nebula preserved the prior session and continued in a new session with the current runtime.", previous_session_id: "prior-runtime-session" } },
+        { type: "message_delta", harness_session_id: session, harness_turn_id: turn, delta: streamingAnswer },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary-1", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I found the verification path. I’m checking the production behavior before changing anything.", artifact_ids: [], payload: {} },
         { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", artifact_ids: [], payload: { command: "npm test" } },
         { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: output, artifact_ids: [], payload: {} },
@@ -3386,7 +3618,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
               controller.close();
               return;
             }
-            globalThis.setTimeout(enqueue, index === 3 ? 2_000 : 80);
+            globalThis.setTimeout(enqueue, index === 2 ? 800 : index === 4 ? 2_000 : 80);
           };
           enqueue();
         },
@@ -3410,9 +3642,17 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await expect(composer).toHaveValue("$review");
   await composer.fill("$review Run the verification.");
   await page.getByRole("button", { name: "Send message" }).click();
+  const runtimeRollover = page.getByRole("status").filter({ hasText: "Command runtime updated" });
+  await expect(runtimeRollover).toContainText("preserved the prior session");
+  await expect(runtimeRollover).toContainText("current command runtime");
   const commentary = page.getByLabel("Assistant commentary");
   await expect(commentary).toContainText("I found the verification path. I’m checking the production behavior before changing anything.");
   await expect(commentary).toBeVisible();
+  const streamingMessage = page.locator(".chat-message.assistant").last();
+  await expect(streamingMessage.locator(".assistant-markdown strong")).toHaveText("Streaming Markdown is visible.");
+  await expect(streamingMessage.locator(".assistant-markdown code")).toHaveText("memcpy");
+  await expect(streamingMessage.locator(".assistant-inert-fence")).toContainText("print('waiting for completion')");
+  await expect(streamingMessage.getByRole("button", { name: /Review and run/ })).toHaveCount(0);
   await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_mode?: string } }).__harnessTurnRequest?.harness_mode)).toBe("plan");
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __harnessTurnRequest?: { harness_skill?: unknown } }).__harnessTurnRequest?.harness_skill)).toEqual({
@@ -3484,6 +3724,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(outerBefore + 2);
   }
   const completedMessage = page.locator(".chat-message.assistant").filter({ hasText: "Verification completed successfully" });
+  await expect(completedMessage.locator(".assistant-markdown strong").first()).toHaveText("Verification completed successfully.");
   const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
   await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);

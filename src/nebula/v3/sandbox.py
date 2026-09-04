@@ -50,6 +50,7 @@ class SandboxNetwork(str, Enum):
     NONE = "none"
     SCOPED = "scoped"
     UNRESTRICTED = "unrestricted"
+    VPN = "vpn"
 
 
 class SandboxExecutionKind(str, Enum):
@@ -372,9 +373,12 @@ class SandboxRequest(BaseModel):
                     "or certified egress rules"
                 )
         elif self.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL:
-            if self.network != SandboxNetwork.UNRESTRICTED:
+            if self.network not in {
+                SandboxNetwork.UNRESTRICTED,
+                SandboxNetwork.VPN,
+            }:
                 raise ValueError(
-                    "human terminals require unrestricted bridge networking"
+                    "human terminals require direct bridge or VPN networking"
                 )
             if self.container_user != SandboxContainerUser.ROOT:
                 raise ValueError("human terminals require the container root user")
@@ -501,6 +505,7 @@ class EgressController(ABC):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
         raise NotImplementedError
 
@@ -514,8 +519,16 @@ class NoEgressController(EgressController):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
-        del runtime_argv, runtime_environment, request, container_name, seccomp_profile
+        del (
+            runtime_argv,
+            runtime_environment,
+            request,
+            container_name,
+            seccomp_profile,
+            vpn_config,
+        )
         raise SandboxUnavailable(
             "network tool execution requires a certified per-invocation egress helper"
         )
@@ -641,6 +654,84 @@ class ContainerEgressController(EgressController):
         self.helper_executable = helper_executable
         self.readiness_timeout_seconds = readiness_timeout_seconds
 
+    async def _remove_failed_helper(
+        self,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        helper_name: str,
+    ) -> None:
+        try:
+            cleanup = await asyncio.create_subprocess_exec(
+                *runtime_argv,
+                "rm",
+                "--force",
+                helper_name,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+                env=runtime_environment,
+            )
+            await asyncio.wait_for(cleanup.wait(), timeout=10)
+        except (OSError, asyncio.TimeoutError) as caught_error:
+            record_caught_exception(
+                "sandbox",
+                "sandbox.egress_failed_cleanup",
+                "A failed egress helper container could not be removed.",
+                caught_error,
+                stage="sandbox",
+            )
+
+    async def _await_ready(
+        self,
+        process: asyncio.subprocess.Process,
+        *,
+        runtime_argv: list[str],
+        runtime_environment: dict[str, str],
+        helper_name: str,
+        label: str,
+    ) -> None:
+        assert process.stdout is not None
+        deadline = asyncio.get_running_loop().time() + self.readiness_timeout_seconds
+        detail = bytearray()
+        timed_out = False
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                line = await asyncio.wait_for(
+                    process.stdout.readline(), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                # diagnostic-expected: handled below as a bounded readiness failure.
+                timed_out = True
+                break
+            if not line:
+                break
+            if line.rstrip(b"\r\n") == b"READY" and process.returncode is None:
+                return
+            detail.extend(line)
+            if len(detail) > 4_096:
+                del detail[:-4_096]
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        await self._remove_failed_helper(
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+        )
+        message = detail.decode("utf-8", errors="replace").strip()
+        if timed_out:
+            raise SandboxUnavailable(
+                f"{label} did not become ready" + (f": {message}" if message else "")
+            )
+        raise SandboxUnavailable(
+            f"{label} failed closed before readiness: {message or 'no status'}"
+        )
+
     async def acquire_loopback(
         self,
         *,
@@ -684,25 +775,14 @@ class ContainerEgressController(EgressController):
             raise SandboxUnavailable(
                 f"could not start loopback namespace helper: {exc}"
             ) from exc
+        await self._await_ready(
+            process,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+            label="loopback namespace helper",
+        )
         assert process.stdout is not None
-        try:
-            line = await asyncio.wait_for(
-                process.stdout.readline(), timeout=self.readiness_timeout_seconds
-            )
-        except asyncio.TimeoutError as exc:
-            process.kill()
-            await process.wait()
-            raise SandboxUnavailable(
-                "loopback namespace helper did not become ready"
-            ) from exc
-        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
-            process.kill()
-            await process.wait()
-            detail = line.decode("utf-8", errors="replace").strip()
-            raise SandboxUnavailable(
-                "loopback namespace failed closed before readiness: "
-                + (detail or "no status")
-            )
         drain_task = create_diagnostic_task(
             _discard_stream(process.stdout),
             feature="sandbox",
@@ -728,10 +808,22 @@ class ContainerEgressController(EgressController):
         request: SandboxRequest,
         container_name: str,
         seccomp_profile: Path | None,
+        vpn_config: str | None = None,
     ) -> EgressLease:
-        if request.execution_kind != SandboxExecutionKind.NETWORK_TOOL:
-            raise SandboxError("egress leases are only valid for network tools")
-        if not request.egress_rules and not request.egress_domains:
+        vpn_terminal = (
+            request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+            and request.network == SandboxNetwork.VPN
+        )
+        if (
+            request.execution_kind != SandboxExecutionKind.NETWORK_TOOL
+            and not vpn_terminal
+        ):
+            raise SandboxError(
+                "egress leases are valid only for network tools or VPN terminals"
+            )
+        if vpn_terminal and vpn_config is None:
+            raise SandboxError("VPN terminal egress requires an admitted VPN profile")
+        if not vpn_terminal and not request.egress_rules and not request.egress_domains:
             raise SandboxUnavailable(
                 "network execution requires broker-approved egress rules or domains"
             )
@@ -756,6 +848,13 @@ class ContainerEgressController(EgressController):
         ]
         if seccomp_profile is not None:
             argv.append(f"--security-opt=seccomp={seccomp_profile}")
+        if vpn_config is not None:
+            argv.extend(["--device=/dev/net/tun", "--interactive"])
+        if vpn_terminal:
+            for publication in request.published_ports:
+                argv.append(
+                    f"--publish=127.0.0.1:{publication.port}:{publication.port}/{publication.protocol}"
+                )
         # Containers joining this helper's network namespace cannot accept
         # their own --add-host flags. Put the approved host mappings on the
         # namespace owner so Docker/Podman can share the complete pinned
@@ -763,6 +862,10 @@ class ContainerEgressController(EgressController):
         for host, address in sorted(request.pinned_hosts.items()):
             argv.append(f"--add-host={host}:{_bracket_ip(address)}")
         argv.extend([self.helper_image, "serve"])
+        if vpn_config is not None:
+            argv.append("--vpn-stdin")
+        if vpn_terminal:
+            argv.append("--vpn-unrestricted")
         if request.start_egress_disabled:
             argv.append("--disabled")
         for rule in request.egress_rules:
@@ -790,7 +893,11 @@ class ContainerEgressController(EgressController):
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=(
+                    asyncio.subprocess.PIPE
+                    if vpn_config is not None
+                    else asyncio.subprocess.DEVNULL
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env=runtime_environment,
@@ -805,28 +912,19 @@ class ContainerEgressController(EgressController):
             )
             raise SandboxUnavailable(f"could not start egress helper: {exc}") from exc
         assert process.stdout is not None
-        try:
-            line = await asyncio.wait_for(
-                process.stdout.readline(), timeout=self.readiness_timeout_seconds
-            )
-        except asyncio.TimeoutError as exc:
-            record_caught_exception(
-                "sandbox",
-                "sandbox.sandbox.caught_failure_005",
-                "A handled sandbox operation raised an exception.",
-                exc,
-                stage="sandbox",
-            )
-            process.kill()
-            await process.wait()
-            raise SandboxUnavailable("egress helper did not become ready") from exc
-        if line.rstrip(b"\r\n") != b"READY" or process.returncode is not None:
-            process.kill()
-            await process.wait()
-            detail = line.decode("utf-8", errors="replace").strip()
-            raise SandboxUnavailable(
-                f"egress helper failed closed before readiness: {detail or 'no status'}"
-            )
+        if vpn_config is not None:
+            assert process.stdin is not None
+            process.stdin.write(vpn_config.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+        await self._await_ready(
+            process,
+            runtime_argv=runtime_argv,
+            runtime_environment=runtime_environment,
+            helper_name=helper_name,
+            label="egress helper",
+        )
+        assert process.stdout is not None
         drain_task = create_diagnostic_task(
             _discard_stream(process.stdout),
             feature="sandbox",
@@ -1690,7 +1788,7 @@ class ContainerSandboxRunner(SandboxRunner):
             if network_mode is None:
                 for host, address in sorted(request.pinned_hosts.items()):
                     argv.append(f"--add-host={host}:{_bracket_ip(address)}")
-        if request.published_ports:
+        if request.published_ports and network_mode is None:
             if request.execution_kind != SandboxExecutionKind.HUMAN_TERMINAL:
                 raise SandboxError("published ports are reserved for human terminals")
             for publication in request.published_ports:
@@ -1712,6 +1810,7 @@ class ContainerSandboxRunner(SandboxRunner):
         container_name: str,
         columns: int,
         rows: int,
+        vpn_config: str | None = None,
     ) -> SandboxTerminalProcess:
         """Launch one fixed-command container with an interactive PTY."""
 
@@ -1736,8 +1835,12 @@ class ContainerSandboxRunner(SandboxRunner):
             raise SandboxError("terminal dimensions must be between 1 and 1000")
 
         lease: EgressLease | None = None
-        if request.network == SandboxNetwork.SCOPED:
-            if not request.egress_rules and not request.egress_domains:
+        if request.network in {SandboxNetwork.SCOPED, SandboxNetwork.VPN}:
+            if (
+                request.network == SandboxNetwork.SCOPED
+                and not request.egress_rules
+                and not request.egress_domains
+            ):
                 raise SandboxUnavailable(
                     "network terminal execution requires an explicit broker-approved boundary"
                 )
@@ -1751,6 +1854,7 @@ class ContainerSandboxRunner(SandboxRunner):
                 request=request,
                 container_name=container_name,
                 seccomp_profile=self.profile.seccomp_profile if self.profile else None,
+                vpn_config=vpn_config,
             )
         master_fd: int | None = None
         slave_fd: int | None = None
@@ -2108,7 +2212,7 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v5"
+    _recipe_version = "v9"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",
@@ -2117,6 +2221,7 @@ class ContainerImagePreparer:
         "ripgrep",
         "git",
         "curl",
+        "openvpn",
     )
     _security_tool_manifest_path = "/usr/local/share/nebula/security-tools.json"
     _base_label = "org.nebula.human-terminal.base"
