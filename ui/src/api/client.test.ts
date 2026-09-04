@@ -682,6 +682,36 @@ describe("ApiClient", () => {
     expect(created).toMatchObject({ name: "Local vLLM", kind: "local" });
   });
 
+  it("maps OrcaRouter profiles as gateway providers", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+      id: "provider-orcarouter",
+      name: "OrcaRouter",
+      provider_type: "orcarouter",
+      endpoint: "https://api.orcarouter.ai/v1",
+      enabled: true,
+      is_local: false,
+      secret_ref: "env:ORCAROUTER_API_KEY",
+      model_allowlist: ["orcarouter/auto"],
+      capabilities: { streaming: true, tool_calling: true },
+      privacy: { local_only: false, residency: [] },
+      metadata: { default_model: "orcarouter/auto" },
+      created_at: "2026-09-04T10:00:00Z",
+      updated_at: "2026-09-04T10:00:00Z",
+      revision: 1,
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const providers = await client.listProviders();
+
+    expect(providers.items[0]).toMatchObject({
+      id: "provider-orcarouter",
+      providerType: "orcarouter",
+      kind: "gateway",
+      credentialEnv: "ORCAROUTER_API_KEY",
+      defaultModel: "orcarouter/auto",
+    });
+  });
+
   it("maps fixed-loopback local provider discovery", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
       flavor: "ollama",

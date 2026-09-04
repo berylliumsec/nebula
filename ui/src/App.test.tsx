@@ -979,6 +979,53 @@ describe("Nebula workspace", () => {
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({ provider_type: "vertex", metadata: { options: { project: "security-project", location: "us-central1", context_window: 16000, max_output_tokens: 1000 } } });
   });
 
+  it("offers OrcaRouter with authoritative gateway defaults", async () => {
+    const entity = { created_at: "2026-09-04T10:00:00Z", updated_at: "2026-09-04T10:00:00Z", revision: 1 };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/providers/provider-orcarouter/health")) return new Response(JSON.stringify({ provider_id: "provider-orcarouter", healthy: true, models: ["orcarouter/auto"], detail: null }), { status: 200 });
+      if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/provider-catalog")) return new Response(JSON.stringify([{
+        flavor: "orcarouter",
+        adapter: "openai_compatible",
+        display_name: "OrcaRouter",
+        local: false,
+        default_base_url: "https://api.orcarouter.ai/v1",
+        suggested_key_env: "ORCAROUTER_API_KEY",
+        support_tier: "standard",
+      }]), { status: 200 });
+      if (url.pathname.endsWith("/providers") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...entity, id: "provider-orcarouter", ...body }), { status: 201 });
+      }
+      return new Response(JSON.stringify([]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/settings");
+    await screen.findByRole("heading", { name: "Settings" });
+    await user.click(screen.getByRole("link", { name: "Advanced settings" }));
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    expect(within(dialog).getByLabelText("Provider type")).toHaveValue("orcarouter");
+    expect(within(dialog).getByLabelText("Profile name")).toHaveValue("OrcaRouter");
+    expect(within(dialog).getByLabelText("Endpoint")).toHaveValue("https://api.orcarouter.ai/v1");
+    await user.click(within(dialog).getByText("Advanced provider options"));
+    expect(within(dialog).getByLabelText("Credential environment variable")).toHaveValue("ORCAROUTER_API_KEY");
+    await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/providers") && init?.method === "POST")).toBe(true));
+    const createCall = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers") && init?.method === "POST");
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      name: "OrcaRouter",
+      provider_type: "orcarouter",
+      endpoint: "https://api.orcarouter.ai/v1",
+      secret_ref: "env:ORCAROUTER_API_KEY",
+      is_local: false,
+    });
+  });
+
   it("records a manual finding as an asset-linked, unverified candidate", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const asset = { ...entity, id: "asset-1", engagement_id: "engagement-1", asset_type: "domain", name: "portal.example.test", address: null, hostname: "portal.example.test", criticality: "high", exposed: true, tags: [], metadata: {} };
