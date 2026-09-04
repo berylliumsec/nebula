@@ -95,8 +95,26 @@ export function AutomationRuntimeSettings() {
         config: await vpnFile.text(), username: vpnUsername || undefined, password: vpnPassword || undefined,
         persistence: vpnPersistence,
       });
-      setVpnProfiles((items) => [saved, ...items]); setVpnFile(undefined); setVpnName(""); setVpnUsername(""); setVpnPassword("");
-      announceSettingsSaved("VPN profile saved. Select it from a project's command runtime policy.");
+      setVpnProfiles((items) => [saved, ...items]);
+      setVpnFile(undefined); setVpnName(""); setVpnUsername(""); setVpnPassword("");
+      if (engagement && projectPolicy) {
+        try {
+          const updated = await api.updateAutomationPolicy(engagement.id, {
+            approvalPolicy: projectPolicy.approvalPolicy,
+            networkEnabled: true,
+            runnerProfileId: projectPolicy.runnerProfileId,
+            vpnProfileId: saved.id,
+            maxTimeoutMs: projectPolicy.maxTimeoutMs,
+            expectedRevision: projectPolicy.revision,
+          });
+          setProjectPolicy(updated);
+        } catch (selectionError) {
+          throw new Error(`${saved.name} was saved, but Nebula could not select it for ${engagement.name}. Use “Use for this project” to retry.`, { cause: selectionError });
+        }
+      }
+      announceSettingsSaved(engagement && projectPolicy
+        ? `${saved.name} was saved and will reconnect automatically for ${engagement.name}.`
+        : "VPN profile saved. Open a project to choose where it is used.");
     } catch (uploadError) {
       void logCaughtDiagnostic("interface.automation_runtime.vpn_upload_failed", "VPN profile could not be saved.", uploadError, "automation_runtime");
       setError(uploadError instanceof Error ? uploadError.message : "Could not save the VPN profile.");
@@ -144,7 +162,7 @@ export function AutomationRuntimeSettings() {
         <label className="vpn-file-drop"><UploadCloud size={22} /><span><strong>{vpnFile?.name ?? "Choose an OpenVPN profile"}</strong><small>.ovpn · TUN client · inline certificates · up to 15 KB</small></span><input type="file" accept=".ovpn,application/x-openvpn-profile" required onChange={(event) => { const file = event.target.files?.[0]; setVpnFile(file); if (file && !vpnName) setVpnName(file.name.replace(/\.ovpn$/i, "")); }} /></label>
         <label>Profile name<input value={vpnName} placeholder="Company VPN" onChange={(event) => setVpnName(event.target.value)} /></label>
         <details className="inventory-disclosure vpn-options"><summary><span><strong>Credentials and storage</strong><small>Only needed when the profile requests username/password authentication.</small></span><ChevronDown size={17} /></summary><div className="policy-form-body"><label>Username<input autoComplete="username" value={vpnUsername} onChange={(event) => setVpnUsername(event.target.value)} /></label><label>Password<input type="password" autoComplete="new-password" value={vpnPassword} onChange={(event) => setVpnPassword(event.target.value)} /></label><label>Storage<select value={vpnPersistence} onChange={(event) => setVpnPersistence(event.target.value as "vault" | "session")}><option value="vault">Operating-system vault</option><option value="session">This Core session only</option></select></label></div></details>
-        <footer><span>Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : "Save profile"}</button></footer>
+        <footer><span>{engagement ? `The profile will be ${vpnPersistence === "vault" ? "kept in the OS vault" : "available for this Core session"} and selected for ${engagement.name}.` : "Open a project to select this profile automatically."} Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : engagement ? "Save for project" : "Save profile"}</button></footer>
       </form>
       <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>{engagement ? `Choose the route for new terminals in ${engagement.name}.` : "Open a project to choose where a profile is used."}</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => {
         const selected = projectPolicy?.vpnProfileId === profile.id;
