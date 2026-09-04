@@ -20,7 +20,13 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.database import BootstrapStateRow, Database
 from nebula.v3.domain import Engagement, RunnerProfile, ScopePolicy
-from nebula.v3.sandbox import ContainerSandboxRunner
+from nebula.v3.sandbox import (
+    ContainerSandboxRunner,
+    PreparedContainerImage,
+    SandboxError,
+    SandboxRequest,
+    SandboxWorkspaceAccess,
+)
 from nebula.v3.setup import (
     ImagePreparationCancellationRequest,
     ImagePreparationRequest,
@@ -348,6 +354,80 @@ def test_prepared_runtime_survives_health_refresh_but_not_runner_config_change(
     with pytest.raises(RuntimePlatformError, match="runner has changed"):
         platform.resolve_operator_runtime(engagement.id, "bash", network=False)
     assert changed.revision > profile.revision
+
+
+def test_human_terminal_runner_admits_only_the_exact_linked_workspace(tmp_path):
+    store = NebulaStore(tmp_path / "linked-workspace.db")
+    linked_workspace = tmp_path / "linked" / "project"
+    linked_workspace.mkdir(parents=True)
+    sibling_workspace = tmp_path / "linked" / "other-project"
+    sibling_workspace.mkdir()
+    engagement = store.create(
+        Engagement(name="Linked workspace", workspace_path=str(linked_workspace))
+    )
+    profile = store.create(
+        RunnerProfile(
+            id="local",
+            name="Local Docker",
+            runtime="docker",
+            executable="/usr/bin/docker",
+            platform="linux/amd64",
+            isolation="rootless",
+            healthy=True,
+        )
+    )
+    platform = _platform(tmp_path, store)
+    image = PreparedContainerImage(
+        source_reference="docker.io/kalilinux/kali-rolling:latest",
+        base_resolved_reference=("docker.io/kalilinux/kali-rolling@sha256:" + "b" * 64),
+        base_digest="sha256:" + "b" * 64,
+        resolved_reference="sha256:" + "c" * 64,
+        digest="sha256:" + "c" * 64,
+        platform="linux/amd64",
+        configured_user="",
+        installed_packages=("kali-linux-headless",),
+        refreshed=False,
+        detail="verified cached image",
+    )
+    platform._prepared_images[(profile.id, profile.revision)] = image
+
+    resolution = asyncio.run(platform.resolve_human_terminal_runtime(engagement.id))
+
+    assert resolution.workspace == linked_workspace.resolve()
+    assert resolution.runner.egress_controller.certified is True
+    assert linked_workspace.resolve() in resolution.runner.workspace_roots
+    assert (tmp_path / "linked").resolve() not in resolution.runner.workspace_roots
+    allowed = SandboxRequest(
+        image=image.digest,
+        trusted_local_image=True,
+        command=["/bin/true"],
+        workspace=linked_workspace,
+        workspace_access=SandboxWorkspaceAccess.WRITE,
+    )
+    assert resolution.runner._validate(allowed) == linked_workspace.resolve()
+    denied = allowed.model_copy(update={"workspace": sibling_workspace})
+    with pytest.raises(SandboxError, match="outside the configured workspace roots"):
+        resolution.runner._validate(denied)
+
+    platform.runtime_metadata_path.write_text(
+        json.dumps(
+            {
+                "schema": KALI_RUNTIME_METADATA_SCHEMA,
+                "image_digest": image.digest,
+                "runner_profile_id": profile.id,
+                "runner_profile_revision": profile.revision,
+                "runner_profile_fingerprint": _runner_profile_fingerprint(profile),
+                "binary_inventory": [
+                    {"name": "bash", "path": "/usr/bin/bash", "version": "5"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    operator = platform.resolve_operator_runtime(engagement.id, "bash", network=False)
+    assert operator.workspace == linked_workspace.resolve()
+    assert linked_workspace.resolve() in operator.runner.workspace_roots
+    assert (tmp_path / "linked").resolve() not in operator.runner.workspace_roots
 
 
 def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(

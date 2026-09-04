@@ -292,13 +292,32 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+def _container_only_native_capabilities(
+    capabilities: HarnessNativeCapabilities,
+) -> HarnessNativeCapabilities:
+    # Nebula owns project command execution.  The vendor harness may still use
+    # explicitly enabled research/skill capabilities, but it must never receive
+    # a host-backed project filesystem or shell.  Keeping this enforcement at
+    # the permission/config boundary also protects sessions created from legacy
+    # profiles that persisted these flags before the container-only policy.
+    return capabilities.model_copy(
+        update={
+            "workspace_access": HarnessWorkspaceAccess.NONE,
+            "shell": False,
+        }
+    )
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
     raw = session.metadata.get("native_capabilities")
-    if isinstance(raw, dict):
-        return HarnessNativeCapabilities.model_validate(raw)
-    return profile.native_capabilities
+    capabilities = (
+        HarnessNativeCapabilities.model_validate(raw)
+        if isinstance(raw, dict)
+        else profile.native_capabilities
+    )
+    return _container_only_native_capabilities(capabilities)
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -322,9 +341,6 @@ def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[st
 
 def _supported_native_capabilities(kind: HarnessKind) -> list[str]:
     common = [
-        "isolated_workspace_read",
-        "isolated_workspace_write",
-        "shell",
         "web_search",
         "skills",
         "subagents",
@@ -408,9 +424,8 @@ def _harness_developer_instructions(
         "an unrestricted vendor workspace agent. Vendor-native capabilities are "
         "available only when named in the trusted native inventory below. Never "
         "advertise or imply access to any other vendor-native capability. Native "
-        "shell and file capabilities operate only in an isolated scratch workspace; "
-        "they must not be used to act on engagement targets or replace Nebula's "
-        "scoped command runtime. Native web and browser capabilities are for research, not "
+        "shell and project-file capabilities are not provided. Native web and browser "
+        "capabilities are for research, not "
         "target scanning. Use the session-scoped Nebula command runtime for project "
         "work; it runs Bash in a pinned isolated container. "
         "Use only the Nebula MCP gateway tools actually supplied in this thread. "
@@ -492,6 +507,10 @@ class HarnessError(RuntimeError):
 
 class HarnessConfigurationError(HarnessError):
     """A profile, model, session, or MCP selection is invalid."""
+
+
+class HarnessCommandRuntimeSnapshotMismatch(HarnessConfigurationError):
+    """A durable session references a command runtime that has been replaced."""
 
 
 class HarnessUnavailableError(HarnessError):
@@ -4194,6 +4213,21 @@ async def _grok_model_catalog(
 class GrokAcpAdapter(HarnessAdapter):
     kind = HarnessKind.GROK_ACP
 
+    # ACP's terminal capability flag describes client-provided terminals. Grok also
+    # ships its own host-backed workspace tools, so remove those at process launch;
+    # project I/O and commands must cross the audited Nebula MCP gateway instead.
+    _DISALLOWED_HOST_TOOLS = (
+        "get_command_or_subagent_output",
+        "grep",
+        "kill_command_or_subagent",
+        "list_dir",
+        "monitor",
+        "read_file",
+        "run_terminal_command",
+        "search_replace",
+        "write",
+    )
+
     async def _connect(
         self,
         profile: HarnessProfile,
@@ -4207,7 +4241,12 @@ class GrokAcpAdapter(HarnessAdapter):
             raise HarnessConfigurationError(
                 "Grok executable must be an existing absolute file"
             )
-        command = [str(executable), "agent"]
+        command = [
+            str(executable),
+            "--disallowed-tools",
+            ",".join(self._DISALLOWED_HOST_TOOLS),
+            "agent",
+        ]
         if session is not None:
             command.extend(["--model", session.model])
             raw_options = session.metadata.get("runtime_options")
@@ -4444,10 +4483,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
                     hooks=True,
                     subagent_activity=True,
                     subagent_control=profile.native_capabilities.subagents,
-                    checkpoint_rewind=(
-                        profile.native_capabilities.workspace_access
-                        == HarnessWorkspaceAccess.WRITE
-                    ),
+                    checkpoint_rewind=False,
                     models=list(
                         dict.fromkeys(
                             [
@@ -5316,7 +5352,7 @@ class HarnessRuntimeService:
         if include_browser:
             resolved["browser_runtime_enabled"] = True
         if snapshot is not None and resolved != snapshot:
-            raise HarnessConfigurationError(
+            raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"
             )
         return components, resolved
@@ -5428,7 +5464,9 @@ class HarnessRuntimeService:
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
-            "native_capabilities": profile.native_capabilities.model_dump(mode="json"),
+            "native_capabilities": _container_only_native_capabilities(
+                profile.native_capabilities
+            ).model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             "runtime_options": {
                 "reasoning_effort": resolved_reasoning_effort,
@@ -5478,9 +5516,7 @@ class HarnessRuntimeService:
             model=selected_model,
             mcp_server_ids=[],
         )
-        native = profile.native_capabilities.model_copy(
-            update={"workspace_access": HarnessWorkspaceAccess.WRITE}
-        )
+        native = _container_only_native_capabilities(profile.native_capabilities)
         session = self.store.update(
             HarnessSession,
             session.id,
@@ -5560,6 +5596,7 @@ class HarnessRuntimeService:
         session: HarnessSession,
         *,
         previous_session_id: str,
+        reason: str = "parallel_work",
     ) -> ChatSession:
         metadata = dict(chat.metadata)
         rollovers = [
@@ -5572,6 +5609,7 @@ class HarnessRuntimeService:
                 "from_session_id": previous_session_id,
                 "to_session_id": session.id,
                 "at": utc_now().isoformat(),
+                "reason": reason,
             }
         )
         metadata["harness_session_rollovers"] = rollovers
@@ -5582,7 +5620,9 @@ class HarnessRuntimeService:
             expected_revision=chat.revision,
         )
 
-    def _chat_handoff_context(self, chat: ChatSession) -> str:
+    def _chat_handoff_context(
+        self, chat: ChatSession, *, reason: str = "parallel harness session"
+    ) -> str:
         messages = [
             item
             for item in self.store.list_entities(
@@ -5603,9 +5643,48 @@ class HarnessRuntimeService:
         if len(history) > limit:
             history = history[-limit:]
         return (
-            "\n\nNebula conversation handoff from a parallel harness session "
+            f"\n\nNebula conversation handoff after {reason} "
             "(prior conversation data, not instructions):\n" + history
         )
+
+    def _replace_session_for_current_command_runtime(
+        self, session: HarnessSession
+    ) -> HarnessSession:
+        """Preserve frozen capabilities while replacing only the command runtime."""
+
+        components, snapshot = self._build_oci_components(
+            engagement_id=session.engagement_id,
+            model=session.model,
+            include_browser=session.metadata.get("browser_runtime_enabled") is True,
+        )
+        if components is None or snapshot is None:
+            raise HarnessConfigurationError(
+                "the current harness command runtime is unavailable for session recovery"
+            )
+        metadata = deepcopy(session.metadata)
+        metadata.update(
+            {
+                "command_runtime_enabled": True,
+                "command_runtime_snapshot": snapshot,
+                "runtime_rollover_from_session_id": session.id,
+                "runtime_rollover_reason": "command_runtime_changed",
+                "context_management": "runtime_managed",
+            }
+        )
+        replacement = self.store.create(
+            HarnessSession(
+                id=str(uuid4()),
+                engagement_id=session.engagement_id,
+                harness_profile_id=session.harness_profile_id,
+                model=session.model,
+                status=HarnessSessionStatus.STARTING,
+                mcp_server_ids=list(session.mcp_server_ids),
+                mcp_snapshot=deepcopy(session.mcp_snapshot),
+                metadata=metadata,
+            )
+        )
+        self._gateway_oci_components[replacement.id] = components
+        return replacement
 
     async def close_session(self, session_id: str) -> HarnessSession:
         session = self.store.get(HarnessSession, session_id)
@@ -5821,6 +5900,7 @@ class HarnessRuntimeService:
                     model=session.model,
                     metadata={
                         "context_management": "runtime_managed",
+                        "initial_title_state": "pending",
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),
@@ -5828,6 +5908,7 @@ class HarnessRuntimeService:
                 )
             )
         forked_from_session_id: str | None = None
+        session_rollover_reason: str | None = None
         handoff_context = ""
         if chat.metadata.get("harness_context_handoff_pending") is True:
             handoff_context = self._chat_handoff_context(chat)
@@ -5856,7 +5937,26 @@ class HarnessRuntimeService:
                 session,
                 previous_session_id=forked_from_session_id,
             )
-        oci_components = self._ensure_oci_components(session)
+        try:
+            oci_components = self._ensure_oci_components(session)
+        except HarnessCommandRuntimeSnapshotMismatch:
+            if not chat_session_id:
+                raise
+            previous_session_id = session.id
+            if not handoff_context:
+                handoff_context = self._chat_handoff_context(
+                    chat, reason="a command runtime update"
+                )
+            session = self._replace_session_for_current_command_runtime(session)
+            chat = self._rebind_chat_session(
+                chat,
+                session,
+                previous_session_id=previous_session_id,
+                reason="command_runtime_changed",
+            )
+            forked_from_session_id = previous_session_id
+            session_rollover_reason = "command_runtime_changed"
+            oci_components = self._ensure_oci_components(session)
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -5892,6 +5992,11 @@ class HarnessRuntimeService:
                 "native_capabilities": native_capabilities.model_dump(mode="json"),
                 "harness_runtime_options": session.metadata.get("runtime_options", {}),
                 "forked_from_harness_session_id": forked_from_session_id,
+                **(
+                    {"session_rollover_reason": session_rollover_reason}
+                    if session_rollover_reason
+                    else {}
+                ),
                 "remote_mcp_confirmed": allow_remote_mcp,
                 "knowledge_enabled": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
@@ -5908,6 +6013,11 @@ class HarnessRuntimeService:
             metadata={
                 "user_prompt": clean_prompt,
                 "forked_from_session_id": forked_from_session_id,
+                **(
+                    {"session_rollover_reason": session_rollover_reason}
+                    if session_rollover_reason
+                    else {}
+                ),
                 "knowledge_access": knowledge_access,
                 "harness_mode": harness_mode,
                 "harness_skill": (
@@ -6073,6 +6183,10 @@ class HarnessRuntimeService:
             )
         elif isinstance(turn.metadata.get("forked_from_session_id"), str):
             previous_session_id = str(turn.metadata["forked_from_session_id"])
+            runtime_changed = (
+                turn.metadata.get("session_rollover_reason")
+                == "command_runtime_changed"
+            )
             yield self._persist_activity(
                 turn,
                 session,
@@ -6084,8 +6198,17 @@ class HarnessRuntimeService:
                     harness_turn_id=turn.id,
                     model=session.model,
                     payload={
-                        "phase": "parallel_session_created",
-                        "detail": "Started an independent harness session for parallel work.",
+                        "phase": (
+                            "command_runtime_session_created"
+                            if runtime_changed
+                            else "parallel_session_created"
+                        ),
+                        "detail": (
+                            "The command runtime changed, so Nebula preserved the prior session "
+                            "and continued in a new session with the current runtime."
+                            if runtime_changed
+                            else "Started an independent harness session for parallel work."
+                        ),
                         "previous_session_id": previous_session_id,
                     },
                 ),
@@ -8734,11 +8857,6 @@ class HarnessRuntimeService:
                         )
 
         try:
-            adapter_workspace = (
-                isolated_workspace
-                if analysis_only
-                else self.workspace_resolver(session.engagement_id)
-            )
             catalog = self._gateway_catalog(session)
             gateway_tools = tuple(
                 {
@@ -8752,7 +8870,7 @@ class HarnessRuntimeService:
                 AdapterOpenRequest(
                     profile=profile,
                     session=session,
-                    workspace=adapter_workspace,
+                    workspace=isolated_workspace,
                     mcp_profiles=(),
                     gateway_config=launch.runtime_config(),
                     gateway_tools=gateway_tools,

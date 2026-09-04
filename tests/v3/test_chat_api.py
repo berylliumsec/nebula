@@ -53,6 +53,15 @@ class ApiChatProvider(ModelProvider):
         )
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
+        if request.metadata.get("operation") == "conversation_naming":
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="API Chat Verification",
+                usage=ModelUsage(input_tokens=2, output_tokens=3, total_tokens=5),
+                finish_reason="stop",
+                provider_request_id="request-api-name",
+            )
         return ModelResponse(
             provider_id=self.config.id,
             model=request.model or "model-a",
@@ -435,11 +444,11 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     renamed = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
-        json={"title": "Renamed API conversation", "expected_revision": 1},
+        json={"title": "Renamed API conversation", "expected_revision": 2},
     )
     assert renamed.status_code == 200
     assert renamed.json()["title"] == "Renamed API conversation"
-    assert renamed.json()["revision"] == 2
+    assert renamed.json()["revision"] == 3
     assert store.get(ChatSession, session_id).title == "Renamed API conversation"
     stale_rename = client.patch(
         f"/api/v1/chat-sessions/{session_id}",

@@ -18,6 +18,7 @@ from pydantic import SecretStr
 
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import AutomationRuntimeUnavailable
+from nebula.v3.automation_tools import AutomationToolComponents, command_specs
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.browser_automation import (
     BrowserAutomationService,
@@ -65,7 +66,6 @@ from nebula.v3.domain import (
     McpServerProfile,
     McpToolSnapshot,
     McpTransport,
-    RiskClass,
     RunBudget,
     RunStatus,
     ScopePolicy,
@@ -659,7 +659,8 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
             == "https://mcp.invalid/api"
         )
         assert len(adapter.opens) == 1
-        assert adapter.opens[0].workspace == tmp_path
+        assert adapter.opens[0].workspace.name == "vendor-workspace"
+        assert adapter.opens[0].workspace != tmp_path
         assert adapter.opens[0].mcp_profiles == ()
         assert set(adapter.opens[0].gateway_config) == {"nebula"}
 
@@ -1236,7 +1237,13 @@ def test_harness_session_freezes_native_capabilities(tmp_path):
         expected_revision=profile.revision,
     )
 
-    assert session.metadata["native_capabilities"] == configured.model_dump(mode="json")
+    frozen = HarnessNativeCapabilities.model_validate(
+        session.metadata["native_capabilities"]
+    )
+    assert frozen.workspace_access == HarnessWorkspaceAccess.NONE
+    assert frozen.shell is False
+    assert frozen.web_search is True
+    assert frozen.subagents is True
 
 
 def test_harness_session_does_not_require_unprepared_optional_command_runtime(tmp_path):
@@ -1259,6 +1266,110 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
 
     assert session.metadata["command_runtime_enabled"] is False
     assert "command_runtime_snapshot" not in session.metadata
+
+
+def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
+    tmp_path,
+):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
+
+        class Commands:
+            def __init__(self, digest: str) -> None:
+                self.store = store
+                self.digest = digest
+
+            def chat_components(self, *, engagement_id: str):
+                return AutomationToolComponents(
+                    broker=object(),
+                    scope=ScopePolicy(
+                        id=f"scope:{engagement_id}", engagement_id=engagement_id
+                    ),
+                    workspace=tmp_path,
+                    specs=command_specs(),
+                    runtime_digest=self.digest,
+                )
+
+        old_digest = "sha256:" + "a" * 64
+        new_digest = "sha256:" + "b" * 64
+        first_runtime.bind_automation_tool_platform(Commands(old_digest))  # type: ignore[arg-type]
+        chat, _, first_turn = first_runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Remember the original request",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        _ = [event async for event in first_runtime.stream_turn(first_turn.id)]
+        frozen_session = store.get(HarnessSession, first_turn.harness_session_id)
+        assert (
+            store.get(HarnessTurn, first_turn.id).status == HarnessTurnStatus.COMPLETE
+        )
+        await first_runtime.shutdown()
+
+        adapter = FakeAdapter()
+        restarted_runtime = HarnessRuntimeService(
+            store,
+            credential_store=CredentialStore(),
+            workspace_resolver=lambda _: tmp_path,
+            adapter_factory=lambda _: adapter,
+        )
+        restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        rebound_chat, owner, replacement_turn = restarted_runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Continue after the runtime update",
+            chat_session_id=chat.id,
+            harness_session_id=frozen_session.id,
+            mcp_server_ids=[],
+        )
+
+        replacement_session = store.get(
+            HarnessSession, replacement_turn.harness_session_id
+        )
+        assert replacement_session.id != frozen_session.id
+        assert rebound_chat.harness_session_id == replacement_session.id
+        assert (
+            store.get(HarnessSession, frozen_session.id).metadata[
+                "command_runtime_snapshot"
+            ]["runtime_digest"]
+            == old_digest
+        )
+        assert (
+            replacement_session.metadata["command_runtime_snapshot"]["runtime_digest"]
+            == new_digest
+        )
+        assert rebound_chat.metadata["harness_session_rollovers"][-1]["reason"] == (
+            "command_runtime_changed"
+        )
+        assert owner.request_snapshot["session_rollover_reason"] == (
+            "command_runtime_changed"
+        )
+        assert replacement_turn.metadata["session_rollover_reason"] == (
+            "command_runtime_changed"
+        )
+        assert "Remember the original request" in replacement_turn.prompt
+        assert "handoff after a command runtime update" in replacement_turn.prompt
+
+        events = [
+            event async for event in restarted_runtime.stream_turn(replacement_turn.id)
+        ]
+        rollover = next(
+            event
+            for event in events
+            if event.payload.get("phase") == "command_runtime_session_created"
+        )
+        assert rollover.payload["previous_session_id"] == frozen_session.id
+        assert "preserved the prior session" in rollover.payload["detail"]
+        assert store.get(HarnessTurn, replacement_turn.id).status == (
+            HarnessTurnStatus.COMPLETE
+        )
+        await restarted_runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_harness_profiles_reject_unsupported_or_secret_bearing_native_tools():
@@ -2030,7 +2141,7 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
     asyncio.run(scenario())
 
 
-def test_native_command_policy_requires_profile_capability_and_exact_approval(tmp_path):
+def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
         profile = store.update(
@@ -2063,58 +2174,19 @@ def test_native_command_policy_requires_profile_capability_and_exact_approval(tm
                 annotations={"vendor_item_id": "codex-item-1"},
             ),
         )
-        approval = store.get(Approval, ticket.approval_id or "")
-        assert approval.risk_class == RiskClass.LOCAL_READ
-        assert approval.exact_request["arguments"] == {
-            "command": "pwd",
-            "cwd": ".",
-        }
-        assert approval.exact_request["argument_editing"] is False
-        decided = store.update(
-            Approval,
-            approval.id,
-            {"status": ApprovalStatus.APPROVED, "decided_by": "operator"},
-            expected_revision=approval.revision,
-        )
-        await runtime.resolve_approval(decided)
-        assert (await ticket.decision).allowed is True
-
+        assert ticket.approval_id is None
+        assert ticket.tool_call_id is not None
+        decision = await ticket.decision
+        assert decision.allowed is False
+        assert "not enabled" in decision.reason
+        denied_call = store.get(ToolCall, ticket.tool_call_id)
+        assert denied_call.status == ToolCallStatus.DENIED
         session = store.get(HarnessSession, turn.harness_session_id)
-        started = runtime._record_tool_event(
-            turn,
-            session,
-            HarnessEvent(
-                type="tool_started",
-                server_id="codex",
-                tool_name="commandExecution",
-                payload={"id": "codex-item-1", "command": "pwd"},
-            ),
-        )
-        completed = runtime._record_tool_event(
-            turn,
-            session,
-            HarnessEvent(
-                type="tool_completed",
-                server_id="codex",
-                tool_name="commandExecution",
-                payload={
-                    "id": "codex-item-1",
-                    "status": "completed",
-                    "output": "scratch workspace",
-                },
-            ),
-        )
-        assert started.tool_call_id == ticket.tool_call_id
-        assert completed.tool_call_id == ticket.tool_call_id
-        native_call = store.get(ToolCall, ticket.tool_call_id or "")
-        assert native_call.status == ToolCallStatus.COMPLETE
-        assert native_call.result == "scratch workspace"
-
         frozen = HarnessNativeCapabilities.model_validate(
             session.metadata["native_capabilities"]
         )
-        assert frozen.shell is True
-        assert frozen.workspace_access == HarnessWorkspaceAccess.READ
+        assert frozen.shell is False
+        assert frozen.workspace_access == HarnessWorkspaceAccess.NONE
 
     asyncio.run(scenario())
 
@@ -2407,6 +2479,27 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
     headers = {"Authorization": "Bearer test-token"}
 
     with TestClient(app) as client:
+        created_profile = client.post(
+            "/api/v1/harnesses",
+            headers=headers,
+            json={
+                "name": "Container-only Codex",
+                "kind": "codex_app_server",
+                "executable": "/bin/true",
+                "auth_mode": "existing_session",
+                "native_capabilities": {
+                    "workspace_access": "write",
+                    "shell": True,
+                    "web_search": True,
+                },
+            },
+        )
+        assert created_profile.status_code == 201, created_profile.text
+        created_native = created_profile.json()["native_capabilities"]
+        assert created_native["workspace_access"] == "none"
+        assert created_native["shell"] is False
+        assert created_native["web_search"] is True
+
         catalog = client.get("/api/v1/harness-catalog", headers=headers)
         assert catalog.status_code == 200
         assert [item["kind"] for item in catalog.json()] == [
@@ -2488,7 +2581,7 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         discussed = client.post(f"/api/v1/runs/{run_id}/discuss", headers=headers)
         assert discussed.status_code == 200
         assert discussed.json()["id"] == body["session_id"]
-        assert len(adapter.opens) == 1
+        assert len(adapter.opens) == 2
 
 
 def test_harness_export_closes_references_without_machine_credentials(tmp_path):

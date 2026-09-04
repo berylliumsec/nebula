@@ -134,6 +134,36 @@ describe("ContainerTerminalPanel", () => {
     terminalSpies.selection = "";
   });
 
+  it("shows the frozen VPN boundary for a recovered terminal", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({ ready: true }),
+      recoverContainerTerminals: vi.fn().mockResolvedValue({
+        sessions: [{
+          session: session("terminal-vpn"),
+          runtime,
+          network: {
+            mode: "vpn",
+            runtimeNetwork: "private_namespace",
+            vpnProfileId: "vpn-1",
+            vpnProfileRevision: 1,
+            vpnProfileName: "Company VPN",
+            publishedPorts: [],
+          },
+        }],
+      }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+
+    renderPanel(api);
+
+    expect(await screen.findByText(/VPN enforced · Company VPN/)).toBeVisible();
+    expect(screen.getByText(/blocked until OpenVPN is ready/)).toBeVisible();
+    expect(screen.queryByText(/Bridge networking is permitted/)).not.toBeInTheDocument();
+  });
+
   it("explains a workspace limit before attempting a terminal start", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
