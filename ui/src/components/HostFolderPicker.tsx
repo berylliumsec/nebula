@@ -10,6 +10,7 @@ interface FolderListing {
   parent?: string;
   directories: Array<{ name: string; path: string }>;
   truncated: boolean;
+  nextOffset?: number;
 }
 
 export function HostFolderPicker({ api, value, onSelect }: {
@@ -20,15 +21,18 @@ export function HostFolderPicker({ api, value, onSelect }: {
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<FolderListing>();
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string>();
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [createError, setCreateError] = useState<string>();
+  const [loadMoreError, setLoadMoreError] = useState<string>();
   const browseButtonRef = useRef<HTMLButtonElement>(null);
   const folderListRef = useRef<HTMLDivElement>(null);
   const newFolderInputRef = useRef<HTMLInputElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const retryLoadMoreButtonRef = useRef<HTMLButtonElement>(null);
   const selectButtonRef = useRef<HTMLButtonElement>(null);
 
   const load = async (path?: string, moveFocus = false) => {
@@ -40,6 +44,7 @@ export function HostFolderPicker({ api, value, onSelect }: {
     }
     setLoading(true);
     setError(undefined);
+    setLoadMoreError(undefined);
     try {
       setListing(await api.listHostWorkspaceFolders(path));
       if (moveFocus) requestAnimationFrame(() => {
@@ -56,6 +61,30 @@ export function HostFolderPicker({ api, value, onSelect }: {
     }
   };
 
+  const loadMore = async () => {
+    if (!api || !listing?.truncated || listing.nextOffset === undefined) return;
+    const { path, nextOffset } = listing;
+    setLoadingMore(true);
+    setLoadMoreError(undefined);
+    try {
+      const page = await api.listHostWorkspaceFolders(path, nextOffset);
+      setListing((current) => {
+        if (!current || current.path !== page.path) return current;
+        const known = new Set(current.directories.map((directory) => directory.path));
+        return {
+          ...page,
+          directories: [...current.directories, ...page.directories.filter((directory) => !known.has(directory.path))],
+        };
+      });
+    } catch (caught) {
+      logCaughtDiagnostic("interface.host_folder.page_failed", "More host workspace folders could not be listed.", caught, "host-folder-picker");
+      setLoadMoreError(caught instanceof Error ? caught.message : "More folders could not be listed.");
+      requestAnimationFrame(() => retryLoadMoreButtonRef.current?.focus());
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const openBrowser = () => {
     setOpen(true);
     void load(value?.trim() || listing?.path);
@@ -67,6 +96,7 @@ export function HostFolderPicker({ api, value, onSelect }: {
     setNewFolderOpen(false);
     setNewFolderName("");
     setCreateError(undefined);
+    setLoadMoreError(undefined);
     requestAnimationFrame(() => browseButtonRef.current?.focus());
   };
 
@@ -142,7 +172,11 @@ export function HostFolderPicker({ api, value, onSelect }: {
           {!loading && !error && listing?.directories.map((directory) => <button type="button" key={directory.path} title={directory.path} onClick={() => void load(directory.path, true)}><Folder size={18} /><span>{directory.name}</span><ChevronRight size={16} /></button>)}
           {!loading && !error && listing && !listing.directories.length && <div className="host-folder-state"><FolderOpen size={20} /><span>This folder has no child folders.</span></div>}
         </div>
-        {listing?.truncated && <small className="host-folder-truncated">Showing the first 500 folders.</small>}
+        {!loading && !error && listing?.truncated && <div className={`host-folder-truncated${loadMoreError ? " error" : ""}`}>
+          {loadMoreError
+            ? <><span role="alert">More folders could not be loaded. {loadMoreError}</span><button ref={retryLoadMoreButtonRef} className="button quiet" type="button" aria-label="Try loading more again" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} Try again</button></>
+            : <><span>{listing.directories.length.toLocaleString()} folders shown.</span><button className="button quiet" type="button" aria-label="Load more folders" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? <LoaderCircle className="spin" size={14} /> : null} {loadingMore ? "Loading more…" : "Load more"}</button></>}
+        </div>}
         <footer>
           <button className="button secondary" type="button" disabled={!listing?.parent || loading} onClick={() => void load(listing?.parent, true)}><ArrowUp size={16} /> Up one level</button>
           <span>{listing?.path === "/" ? "The filesystem root cannot be used as a project folder." : "Select the folder shown above."}</span>

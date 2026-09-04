@@ -78,6 +78,13 @@ def test_health_and_data_routes_require_auth(api):
     assert any(
         item["flavor"] == "vllm" and item["local"] is True for item in catalog.json()
     )
+    assert any(
+        item["flavor"] == "orcarouter"
+        and item["display_name"] == "OrcaRouter"
+        and item["default_base_url"] == "https://api.orcarouter.ai/v1"
+        and item["suggested_key_env"] == "ORCAROUTER_API_KEY"
+        for item in catalog.json()
+    )
 
 
 def test_action_resolution_endpoint_uses_core_resource_and_device_authority(api):
