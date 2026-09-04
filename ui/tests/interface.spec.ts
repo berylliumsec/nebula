@@ -119,6 +119,7 @@ async function installTruthfulCore(page: Page) {
     const url = new URL(request.url());
     const path = url.pathname;
     let body: unknown = [];
+    let responseStatus = 200;
     if (path.endsWith("/health")) {
       body = {
         status: "ok",
@@ -243,16 +244,22 @@ async function installTruthfulCore(page: Page) {
         assistant: { status: "needs_model", provider_profile_id: null, detail: "Optional model connection not configured." },
       };
     } else if (path.endsWith("/workspace-folders")) {
-      const requested = url.searchParams.get("path") ?? "/home/agent";
-      body = {
-        path: requested,
-        parent: requested === "/home/agent" ? "/home" : "/home/agent",
-        directories: requested === "/home/agent" ? [{
-          name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
-          path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
-        }] : [],
-        truncated: false,
-      };
+      if (request.method() === "POST") {
+        const create = request.postDataJSON() as { parent_path: string; name: string };
+        responseStatus = 201;
+        body = { path: `${create.parent_path}/${create.name}`, parent: create.parent_path, directories: [], truncated: false };
+      } else {
+        const requested = url.searchParams.get("path") ?? "/home/agent";
+        body = {
+          path: requested,
+          parent: requested === "/home/agent" ? "/home" : "/home/agent",
+          directories: requested === "/home/agent" ? [{
+            name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+            path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+          }] : [],
+          truncated: false,
+        };
+      }
     } else if (path.endsWith("/engagements/scratch-project/scope")) {
       body = {
         ...entity,
@@ -529,7 +536,7 @@ async function installTruthfulCore(page: Page) {
       };
     }
     await route.fulfill({
-      status: 200,
+      status: responseStatus,
       contentType: "application/json",
       body: JSON.stringify(body),
     });
@@ -1801,7 +1808,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
 });
 
 test("host folder picker remains usable as a bounded project workflow", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop" && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
+  test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile browser projects.");
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await openWorkspace(page, "/settings", "Settings");
   if (testInfo.project.name.startsWith("mobile-")) {
@@ -1842,6 +1849,13 @@ test("host folder picker remains usable as a bounded project workflow", async ({
     geometry.footerButtons.every(({ height, left, right }) => height >= minimumActionHeight && left >= 0 && right <= geometry.viewportWidth + 1),
     JSON.stringify(geometry),
   ).toBe(true);
+
+  await dialog.getByRole("button", { name: "New folder" }).click();
+  await dialog.getByRole("textbox", { name: "New folder name" }).fill("fresh-assessment");
+  await dialog.getByRole("button", { name: "Create folder" }).click();
+  await expect(dialog.getByText("/home/agent/fresh-assessment", { exact: true })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Select folder" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Up one level" }).click();
 
   await dialog.getByRole("button", { name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog" }).click();
   await expect(dialog.getByText("/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog", { exact: true })).toBeVisible();

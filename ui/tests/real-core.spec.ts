@@ -1169,8 +1169,12 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
 
 test("real Core persists a project folder chosen through the host browser", async ({ page }) => {
   test.setTimeout(60_000);
-  const core = await startRealCore();
-  const selectedFolder = await mkdtemp(path.join(homedir(), ".nebula-folder-picker-"));
+  const lanAddress = Object.values(networkInterfaces())
+    .flat()
+    .find((address) => address?.family === "IPv4" && !address.internal)?.address;
+  const core = await startRealCore(lanAddress ? { bindHost: "0.0.0.0", browserHost: lanAddress } : {});
+  const folderParent = await mkdtemp(path.join(homedir(), ".nebula-folder-picker-"));
+  const selectedFolder = path.join(folderParent, "fresh-project");
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -1178,6 +1182,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
   try {
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
+    if (lanAddress) expect(new URL(page.url()).hostname).toBe(lanAddress);
     await page.getByRole("button", { name: "Switch project" }).click();
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     await switcher.getByRole("button", { name: "New project" }).click();
@@ -1186,8 +1191,13 @@ test("real Core persists a project folder chosen through the host browser", asyn
 
     const browser = page.getByRole("dialog", { name: "Choose project folder" });
     await expect(browser).toBeVisible();
-    await browser.getByRole("button", { name: path.basename(selectedFolder), exact: true }).click();
+    await browser.getByRole("button", { name: path.basename(folderParent), exact: true }).click();
+    await expect(browser.getByText(folderParent, { exact: true })).toBeVisible();
+    await browser.getByRole("button", { name: "New folder" }).click();
+    await browser.getByRole("textbox", { name: "New folder name" }).fill("fresh-project");
+    await browser.getByRole("button", { name: "Create folder" }).click();
     await expect(browser.getByText(selectedFolder, { exact: true })).toBeVisible();
+    expect(existsSync(selectedFolder)).toBe(true);
     await browser.getByRole("button", { name: "Select folder" }).click();
     await expect(switcher.getByLabel("Project folder", { exact: true })).toHaveValue(selectedFolder);
     await switcher.getByRole("button", { name: "Create" }).click();
@@ -1205,8 +1215,8 @@ test("real Core persists a project folder chosen through the host browser", asyn
   } finally {
     await api.dispose();
     await stopRealCore(core);
-    if (path.basename(selectedFolder).startsWith(".nebula-folder-picker-")) {
-      await rm(selectedFolder, { recursive: true, force: true });
+    if (path.basename(folderParent).startsWith(".nebula-folder-picker-")) {
+      await rm(folderParent, { recursive: true, force: true });
     }
   }
 });

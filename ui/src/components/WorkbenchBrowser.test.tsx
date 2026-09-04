@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { useState } from "react";
 import type { EngagementScopePolicy } from "../api/types";
 import type { ApiClient } from "../api/client";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
-import { DialogProvider } from "./DialogSystem";
+import { DialogProvider, useDialogPresence } from "./DialogSystem";
 import { WorkbenchBrowser } from "./WorkbenchBrowser";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -115,6 +116,12 @@ function browserApi(): ApiClient {
   } as unknown as ApiClient;
 }
 
+function BlockingSurfaceControl() {
+  const [open, setOpen] = useState(false);
+  useDialogPresence(open);
+  return <button type="button" onClick={() => setOpen((value) => !value)}>{open ? "Close blocking surface" : "Open blocking surface"}</button>;
+}
+
 function renderBrowser(
   onAddKnowledgeUrl = vi.fn(async () => ({ id: "source-1", name: "Guide" })),
   onAskNebula = vi.fn(),
@@ -138,6 +145,7 @@ function renderBrowser(
       <MemoryRouter>
         <DialogProvider>
           <ChromeProvider value={chrome}>
+            <BlockingSurfaceControl />
             <WorkbenchBrowser
               active
               api={api}
@@ -226,6 +234,23 @@ describe("WorkbenchBrowser", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add to Sources" }));
     await waitFor(() => expect(onAddKnowledgeUrl).toHaveBeenCalledWith("https://docs.example.com/guide"));
     expect(screen.getByRole("status")).toHaveTextContent("Guide is ready for cited retrieval.");
+  });
+
+  it("hides and restores the native browser while a blocking application surface is open", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    renderBrowser();
+    await openPage();
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenCalledWith(tabId, "project-1", true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open blocking surface" }));
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenCalledWith(tabId, "project-1", false));
+
+    fireEvent.click(screen.getByRole("button", { name: "Close blocking surface" }));
+    await waitFor(() => expect(browserMocks.visible).toHaveBeenLastCalledWith(tabId, "project-1", true));
   });
 
   it("adds the final URL of the current page to Project Sources and links to it", async () => {

@@ -6,6 +6,7 @@ import { canonicalNavigationPath, replaceProjectInPath } from "../resourceRoutes
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
+import { useDialogPresence } from "./DialogSystem";
 
 interface SideNavProps {
   collapsed: boolean;
@@ -31,6 +32,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
   const [workspacePath, setWorkspacePath] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  useDialogPresence(open);
   const engagementName = engagement?.name ?? "No project available";
   const initials = engagementName
     .split(/\s+/)
