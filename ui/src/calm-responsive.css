@@ -59,6 +59,7 @@
   .button,
   .icon-button,
   .connection-chip,
+  .top-bar-public-ip,
   .command-trigger { min-height: var(--touch-target); }
   .icon-button,
   .connection-chip,

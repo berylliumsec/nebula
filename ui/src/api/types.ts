@@ -2381,6 +2381,12 @@ export interface ContainerTerminalCapacity {
   maxActiveSessions: number;
 }
 
+export interface ContainerTerminalPublicIpStatus {
+  address: string;
+  observedAt: string;
+  stale: boolean;
+}
+
 export interface TerminalCommandRecord {
   id: Identifier;
   engagementId: Identifier;

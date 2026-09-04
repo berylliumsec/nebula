@@ -1,5 +1,7 @@
 import {
+  Check,
   Command,
+  Copy,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
@@ -7,9 +9,13 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
+import type { ContainerTerminalPublicIpStatus } from "../api/types";
+import { copySelectionText } from "./selection";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -34,8 +40,49 @@ export function TopBar({
 }: TopBarProps) {
   const location = useLocation();
   const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
-  const { coreError, reconnect, workspaceState } = useWorkspace();
+  const { api, coreError, engagement, reconnect, workspaceState } = useWorkspace();
+  const [publicIp, setPublicIp] = useState<ContainerTerminalPublicIpStatus>();
+  const [publicIpCopied, setPublicIpCopied] = useState(false);
   const canRetry = workspaceState === "failed" || workspaceState === "degraded";
+
+  useEffect(() => {
+    if (!api || typeof api.engagementContainerTerminalPublicIp !== "function" || !engagement || !["ready", "degraded"].includes(workspaceState)) {
+      setPublicIp(undefined);
+      return;
+    }
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const refresh = async () => {
+      try {
+        const status = await api.engagementContainerTerminalPublicIp(engagement.id, controller.signal);
+        if (!controller.signal.aborted) setPublicIp(status);
+      } catch (caught) {
+        if (!controller.signal.aborted) {
+          setPublicIp(undefined);
+          void logCaughtDiagnostic(
+            "interface.container_terminal.public_ip_load_failed",
+            "The terminal container public IP could not be refreshed.",
+            caught,
+            "container_terminal",
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) timer = globalThis.setTimeout(refresh, 15_000);
+      }
+    };
+    void refresh();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) globalThis.clearTimeout(timer);
+    };
+  }, [api, engagement, workspaceState]);
+
+  const copyPublicIp = async () => {
+    if (!publicIp) return;
+    await copySelectionText(publicIp.address);
+    setPublicIpCopied(true);
+    globalThis.setTimeout(() => setPublicIpCopied(false), 1_500);
+  };
 
   return (
     <header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared">
@@ -74,6 +121,9 @@ export function TopBar({
             <WifiOff size={14} aria-hidden="true" />
           )}
           <span>{workspaceState === "degraded" ? "Limited" : workspaceState}</span>
+        </button>
+        <button className={`top-bar-public-ip${publicIp?.stale ? " stale" : ""}`} type="button" disabled={!publicIp} onClick={() => void copyPublicIp()} title={publicIp ? `Terminal container public IP · observed ${new Date(publicIp.observedAt).toLocaleString()}` : "Start a terminal to observe its container public IP"} aria-label={publicIp ? `Terminal container public IP ${publicIp.address}. Copy address` : "Terminal container public IP unavailable"}>
+          <span>IP</span><code>{publicIp?.address ?? "—"}</code>{publicIp && (publicIpCopied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />)}
         </button>
         <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />

@@ -364,6 +364,8 @@ async function installTruthfulCore(page: Page) {
         tags: [],
         metadata: { created_by: "system:bootstrap", bootstrap_kind: "scratch_project_v1" },
       }];
+    } else if (path.endsWith("/container-terminal/public-ip")) {
+      body = { address: "203.0.113.42", observed_at: "2026-09-04T10:40:00Z", stale: false };
     } else if (path.endsWith("/container-terminal/capabilities")) {
       body = {
         engagement_id: "scratch-project",
@@ -1103,7 +1105,7 @@ test(firstRunThemeTest, async ({ page }) => {
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("theme picker offers Light, Dark, and Zero Dark and persists the selection", async ({ page }) => {
+test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
   await openWorkspace(page, "/settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
@@ -1112,6 +1114,7 @@ test("theme picker offers Light, Dark, and Zero Dark and persists the selection"
   for (const [label, theme, zeroShell] of [
     ["Light", "light", false],
     ["Dark", "dark", false],
+    ["Zero Light", "zero-light", true],
     ["Zero Dark", "zero-dark", true],
   ] as const) {
     await appearance.getByRole("button", { name: label, exact: true }).click();
@@ -5137,6 +5140,10 @@ test("shared actions keep sleek geometry without weakening touch targets", async
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   for (const [route, name] of [["/findings", "New finding"], ["/?view=chat", "New chat"]] as const) {
     await openWorkspace(page, route, route === "/findings" ? "Findings" : "Workbench");
+    const connection = page.getByRole("button", { name: "Nebula Core ready" });
+    const publicIp = page.getByRole("button", { name: /Terminal container public IP 203\.0\.113\.42/ });
+    await expect(publicIp).toBeVisible();
+    expect(await connection.evaluate((element) => element.nextElementSibling?.getAttribute("aria-label"))).toContain("203.0.113.42");
     const action = page.getByRole("button", { name, exact: true }).first();
     await expect(action).toBeVisible();
     const resting = await action.evaluate((element) => {

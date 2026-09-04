@@ -368,7 +368,7 @@
 .security-note span { display: flex; flex-direction: column; }
 .security-note strong { font-size: 11px; }
 .security-note small { margin-top: 3px; color: var(--muted-strong); font-size: 11px; line-height: 1.4; }
-.theme-options { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; padding: 14px; }
+.theme-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 14px; }
 .theme-options button { display: flex; min-width: 0; align-items: center; flex-direction: column; gap: 6px; padding: 9px 3px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); background: var(--surface-muted); cursor: pointer; }
 .theme-options button[aria-pressed="true"] { color: var(--blue); border-color: var(--blue); background: var(--blue-muted); }
 .theme-options button > span { display: grid; height: 23px; place-items: center; }
@@ -561,7 +561,8 @@
   :root { --side-width: 58px; }
   .page { padding: 20px 15px 42px; }
   .top-bar { padding-inline: 11px; }
-  .top-bar-title, .command-trigger span, .connection-chip span { display: none; }
+  .top-bar-title, .command-trigger span, .connection-chip span, .top-bar-public-ip > span { display: none; }
+  .top-bar-public-ip { max-width: 142px; padding-inline: 7px; }
   .connection-chip { width: 32px; justify-content: center; padding-inline: 0; }
   .page-header { align-items: flex-start; flex-direction: column; }
   .mission-stage-builder > header { align-items: flex-start; flex-direction: column; }

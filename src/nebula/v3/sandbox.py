@@ -1079,6 +1079,30 @@ class SandboxTerminalProcess:
     async def wait(self) -> int:
         return int(await self.process.wait())
 
+    async def read_public_ip_status(self) -> str:
+        """Read the bounded status produced inside this terminal container."""
+
+        process = await asyncio.create_subprocess_exec(
+            *self.runner._runtime_argv(),
+            "exec",
+            self.container_name,
+            "/bin/cat",
+            "/run/nebula/public-ip",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=_runtime_environment(),
+        )
+        try:
+            stdout, _stderr = await _communicate_limited(
+                process, timeout_seconds=3, output_bytes=512
+            )
+        except asyncio.TimeoutError as exc:
+            raise SandboxUnavailable("public IP status read timed out") from exc
+        if process.returncode != 0:
+            raise SandboxUnavailable("public IP has not been observed yet")
+        return stdout.decode("ascii", errors="strict")
+
     async def close(self) -> None:
         assert self._close_lock is not None
         async with self._close_lock:
@@ -1859,8 +1883,20 @@ class ContainerSandboxRunner(SandboxRunner):
         master_fd: int | None = None
         slave_fd: int | None = None
         try:
+            terminal_request = (
+                request.model_copy(
+                    update={
+                        "command": [
+                            "/usr/local/bin/nebula-terminal-entrypoint",
+                            *request.command,
+                        ]
+                    }
+                )
+                if request.execution_kind == SandboxExecutionKind.HUMAN_TERMINAL
+                else request
+            )
             argv = self._argv(
-                request,
+                terminal_request,
                 workspace,
                 container_name=container_name,
                 network_mode=lease.network_mode if lease else None,
@@ -2212,7 +2248,7 @@ class ContainerImagePreparer:
     """Verify official Kali and prepare a pinned local headless-tool image."""
 
     _derived_repository = "localhost/nebula-kali-headless"
-    _recipe_version = "v9"
+    _recipe_version = "v10"
     _installed_packages = (
         "kali-linux-headless",
         "iputils-ping",
@@ -2221,6 +2257,7 @@ class ContainerImagePreparer:
         "ripgrep",
         "git",
         "curl",
+        "cron",
         "openvpn",
     )
     _security_tool_manifest_path = "/usr/local/share/nebula/security-tools.json"
@@ -2834,12 +2871,17 @@ class ContainerImagePreparer:
 ARG DEBIAN_FRONTEND=noninteractive
 COPY kali_tool_inventory.py /usr/local/lib/nebula-kali-tool-inventory.py
 COPY egress_helper.py /usr/local/bin/nebula-egress
+COPY public_ip_update.py /usr/local/lib/nebula-public-ip-update
+COPY terminal_entrypoint.sh /usr/local/bin/nebula-terminal-entrypoint
+COPY public_ip.cron /etc/cron.d/nebula-public-ip
 RUN apt-get update \\
  && apt-get install -y {" ".join(self._installed_packages)} \\
  && if getcap /usr/lib/nmap/nmap | grep -q .; then setcap -r /usr/lib/nmap/nmap; fi \\
  && test -z "$(getcap /usr/lib/nmap/nmap)" \\
  && python3 /usr/local/lib/nebula-kali-tool-inventory.py --output {self._security_tool_manifest_path} \\
  && chmod 0500 /usr/local/bin/nebula-egress \\
+ && chmod 0500 /usr/local/lib/nebula-public-ip-update /usr/local/bin/nebula-terminal-entrypoint \\
+ && chmod 0600 /etc/cron.d/nebula-public-ip \\
  && rm -f /usr/local/lib/nebula-kali-tool-inventory.py \\
  && printf '%s\\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-nebula-terminal \\
  && apt-get clean \\
@@ -2858,6 +2900,16 @@ CMD ["/bin/bash"]
             )
             (context / "egress_helper.py").write_bytes(
                 Path(__file__).with_name("egress_helper.py").read_bytes()
+            )
+            (context / "public_ip_update.py").write_bytes(
+                Path(__file__).with_name("public_ip_update.py").read_bytes()
+            )
+            (context / "terminal_entrypoint.sh").write_bytes(
+                Path(__file__).with_name("terminal_entrypoint.sh").read_bytes()
+            )
+            (context / "public_ip.cron").write_text(
+                "*/5 * * * * root /usr/local/lib/nebula-public-ip-update >/dev/null 2>&1\n",
+                encoding="utf-8",
             )
             return await self._runtime_command(
                 "build",

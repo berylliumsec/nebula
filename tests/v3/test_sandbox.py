@@ -1200,7 +1200,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v9"}}}',
+            + '"org.nebula.human-terminal.recipe":"v10"}}}',
             "",
             0,
         )
@@ -1225,6 +1225,7 @@ def test_human_terminal_verified_podman_cache_makes_no_registry_or_build_request
         "ripgrep",
         "git",
         "curl",
+        "cron",
         "openvpn",
     )
     assert image.security_tools == ("hashcat", "nmap")
@@ -1338,7 +1339,7 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v9"}}}',
+            + '"org.nebula.human-terminal.recipe":"v10"}}}',
             "",
             0,
         )
@@ -1371,10 +1372,16 @@ def test_human_terminal_cold_preparation_pulls_builds_and_verifies(monkeypatch):
     assert build[0][1] == "--platform=linux/amd64"
     assert build[0][2] == "--pull=false"
     assert build[0][3] == "--quiet"
-    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v9-")
+    assert build[0][4].startswith("--tag=localhost/nebula-kali-headless:v10-")
     assert "FROM docker.io/kalilinux/kali-rolling@sha256:" + "e" * 64 in dockerfiles[0]
     assert "apt-get install -y kali-linux-headless iputils-ping" in dockerfiles[0]
     assert "COPY egress_helper.py /usr/local/bin/nebula-egress" in dockerfiles[0]
+    assert (
+        "COPY public_ip_update.py /usr/local/lib/nebula-public-ip-update"
+        in dockerfiles[0]
+    )
+    assert "COPY public_ip.cron /etc/cron.d/nebula-public-ip" in dockerfiles[0]
+    assert "cron" in dockerfiles[0]
     assert "setcap -r /usr/lib/nmap/nmap" in dockerfiles[0]
     assert 'test -z "$(getcap /usr/lib/nmap/nmap)"' in dockerfiles[0]
     assert "ENV NMAP_UNPRIVILEGED=1" in dockerfiles[0]
@@ -1430,7 +1437,7 @@ def test_human_terminal_cold_pull_failure_can_be_retried(monkeypatch):
             + '"org.nebula.human-terminal.base":"docker.io/kalilinux/kali-rolling@sha256:'
             + "e" * 64
             + '","org.nebula.human-terminal.profile":"kali-linux-headless",'
-            + '"org.nebula.human-terminal.recipe":"v9"}}}',
+            + '"org.nebula.human-terminal.recipe":"v10"}}}',
             "",
             0,
         )

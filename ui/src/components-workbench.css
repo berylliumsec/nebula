@@ -2339,7 +2339,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .resource-inspector { top: var(--top-height); width: 100vw; border-left: 0; }
   .page-header p, .eyebrow { display: none; }
   .page-header { margin-bottom: 18px; }
-  .button, .icon-button, .connection-chip, .command-trigger { min-height: 44px; }
+  .button, .icon-button, .connection-chip, .command-trigger, .top-bar-public-ip { min-height: 44px; }
   .icon-button, .connection-chip, .command-trigger { width: 44px; height: 44px; }
   .settings-tabs a { min-height: 44px; }
   .settings-section { scroll-margin-top: 190px; }
