@@ -5192,7 +5192,9 @@ def create_app(
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        return await list_host_workspace_folders(str(parent / request.name))
+        return await list_host_workspace_folders(
+            str(parent / request.name), offset=0, limit=500
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace",
