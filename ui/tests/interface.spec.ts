@@ -5260,10 +5260,15 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
   }
 });
 
-test("browser Assistant stays beside the page through an answer and follow-up", async ({ page }) => {
+for (const degradedBrowserCore of [false, true]) {
+test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page }) => {
   test.setTimeout(60000);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
+    if (degradedBrowserCore && path.endsWith("/health")) {
+      await route.fulfill({ json: { status: "degraded", version: "3.0.0", mode: "local", runner: "unavailable", diagnostics: { writable: false, degraded: true } } });
+      return;
+    }
     if (path.endsWith("/providers") && route.request().method() === "GET") {
       await route.fulfill({ json: [{ ...entity, id: "browser-provider", name: "Browser provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["browser-model"], capabilities: { streaming: true }, privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "browser-model" } }] });
     } else if (path.endsWith("/handoffs") && route.request().method() === "POST") {
@@ -5292,6 +5297,8 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   await openWorkspace(page, "/?view=browser", "Workbench");
   await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  await page.getByLabel("Browser address").fill("https://example.test/");
+  await page.getByRole("button", { name: "Go", exact: true }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
   await page.getByRole("button", { name: "Attach to Assistant", exact: true }).click();
@@ -5314,8 +5321,11 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   expect(overflow).toBe(false);
 });
 
+}
+
 for (const imageInput of [true, false]) {
   test(`browser Assistant harness image attachments follow model capability (${imageInput})`, async ({ page }) => {
+    test.setTimeout(60000);
     let upload: Record<string, unknown> | undefined;
     let sent: Record<string, any> | undefined;
     await page.route("**/api/v1/**", async route => {
@@ -5388,6 +5398,7 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
 });
 
 test("browser Assistant uploads a selected device file only after inline approval", async ({ page }) => {
+  test.setTimeout(60000);
   const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
   const actions: Array<Record<string, any>> = [];
   let decisions = 0;

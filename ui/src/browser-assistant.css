@@ -46,3 +46,8 @@
 .managed-browser-region { position: absolute; pointer-events: none; border: 2px solid #84caff; background: #84caff33; box-sizing: border-box; }
 .managed-browser-keyboard label { display: flex; flex-direction: column; }
 .managed-browser-keyboard textarea { min-height: 80px; width: 100%; box-sizing: border-box; }
+
+@media (pointer: coarse) and (max-height: 500px) {
+  .main-content:has(> .sessions-page.screen-fit > .session-layout.browser) { overflow-y: auto; }
+  .sessions-page.screen-fit:has(> .session-layout.browser) { flex: 1 0 320px; min-height: 320px; }
+}

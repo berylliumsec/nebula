@@ -615,3 +615,42 @@ page change and then exceeded the former five-second reload assertion while Core
 was still displaying Loading workspace. Startup/reload readiness now has a bounded
 30-second wait; the remaining live portrait run is in progress. This wait does not
 change page mutation, approval or result assertions.
+
+
+### Final automated validation follow-up (2026-09-07)
+
+The full backend suite passed **789 tests, five skipped** in 174.20 seconds. Ruff,
+formatting of 177 files, Python/Rust diagnostic audit, frontend diagnostic audit and
+four-module type checking passed. The normal stream-end handler now has the audit's
+required expected-condition annotation; this corrects the CI failure on `ee0217b`.
+
+The host regression reproduced loss of the restart notice when background tab
+polling ran before reconnect. Core now persists that indication, pauses control and
+revokes pending actions when it observes replacement live tabs. Reconnect retains
+the notice until successful explicit navigation. Both the real headed host runner
+and its durable-store unit regression passed.
+
+Production landscape device emulation now completes the full live journey in both
+Chromium 149.0.7827.55 and WebKit 26.5 at 844x390, paired to real Core at
+`http://192.168.1.155:42079`, UI SHA256
+`cd55e37324b39f92b4dcb1b897d8feee3b2efbdb2db6bfa8cf32a812ae672c6e`.
+The run includes touch scrolling through the authenticated Core stream and a live
+Codex check that reads a controlled page heading while ignoring page instructions
+to navigate elsewhere. Only completed read operations were accepted for that turn.
+The degraded-Core landscape fixture reproduced inaccessible Go controls before the
+scrolling fix and passed afterward in Chromium (2.4s) and WebKit (45.8s). The six
+landscape image-capability/upload cases also passed after allowing a 60-second
+whole-workflow deadline for the slow WebKit cases.
+
+The final portrait rerun passed WebKit 430x932 and Chromium 320x700, including
+selection, answer, inline approval, reload and shared conversation, at
+`http://192.168.1.155:43495`, UI SHA256
+`6d65bbed40d8adeb23db35ea339d277ef0222df59a407ad85da9d4cf5de234a5`.
+Earlier 320/390 WebKit and 390/430 Chromium passes remain recorded separately.
+
+The native packaged preflight now explicitly sets and verifies its webview
+viewport. At 1024x700 it passed startup, managed browser navigation and context
+attachment using the extracted `3f346f9` package. The latest recovery/layout changes
+still require the final package rebuild and complete live 1024/1440 journeys.
+Physical phone touch, rotation, background/resume and software-keyboard evidence
+remain required and have not been substituted with emulation.

@@ -35,6 +35,8 @@ async def smoke(
     evidence_root: Path,
     harness_source_db: Path | None = None,
     codex_home: Path | None = None,
+    width: int = 1440,
+    height: int = 900,
 ) -> dict[str, object]:
     evidence_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nebula-packaged-profile-") as temporary:
@@ -115,6 +117,29 @@ async def smoke(
                     else:
                         raise RuntimeError(
                             "The packaged desktop interface did not render."
+                        )
+                    requested_rect = {"x": 0, "y": 0, "width": width, "height": height}
+                    for _ in range(3):
+                        resized = await webdriver.post(
+                            prefix + "/window/rect", json=requested_rect
+                        )
+                        resized.raise_for_status()
+                        actual = await webdriver.post(
+                            prefix + "/execute/sync",
+                            json={
+                                "script": "return {width: innerWidth, height: innerHeight};",
+                                "args": [],
+                            },
+                        )
+                        actual.raise_for_status()
+                        viewport = actual.json()["value"]
+                        if viewport == {"width": width, "height": height}:
+                            break
+                        requested_rect["width"] += width - viewport["width"]
+                        requested_rect["height"] += height - viewport["height"]
+                    else:
+                        raise RuntimeError(
+                            f"Packaged viewport did not reach {width}x{height}: {viewport}"
                         )
                     backend_response = await webdriver.post(
                         prefix + "/execute/async",
@@ -373,6 +398,14 @@ async def smoke(
                                 "return !document.querySelector('#browser-assistant-panel button[aria-label=\"Stop response\"]') && [...document.querySelectorAll('#browser-assistant-panel .chat-message.assistant')].at(-1)?.textContent.includes('Saved');",
                                 180,
                             )
+                            await execute(
+                                "[...document.querySelectorAll('.managed-browser-toolbar button')].find(b => b.textContent === 'Ask about page').setAttribute('data-validation-capture','true'); return true;"
+                            )
+                            await click("[data-validation-capture]")
+                            await wait_for(
+                                "return document.querySelector('.managed-browser-capture pre')?.textContent === 'Saved';"
+                            )
+                            await click(".managed-browser-capture pre")
                             print(
                                 "Packaged desktop: live answer and approved page action passed",
                                 flush=True,
@@ -391,6 +424,7 @@ async def smoke(
                         "supervised_packaged_core": True,
                         "package_root": str(package_root),
                         "profile_isolated": True,
+                        "viewport": viewport,
                         "managed_chromium_visible": True,
                         "page_navigation_and_context_attachment": True,
                         "live_codex_inline_approval": bool(conversation_id),
@@ -417,6 +451,8 @@ if __name__ == "__main__":
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--harness-source-db", type=Path)
     parser.add_argument("--codex-home", type=Path)
+    parser.add_argument("--width", type=int, default=1440)
+    parser.add_argument("--height", type=int, default=900)
     args = parser.parse_args()
     print(
         json.dumps(
@@ -428,6 +464,8 @@ if __name__ == "__main__":
                     args.evidence_root,
                     args.harness_source_db,
                     args.codex_home,
+                    args.width,
+                    args.height,
                 )
             ),
             sort_keys=True,

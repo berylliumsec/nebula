@@ -143,6 +143,12 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                         ),
                     )
                     await context.close()
+                    # A viewer's background tab refresh can win the race with
+                    # its explicit reconnect; it must not erase the loss notice.
+                    refreshed = await client.post(
+                        endpoint + "/operations", json={"operation": "tabs"}
+                    )
+                    refreshed.raise_for_status()
                     reopened = await client.post(path)
                     reopened.raise_for_status()
                     restored = reopened.json()
@@ -165,6 +171,16 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                         },
                     )
                     assert stale.status_code == 409
+                    navigated = await client.post(
+                        endpoint + "/operations",
+                        json={
+                            "operation": "navigate",
+                            "tab_id": restored["active_tab_id"],
+                            "url": url,
+                        },
+                    )
+                    navigated.raise_for_status()
+                    assert (await client.post(path)).json()["page_state_reset"] is False
                     private_endpoint = host._adapter.base_url
             assert host._task is None and not host._proxies
             try:

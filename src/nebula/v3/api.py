@@ -10047,6 +10047,7 @@ async def _correlated_stream(
                 try:
                     item = await anext(iterator)
                 except StopAsyncIteration:
+                    # diagnostic-expected: the source completed its event stream.
                     return
             yield item
     finally:

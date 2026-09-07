@@ -62,11 +62,13 @@ async def exercise_ui(
             await page.get_by_role("button", name="Pair device", exact=True).click()
             await expect(
                 page.get_by_role("button", name="More workbench views", exact=True)
-                if device
+                if width <= 760
                 else page.get_by_role("tab", name="Project browser", exact=True)
             ).to_be_visible(timeout=20000)
             await page.goto(f"{origin}/?view=browser&session={conversation_id}")
-            await expect(page.get_by_label("Browser engine")).to_have_value("managed", timeout=30000)
+            await expect(page.get_by_label("Browser engine")).to_have_value(
+                "managed", timeout=30000
+            )
             panel = page.get_by_role(
                 "complementary", name="Browser Assistant", exact=True
             )

@@ -749,3 +749,65 @@ def test_attached_files_are_scoped_revocable_and_integrity_checked(tmp_path):
     path.write_bytes(b"changed data")
     with pytest.raises(ValueError, match="integrity"):
         service.file_payload(session.id, reference)
+
+
+def test_background_tab_poll_preserves_lost_state_until_navigation(
+    tmp_path, monkeypatch
+):
+    import httpx
+
+    store, project, _, session, service = setup(tmp_path)
+    store.update(
+        BrowserSession,
+        session.id,
+        {
+            "tabs": [{"id": "old-tab", "title": "Unsaved page", "position": 0}],
+            "active_tab_id": "old-tab",
+        },
+    )
+    pending = service.propose(
+        session.id,
+        CompanionRequest(operation="click", tab_id="old-tab", page_revision="old"),
+    )
+
+    class Adapter:
+        async def ensure_identity(self, identity_id):
+            return None
+
+        async def _request(self, method, path, payload):
+            return httpx.Response(
+                200,
+                request=httpx.Request(method, "http://fixture.test"),
+                json={
+                    "tabs": [
+                        {"id": "new-tab", "title": "New page", "url": "about:blank"}
+                    ]
+                }
+                if payload["operation"] == "tabs"
+                else {"text": "Fresh page"},
+            )
+
+    async def adapter():
+        return Adapter()
+
+    monkeypatch.setattr(service, "adapter", adapter)
+    monkeypatch.setattr(service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(service.security, "_require_in_scope", lambda *args: None)
+
+    async def run():
+        await service.request(session.id, CompanionRequest(operation="tabs"))
+        saved = NebulaStore(tmp_path / "nebula.db").get(BrowserSession, session.id)
+        assert saved.metadata["browser_page_state_reset"] is True
+        assert saved.metadata["assistant_paused"] is True
+        assert store.get(CompanionAction, pending.id).status == "revoked"
+        assert (await service.open(project.id))["page_state_reset"] is True
+        assert (await service.open(project.id))["page_state_reset"] is True
+        await service.request(
+            session.id,
+            CompanionRequest(
+                operation="navigate", tab_id="new-tab", url="https://example.test/"
+            ),
+        )
+        assert (await service.open(project.id))["page_state_reset"] is False
+
+    asyncio.run(run())

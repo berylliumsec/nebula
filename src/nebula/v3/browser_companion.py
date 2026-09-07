@@ -353,7 +353,8 @@ class BrowserCompanion:
             session = self.session(session.id)
             available = {tab["id"] for tab in tabs["tabs"]}
             page_state_reset = bool(
-                previous_active_tab and previous_active_tab not in available
+                session.metadata.get("browser_page_state_reset")
+                or (previous_active_tab and previous_active_tab not in available)
             )
             if page_state_reset:
                 self.takeover(session.id, True)
@@ -499,6 +500,15 @@ class BrowserCompanion:
             if "tabs" in result:
                 latest = self.session(session_id)
                 tab_ids = {tab["id"] for tab in result["tabs"]}
+                known_ids = {tab.id for tab in latest.tabs}
+                lost_tabs = (
+                    request.operation == "tabs"
+                    and bool(known_ids)
+                    and known_ids.isdisjoint(tab_ids)
+                )
+                metadata = dict(latest.metadata)
+                if lost_tabs:
+                    metadata["browser_page_state_reset"] = True
                 active_tab = result.get("active_tab_id") or latest.active_tab_id
                 if active_tab not in tab_ids:
                     active_tab = result["tabs"][0]["id"] if result["tabs"] else None
@@ -507,6 +517,7 @@ class BrowserCompanion:
                     session_id,
                     {
                         "active_tab_id": active_tab,
+                        "metadata": metadata,
                         "tabs": [
                             {"id": tab["id"], "title": tab["title"], "position": index}
                             for index, tab in enumerate(result["tabs"])
@@ -514,6 +525,22 @@ class BrowserCompanion:
                     },
                     expected_revision=latest.revision,
                 )
+                if lost_tabs:
+                    self.takeover(session_id, True)
+            if request.operation == "navigate":
+                latest = self.session(session_id)
+                if latest.metadata.get("browser_page_state_reset"):
+                    self.store.update(
+                        BrowserSession,
+                        latest.id,
+                        {
+                            "metadata": {
+                                **latest.metadata,
+                                "browser_page_state_reset": False,
+                            }
+                        },
+                        expected_revision=latest.revision,
+                    )
             return result
 
     def actions(self, session_id: str) -> list[CompanionAction]:
