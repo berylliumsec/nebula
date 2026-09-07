@@ -10038,9 +10038,22 @@ async def _correlated_stream(
 ) -> AsyncIterator[bytes]:
     """Preserve request correlation after the HTTP response starts streaming."""
 
-    with diagnostic_context(request_id=request_id, operation_id=operation_id):
-        async for item in stream:
+    iterator = aiter(stream)
+    try:
+        while True:
+            # Reset ContextVar tokens before yielding: ASGI may close this
+            # generator from a different task after a viewer disconnects.
+            with diagnostic_context(request_id=request_id, operation_id=operation_id):
+                try:
+                    item = await anext(iterator)
+                except StopAsyncIteration:
+                    return
             yield item
+    finally:
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            with diagnostic_context(request_id=request_id, operation_id=operation_id):
+                await close()
 
 
 def _setup_server_sent_event(event: SetupEvent) -> bytes:

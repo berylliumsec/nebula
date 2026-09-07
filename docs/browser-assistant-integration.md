@@ -37,7 +37,10 @@ and a physical mobile browser. Mock/fixture passes do not satisfy live acceptanc
 
 Core integration implemented in the isolated worktree; the full plan remains
 partially verified and is not ready for an unqualified completion claim. Nothing
-was merged, pushed, deployed, or changed in the running installation.
+was deployed or changed in the running installation. The branch is pushed in draft
+PR #251; it has not been merged. Historical checkpoints below retain their original
+evidence and limitations. Codex with `~/.codex-2` is the operator-approved live runtime
+target; separate provider coverage remains automated.
 
 ### Implemented
 
@@ -576,3 +579,21 @@ Regression coverage checks attached and removed-browser retries without changing
 the original cancelled execution. The focused harness/companion suite passed 67
 tests; Ruff and type checking of four affected backend modules passed. The live
 retry/takeover/recovery continuation remains pending.
+
+
+### Visible lifecycle result (2026-09-07)
+
+The production LAN lifecycle run passed at `http://192.168.1.155:38515`, headed
+Chromium 149.0.7827.55 at 1440x900, using live Codex and automatic host startup:
+stop revoked its pending action without a page change; linked retry required a new
+approval; opening a tab took over a queued action without changing the old target;
+a second viewer detached and the first reconnected; Chromium restart retained the
+conversation while reporting lost tabs and paused control. The retained result is
+`/tmp/nebula-companion-validation/lifecycle/result.json`, with screenshot and trace
+beside it. This is Xvfb automation, not physical-device evidence.
+
+Cancellation also exposed a diagnostic ContextVar token being reset from a
+different task when ASGI closed an event generator. A deterministic regression
+failed with that exact exception before the fix. Correlation now surrounds each
+iterator advance and close, ending before yielding to the consumer. The stream
+and chat API checks passed 11 tests. Final packaging must include this follow-up.

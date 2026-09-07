@@ -160,6 +160,7 @@ class CompanionBroker:
                     self.session_id,
                     CompanionRequest(operation="capture", tab_id=request.tab_id),
                     assistant=True,
+                    chat_turn_id=invocation.chat_turn_id,
                 )
                 if request.page_revision != current["page_revision"]:
                     raise InvalidToolArguments(
@@ -230,7 +231,10 @@ class CompanionBroker:
                 }
             else:
                 output = await self.service.request(
-                    self.session_id, request, assistant=True
+                    self.session_id,
+                    request,
+                    assistant=True,
+                    chat_turn_id=invocation.chat_turn_id,
                 )
             output = model_browser_result(output)
             output["untrusted_page_data"] = True
