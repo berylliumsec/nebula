@@ -42,10 +42,10 @@ PR #251; it has not been merged. Historical checkpoints below retain their origi
 evidence and limitations. Codex with `~/.codex-2` is the operator-approved live runtime
 target; separate provider coverage remains automated.
 
-Latest checkpoint: CI passed all seven jobs on `ca39ce1` (run `34148230553`).
-The extracted production DEB passed the full live Codex journey at 1440x900.
-Its 1024x700 native run exposed a clipped Send control with attached context;
-the composer sizing follow-up is being validated before rebuilding. Physical
+Latest checkpoint: CI passed all seven jobs on `151d566` (run `34149453071`).
+The rebuilt production DEB passed the full live Codex journey at 1024x700 and
+1440x900, with native wheel scrolling and clicks where needed. Both retained
+acceptance runs exited zero. Physical
 iPhone testing is waiting for the operator to enable Safari Web Inspector and
 Remote Automation on the connected iPhone 16 Plus. Neither gate is waived.
 
@@ -684,3 +684,40 @@ cases in compact Chromium and landscape Chromium/WebKit after the change
 (`composer-bound-fixtures-headed.log`). The first launch used headless mode
 against the headed-only runtime root; four Chromium cases did not launch.
 The successful run explicitly used `--headed`; no product assertion was relaxed.
+
+The rebuilt `151d566` compact package bounded the composer, but WebKitGTK's
+native click did not scroll its partially visible Send control. Geometry recorded
+a 224 px scroll viewport, 274 px content, `overflow-y: auto`, and scrollTop zero.
+The native runner now issues a W3C wheel action over that actual scroll container
+before clicking an offscreen composer control. It does not force a click or
+change the DOM layout. This closed the full 1024x700 journey, including the live
+answer and approved page change; the wrapper exited zero. Evidence:
+`/tmp/nebula-companion-validation/packaged-151d566-1024-wheel.log`, screenshot in
+the matching directory. The failed click geometry remains in
+`packaged-151d566-1024-geometry/packaged-click-geometry.json`.
+
+Final runtime build identity is `151d566`; subsequent evidence/runner-only edits
+do not change its bundled UI or Core. DEB SHA256:
+`a70b24cdec1827171fb29bae198e732b217dc5f230e61551bb922047b2374c0c`.
+Core SHA256: `6e17a61448c07f17b0236f9fb2e4564015cdf4bd1d0ee30365eb9c25c8bc7e12`.
+UI index SHA256: `fc4830067578e0a49441bf93ed745853fbfcfe35e0bb2e08b0a1feec95bed6d9`.
+The full manifest is `package-151d566-manifest.json` in the validation root.
+
+The sequential 1440x900 acceptance run also passed and exited zero:
+`packaged-151d566-1440-sequential.log`, with screenshot in the matching directory.
+An earlier concurrent 1440 run printed its successful result but its wrapper
+exited 143; it is retained as superseded evidence, not a clean acceptance run.
+Both accepted runs use the same extracted package and isolated XDG profiles,
+native WebKitGTK 2.52.6, bundled Core and the qualified Chromium runtime. The
+native input runner is `scripts/smoke_test_browser_packaged.py` with `--width`
+and `--height`, `--package-root desktop-package-151d566`, the staged tauri/native
+drivers, the installed database supplied read-only through `--harness-source-db`,
+and `--codex-home /home/agent/.codex-2`; complete arguments remain in the runner
+and session evidence. No package was installed.
+
+Physical device status: the governed Mac inventory reports a connected iPhone
+16 Plus. A bounded Safari WebDriver probe could not create a session because
+Web Inspector was disabled. The operator was asked to enable Web Inspector and
+Remote Automation and leave it unlocked. No device setting was bypassed, and no
+Mac runtime lease is held while waiting. Touch, software keyboard, actual rotation
+and background/resume remain unverified physical gates. The PR remains draft.

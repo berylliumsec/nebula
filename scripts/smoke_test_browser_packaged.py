@@ -304,11 +304,47 @@ async def smoke(
                             ]
 
                         async def click(selector: str) -> None:
+                            scroll = await execute(
+                                "const e=document.querySelector(arguments[0]),p=e?.closest('.chat-composer');if(!p||getComputedStyle(p).overflowY!=='auto')return null;const r=e.getBoundingClientRect(),b=p.getBoundingClientRect();if(r.bottom<=b.bottom&&r.top>=b.top)return null;return {x:Math.round(b.right-8),y:Math.round((b.top+b.bottom)/2),deltaX:0,deltaY:Math.round(r.bottom>b.bottom?r.bottom-b.bottom+8:r.top-b.top-8)};",
+                                selector,
+                            )
+                            if scroll:
+                                scrolled = await webdriver.post(
+                                    prefix + "/actions",
+                                    json={
+                                        "actions": [
+                                            {
+                                                "type": "wheel",
+                                                "id": "composer-scroll",
+                                                "actions": [
+                                                    {
+                                                        "type": "scroll",
+                                                        "origin": "viewport",
+                                                        "duration": 150,
+                                                        **scroll,
+                                                    }
+                                                ],
+                                            }
+                                        ]
+                                    },
+                                )
+                                if scrolled.is_error:
+                                    raise RuntimeError(
+                                        "Native composer scroll failed: "
+                                        + scrolled.text
+                                    )
                             identifier = await element(selector)
                             response = await webdriver.post(
                                 prefix + f"/element/{identifier}/click", json={}
                             )
                             if response.is_error:
+                                geometry = await execute(
+                                    "let e=document.querySelector(arguments[0]);const out=[];while(e){const r=e.getBoundingClientRect(),s=getComputedStyle(e);out.push({tag:e.tagName,class:e.className,top:r.top,bottom:r.bottom,height:r.height,clientHeight:e.clientHeight,scrollHeight:e.scrollHeight,scrollTop:e.scrollTop,overflowY:s.overflowY});e=e.parentElement;}return out;",
+                                    selector,
+                                )
+                                (
+                                    evidence_root / "packaged-click-geometry.json"
+                                ).write_text(json.dumps(geometry, indent=2))
                                 screenshot = await webdriver.get(prefix + "/screenshot")
                                 if screenshot.is_success:
                                     (
