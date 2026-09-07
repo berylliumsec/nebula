@@ -951,7 +951,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, operatorId, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, onAttachContext, operatorId, projectId, scope, updateTab]);
 
   useEffect(() => {
     if (typeof api.getSecurityBrowserAutomation !== "function") return;

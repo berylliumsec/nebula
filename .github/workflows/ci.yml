@@ -31,6 +31,8 @@ jobs:
         run: poetry check
       - name: Install project
         run: poetry install --no-interaction
+      - name: Install Chromium for browser runtime regression tests
+        run: poetry run playwright install --with-deps chromium
       - name: Test
         run: poetry run pytest -q tests/v3
       - name: Lint Nebula 3

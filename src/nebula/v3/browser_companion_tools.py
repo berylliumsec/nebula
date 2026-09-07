@@ -193,6 +193,13 @@ class CompanionBroker:
                 )
             output = model_browser_result(output)
             output["untrusted_page_data"] = True
+        except asyncio.CancelledError:
+            await self.ledger.transition(
+                running,
+                ToolCallStatus.FAILED,
+                error="Browser request cancelled. An already executing action may have completed; inspect the page before retrying.",
+            )
+            raise
         except Exception:
             await self.ledger.transition(
                 running,

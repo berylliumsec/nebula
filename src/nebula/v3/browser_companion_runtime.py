@@ -31,7 +31,7 @@ CAPTURE = """({kind, x, y}) => {
     content = anchor && focus && !sensitive(anchor) && !sensitive(focus) ? selection.toString().slice(0,12000) : '';
   }
   return {url:location.href, title:document.title.slice(0,500), text:content, elements,
-    structure:chosen ? {tag:chosen.tagName.toLowerCase(), role:chosen.getAttribute('role')} : null};
+    structure:chosen ? {tag:chosen.tagName.toLowerCase(), role:chosen.getAttribute('role')?.slice(0,200) || null} : null};
 }"""
 
 

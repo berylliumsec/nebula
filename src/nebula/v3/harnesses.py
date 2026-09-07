@@ -8071,7 +8071,8 @@ class HarnessRuntimeService:
                 runtime_session_kind="harness",
                 runtime_session_id=session.id,
             )
-            result = await components.broker.execute(invocation, components.scope)
+            async with self._gateway_execution_gate(turn):
+                result = await components.broker.execute(invocation, components.scope)
             return {
                 "content": [{"type": "text", "text": json.dumps(result.output)}],
                 "isError": False,

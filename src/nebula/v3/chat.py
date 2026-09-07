@@ -29,6 +29,9 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
+from .browser_companion import BrowserCompanion
+from .browser_engine import BrowserEngineRegistry
+from .domain import BrowserSession
 
 from .domain import (
     AgentRun,
@@ -1061,8 +1064,6 @@ class ChatService:
         )
         browser_session_id = browser_session_id or companion_session_id
         if browser_session_id:
-            from .domain import BrowserSession
-
             selected_browser = self.store.get(BrowserSession, browser_session_id)
             if selected_browser.metadata.get("browser_companion_version") == 1 and (
                 selected_browser.metadata.get("assistant_paused", True)
@@ -1137,8 +1138,6 @@ class ChatService:
                         "no runtime capabilities were selected"
                     )
                 if browser_session_id is not None:
-                    from .domain import BrowserSession
-
                     browser_session = self.store.get(BrowserSession, browser_session_id)
                     browser_components = (
                         companion_components(
@@ -2048,7 +2047,7 @@ class ChatService:
                 if mcp_profiles and self.tool_platform is not None
                 else None
             )
-            components: RuntimeToolComponents | AutomationToolComponents
+            components: RuntimeToolComponents | AutomationToolComponents | None
             if include_commands:
                 assert self.automation_tool_platform is not None
                 components = self.automation_tool_platform.chat_components(
@@ -2059,8 +2058,6 @@ class ChatService:
                 components = extra_components
             browser_session_id = turn.request_snapshot.get("browser_session_id")
             if isinstance(browser_session_id, str):
-                from .domain import BrowserSession
-
                 browser_session = self.store.get(BrowserSession, browser_session_id)
                 browser_components = (
                     companion_components(
@@ -3196,10 +3193,6 @@ class ChatService:
                 transaction.add_all([*messages, turn])
         browser_session_id = turn.request_snapshot.get("browser_session_id")
         if isinstance(browser_session_id, str):
-            from .domain import BrowserSession
-            from .browser_companion import BrowserCompanion
-            from .browser_engine import BrowserEngineRegistry
-
             browser_session = self.store.get(BrowserSession, browser_session_id)
             if browser_session.metadata.get("browser_companion_version") == 1:
                 BrowserCompanion(self.store, BrowserEngineRegistry()).bind(

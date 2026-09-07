@@ -232,8 +232,9 @@ def test_real_core_requires_auth_and_reports_absent_browser_runtime(
     assert "saved conversations remain available" in result.text
 
 
+@pytest.mark.parametrize("cancel", [False, True])
 def test_assistant_waits_for_inline_approval_and_receives_actual_result(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, cancel
 ):
     from nebula.v3.browser_companion_tools import CompanionBroker
     from nebula.v3.domain import ScopePolicy
@@ -302,6 +303,22 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
                 await asyncio.sleep(0.01)
             assert actions and not task.done()
             assert operations == ["capture"]
+            if cancel:
+                from nebula.v3.domain import (
+                    ToolCall as PersistedToolCall,
+                    ToolCallStatus,
+                )
+
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                assert broker.service.actions(session.id)[0].status == "revoked"
+                assert (
+                    store.get(PersistedToolCall, invocation.id).status
+                    == ToolCallStatus.FAILED
+                )
+                assert operations == ["capture"]
+                return
             await broker.service.decide(session.id, actions[0].id, "approve")
             result = await asyncio.wait_for(task, 2)
             assert result.output["status"] == "complete"
@@ -310,6 +327,42 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(run())
+
+
+def test_manual_action_pauses_assistant_before_waiting_for_control(tmp_path):
+    store, _, _, session, service = setup(tmp_path)
+    pending = service.propose(
+        session.id,
+        CompanionRequest(
+            operation="click",
+            tab_id="tab",
+            page_revision="page-1",
+            element_id="0",
+        ),
+    )
+
+    async def run():
+        lock = service._locks.setdefault(session.id, asyncio.Lock())
+        async with lock:
+            task = asyncio.create_task(
+                service.request(
+                    session.id,
+                    CompanionRequest(
+                        operation="navigate",
+                        tab_id="tab",
+                        url="https://example.test/",
+                    ),
+                )
+            )
+            await asyncio.sleep(0)
+            assert not task.done()
+            assert service.session(session.id).metadata["assistant_paused"] is True
+            assert store.get(CompanionAction, pending.id).status == "revoked"
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     asyncio.run(run())
 

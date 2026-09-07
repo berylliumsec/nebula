@@ -7698,8 +7698,7 @@ def create_app(
                     detail="Attach one browser session per conversation.",
                 )
             if companion_ids:
-                companion_id = next(iter(companion_ids))
-                browser_companion.bind(companion_id, chat.id)
+                browser_companion.bind(next(iter(companion_ids)), chat.id)
             from .browser_companion_tools import attached_session
 
             companion_id = attached_session(store, engagement_id, chat.id)
@@ -9529,6 +9528,7 @@ def create_app(
         from urllib.parse import quote
         from websockets.asyncio.client import connect
         from websockets.exceptions import ConnectionClosed
+        from websockets.typing import Subprotocol
 
         protocols = [
             p.strip()
@@ -9554,7 +9554,10 @@ def create_app(
             )
             async with connect(
                 endpoint,
-                subprotocols=["nebula.browserd.v1", f"nebula.auth.{secret}"],
+                subprotocols=[
+                    Subprotocol("nebula.browserd.v1"),
+                    Subprotocol(f"nebula.auth.{secret}"),
+                ],
                 max_size=8 * 1024 * 1024,
             ) as upstream:
                 await websocket.accept(subprotocol="nebula.browser.v1")
@@ -9582,7 +9585,9 @@ def create_app(
                             browser_companion.session(session_id)
                             await upstream.send(json.dumps(event))
 
+                # diagnostic-expected: paired pumps are cancelled and drained in finally.
                 sender = asyncio.create_task(frames())
+                # diagnostic-expected: paired with sender in the same wait and cleanup.
                 receiver = asyncio.create_task(inputs())
                 try:
                     done, _ = await asyncio.wait(

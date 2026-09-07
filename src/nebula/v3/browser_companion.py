@@ -96,11 +96,12 @@ class BrowserCompanion:
                 self.store.create_many([identity, session])
             self.session(session.id)
             await adapter.ensure_identity(session.identity_id)
+            previous_active_tab = session.active_tab_id
             tabs = await self.request(session.id, CompanionRequest(operation="tabs"))
             session = self.session(session.id)
             available = {tab["id"] for tab in tabs["tabs"]}
             page_state_reset = bool(
-                session.active_tab_id and session.active_tab_id not in available
+                previous_active_tab and previous_active_tab not in available
             )
             if session.active_tab_id not in available and tabs["tabs"]:
                 session = self.store.update(
@@ -150,6 +151,10 @@ class BrowserCompanion:
     async def request(
         self, session_id: str, request: CompanionRequest, *, assistant: bool = False
     ) -> dict[str, Any]:
+        if not assistant and request.operation not in {"tabs", "capture"}:
+            # Takeover must precede the control queue so waiting assistant actions
+            # see the pause before they can mutate the page.
+            self.takeover(session_id, True)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             session = self.session(session_id)
             adapter = await self.adapter()
@@ -199,12 +204,22 @@ class BrowserCompanion:
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
                 )
             result = response.json()
-            if result.get("active_tab_id"):
+            if "tabs" in result:
                 latest = self.session(session_id)
+                tab_ids = {tab["id"] for tab in result["tabs"]}
+                active_tab = result.get("active_tab_id") or latest.active_tab_id
+                if active_tab not in tab_ids:
+                    active_tab = result["tabs"][0]["id"] if result["tabs"] else None
                 self.store.update(
                     BrowserSession,
                     session_id,
-                    {"active_tab_id": result["active_tab_id"]},
+                    {
+                        "active_tab_id": active_tab,
+                        "tabs": [
+                            {"id": tab["id"], "title": tab["title"], "position": index}
+                            for index, tab in enumerate(result["tabs"])
+                        ],
+                    },
                     expected_revision=latest.revision,
                 )
             return result

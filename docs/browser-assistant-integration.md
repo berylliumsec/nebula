@@ -121,3 +121,53 @@ Those observations do not replace physical Safari/keyboard acceptance.
   an already configured host runtime. First-time host provisioning remains separate.
 
 These are retained as implementation/acceptance gaps, not waived requirements.
+
+### Completion-goal validation pass (2026-09-07)
+
+The completion, PR and merge goal remains active. The operator offered a physical
+phone; device connection details and physical evidence are pending.
+
+The real-Core check exposed an initial-open failure that fixture UI tests missed:
+Core persisted an active tab without its required durable tab membership. Core now
+updates tab membership and selection together, retaining Chromium as live-page
+authority. Manual REST actions now pause assistant control before waiting for the
+queue, as streamed input already did. Cancellation revokes pending approvals and
+settles the tool ledger. Attachments include bounded element structure. Harness
+browser tools use the shared gateway concurrency gate. Imports and typing were
+corrected to satisfy packaging and static checks.
+
+An isolated full headed Chromium runtime was staged with the repository's staging
+script at `/tmp/nebula-companion-validation/playwright-browsers`, under Xvfb.
+Playwright 1.61.0; Chromium revision 1228; executable SHA256
+`2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801`.
+Profiles and Core databases use temporary directories. No installed service was
+modified. This is a controlled proxy fixture, not production proxy qualification.
+
+Passed repeatable commands:
+
+```sh
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browserd.py --headed --runtime-root /tmp/nebula-companion-validation/playwright-browsers
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browser_companion_core.py --runtime-root /tmp/nebula-companion-validation/playwright-browsers
+PYTHONPATH=src poetry run pytest -q tests/v3/test_browser_companion.py tests/v3/test_chat.py tests/v3/test_packaging.py
+PYTHONPATH=src poetry run mypy src/nebula/v3
+```
+
+The first smoke observed a visible change, stale-revision rejection and existing
+durable duplicate/pause behavior. The second used real Core and browserd loopback
+HTTP/WebSocket connections: authentication, initial open, navigation, visible click
+result, conversation binding/reopen, relayed frame, resize takeover, and viewer
+disconnect preserving the binding passed. It does not exercise a provider answer,
+packaged desktop, production LAN origin, or physical phone.
+
+The focused Python set passed 63 tests. Type checking passed all 88 source files.
+The full backend run initially reported 740 passed, 5 skipped and one packaging
+import-placement failure; that failure passed after correction. The full rerun
+passed 742 tests with 5 skipped (173 seconds initial run, 166 seconds rerun).
+UI component checks passed 17 tests in three files. The production build
+passed; index HTML SHA256 is
+`e606b1613f59b4864b2e3e8641ceb11d60a3a39e1682db70733198eb575720ae`.
+The same eight-profile LAN command recorded above passed again against this bundle
+(API/provider fixtures). CI now installs Chromium for the real-browser Python test.
+
+The screenshot-tool, protected-reference, upload, live-provider/harness, packaged
+desktop and broader lifecycle/mobile gaps listed above remain open.

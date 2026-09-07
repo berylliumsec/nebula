@@ -9,7 +9,7 @@ function fixture(active = true, fail = false) {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
     if (path.endsWith("/browser-companion")) return { session_id: "browser-1", conversation_id: "chat-1", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] };
     if (path.endsWith("/actions")) return [];
-    if (path.endsWith("/operations")) return { url: "https://example.test/?token=private-url-token", title: "Example", text: "Selected page content", page_revision: "revision-1", captured_at: "2026-09-07T12:00:00Z", elements: [] };
+    if (path.endsWith("/operations")) return { url: "https://example.test/?token=private-url-token", title: "Example", text: "Selected page content", page_revision: "revision-1", captured_at: "2026-09-07T12:00:00Z", structure: { tag: "main", role: "main" }, elements: [] };
     return {};
   });
   const onContext = vi.fn(); const onConversation = vi.fn();
@@ -32,6 +32,7 @@ describe("ManagedAssistantBrowser", () => {
     fireEvent.click(screen.getByRole("button", { name: "Attach to Assistant" }));
     expect(onContext).toHaveBeenCalledWith(expect.objectContaining({ sourceKind: "browser_companion", sourceId: "browser-1", text: expect.stringContaining("UNTRUSTED BROWSER CONTENT") }));
     expect(onContext.mock.calls[0][0].text).toContain("Page revision: revision-1");
+    expect(onContext.mock.calls[0][0].text).toContain('Element structure: {"tag":"main","role":"main"}');
     expect(JSON.stringify(onContext.mock.calls)).not.toContain("private-url-token");
   });
   it("discards page context and explains unavailable image input", async () => {
