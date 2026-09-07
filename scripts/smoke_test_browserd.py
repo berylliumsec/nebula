@@ -11,10 +11,15 @@ import tempfile
 
 
 async def _respond_as_bounded_proxy(
-    reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    observed_requests: list[bytes] | None = None,
 ) -> None:
     try:
-        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        headers = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        if observed_requests is not None:
+            observed_requests.append(headers)
         body = b"<html><head><title>Nebula browserd smoke</title></head><body><button onclick=\"this.textContent=this.textContent==='Ready'?'Saved':'Ready'\">Ready</button><input type=password aria-label=Password oninput=\"document.getElementById('echo').textContent=this.value\"><span id=echo></span><input type=file aria-label=Document></body></html>"
         writer.write(
             b"HTTP/1.1 200 OK\r\n"

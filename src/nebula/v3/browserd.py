@@ -18,7 +18,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -249,9 +249,11 @@ class BrowserdManager:
         settings: BrowserdSettings,
         *,
         playwright_factory: Callable[[], Any] | None = None,
+        proxy_for_identity: Callable[[str], Awaitable[dict[str, str]]] | None = None,
     ) -> None:
         self.settings = settings
         self._playwright_factory = playwright_factory
+        self._proxy_for_identity = proxy_for_identity
         self._playwright: Any | None = None
         self._contexts: dict[str, Any] = {}
         self._tabs: dict[tuple[str, str], Any] = {}
@@ -402,12 +404,21 @@ class BrowserdManager:
                 profile = self._identity_path(identity_id)
                 profile.mkdir(parents=True, exist_ok=True, mode=0o700)
                 os.chmod(profile, 0o700)
+                proxy = (
+                    await self._proxy_for_identity(identity_id)
+                    if self._proxy_for_identity is not None
+                    else {"server": self.settings.policy_proxy_url}
+                )
                 context = await playwright.chromium.launch_persistent_context(
                     str(profile),
                     headless=self.settings.headless,
                     executable_path=playwright.chromium.executable_path,
-                    proxy={"server": self.settings.policy_proxy_url},
-                    args=["--proxy-bypass-list=<-loopback>"],
+                    proxy=proxy,
+                    args=[
+                        "--proxy-bypass-list=<-loopback>",
+                        "--disable-quic",
+                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    ],
                     accept_downloads=True,
                 )
                 await context.tracing.start(

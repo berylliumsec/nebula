@@ -17,6 +17,7 @@ async def exercise_ui(
     pairing: dict[str, str],
     conversation_id: str,
     evidence_root: Path,
+    target_url: str = "http://browserd-smoke.example.test/",
 ) -> dict[str, object]:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=False)
@@ -43,9 +44,7 @@ async def exercise_ui(
             )
             await expect(panel).to_be_visible()
             await expect(page.locator(".managed-browser-screen img")).to_be_visible()
-            await page.get_by_label("Browser address").fill(
-                "http://browserd-smoke.example.test/"
-            )
+            await page.get_by_label("Browser address").fill(target_url)
             await page.get_by_role("button", name="Go", exact=True).click()
             await page.get_by_role("button", name="Ask about page", exact=True).click()
             preview = page.get_by_role("region", name="Browser context preview")

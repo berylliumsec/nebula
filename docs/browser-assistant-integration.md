@@ -409,7 +409,7 @@ also observed touch activation, Tab focus, text insertion, Ctrl-A and Backspace
 through the authenticated relay. This is host-runtime observation, not a physical
 phone or software-keyboard acceptance claim.
 
-Outstanding host-readiness work is concrete: the packaged Core bootstrap supplies
+Host-readiness gap identified before the startup milestone below: the packaged Core bootstrap supplies
 the verified Playwright runtime, but the browser registry currently discovers
 browserd only from `NEBULA_BROWSERD_URL` and `NEBULA_BROWSERD_TOKEN`. The UI's
 Prepare/retry control retries opening the session; it does not yet provision the
@@ -432,3 +432,58 @@ PYTHONPATH=src poetry run pytest -q tests/v3/test_browser_companion.py tests/v3/
 The desktop launcher currently clears its environment and does not pass DISPLAY,
 WAYLAND_DISPLAY, or browserd configuration to Core. Host startup work must address
 that deliberately; a manually injected test browserd is not packaged acceptance.
+
+### Host startup contract
+
+Core now lazily starts its private browserd endpoint when an operator opens the
+managed browser and no external adapter is configured. It will use the packaged,
+manifest-verified full Chromium, preserve headed qualification, and own shutdown.
+A private authenticated forwarding proxy per browser identity will recheck the
+current project scope and revocation state. HTTP requests and HTTPS tunnels remain
+bounded to the granted destination; no interception, capture, replay, or arbitrary
+proxy tool is introduced. Provider/harness companion instances must share the same
+Core-owned runtime, while native browser state remains separate.
+
+Required observations: clean host readiness, concurrent opens yielding one runtime,
+missing/invalid bundle recovery in place, scope denial including subrequests,
+identity revocation during a connection, restart with saved conversation and lost
+live tabs stated honestly, private endpoint/token isolation, and Core shutdown
+without orphan browser processes. Validate the forwarding boundary against local
+controlled endpoints and exercise the production UI using automatic startup.
+
+
+### Automatic host validation (2026-09-07)
+
+Core-owned startup passed through the full production HTTP/WebSocket and paired
+LAN UI journey at `http://192.168.1.155:53161`, headed Chromium 1440x900, UI index
+SHA256 `5a4fa7a61ebe601249639b9125dad31ccfec92122f05f6252b59d68c99f605a3`.
+The live Codex harness using `~/.codex-2` completed screenshot, image attachment,
+approved click, approved upload, visible question/follow-up and same-conversation
+reload checks with no external browserd configuration. The existing verified
+Chromium executable digest remains
+`2d18db9d8608b052b6a552ee00ec1e830f93692e928b65ecc67d693bd33fe801`.
+
+The separate host smoke runner observed concurrent opens sharing one browser,
+authentication on the private endpoint, the broker sharing the Core-owned adapter,
+a real browser subrequest denied before reaching a reachable controlled origin,
+Chromium exit with saved conversation and new blank tabs, stale-action rejection,
+paused assistant control and revoked pending approvals after restart, and Core
+shutdown releasing its listeners. This runner uses real Chromium and proxy
+traffic through Core's ASGI interface; it is separate from the production HTTP/UI
+runner. The test originally assumed a proxy 403 would reject fetch's Promise;
+the corrected proof checks the proxy denial and absence of origin traffic.
+
+```sh
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browser_host.py --runtime-root /tmp/nebula-companion-validation/playwright-browsers
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browser_companion_core.py --runtime-root /tmp/nebula-companion-validation/playwright-browsers --harness-source-db /home/agent/.local/share/nebula/v3/nebula.db --codex-home /home/agent/.codex-2 --ui-host 192.168.1.155 --automatic-host
+PYTHONPATH=src poetry run pytest -q tests/v3/test_browser_host.py tests/v3/test_browser_host_proxy.py tests/v3/test_browser_companion.py tests/v3/test_browserd.py tests/v3/test_browser_engine.py
+```
+
+The focused backend run passed 32 tests. Type checking, Ruff, Rust formatting and
+both diagnostic audits passed. All CI jobs passed on prior commit `30e0d0c`
+(run `34135613150`); this host-startup milestone needs its own CI run. The desktop
+launcher now forwards display-session variables to Core. Packaged desktop runtime
+acceptance is still outstanding; this shell has no physical desktop display and
+headed automation has used Xvfb. Physical phone, real mobile UI profiles and the
+remaining lifecycle/context-selection matrix also remain required. The installed
+application and services have not been changed.

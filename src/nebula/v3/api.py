@@ -1271,11 +1271,23 @@ def create_app(
     credentials = credential_store or CredentialStore()
     browser_automation = BrowserAutomationService(store)
     browser_assessments = BrowserAssessmentService(store)
+    from .browser_host import ManagedBrowserHost
+
+    browser_database = store.database.engine.url.database
+    browser_root = (
+        Path(browser_database).parent
+        if store.database.engine.dialect.name == "sqlite"
+        and browser_database
+        and browser_database != ":memory:"
+        else Path(execution_data_root or Path.home() / ".local/share/nebula/v3")
+    )
+    managed_browser_host = ManagedBrowserHost(store, browser_root / "managed-browser")
     browser_companion = BrowserCompanion(
         store,
         browser_assessments.engines,
         credentials=credentials,
         artifact_store=artifact_store,
+        managed_host=managed_browser_host,
     )
     browser_automation_platform = BrowserAutomationToolPlatform(
         store, browser_automation
@@ -1534,6 +1546,8 @@ def create_app(
     async def lifespan(_: FastAPI):
         install_asyncio_exception_hook()
         started: list[tuple[str, str, Callable[[], Any]]] = []
+        # Lazy startup is driven by opening the browser; Core still owns shutdown.
+        started.append(("browser", "managed-host", managed_browser_host.close))
 
         async def start_component(
             feature: str,

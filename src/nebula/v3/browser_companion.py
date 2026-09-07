@@ -8,9 +8,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import os
 from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, ref
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -61,6 +62,7 @@ class BrowserCompanion:
     _store_locks: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
     _store_credentials: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
     _store_artifacts: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
+    _store_hosts: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
 
     def __init__(
         self,
@@ -69,6 +71,7 @@ class BrowserCompanion:
         *,
         credentials: CredentialStore | None = None,
         artifact_store: ArtifactStore | None = None,
+        managed_host: Any | None = None,
     ):
         self.store = store
         self.engines = engines
@@ -82,6 +85,8 @@ class BrowserCompanion:
         if artifact_store is not None:
             self._store_artifacts[store] = artifact_store
         self.artifact_store = self._store_artifacts.get(store)
+        if managed_host is not None:
+            self._store_hosts[store] = ref(managed_host)
 
     def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
         session = self.session(session_id)
@@ -276,6 +281,22 @@ class BrowserCompanion:
 
     async def adapter(self) -> LocalBrowserdAdapter:
         adapter = await self.engines.adapter("managed-chromium")
+        host_ref = self._store_hosts.get(self.store)
+        if (
+            adapter is None
+            and not (
+                os.environ.get("NEBULA_BROWSERD_URL")
+                or os.environ.get("NEBULA_BROWSERD_TOKEN")
+            )
+            and not any(
+                isinstance(item, LocalBrowserdAdapter)
+                for item in self.engines._adapters
+            )
+            and host_ref is not None
+        ):
+            host = host_ref()
+            if host is not None:
+                adapter = await host.adapter()
         if not isinstance(adapter, LocalBrowserdAdapter):
             raise ValueError(
                 "Managed Chromium is unavailable. Prepare the browser runtime on the Nebula host, then retry. Your saved conversations remain available."
@@ -332,6 +353,9 @@ class BrowserCompanion:
             page_state_reset = bool(
                 previous_active_tab and previous_active_tab not in available
             )
+            if page_state_reset:
+                self.takeover(session.id, True)
+                session = self.session(session.id)
             if session.active_tab_id not in available and tabs["tabs"]:
                 session = self.store.update(
                     BrowserSession,
