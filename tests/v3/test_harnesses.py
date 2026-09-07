@@ -2764,3 +2764,32 @@ def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_namin
         assert frames[0]["session_id"] == done["session_id"]
         assert frames[0]["turn_id"] == done["turn_id"]
         assert store.get(ChatSession, frames[0]["session_id"])
+
+
+def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
+    headers = {"Authorization": "Bearer test-token"}
+    with TestClient(app) as client:
+        completion = client.post(
+            "/api/v1/chat/completions",
+            headers=headers,
+            json={
+                "backend": "harness",
+                "engagement_id": engagement.id,
+                "harness_profile_id": profile.id,
+                "model": "test-model",
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert completion.status_code == 200, completion.text
+        result = completion.json()
+        events = runtime.activity_events(result["harness_turn_id"]).events
+        assert any(event.type == "started" for event in events)
+        evidence = client.get(
+            f"/api/v1/chat/sessions/{result['session_id']}/messages/{result['message']['id']}/evidence",
+            headers=headers,
+        )
+        assert evidence.status_code == 200, evidence.text
+        assert evidence.json()["source_message_id"] == result["message"]["id"]
+        assert "Source presence does not establish correctness" in evidence.text
