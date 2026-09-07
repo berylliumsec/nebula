@@ -1469,6 +1469,15 @@ class AutomationRuntimeManager:
                 )
                 self._sessions[entity.id] = managed
                 self._owner_sessions[key] = entity.id
+                if scope is not None and scope.not_after is not None:
+                    managed.scope_expiry_task = create_diagnostic_task(
+                        self._expire_session_at_scope_boundary(
+                            entity.id, scope.not_after
+                        ),
+                        feature="runtime",
+                        event_code="runtime.scope_expiry",
+                        failure_message="Scope-expiry supervision stopped unexpectedly.",
+                    )
                 return managed
             profile = self._select_runner(policy)
             if not self.runtime_image or not self.runtime_digest:

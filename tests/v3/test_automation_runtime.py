@@ -1299,3 +1299,44 @@ def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
         await manager.close_session(result.session_id)
 
     asyncio.run(scenario())
+
+
+def test_host_scope_expiry_closes_running_commands(tmp_path):
+    from datetime import timedelta
+
+    async def scenario():
+        manager, store, _, engagement, _ = runtime(tmp_path)
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        store.update(
+            ScopePolicy,
+            scope.id,
+            {"not_after": utc_now() + timedelta(seconds=0.5)},
+            expected_revision=scope.revision,
+        )
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=5000,
+        )
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="expiring-host",
+            request=RunCommandRequest(command="sleep 30", background=True),
+        )
+        await asyncio.sleep(0.8)
+        assert (
+            store.get(AutomationSession, result.session_id).status
+            == AutomationSessionStatus.CLOSED
+        )
+        assert (
+            store.get(CommandExecution, result.execution_id).status
+            == CommandExecutionStatus.CANCELLED
+        )
+        await manager.shutdown()
+
+    asyncio.run(scenario())

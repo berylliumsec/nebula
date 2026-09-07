@@ -34,9 +34,9 @@ paths. Host mode reports host networking and never claims container egress/VPN
 isolation. Existing command sessions retain their frozen policy; a conflicting
 new tool contract requires a new session rather than silently changing modes.
 
-- 124 focused Python tests passed; includes host consent, sibling-folder access,
+- 125 focused Python tests passed; includes host consent, sibling-folder access,
   no Docker preparation, Docker path/network rejection, frozen mode, exact
-  approval and real host process timeout cleanup.
+  approval, real host process timeout cleanup and scope-expiry cancellation.
 - Mypy passed for all 91 source files; Ruff and diagnostic audit passed for the
   change. Unrelated pre-existing credential formatting edits were preserved.
 - Production UI build passed. Eight permanent production real-Core LAN profiles
