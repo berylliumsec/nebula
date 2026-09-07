@@ -42,7 +42,7 @@ PR #251; it has not been merged. Historical checkpoints below retain their origi
 evidence and limitations. Codex with `~/.codex-2` is the operator-approved live runtime
 target; separate provider coverage remains automated.
 
-Latest checkpoint: CI passed all seven jobs on `151d566` (run `34149453071`).
+Latest runtime checkpoint: CI passed all seven jobs on `fce1bd3` (run `34150415312`).
 The rebuilt production DEB passed the full live Codex journey at 1024x700 and
 1440x900, with native wheel scrolling and clicks where needed. Both retained
 acceptance runs exited zero. Physical
@@ -696,7 +696,7 @@ answer and approved page change; the wrapper exited zero. Evidence:
 the matching directory. The failed click geometry remains in
 `packaged-151d566-1024-geometry/packaged-click-geometry.json`.
 
-Final runtime build identity is `151d566`; subsequent evidence/runner-only edits
+Runtime build identity for those checks is `151d566`; subsequent evidence/runner-only edits
 do not change its bundled UI or Core. DEB SHA256:
 `a70b24cdec1827171fb29bae198e732b217dc5f230e61551bb922047b2374c0c`.
 Core SHA256: `6e17a61448c07f17b0236f9fb2e4564015cdf4bd1d0ee30365eb9c25c8bc7e12`.
@@ -721,3 +721,44 @@ Web Inspector was disabled. The operator was asked to enable Web Inspector and
 Remote Automation and leave it unlocked. No device setting was bypassed, and no
 Mac runtime lease is held while waiting. Touch, software keyboard, actual rotation
 and background/resume remain unverified physical gates. The PR remains draft.
+
+### Current-main integration and packaged validation (2026-09-07)
+
+Main's harness workspace update (`502a247`) merged without conflicts as
+`fce1bd3`. The shared gateway review confirmed that browser-binding refresh and
+dispatch checks remain in place; the new portable-name handling is conditional
+on the Grok adapter. No live Grok runtime was used. The focused harness,
+adapter and browser suite passed 103 tests in 16.05 seconds; all seven CI jobs
+passed on `fce1bd3` (run `34150415312`).
+
+The rebuilt, extracted production DEB passed sequential native WebKitGTK journeys
+at 1024x700 and 1440x900, both with exit zero. Each used live Codex, late browser
+attachment to the seeded conversation, a contextual answer, inline approval and
+a fresh capture confirming Saved. Evidence is retained in
+`/tmp/nebula-companion-validation/packaged-fce1bd3-1024.log` and
+`packaged-fce1bd3-1440.log`, with screenshots in their matching directories.
+Manifest: `package-fce1bd3-manifest.json` in the same validation root.
+DEB SHA256: `b07d84ccf2c1d060f2a19ea153ebf3e7b3fcb8f2a4d4656cf9eff9807c19cf4a`.
+Core SHA256: `2ec38826b724afa3ef2dd20ecdb312742387e6ccba780ba2101da2ec628100c4`.
+The UI index remains `fc4830067578e0a49441bf93ed745853fbfcfe35e0bb2e08b0a1feec95bed6d9`.
+
+A fresh bounded physical-device probe again returned Web Inspector disabled on
+the connected iPhone 16 Plus. The probe closed its driver; the global Mac lease
+registry was clear afterward. Physical acceptance still requires the operator's
+device setup, followed by touch, software keyboard, rotation, zoom and
+background/resume checks. Earlier emulation results do not supply that evidence.
+
+The final audit added a permanent Axe scan of the integrated page and Assistant
+panel to the conversation fixture. The initial six-profile scan passed; the
+strengthened fixture then passed all six profiles with roughly 6 KB page context,
+a multi-paragraph follow-up and a long unbroken URL. It asserts zero Axe violations,
+reachable composer/Send and no horizontal document overflow. Profiles: Chromium
+1440x900 and 1024x700, Chromium Android 320x700, WebKit iPhone 430x932, and both
+engines at 844x390 landscape. These are production LAN fixtures at
+`http://192.168.1.155:15431`, not live provider or physical-device evidence.
+Results: `integrated-browser-accessibility.log` and
+`integrated-browser-long-accessibility.log` in the validation root, six passed
+each. The expanded long-content plus Axe workflow has a 90-second whole-test
+deadline; its WebKit cases completed in 53.4 and 53.0 seconds. No individual
+interaction or geometry assertion was weakened. This follow-up changes only
+tests and evidence; the accepted runtime build remains `fce1bd3`.

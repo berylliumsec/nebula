@@ -5262,7 +5262,7 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
 
 for (const degradedBrowserCore of [false, true]) {
 test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page }) => {
-  test.setTimeout(60000);
+  test.setTimeout(90000);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (degradedBrowserCore && path.endsWith("/health")) {
@@ -5280,12 +5280,14 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
         await route.fulfill({ json: { tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
         return;
       }
-      await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.", page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
+      await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.\n\n" + "Additional bounded page context for reviewing the selected control. ".repeat(90), page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
     } else if (path.includes("/browser-companion/")) {
       await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
     } else if (path.endsWith("/chat/completions")) {
       const body = route.request().postDataJSON();
-      const answer = body.session_id ? "Yes, that is the same page context." : "The Save button saves your changes.";
+      const answer = body.session_id
+        ? "Yes, that is the same page context.\n\n" + "The historical attachment remains available for this follow-up. ".repeat(80) + "\n\nhttps://example.test/" + "long-path-segment".repeat(70)
+        : "The Save button saves your changes.";
       const frames = [
         { type: "started", provider_id: "browser-provider", model: "browser-model", session_id: "browser-chat", turn_id: "browser-turn" },
         { type: "delta", delta: answer },
@@ -5317,6 +5319,13 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   expect(new URL(page.url()).searchParams.get("session")).toBe("browser-chat");
   await expect(panel.locator("#analyst-message")).toBeInViewport({ ratio: 1 });
   await expect(panel.getByRole("button", { name: "Send message", exact: true })).toBeInViewport({ ratio: 1 });
+  if (!degradedBrowserCore) {
+    const accessibility = await new AxeBuilder({ page })
+      .include(".integrated-browser-page")
+      .include("#browser-assistant-panel")
+      .analyze();
+    expect(accessibility.violations).toEqual([]);
+  }
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
   expect(overflow).toBe(false);
 });
