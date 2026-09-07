@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
-import { canonicalNavigationPath, replaceProjectInPath } from "../resourceRoutes";
+import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
@@ -48,7 +48,9 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     setSaving(true);
     setError(undefined);
     try {
-      await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined });
+      const created = await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined });
+      navigate(`${projectSurface(created.id, "workbench")}?view=chat`);
+      onNavigate();
       setName("");
       setClientName("");
       setWorkspacePath("");
