@@ -36,6 +36,13 @@ export default defineConfig({
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
     ].map(project => ({...project, testMatch: "**/real-core.spec.ts", grep: /assistant upgrade/})),
+    ...[
+      { name: "browser-chromium-landscape", device: "Pixel 5" },
+      { name: "browser-webkit-landscape", device: "iPhone 13" },
+    ].map(({ name, device }) => ({
+      name, testMatch: "**/interface.spec.ts", grep: /browser Assistant /,
+      use: { ...devices[device], viewport: { width: 844, height: 390 } },
+    })),
     {
       name: "desktop",
       testIgnore: ["**/real-core.spec.ts", "**/usage/**"],

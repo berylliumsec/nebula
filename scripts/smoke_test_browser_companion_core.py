@@ -928,7 +928,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ui-profiles",
         default="desktop",
-        help="Comma-separated desktop, compact, chromium-320/390/430, webkit-320/390/430 profiles",
+        help="Comma-separated desktop, compact, chromium-320/390/430, webkit-320/390/430, chromium-landscape, webkit-landscape profiles",
     )
     parser.add_argument(
         "--ui-lifecycle",

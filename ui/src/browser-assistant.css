@@ -29,7 +29,7 @@
 .managed-browser-credentials form, .managed-browser-credentials label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .managed-browser-credentials input, .managed-browser-credentials select { width: 100%; min-width: 0; box-sizing: border-box; }
 .managed-browser-credentials button { white-space: normal; }
-@media (max-width: 760px) {
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .main-content:has(> .sessions-page.screen-fit > .session-layout.browser) { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
   .sessions-page.screen-fit:has(> .session-layout.browser) { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow: hidden; }
   .sessions-page.screen-fit > .session-layout.browser { flex: 1 1 0; min-height: 0; }

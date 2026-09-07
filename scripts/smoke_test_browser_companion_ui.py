@@ -25,6 +25,8 @@ async def exercise_ui(
     profiles = {
         "desktop": ("chromium", None, 1440, 900),
         "compact": ("chromium", None, 1024, 700),
+        "chromium-landscape": ("chromium", "Pixel 5", 844, 390),
+        "webkit-landscape": ("webkit", "iPhone 13", 844, 390),
         **{
             f"{engine}-{width}": (
                 engine,
@@ -68,7 +70,7 @@ async def exercise_ui(
             panel = page.get_by_role(
                 "complementary", name="Browser Assistant", exact=True
             )
-            await expect(panel).to_be_visible()
+            await expect(panel).to_be_visible(timeout=30000)
             if device:
                 await panel.get_by_role(
                     "button", name="Collapse browser Assistant"
@@ -188,7 +190,7 @@ async def exercise_ui(
             await preview.get_by_role("button", name="Discard", exact=True).click()
             print("UI journey: checking reload and durable conversation", flush=True)
             await page.reload()
-            await expect(panel).to_be_visible()
+            await expect(panel).to_be_visible(timeout=30000)
             await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
                 "Saved", timeout=30000
             )

@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
+export const BROWSER_ASSISTANT_SHEET_QUERY = "(max-width: 760px), (pointer: coarse) and (max-height: 500px)";
+
 /** Desktop column or a nonmodal phone sheet, retaining the same conversation. */
 export function BrowserAssistantPanel({ header, children, onActionContainer }: {
   header: ReactNode; children: ReactNode;
@@ -11,7 +13,7 @@ export function BrowserAssistantPanel({ header, children, onActionContainer }: {
     const height = viewport?.height ?? window.innerHeight;
     const keyboard = height < window.innerHeight - 120;
     const reserve = keyboard ? 8 : 76;
-    return { mobile: window.matchMedia("(max-width: 760px)").matches,
+    return { mobile: window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches,
       bottom: window.innerHeight - (viewport?.offsetTop ?? 0) - height + reserve,
       height: Math.min(560, height - reserve - 12, Math.max(240, height * .68)) };
   };

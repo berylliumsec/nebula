@@ -5291,12 +5291,12 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
   await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
-  if ((page.viewportSize()?.width ?? 1440) <= 760) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
   await page.getByRole("button", { name: "Attach to Assistant", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
-  if ((page.viewportSize()?.width ?? 1440) <= 760) expect(await panel.evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  if (await page.locator(".browser-assistant-sheet").count()) expect(await panel.evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
   await expect(panel).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("browser-selection-handoff");
   await panel.locator("#analyst-message").fill("What does this button do?");
@@ -5427,7 +5427,7 @@ test("browser Assistant uploads a selected device file only after inline approva
     } else await route.fallback();
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
-  if ((page.viewportSize()?.width ?? 1440) <= 760) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByText("Files for this page (0)", { exact: true }).click();
   await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
   await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");

@@ -597,3 +597,21 @@ different task when ASGI closed an event generator. A deterministic regression
 failed with that exact exception before the fix. Correlation now surrounds each
 iterator advance and close, ending before yielding to the consumer. The stream
 and chat API checks passed 11 tests. Final packaging must include this follow-up.
+
+
+### Landscape and reload checks (2026-09-07)
+
+Permanent `browser-chromium-landscape` and `browser-webkit-landscape` Playwright
+projects cover 844x390 device emulation. The initial desktop-column layout clipped
+the composer at that height. The Assistant sheet now also applies to short coarse-
+pointer viewports. The production answer/follow-up fixture passed in Chromium
+(2.2 seconds) and WebKit (41.3 seconds), asserting the complete composer and Send
+button are inside the viewport. Page-control tests collapse the sheet through its
+visible button before interacting with the underlying page. Remaining landscape
+capability and live-Core runs are in progress.
+
+Live WebKit 390 px passed the complete main journey. The 430 px run reached the
+page change and then exceeded the former five-second reload assertion while Core
+was still displaying Loading workspace. Startup/reload readiness now has a bounded
+30-second wait; the remaining live portrait run is in progress. This wait does not
+change page mutation, approval or result assertions.

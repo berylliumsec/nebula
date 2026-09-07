@@ -1,5 +1,5 @@
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
-import { BrowserAssistantPanel } from "../components/BrowserAssistantPanel";
+import { BrowserAssistantPanel, BROWSER_ASSISTANT_SHEET_QUERY } from "../components/BrowserAssistantPanel";
 import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
@@ -572,7 +572,7 @@ export function SessionsPage() {
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  useChatComposerAnchor(composerRef, (view === "chat" || view === "browser") && conversationOpen, view === "browser" && window.matchMedia("(max-width: 760px)").matches ? "browser-sheet" : view);
+  useChatComposerAnchor(composerRef, (view === "chat" || view === "browser") && conversationOpen, view === "browser" && window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches ? "browser-sheet" : view);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);
