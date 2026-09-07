@@ -13,6 +13,8 @@ import hashlib
 import json
 import os
 import re
+import signal
+import platform
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -116,10 +118,10 @@ class RunCommandRequest(BaseModel):
 
     @field_validator("cwd")
     @classmethod
-    def cwd_is_workspace_relative(cls, value: str) -> str:
+    def cwd_has_no_nul(cls, value: str) -> str:
         path = Path(value)
-        if path.is_absolute() or ".." in path.parts or "\x00" in value:
-            raise ValueError("cwd must remain inside the project workspace")
+        if "\x00" in value:
+            raise ValueError("cwd cannot contain NUL bytes")
         return path.as_posix() or "."
 
 
@@ -269,6 +271,103 @@ class _ContainerProcess(RuntimeBackendProcess):
                 if self.process.returncode is None:
                     self.process.kill()
                     await self.process.wait()
+
+
+class HostRuntimeProcess(RuntimeBackendProcess):
+    def __init__(self, process: asyncio.subprocess.Process) -> None:
+        self.process = process
+        assert process.stdout is not None and process.stderr is not None
+        self.stdout = process.stdout
+        self.stderr = process.stderr
+
+    async def write(self, data: bytes) -> None:
+        if self.process.stdin is None or self.process.returncode is not None:
+            raise AutomationRuntimeError("process stdin is closed")
+        self.process.stdin.write(data)
+        await self.process.stdin.drain()
+
+    def _signal(self, value: int) -> None:
+        try:
+            os.killpg(self.process.pid, value)
+        except ProcessLookupError:
+            # diagnostic-expected: the supervised process group already exited.
+            pass
+
+    async def wait(self) -> int:
+        code = await self.process.wait()
+        self._signal(signal.SIGKILL)
+        return int(code)
+
+    async def terminate(self) -> None:
+        self._signal(signal.SIGTERM)
+        try:
+            await asyncio.wait_for(self.process.wait(), timeout=2)
+        except asyncio.TimeoutError:
+            # diagnostic-expected: bounded escalation for a supervised host process.
+            self._signal(signal.SIGKILL)
+            await self.process.wait()
+        self._signal(signal.SIGKILL)
+
+
+class HostRuntimeSession(RuntimeBackendSession):
+    """Explicitly opted-in execution as Core's OS user, without OCI isolation."""
+
+    def __init__(self, workspace: Path) -> None:
+        if os.name != "posix" or not Path("/bin/bash").is_file():
+            raise AutomationRuntimeUnavailable(
+                "Host mode requires a POSIX host with /bin/bash"
+            )
+        self.workspace = workspace
+        self._closed = False
+        self.processes: list[HostRuntimeProcess] = []
+
+    @property
+    def network_enabled(self) -> bool:
+        return True
+
+    async def enable_network(self) -> None:
+        return None
+
+    async def run(
+        self, process_id: str, command: str, cwd: str
+    ) -> RuntimeBackendProcess:
+        if self._closed:
+            raise AutomationRuntimeUnavailable("host session is closed")
+        directory = Path(cwd).expanduser()
+        if not directory.is_absolute():
+            directory = self.workspace / directory
+        directory = directory.resolve(strict=True)
+        if not directory.is_dir():
+            raise AutomationRuntimeUnavailable(
+                "command working directory is not a directory"
+            )
+        process = await asyncio.create_subprocess_exec(
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            command,
+            cwd=str(directory),
+            env={
+                key: value
+                for key, value in os.environ.items()
+                if key
+                in {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}
+            },
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        backend = HostRuntimeProcess(process)
+        self.processes.append(backend)
+        return backend
+
+    async def close(self) -> None:
+        self._closed = True
+        for process in self.processes:
+            if process.process.returncode is None:
+                await process.terminate()
 
 
 class ContainerRuntimeSession(RuntimeBackendSession):
@@ -769,15 +868,32 @@ class AutomationRuntimeManager:
         vpn_profile_id: str | None = None,
         max_timeout_ms: int,
         expected_revision: int | None = None,
+        execution_mode: Literal["docker", "host"] | None = None,
+        host_access_acknowledged: bool = False,
     ) -> AutomationProjectPolicy:
         current = self.project_policy(engagement_id)
-        if runner_profile_id is not None:
+        selected_mode = execution_mode or current.execution_mode
+        if selected_mode == "host" and not (
+            host_access_acknowledged
+            or current.host_access_acknowledged
+            and current.execution_mode == "host"
+        ):
+            raise AutomationPolicyDenied(
+                "Acknowledge host filesystem and network access before enabling Host mode"
+            )
+        if selected_mode == "host" and (
+            os.name != "posix" or not Path("/bin/bash").is_file()
+        ):
+            raise AutomationRuntimeUnavailable(
+                "Host mode requires a POSIX host with /bin/bash"
+            )
+        if selected_mode == "docker" and runner_profile_id is not None:
             runner = self.store.get(StoredRunnerProfile, runner_profile_id)
             if not runner.enabled or not runner.healthy:
                 raise AutomationRuntimeUnavailable(
                     "selected runner is not verified healthy"
                 )
-        if vpn_profile_id is not None:
+        if selected_mode == "docker" and vpn_profile_id is not None:
             if not network_enabled:
                 raise AutomationRuntimeUnavailable(
                     "enable project networking before selecting a VPN profile"
@@ -795,6 +911,8 @@ class AutomationRuntimeManager:
             current.id,
             {
                 "approval_policy": approval_policy,
+                "execution_mode": selected_mode,
+                "host_access_acknowledged": selected_mode == "host",
                 "network_enabled": network_enabled,
                 "runner_profile_id": runner_profile_id,
                 "vpn_profile_id": vpn_profile_id,
@@ -803,7 +921,31 @@ class AutomationRuntimeManager:
             expected_revision=expected_revision or current.revision,
         )
 
-    async def runtime_info(self) -> AutomationRuntimeInfo:
+    def project_runtime_digest(self, engagement_id: str) -> str:
+        if self.project_policy(engagement_id).execution_mode == "host":
+            identity = (
+                f"host-v1:{platform.node()}:{platform.system()}:{os.getuid()}:/bin/bash"
+            )
+            return "sha256:" + hashlib.sha256(identity.encode()).hexdigest()
+        return self.runtime_digest
+
+    async def runtime_info(
+        self, *, engagement_id: str | None = None
+    ) -> AutomationRuntimeInfo:
+        if (
+            engagement_id
+            and self.project_policy(engagement_id).execution_mode == "host"
+        ):
+            ready = os.name == "posix" and Path("/bin/bash").is_file()
+            return AutomationRuntimeInfo(
+                configured=True,
+                ready=ready,
+                digest=self.project_runtime_digest(engagement_id),
+                runner_profile_id="host",
+                detail="Host mode: commands run as the Core OS user with host filesystem and network access"
+                if ready
+                else "Host mode requires POSIX and /bin/bash",
+            )
         prepared = self._refresh_cached_runtime()
         profiles = [
             item
@@ -989,10 +1131,26 @@ class AutomationRuntimeManager:
         approval: Approval | None = None,
         requested_by: str = "agent",
         tool_call_id: str | None = None,
+        expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
         managed = await self._get_or_create_session(
             engagement_id=engagement_id, owner_kind=owner_kind, owner_id=owner_id
         )
+        if (
+            expected_execution_mode
+            and managed.policy.execution_mode != expected_execution_mode
+        ):
+            raise AutomationPolicyDenied(
+                "Project execution mode changed; start a new session"
+            )
+        if managed.policy.execution_mode == "host":
+            request = request.model_copy(update={"network": AutomationNetworkMode.HOST})
+        else:
+            path = Path(request.cwd)
+            if path.is_absolute() or ".." in path.parts:
+                raise AutomationPolicyDenied(
+                    "Docker cwd must remain inside the project workspace"
+                )
         timeout_ms = min(
             request.timeout_ms or managed.policy.max_timeout_ms,
             managed.policy.max_timeout_ms,
@@ -1043,10 +1201,11 @@ class AutomationRuntimeManager:
             cwd=request.cwd,
             network=request.network,
             background=request.background,
-            runtime_digest=self.runtime_digest,
+            runtime_digest=managed.entity.runtime_digest,
             policy_revision=managed.policy.revision,
             scope_policy_revision=managed.scope.revision if managed.scope else None,
             metadata={
+                "execution_mode": managed.policy.execution_mode,
                 "owner_kind": owner_kind,
                 "owner_id": owner_id,
                 "tool_call_id": tool_call_id,
@@ -1259,6 +1418,58 @@ class AutomationRuntimeManager:
                 return self._sessions[existing_id]
             engagement = self.store.get(Engagement, engagement_id)
             policy = self.project_policy(engagement_id)
+            if policy.execution_mode == "host":
+                if not policy.host_access_acknowledged:
+                    raise AutomationPolicyDenied(
+                        "Host access has not been acknowledged"
+                    )
+                workspace = (
+                    self.workspace_resolver(engagement_id)
+                    .expanduser()
+                    .resolve(strict=True)
+                )
+                if not workspace.is_dir():
+                    raise AutomationRuntimeUnavailable(
+                        "project workspace is unavailable"
+                    )
+                scope = (
+                    self.store.get(ScopePolicy, engagement.scope_policy_id)
+                    if engagement.scope_policy_id
+                    else None
+                )
+                backend: RuntimeBackendSession = HostRuntimeSession(workspace)
+                entity = self.store.create(
+                    AutomationSession(
+                        engagement_id=engagement_id,
+                        owner_kind=owner_kind,
+                        owner_id=owner_id,
+                        execution_mode="host",
+                        runtime_image="host:/bin/bash",
+                        runtime_digest=self.project_runtime_digest(engagement_id),
+                        runner_profile_id="host",
+                        runner_profile_revision=1,
+                        policy_id=policy.id,
+                        policy_revision=policy.revision,
+                        scope_policy_id=scope.id if scope else None,
+                        scope_policy_revision=scope.revision if scope else None,
+                        status=AutomationSessionStatus.READY,
+                        network_granted=True,
+                        metadata={
+                            "network_boundary": "host_os",
+                            "workspace": str(workspace),
+                        },
+                    )
+                )
+                managed = _ManagedSession(
+                    entity=entity,
+                    policy=policy,
+                    scope=scope,
+                    backend=backend,
+                    workspace=workspace,
+                )
+                self._sessions[entity.id] = managed
+                self._owner_sessions[key] = entity.id
+                return managed
             profile = self._select_runner(policy)
             if not self.runtime_image or not self.runtime_digest:
                 raise AutomationRuntimeUnavailable(
@@ -1478,6 +1689,28 @@ class AutomationRuntimeManager:
     def _validate_network_request(
         managed: _ManagedSession, network: AutomationNetworkMode
     ) -> None:
+        if managed.policy.execution_mode == "host":
+            if (
+                managed.scope
+                and managed.scope.not_before
+                and managed.scope.not_before > utc_now()
+            ):
+                raise AutomationPolicyDenied("project scope is not active yet")
+            if (
+                managed.scope
+                and managed.scope.not_after
+                and managed.scope.not_after <= utc_now()
+            ):
+                raise AutomationPolicyDenied("project scope has expired")
+            if network != AutomationNetworkMode.HOST:
+                raise AutomationPolicyDenied(
+                    "Host mode uses the host OS network boundary"
+                )
+            return
+        if network == AutomationNetworkMode.HOST:
+            raise AutomationPolicyDenied(
+                "Host networking is unavailable in Docker mode"
+            )
         if network == AutomationNetworkMode.NONE:
             return
         if not managed.policy.network_enabled:
@@ -1516,7 +1749,7 @@ class AutomationRuntimeManager:
             "tool_name": "run_command",
             "arguments": request.model_dump(mode="json"),
             "session_id": managed.entity.id,
-            "runtime_digest": self.runtime_digest,
+            "runtime_digest": managed.entity.runtime_digest,
             "policy_revision": managed.policy.revision,
             "argument_editing": False,
         }
@@ -1534,7 +1767,9 @@ class AutomationRuntimeManager:
                 risk_class=RiskClass.WORKSPACE_WRITE,
                 exact_request=exact_request,
                 expected_effects=[
-                    "Run an arbitrary Bash command in the project automation container"
+                    "Run a Bash command as the Core OS user with host filesystem and network access"
+                    if managed.policy.execution_mode == "host"
+                    else "Run an arbitrary Bash command in the project automation container"
                 ],
                 policy_rationale=(
                     "the project requires approval for every command"

@@ -90,7 +90,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions"],
+    keywords: ["host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions"],
   },
   {
     id: "settings.operators",

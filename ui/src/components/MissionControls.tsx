@@ -129,7 +129,7 @@ export function NewMissionButton({ className = "button primary", children, showS
       return () => { active = false; };
     }
     setToolPreparation("preparing");
-    void api.getAutomationRuntime()
+    void api.getAutomationRuntime(undefined, engagement?.id)
       .then((runtime) => {
         if (!active) return;
         setRuntimeReady(runtime.ready);
@@ -385,7 +385,7 @@ export function NewMissionButton({ className = "button primary", children, showS
               <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
             </div>
             <section className="mission-tool-selection">
-              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O use Nebula's pinned automation runtime.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>
+              <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O use the project’s selected execution mode.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>
               {runtimeReady && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
