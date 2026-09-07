@@ -21,14 +21,14 @@ function LocationProbe() {
   return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
 
-function AskFromAssistant() {
+function AskFromAssistant({ view = "chat" }: { view?: "chat" | "browser" }) {
   const { requestNebulaDraft } = useWorkbenchDrafts();
   return <button type="button" onClick={() => requestNebulaDraft({
     text: "Keep this conversation visible",
     sourceKind: "assistant_message",
     sourceId: "message-1",
     sourceLabel: "Assistant response",
-  })}>Ask Nebula</button>;
+  }, view)}>Ask Nebula</button>;
 }
 
 describe("Ask Nebula conversation navigation", () => {
@@ -58,3 +58,16 @@ describe("Ask Nebula conversation navigation", () => {
     expect(state.createHandoff).toHaveBeenCalledTimes(1);
   });
 });
+
+ it("keeps native browser and conversation selected during context attachment", async () => {
+    state.createHandoff.mockResolvedValue({ id: "handoff-browser" });
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&browserEngine=native&session=conversation-1"]}>
+      <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
+    </MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-browser"));
+    const destination = new URL(screen.getByTestId("location").textContent ?? "", "http://nebula.test");
+    expect(destination.searchParams.get("view")).toBe("browser");
+    expect(destination.searchParams.get("browserEngine")).toBe("native");
+    expect(destination.searchParams.get("session")).toBe("conversation-1");
+ });

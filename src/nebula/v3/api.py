@@ -87,6 +87,12 @@ from .browser_assessments import (
     BrowserValidationRevokeRequest,
     BrowserValidationResultRequest,
 )
+from .browser_companion import (
+    BrowserCompanion,
+    CompanionRequest,
+    CompanionBindingRequest,
+    CompanionDecision,
+)
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
@@ -480,6 +486,7 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "browser_companion_actions",
     "action_intents",
     "automation_policies",
     "chat_turns",
@@ -1257,6 +1264,7 @@ def create_app(
     credentials = credential_store or CredentialStore()
     browser_automation = BrowserAutomationService(store)
     browser_assessments = BrowserAssessmentService(store)
+    browser_companion = BrowserCompanion(store, browser_assessments.engines)
     browser_automation_platform = BrowserAutomationToolPlatform(
         store, browser_automation
     )
@@ -7679,6 +7687,37 @@ def create_app(
                     else None
                 ),
             )
+            companion_ids = {
+                item.source_id
+                for item in request.context_attachments
+                if item.source_kind == "browser_companion" and item.source_id
+            }
+            if len(companion_ids) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Attach one browser session per conversation.",
+                )
+            if companion_ids:
+                companion_id = next(iter(companion_ids))
+                browser_companion.bind(companion_id, chat.id)
+            from .browser_companion_tools import attached_session
+
+            companion_id = attached_session(store, engagement_id, chat.id)
+            if companion_id:
+                runtime_session = store.get(
+                    HarnessSession, harness_turn.harness_session_id
+                )
+                store.update(
+                    HarnessSession,
+                    runtime_session.id,
+                    {
+                        "metadata": {
+                            **runtime_session.metadata,
+                            "browser_companion_session_id": companion_id,
+                        }
+                    },
+                    expected_revision=runtime_session.revision,
+                )
             harness_runtime.start_chat_turn(harness_turn.id)
 
             async def harness_events() -> Any:
@@ -9397,6 +9436,171 @@ def create_app(
         x_nebula_actor: str = Header(default="operator", alias="X-Nebula-Actor"),
     ) -> BrowserIdentity:
         return browser_security.create_identity(engagement_id, request, x_nebula_actor)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/browser-companion",
+        dependencies=[Depends(require_auth)],
+    )
+    async def open_browser_companion(engagement_id: str) -> dict[str, Any]:
+        try:
+            return await browser_companion.open(engagement_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.put(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/conversation",
+        dependencies=[Depends(require_auth)],
+    )
+    async def bind_browser_conversation(
+        session_id: str, request: CompanionBindingRequest
+    ) -> dict[str, Any]:
+        try:
+            browser_companion.bind(session_id, request.conversation_id)
+            return {"conversation_id": request.conversation_id}
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/operations",
+        dependencies=[Depends(require_auth)],
+    )
+    async def operate_browser_companion(
+        session_id: str, request: CompanionRequest
+    ) -> dict[str, Any]:
+        try:
+            return await browser_companion.request(session_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.put(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/active-tab/{{tab_id}}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def companion_select_tab(session_id: str, tab_id: str) -> dict[str, str]:
+        await browser_companion.select_tab(session_id, tab_id)
+        return {"active_tab_id": tab_id}
+
+    @app.get(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
+        dependencies=[Depends(require_auth)],
+    )
+    async def companion_actions(session_id: str) -> Any:
+        return browser_companion.actions(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/actions/{{action_id}}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def companion_decision(
+        session_id: str, action_id: str, request: CompanionDecision
+    ) -> Any:
+        try:
+            return await browser_companion.decide(
+                session_id, action_id, request.decision
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/control",
+        dependencies=[Depends(require_auth)],
+    )
+    async def companion_control_status(session_id: str) -> dict[str, bool]:
+        session = browser_companion.session(session_id)
+        return {"paused": session.metadata.get("assistant_paused", True)}
+
+    @app.put(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/control",
+        dependencies=[Depends(require_auth)],
+    )
+    async def companion_control(
+        session_id: str, paused: bool = Query(default=True)
+    ) -> dict[str, bool]:
+        browser_companion.takeover(session_id, paused)
+        return {"paused": paused}
+
+    @app.websocket(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/tabs/{{tab_id}}/stream"
+    )
+    async def companion_stream(
+        websocket: WebSocket, session_id: str, tab_id: str
+    ) -> None:
+        import base64
+        from urllib.parse import quote
+        from websockets.asyncio.client import connect
+        from websockets.exceptions import ConnectionClosed
+
+        protocols = [
+            p.strip()
+            for p in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if p.strip()
+        ]
+        supplied = _websocket_protocol_secret(
+            protocols, "nebula.auth.", decode_base64=True
+        )
+        if not allow_unauthenticated and (
+            (not supplied or not hmac.compare_digest(supplied, token))
+            and not _cookie_websocket_authenticated(websocket)
+        ):
+            await websocket.close(code=4401, reason="valid authentication required")
+            return
+        try:
+            session = browser_companion.session(session_id)
+            adapter = await browser_companion.adapter()
+            endpoint = adapter.base_url.replace("http://", "ws://", 1)
+            endpoint += f"/v1/identities/{quote(session.identity_id, safe='')}/tabs/{quote(tab_id, safe='')}/screencast"
+            secret = (
+                base64.urlsafe_b64encode(adapter._token.encode()).decode().rstrip("=")
+            )
+            async with connect(
+                endpoint,
+                subprotocols=["nebula.browserd.v1", f"nebula.auth.{secret}"],
+                max_size=8 * 1024 * 1024,
+            ) as upstream:
+                await websocket.accept(subprotocol="nebula.browser.v1")
+
+                async def frames() -> None:
+                    async for frame in upstream:
+                        browser_companion.session(session_id)
+                        await websocket.send_text(
+                            frame if isinstance(frame, str) else frame.decode()
+                        )
+
+                async def inputs() -> None:
+                    while True:
+                        event = await websocket.receive_json()
+                        browser_companion.session(session_id)
+                        if event.get("kind") not in {"mouse", "key", "text", "resize"}:
+                            continue
+                        if len(json.dumps(event)) > 8000:
+                            await websocket.close(code=4400, reason="input too large")
+                            return
+                        browser_companion.takeover(session_id, True)
+                        async with browser_companion._locks.setdefault(
+                            session_id, asyncio.Lock()
+                        ):
+                            browser_companion.session(session_id)
+                            await upstream.send(json.dumps(event))
+
+                sender = asyncio.create_task(frames())
+                receiver = asyncio.create_task(inputs())
+                try:
+                    done, _ = await asyncio.wait(
+                        {sender, receiver}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in done:
+                        task.result()
+                finally:
+                    sender.cancel()
+                    receiver.cancel()
+                    await asyncio.gather(sender, receiver, return_exceptions=True)
+        except (ValueError, OSError, ConnectionClosed, WebSocketDisconnect):
+            # diagnostic-expected: detached viewers do not terminate the host browser.
+            if websocket.client_state.name != "DISCONNECTED":
+                await websocket.close(
+                    code=4410,
+                    reason="Browser connection ended. Reconnect to restore the view.",
+                )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/browser-sessions",

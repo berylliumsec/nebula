@@ -28,6 +28,7 @@ from pydantic import Field, StringConstraints, field_validator, model_validator
 
 from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
+from .browser_companion_tools import attached_session, companion_components
 
 from .domain import (
     AgentRun,
@@ -1045,13 +1046,36 @@ class ChatService:
         browser_session_ids = {
             item.source_id
             for item in request.context_attachments
-            if item.source_kind == "browser_page" and item.source_id
+            if item.source_kind in {"browser_page", "browser_companion"}
+            and item.source_id
         }
         if len(browser_session_ids) > 1:
             raise ChatConfigurationError(
                 "one chat turn cannot control more than one browser session"
             )
         browser_session_id = next(iter(browser_session_ids), None)
+        companion_session_id = (
+            attached_session(self.store, engagement_id, request.session_id)
+            if engagement_id
+            else None
+        )
+        browser_session_id = browser_session_id or companion_session_id
+        if browser_session_id:
+            from .domain import BrowserSession
+
+            selected_browser = self.store.get(BrowserSession, browser_session_id)
+            if selected_browser.metadata.get("browser_companion_version") == 1 and (
+                selected_browser.metadata.get("assistant_paused", True)
+                or not profile.tools_verified_for(selected_model)
+                or (
+                    not provider.config.local
+                    and (
+                        not profile.privacy.permits_sensitive_data
+                        or not request.allow_cloud_tool_results
+                    )
+                )
+            ):
+                browser_session_id = None
         tools_enabled = (
             request.tools_enabled or bool(mcp_profiles) or bool(browser_session_id)
         )
@@ -1113,9 +1137,19 @@ class ChatService:
                         "no runtime capabilities were selected"
                     )
                 if browser_session_id is not None:
-                    browser_components = self.browser_tool_platform.chat_components(
-                        engagement_id=engagement_id,
-                        browser_session_id=browser_session_id,
+                    from .domain import BrowserSession
+
+                    browser_session = self.store.get(BrowserSession, browser_session_id)
+                    browser_components = (
+                        companion_components(
+                            self.store, engagement_id, browser_session_id
+                        )
+                        if browser_session.metadata.get("browser_companion_version")
+                        == 1
+                        else self.browser_tool_platform.chat_components(
+                            engagement_id=engagement_id,
+                            browser_session_id=browser_session_id,
+                        )
                     )
                     tool_components = combine_tool_components(
                         tool_components,
@@ -2021,9 +2055,25 @@ class ChatService:
                     engagement_id=turn.engagement_id,
                     extra_components=extra_components,
                 )
-            elif extra_components is not None:
-                components = extra_components
             else:
+                components = extra_components
+            browser_session_id = turn.request_snapshot.get("browser_session_id")
+            if isinstance(browser_session_id, str):
+                from .domain import BrowserSession
+
+                browser_session = self.store.get(BrowserSession, browser_session_id)
+                browser_components = (
+                    companion_components(
+                        self.store, turn.engagement_id, browser_session_id
+                    )
+                    if browser_session.metadata.get("browser_companion_version") == 1
+                    else self.browser_tool_platform.chat_components(
+                        engagement_id=turn.engagement_id,
+                        browser_session_id=browser_session_id,
+                    )
+                )
+                components = combine_tool_components(components, browser_components)
+            if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
         except Exception as exc:
             record_caught_exception(
@@ -3144,6 +3194,17 @@ class ChatService:
                     expected_revision=session.revision,
                 )
                 transaction.add_all([*messages, turn])
+        browser_session_id = turn.request_snapshot.get("browser_session_id")
+        if isinstance(browser_session_id, str):
+            from .domain import BrowserSession
+            from .browser_companion import BrowserCompanion
+            from .browser_engine import BrowserEngineRegistry
+
+            browser_session = self.store.get(BrowserSession, browser_session_id)
+            if browser_session.metadata.get("browser_companion_version") == 1:
+                BrowserCompanion(self.store, BrowserEngineRegistry()).bind(
+                    browser_session_id, session.id
+                )
         prepared.inputs_persisted = True
         prepared.stored_messages.extend(messages)
         prepared.new_messages = []

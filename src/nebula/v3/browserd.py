@@ -28,6 +28,9 @@ from playwright.async_api import async_playwright
 from pydantic import BaseModel, ConfigDict, Field
 import uvicorn
 
+from .browser_companion import CompanionRequest
+from .browser_companion_runtime import operate as companion_operate
+
 from .browser_engine import (
     BROWSER_ENGINE_CONTRACT_VERSION,
     BrowserEngineAction,
@@ -398,6 +401,15 @@ class BrowserdManager:
                     screenshots=True, snapshots=True, sources=False
                 )
                 self._contexts[identity_id] = context
+
+                def forget_closed_context() -> None:
+                    if self._contexts.get(identity_id) is context:
+                        self._contexts.pop(identity_id, None)
+                        for key in list(self._tabs):
+                            if key[0] == identity_id:
+                                self._tabs.pop(key, None)
+
+                context.on("close", forget_closed_context)
                 pages = list(context.pages) or [await context.new_page()]
                 for page in pages:
                     tab_id = str(uuid4())
@@ -688,6 +700,13 @@ def create_browserd_app(
         states = {"pause": "paused", "resume": "running", "stop": "stopped"}
         return await runtime.lifecycle(assessment_id, states[action])
 
+    @app.post("/v1/companion/{identity_id}", dependencies=[Depends(require_auth)])
+    async def companion(identity_id: str, request: CompanionRequest) -> dict[str, Any]:
+        try:
+            return await companion_operate(runtime, identity_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.websocket("/v1/identities/{identity_id}/tabs/{tab_id}/screencast")
     async def screencast(websocket: WebSocket, identity_id: str, tab_id: str) -> None:
         protocols = [
@@ -759,7 +778,15 @@ def create_browserd_app(
             while True:
                 event = await websocket.receive_json()
                 kind = event.get("kind")
-                if kind == "mouse":
+                if kind == "resize":
+                    width = int(event.get("width", 1280))
+                    height = int(event.get("height", 800))
+                    if not 320 <= width <= 1920 or not 320 <= height <= 1080:
+                        raise ValueError(
+                            "Browser viewport is outside supported dimensions."
+                        )
+                    await page.set_viewport_size({"width": width, "height": height})
+                elif kind == "mouse":
                     await cdp.send(
                         "Input.dispatchMouseEvent",
                         {
@@ -768,6 +795,14 @@ def create_browserd_app(
                             "y": float(event["y"]),
                             "button": event.get("button", "none"),
                             "clickCount": int(event.get("clickCount", 0)),
+                            **(
+                                {
+                                    "deltaX": float(event.get("deltaX", 0)),
+                                    "deltaY": float(event.get("deltaY", 0)),
+                                }
+                                if event.get("type") == "mouseWheel"
+                                else {}
+                            ),
                         },
                     )
                 elif kind == "key":

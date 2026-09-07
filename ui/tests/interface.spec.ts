@@ -5243,3 +5243,44 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
     expect(contract.nestedFrames, `${route} contains decorative frame nesting`).toEqual([]);
   }
 });
+
+test("browser Assistant stays beside the page through an answer and follow-up", async ({ page }) => {
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{ ...entity, id: "browser-provider", name: "Browser provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["browser-model"], capabilities: { streaming: true }, privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "browser-model" } }] });
+    } else if (path.endsWith("/browser-companion")) {
+      await route.fulfill({ json: { session_id: "browser-session", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
+    } else if (path.endsWith("/browser-companion/browser-session/operations")) {
+      await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.", page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
+    } else if (path.includes("/browser-companion/")) {
+      await route.fulfill({ json: path.endsWith("/actions") ? [] : {} });
+    } else if (path.endsWith("/chat/completions")) {
+      const body = route.request().postDataJSON();
+      const answer = body.session_id ? "Yes, that is the same page context." : "The Save button saves your changes.";
+      const frames = [
+        { type: "started", provider_id: "browser-provider", model: "browser-model", session_id: "browser-chat", turn_id: "browser-turn" },
+        { type: "delta", delta: answer },
+        { type: "done", provider_id: "browser-provider", model: "browser-model", session_id: "browser-chat", turn_id: "browser-turn", message: { id: "browser-answer", role: "assistant", content: answer }, usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 }, finish_reason: "stop", citations: [] },
+      ];
+      await route.fulfill({ contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n" });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=browser", "Workbench");
+  await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
+  await page.getByRole("button", { name: "Attach to Assistant", exact: true }).click();
+  const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+  await expect(panel).toBeVisible();
+  await panel.locator("#analyst-message").fill("What does this button do?");
+  await panel.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(panel.getByText("The Save button saves your changes.", { exact: true }).first()).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  await panel.locator("#analyst-message").fill("Is this still the same context?");
+  await panel.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(panel.getByText("Yes, that is the same page context.", { exact: true }).first()).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("session")).toBe("browser-chat");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+  expect(overflow).toBe(false);
+});

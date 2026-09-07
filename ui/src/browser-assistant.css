@@ -1,0 +1,28 @@
+.integrated-browser-layout { display: flex; min-height: 0; height: 100%; gap: 12px; }
+.integrated-browser-page { flex: 1 1 55%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.integrated-browser-page > .workbench-browser { flex: 1; min-height: 0; }
+.integrated-browser-assistant { flex: 1 1 45%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.integrated-browser-assistant > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.integrated-browser-assistant > header > strong { margin-right: auto; }
+.integrated-browser-assistant .chat-panel { flex: 1; min-height: 0; }
+.integrated-browser-assistant button { min-height: 44px; }
+.integrated-browser-assistant button > svg { pointer-events: none; }
+.managed-assistant-browser { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+.managed-assistant-browser > * { flex-shrink: 0; }
+.managed-browser-toolbar { display: flex; gap: 6px; flex-wrap: wrap; }
+.managed-browser-toolbar input { flex: 1; min-width: 120px; }
+.managed-browser-toolbar select { max-width: 100%; }
+.managed-assistant-browser button, .managed-assistant-browser input, .managed-assistant-browser select { min-height: 44px; }
+.managed-browser-screen { min-height: 100px; overflow: auto; }
+.managed-browser-screen > img { display: block; width: 100%; height: auto; touch-action: none; }
+.managed-browser-capture { max-height: 40vh; overflow: auto; }
+.managed-browser-capture pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.managed-browser-capture img { max-width: 100%; }
+.managed-browser-capture small { display: block; }
+.managed-browser-approval { padding: 12px; border: 1px solid currentColor; }
+@media (max-width: 760px) {
+  .integrated-browser-layout { flex-direction: column; }
+  .integrated-browser-layout.assistant-open > .integrated-browser-page { flex: 1 1 40%; min-height: 100px; }
+  .integrated-browser-assistant { flex: 1 1 60%; min-height: 180px; }
+  .integrated-browser-assistant .chat-settings-popover { width: 100%; max-width: 100%; }
+}

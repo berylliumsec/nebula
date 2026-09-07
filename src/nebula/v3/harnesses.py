@@ -99,6 +99,7 @@ from .domain import (
     utc_now,
 )
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
+from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
@@ -7830,6 +7831,17 @@ class HarnessRuntimeService:
         self, session: HarnessSession, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         tools: list[dict[str, Any]] = []
+        current = self.store.get(HarnessSession, session.id)
+        if current.metadata.get("browser_companion_session_id"):
+            spec = companion_spec()
+            tools.append(
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "inputSchema": spec.input_schema,
+                }
+            )
+
         mapping: dict[str, tuple[McpServerProfile, McpToolSnapshot]] = {}
         oci_mapping: dict[str, str] = {}
         if self.knowledge_retriever is not None:
@@ -8031,6 +8043,39 @@ class HarnessRuntimeService:
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        if name == "browser.companion":
+            current = self.store.get(HarnessSession, session.id)
+            companion_id = current.metadata.get("browser_companion_session_id")
+            if not isinstance(companion_id, str):
+                raise HarnessConfigurationError(
+                    "No browser is attached to this conversation."
+                )
+            components = companion_components(
+                self.store, turn.engagement_id, companion_id
+            )
+            invocation = ToolInvocation(
+                id=str(uuid4()),
+                engagement_id=turn.engagement_id,
+                run_id=turn.chat_turn_id or turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=turn.chat_session_id,
+                chat_turn_id=turn.chat_turn_id,
+                tool_name=name,
+                arguments=arguments,
+                workspace=components.workspace,
+                idempotency_key=f"browser:{turn.id}:"
+                + hashlib.sha256(
+                    json.dumps(arguments, sort_keys=True).encode()
+                ).hexdigest(),
+                requested_by="harness-gateway",
+                runtime_session_kind="harness",
+                runtime_session_id=session.id,
+            )
+            result = await components.broker.execute(invocation, components.scope)
+            return {
+                "content": [{"type": "text", "text": json.dumps(result.output)}],
+                "isError": False,
+            }
         if name == "knowledge.list":
             return await self._gateway_knowledge_list(turn, arguments)
         if name == "knowledge.search":
