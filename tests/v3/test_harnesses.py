@@ -28,7 +28,7 @@ from nebula.v3.browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
 )
-from nebula.v3.chat import ChatService
+from nebula.v3.chat import ChatService, ChatConfigurationError
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
@@ -37,6 +37,7 @@ from nebula.v3.domain import (
     ApprovalStatus,
     ChatBackend,
     ChatMessage,
+    ChatContentBlock,
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
@@ -109,8 +110,12 @@ class FakeConnection(HarnessConnection):
         self.closed = False
         self.steering: list[str] = []
         self.prompts: list[str] = []
+        self.images: list[list[dict]] = []
 
-    async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
+    async def run_turn(
+        self, prompt: str, *, model: str, images=None
+    ) -> AsyncIterator[HarnessEvent]:
+        self.images.append(images or [])
         self.prompts.append(prompt)
         self.external_session_id = self.external_session_id or "vendor-session-1"
         yield HarnessEvent(
@@ -2733,3 +2738,87 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
         allow_remote_mcp=True,
     )
     assert chat.harness_session_id
+
+
+def test_harness_images_validate_ownership_and_persist_references(tmp_path):
+    store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+    original = store.create(
+        runtime.artifact_store.put_bytes(
+            b"original image",
+            engagement_id=engagement.id,
+            media_type="image/png",
+            metadata={"chat_image_original": True},
+        )
+    )
+    preview = store.create(
+        runtime.artifact_store.put_bytes(
+            b"validated preview",
+            engagement_id=engagement.id,
+            media_type="image/png",
+            parent_artifact_id=original.id,
+            metadata={"chat_image_preview": True, "metadata_stripped": True},
+        )
+    )
+    block = ChatContentBlock(
+        type="image",
+        artifact_id=original.id,
+        metadata={"preview_artifact_id": preview.id},
+    )
+    args = dict(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Describe this image",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        content_blocks=[block],
+    )
+    with pytest.raises(HarnessConfigurationError, match="image input"):
+        runtime.prepare_chat(**args)
+    assert store.list_entities(ChatSession) == []
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": HarnessCapabilities(
+                models=["test-model"],
+                model_options=[
+                    HarnessModelOptions(model="test-model", image_input=True)
+                ],
+            )
+        },
+        expected_revision=profile.revision,
+    )
+    foreign = store.create(Engagement(name="Other project"))
+    with pytest.raises(ChatConfigurationError, match="belong"):
+        runtime.prepare_chat(**{**args, "engagement_id": foreign.id})
+    assert store.list_entities(ChatSession) == []
+
+    async def scenario():
+        chat, _, turn = runtime.prepare_chat(**args)
+        messages = store.list_entities(ChatMessage, engagement_id=engagement.id)
+        assert messages[0].content_blocks == [block]
+        assert "validated preview" not in turn.model_dump_json()
+        assert turn.metadata["image_blocks"][0]["artifact_id"] == original.id
+        events = [event async for event in runtime.stream_turn(turn.id)]
+        assert any(event.type == "completed" for event in events), events
+        assert adapter.connections[0].images[0][0]["data"] == "dmFsaWRhdGVkIHByZXZpZXc="
+        assert store.get(ChatSession, chat.id).id == chat.id
+        _, _, corrupted_turn = runtime.prepare_chat(
+            **{**args, "chat_session_id": chat.id, "mcp_server_ids": None}
+        )
+        preview_path = runtime.artifact_store.path_for(preview)
+        preview_path.chmod(0o600)
+        preview_path.write_bytes(b"changed after validation")
+        failed_events = [
+            event async for event in runtime.stream_turn(corrupted_turn.id)
+        ]
+        assert any(event.type == "error" for event in failed_events)
+        assert (
+            store.get(HarnessTurn, corrupted_turn.id).status == HarnessTurnStatus.INTERRUPTED
+        )
+        assert len(adapter.connections[0].images) == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

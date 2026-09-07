@@ -7673,6 +7673,7 @@ def create_app(
                 profile_id=request.harness_profile_id or "",
                 model=request.model,
                 prompt=prompt,
+                content_blocks=request.messages[-1].content_blocks,
                 chat_session_id=request.session_id,
                 harness_session_id=request.harness_session_id,
                 mcp_server_ids=request.mcp_server_ids,

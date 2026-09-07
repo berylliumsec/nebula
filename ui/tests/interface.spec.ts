@@ -5284,3 +5284,55 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
   expect(overflow).toBe(false);
 });
+
+for (const imageInput of [true, false]) {
+  test(`browser Assistant harness image attachments follow model capability (${imageInput})`, async ({ page }) => {
+    let upload: Record<string, unknown> | undefined;
+    let sent: Record<string, any> | undefined;
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/harnesses") && route.request().method() === "GET") {
+        await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at } }] });
+      } else if (path.endsWith("/browser-companion")) {
+        await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
+      } else if (path.includes("/browser-companion/")) {
+        await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") ? [] : {} });
+      } else if (path.endsWith("/chat/images")) {
+        upload = route.request().postDataJSON();
+        await route.fulfill({ json: { artifact_id: "image-artifact", preview_artifact_id: "image-preview", media_type: "image/png", width: 1, height: 1 } });
+      } else if (path.endsWith("/chat/completions")) {
+        sent = route.request().postDataJSON();
+        const frames = [
+          { type: "started", backend: "harness", harness_profile_id: "image-harness", model: "image-model", session_id: "image-chat", turn_id: "image-turn", harness_session_id: "image-harness-session" },
+          { type: "done", backend: "harness", harness_profile_id: "image-harness", model: "image-model", session_id: "image-chat", turn_id: "image-turn", message: { role: "assistant", content: "Image received." }, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 }, citations: [] },
+        ];
+        await route.fulfill({ contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n" });
+      } else await route.fallback();
+    });
+    await openWorkspace(page, "/?view=browser", "Workbench");
+    const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+    if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    const attach = panel.getByRole("button", { name: "Attach images", exact: true });
+    if (!imageInput) {
+      await expect(attach).toBeDisabled();
+      await expect(attach).toHaveAttribute("title", "The selected runtime does not advertise image input");
+      return;
+    }
+    await expect(attach).toBeEnabled();
+    const image = { name: "selection.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64") };
+    await panel.getByLabel("Choose image attachments").setInputFiles(image);
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toBeVisible();
+    await panel.getByRole("button", { name: "Remove selection.png" }).click();
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toHaveCount(0);
+    await panel.getByLabel("Choose image attachments").setInputFiles(image);
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toBeVisible();
+    await panel.locator("#analyst-message").fill("Describe the selected image.");
+    await panel.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect.poll(() => sent?.backend).toBe("harness");
+    expect(upload?.filename).toBe("selection.png");
+    expect(sent?.messages[0].content_blocks).toContainEqual(expect.objectContaining({ type: "image", artifact_id: "image-artifact" }));
+    expect(JSON.stringify(sent)).not.toContain("iVBORw0");
+    await expect(panel.getByText("Image received.", { exact: true }).first()).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  });
+}

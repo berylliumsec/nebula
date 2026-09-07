@@ -33,6 +33,7 @@ async def smoke(
     codex_home: Path | None = None,
 ) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
+    from nebula.v3.artifacts import ArtifactStore
     from nebula.v3.api import create_app
     from nebula.v3.browserd import (
         BrowserdSettings,
@@ -91,7 +92,11 @@ async def smoke(
                 )
             )
             store.update(Engagement, project.id, {"scope_policy_id": scope.id})
-            app = create_app(store, auth_token="isolated-core-token")
+            app = create_app(
+                store,
+                auth_token="isolated-core-token",
+                artifact_store=ArtifactStore(root / "artifacts"),
+            )
             core_listener = socket.socket()
             core_listener.bind(("127.0.0.1", 0))
             core_listener.listen(128)
@@ -487,8 +492,71 @@ async def smoke(
                     finally:
                         followup.cancel()
                         await asyncio.gather(followup, return_exceptions=True)
+                    # Image content must travel through the operator attachment path,
+                    # independently of MCP screenshots or information in page text.
+                    image_buffer = BytesIO()
+                    Image.new("RGB", (160, 160), "blue").save(
+                        image_buffer, format="PNG"
+                    )
+                    uploaded = await client.post(
+                        "/api/v1/chat/images",
+                        json={
+                            "engagement_id": project.id,
+                            "filename": "color-check.png",
+                            "media_type": "image/png",
+                            "content_base64": base64.b64encode(
+                                image_buffer.getvalue()
+                            ).decode("ascii"),
+                        },
+                    )
+                    uploaded.raise_for_status()
+                    image_block = {
+                        "type": "image",
+                        "artifact_id": uploaded.json()["artifact_id"],
+                        "metadata": {
+                            "preview_artifact_id": uploaded.json()[
+                                "preview_artifact_id"
+                            ]
+                        },
+                    }
+                    image_answer = await client.post(
+                        "/api/v1/chat/completions",
+                        timeout=180,
+                        json={
+                            "backend": "harness",
+                            "engagement_id": project.id,
+                            "session_id": completion.json()["session_id"],
+                            "harness_profile_id": profile.id,
+                            "model": model,
+                            "include_knowledge": False,
+                            "allow_cloud_tool_results": True,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "What single color fills the attached image? Answer only the color. Do not use tools.",
+                                    "content_blocks": [image_block],
+                                }
+                            ],
+                        },
+                    )
+                    image_answer.raise_for_status()
+                    assert (
+                        "blue" in image_answer.json()["message"]["content"].lower()
+                    ), image_answer.json()
+                    saved_messages = await client.get(
+                        "/api/v1/chat/sessions/"
+                        + completion.json()["session_id"]
+                        + "/messages"
+                    )
+                    saved_messages.raise_for_status()
+                    assert any(
+                        image_block["artifact_id"] == block.get("artifact_id")
+                        for message in saved_messages.json()
+                        for block in message.get("content_blocks", [])
+                    )
                     harness_evidence = {
                         "harness_model": model,
+                        "harness_operator_image_attachment": True,
                         "harness_mcp_screenshot": True,
                         "harness_visible_answer": True,
                         "harness_inline_approval_and_followup": True,

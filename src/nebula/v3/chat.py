@@ -155,6 +155,71 @@ class ChatContextAttachment(NebulaModel):
         return self
 
 
+def resolve_chat_model_content(
+    store: NebulaStore,
+    artifact_store: ArtifactStore | None,
+    message: ChatRequestMessage,
+    engagement_id: str | None,
+) -> str | list[dict[str, Any]]:
+    images = [block for block in message.content_blocks if block.type == "image"]
+    if not images:
+        return message.content
+    if artifact_store is None or not engagement_id:
+        raise ChatConfigurationError("image messages require durable artifact storage")
+    parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
+    for block in images:
+        assert block.artifact_id is not None
+        artifact = store.get(Artifact, block.artifact_id)
+        if (
+            artifact.engagement_id != engagement_id
+            or artifact.metadata.get("chat_image_original") is not True
+        ):
+            raise ChatConfigurationError("chat image does not belong to this project")
+        preview_id = block.metadata.get("preview_artifact_id")
+        preview = (
+            store.get(Artifact, preview_id)
+            if isinstance(preview_id, str)
+            else next(
+                (
+                    candidate
+                    for candidate in store.list_entities(
+                        Artifact, engagement_id=engagement_id, limit=1_000
+                    )
+                    if candidate.parent_artifact_id == artifact.id
+                    and candidate.metadata.get("chat_image_preview") is True
+                ),
+                None,
+            )
+        )
+        if (
+            preview is None
+            or preview.engagement_id != engagement_id
+            or preview.parent_artifact_id != artifact.id
+            or preview.metadata.get("chat_image_preview") is not True
+            or preview.metadata.get("metadata_stripped") is not True
+        ):
+            raise ChatConfigurationError(
+                "validated metadata-stripped chat image preview is unavailable"
+            )
+        data = artifact_store.read(preview)
+        if (
+            len(data) != preview.size
+            or hashlib.sha256(data).hexdigest() != preview.sha256
+        ):
+            raise ChatConfigurationError(
+                "Chat image preview failed integrity verification. Remove the attachment and upload it again."
+            )
+        parts.append(
+            {
+                "type": "image",
+                "media_type": preview.media_type,
+                "data": base64.b64encode(data).decode("ascii"),
+                "alt": block.alt,
+            }
+        )
+    return parts
+
+
 class ChatCompletionRequest(NebulaModel):
     backend: ChatBackend = ChatBackend.PROVIDER
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -702,60 +767,9 @@ class ChatService:
     def _model_content(
         self, message: ChatRequestMessage, engagement_id: str | None
     ) -> str | list[dict[str, Any]]:
-        images = [block for block in message.content_blocks if block.type == "image"]
-        if not images:
-            return message.content
-        if self.artifact_store is None or not engagement_id:
-            raise ChatConfigurationError(
-                "image messages require durable artifact storage"
-            )
-        parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
-        for block in images:
-            assert block.artifact_id is not None
-            artifact = self.store.get(Artifact, block.artifact_id)
-            if (
-                artifact.engagement_id != engagement_id
-                or artifact.metadata.get("chat_image_original") is not True
-            ):
-                raise ChatConfigurationError(
-                    "chat image does not belong to this project"
-                )
-            preview_id = block.metadata.get("preview_artifact_id")
-            preview = (
-                self.store.get(Artifact, preview_id)
-                if isinstance(preview_id, str)
-                else next(
-                    (
-                        candidate
-                        for candidate in self.store.list_entities(
-                            Artifact, engagement_id=engagement_id, limit=1_000
-                        )
-                        if candidate.parent_artifact_id == artifact.id
-                        and candidate.metadata.get("chat_image_preview") is True
-                    ),
-                    None,
-                )
-            )
-            if (
-                preview is None
-                or preview.engagement_id != engagement_id
-                or preview.parent_artifact_id != artifact.id
-                or preview.metadata.get("chat_image_preview") is not True
-                or preview.metadata.get("metadata_stripped") is not True
-            ):
-                raise ChatConfigurationError(
-                    "validated metadata-stripped chat image preview is unavailable"
-                )
-            data = self.artifact_store.read(preview)
-            parts.append(
-                {
-                    "type": "image",
-                    "media_type": preview.media_type,
-                    "data": base64.b64encode(data).decode("ascii"),
-                    "alt": block.alt,
-                }
-            )
-        return parts
+        return resolve_chat_model_content(
+            self.store, self.artifact_store, message, engagement_id
+        )
 
     def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
         """Synchronous compatibility wrapper for non-ASGI callers and tests."""

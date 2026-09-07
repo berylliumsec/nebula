@@ -685,7 +685,8 @@ export function SessionsPage() {
   const harnessServiceTiers = selectedHarnessModelOptions?.serviceTiers ?? [];
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
   const imageInputEnabled = runtimeKind === "provider"
-    && Boolean(selectedProvider?.capabilities.includes("vision"));
+    ? Boolean(selectedProvider?.capabilities.includes("vision"))
+    : Boolean(selectedHarnessModelOptions?.imageInput);
   const harnessIsLocal = selectedHarness?.localOnly === true;
   const runtimePermitsKnowledge = runtimeKind === "harness"
     ? harnessIsLocal || selectedHarness?.permitsSensitiveData === true

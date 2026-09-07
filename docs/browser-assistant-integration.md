@@ -264,3 +264,30 @@ The live Codex workflow was rerun successfully after commit `08f43e8`, using
 `--codex-home /home/agent/.codex-2` and model `gpt-6-astra`. The run included
 protected fill and screenshot masking, MCP screenshot delivery, a visible answer,
 same-conversation follow-up, inline approval and the observed page change.
+
+### Harness image attachment contract
+
+Journey: capture a page region or choose an image in the browser composer, preview
+and remove it, send to an image-capable harness, then reopen the same transcript.
+Core owns the validated metadata-stripped artifacts and durable message references;
+the harness owns live conversation history. Client state holds unsent previews.
+Image bytes are resolved and integrity-checked just before dispatch, never stored
+in turn metadata or prompts. Reject unsupported models and cross-project artifacts
+before creating a conversation. Verify adapter input, durable transcript, unavailable
+models, ownership and a live Codex image answer; include the browser UI path in the
+remaining real-Core production acceptance.
+
+The operator attachment path passed the live headed Core/Codex script with
+`--codex-home /home/agent/.codex-2`: a generated color fixture was uploaded through
+`/chat/images`, sent as a structured image in the existing harness conversation,
+identified correctly, and found in the authoritative saved message. MCP screenshots,
+inline click approval and protected-value checks passed in the same run.
+
+Focused harness/adapter/chat coverage passed 91 tests. The production bundle built
+with index SHA256 `84041ad5f1a0c13933c9d82d928893daacdbe970b9625e4addf94041fd914631`.
+The image-capable and image-unavailable composer cases passed 16 production-bundle
+LAN fixture checks across desktop 1440/1024 and mobile Chromium/WebKit 320/390/430
+profiles (34.8 seconds, origin `http://192.168.1.155:15431`). Model capability gates,
+preview removal, reference-only requests and in-browser answers were asserted.
+These are emulated profiles; the complete real-runtime UI and physical-device
+gates remain open. Uploads to page forms are a separate unfinished workflow.

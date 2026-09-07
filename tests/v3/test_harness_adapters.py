@@ -929,6 +929,7 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
                 "inspect",
                 model="gpt-test",
                 mode="plan",
+                images=[{"media_type": "image/png", "data": "aW1hZ2U="}],
                 skill=HarnessSkillInvocation(
                     name="review",
                     path="/workspace/.codex/skills/review/SKILL.md",
@@ -937,6 +938,10 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
         ]
         assert events[-1].message == "done"
         turn = next(params for method, params in rpc.calls if method == "turn/start")
+        assert turn["input"][1] == {
+            "type": "image",
+            "url": "data:image/png;base64,aW1hZ2U=",
+        }
         assert turn["collaborationMode"] == {"mode": "plan"}
         assert turn["input"][-1] == {
             "type": "skill",
