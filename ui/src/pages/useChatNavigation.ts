@@ -1,3 +1,4 @@
+import { logCaughtDiagnostic } from "../diagnostics";
 import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
 
@@ -13,7 +14,7 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
     setBookmarks([]);
     if (!api || !sessionId) return;
     const controller = new AbortController();
-    void api.request<ChatBookmark[]>(`chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`, {signal: controller.signal}).then(setBookmarks).catch((e: unknown) => {
+    void api.request<ChatBookmark[]>(`chat/sessions/${encodeURIComponent(sessionId)}/bookmarks`, {signal: controller.signal}).then(setBookmarks).catch((e: unknown) => { void logCaughtDiagnostic("interface.assistant_chat.read_failed", "Assistant chat state could not be read.", e, "assistant_chat");
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Bookmarks could not be loaded.");
     });
     return () => controller.abort();
@@ -25,7 +26,7 @@ export function useChatNavigation(api: ApiClient | undefined, projectId: string 
     try {
       await api.request(`chat/sessions/${encodeURIComponent(sessionId)}/bookmarks/${encodeURIComponent(messageId)}`, {method: "PUT", body: JSON.stringify({active: !current?.active, expected_revision: current?.revision ?? 0})});
       setRefresh(value => value + 1);
-    } catch (e) { setError(e instanceof Error ? e.message : "Bookmark could not be saved."); }
+    } catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat"); setError(e instanceof Error ? e.message : "Bookmark could not be saved."); }
   };
   const search = (q: string, bookmarked: boolean, currentOnly: boolean, offset = 0) => {
     if (!api || !projectId) return Promise.resolve<ChatSearchPage>({items: [], next_offset: null});

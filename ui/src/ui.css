@@ -15,3 +15,9 @@
 @import url("./calm-responsive.css") layer(responsive);
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
+
+.chat-follow-up-queue:empty { display: none; }
+.chat-follow-up-queue { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
+.chat-follow-up-queue p { overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-follow-up-queue button { min-height: 44px; }
+.chat-follow-up-queue textarea { width: 100%; min-height: 80px; }

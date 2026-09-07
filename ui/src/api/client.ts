@@ -3040,7 +3040,7 @@ function mapWorkspacePreview(value: WireWorkspacePreview): WorkspacePreview {
   };
 }
 
-function chatRequestBody(
+export function chatRequestBody(
   body: ChatCompletionRequest,
   stream: boolean,
 ): JsonObject {

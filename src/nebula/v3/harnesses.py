@@ -5723,6 +5723,7 @@ class HarnessRuntimeService:
         title: str | None = None,
         runtime_context: str | None = None,
         context_attachments: list[dict[str, Any]] | None = None,
+        queue_claim: tuple[str, int, str] | None = None,
         citations: list[ChatCitation] | None = None,
         allow_remote_mcp: bool = False,
         include_knowledge: bool = False,
@@ -6047,6 +6048,9 @@ class HarnessRuntimeService:
         with self.store.transaction() as transaction:
             transaction.add(chat_turn)
             transaction.add(harness_turn)
+            from .chat_queue import link_queue_turn
+
+            link_queue_turn(transaction, queue_claim, chat_turn.id, harness_turn.id)
             sequence = max((item.sequence for item in prior_messages), default=0) + 1
             transaction.add(
                 ChatMessage(
@@ -6057,7 +6061,10 @@ class HarnessRuntimeService:
                     role=ChatRole.USER,
                     content=clean_prompt,
                     model=session.model,
-                    metadata={"harness_turn_id": harness_turn.id, "context_attachments": context_attachments or []},
+                    metadata={
+                        "harness_turn_id": harness_turn.id,
+                        "context_attachments": context_attachments or [],
+                    },
                 )
             )
         return chat, chat_turn, harness_turn

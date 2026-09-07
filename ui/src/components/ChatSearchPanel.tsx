@@ -1,3 +1,4 @@
+import { logCaughtDiagnostic } from "../diagnostics";
 import { useRef, useState } from "react";
 import type { ChatSearchHit, ChatSearchPage } from "../pages/useChatNavigation";
 
@@ -14,7 +15,7 @@ export function ChatSearchPanel({search, onSelect}: {search: (q: string, bookmar
     const request = ++generation.current;
     setBusy(true); setError(undefined);
     try { const result = await search(query, bookmarked, currentOnly, offset); if (generation.current === request) {setPage(result); setIndex(0);} }
-    catch (e) { if (generation.current === request) setError(e instanceof Error ? e.message : "Search failed. Try again."); }
+    catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat"); if (generation.current === request) setError(e instanceof Error ? e.message : "Search failed. Try again."); }
     finally { if (generation.current === request) setBusy(false); }
   };
   const jump = (next: number) => { if (page?.items[next]) { setIndex(next); onSelect(page.items[next]); } };

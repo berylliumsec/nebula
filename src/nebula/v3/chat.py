@@ -24,7 +24,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    PrivateAttr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
@@ -152,6 +158,7 @@ class ChatContextAttachment(NebulaModel):
 
 
 class ChatCompletionRequest(NebulaModel):
+    _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -329,6 +336,7 @@ class PreparedChat:
     tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
     turn: ChatTurn | None = None
     inputs_persisted: bool = False
+    queue_claim: tuple[str, int, str] | None = None
 
 
 @dataclass
@@ -1216,6 +1224,7 @@ class ChatService:
             tools_enabled=tools_enabled,
             tool_components=tool_components,
             turn=turn,
+            queue_claim=request._queue_claim,
         )
         if turn is not None:
             self._persist_turn_inputs(prepared)
@@ -2241,7 +2250,12 @@ class ChatService:
             )
         messages = self._session_messages(source)
         boundary = next(
-            (message for message in messages if message.id == (through_message_id or before_message_id)), None
+            (
+                message
+                for message in messages
+                if message.id == (through_message_id or before_message_id)
+            ),
+            None,
         )
         if boundary is None:
             raise ChatHistoryConflict(
@@ -2280,7 +2294,9 @@ class ChatService:
             )
         )
         for message in messages:
-            if message.sequence > boundary.sequence or (before_message_id and message.sequence == boundary.sequence):
+            if message.sequence > boundary.sequence or (
+                before_message_id and message.sequence == boundary.sequence
+            ):
                 break
             self.store.create(
                 ChatMessage(
@@ -2987,9 +3003,16 @@ class ChatService:
             return
         session = self.store.get(ChatSession, session_id)
         from .chat_naming import should_name, substantive_prompt
+
         if not should_name(session):
             return
-        first_prompt = substantive_prompt([message.content for message in prepared.model_request.messages if message.role == "user"])
+        first_prompt = substantive_prompt(
+            [
+                message.content
+                for message in prepared.model_request.messages
+                if message.role == "user"
+            ]
+        )
         if not first_prompt:
             return
         request = ModelRequest(
@@ -3046,7 +3069,16 @@ class ChatService:
         if latest.metadata.get("initial_title_state") == "operator":
             return
         prepared.session = self.store.update(
-            ChatSession, session.id, {**changes, "metadata": {**latest.metadata, **changes["metadata"]}}, expected_revision=latest.revision,
+            ChatSession,
+            session.id,
+            {
+                **changes,
+                "metadata": {
+                    **latest.metadata,
+                    "initial_title_state": changes["metadata"]["initial_title_state"],
+                },
+            },
+            expected_revision=latest.revision,
         )
 
     @staticmethod
@@ -3142,6 +3174,9 @@ class ChatService:
                     expected_revision=session.revision,
                 )
                 transaction.add_all([*messages, turn])
+                from .chat_queue import link_queue_turn
+
+                link_queue_turn(transaction, prepared.queue_claim, turn.id)
         prepared.inputs_persisted = True
         prepared.stored_messages.extend(messages)
         prepared.new_messages = []

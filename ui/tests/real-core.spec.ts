@@ -156,6 +156,10 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
         }));
         return;
       }
+      if (tools.some(tool => tool.function?.name === "finish_response")) {
+        response.end(JSON.stringify({id: "chatcmpl-queue-routing", object: "chat.completion", created: 1, model: "security-model", choices: [{index: 0, message: {role: "assistant", content: null, tool_calls: [{id: "finish-queue", type: "function", function: {name: "finish_response", arguments: "{}"}}]}, finish_reason: "tool_calls"}], usage: {prompt_tokens: 12, completion_tokens: 4, total_tokens: 16}}));
+        return;
+      }
       const messages = Array.isArray(body.messages) ? body.messages as Array<{ content?: unknown }> : [];
       if (messages.some((message) => typeof message.content === "string" && message.content.includes("Name this conversation from its first exchange"))) {
         response.end(JSON.stringify({
@@ -1441,7 +1445,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
-  const stub = await startLocalModelStub();
+  const stub = await startLocalModelStub({streamDelayMs: 250});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   try {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
@@ -1481,7 +1485,37 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(page.getByText("Prepared for your next message", {exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Close details"}).click();
     await expect(composer).toHaveValue("Preserve this unsent draft");
-    await operator.getByRole("button", {name: "Edit and branch"}).click();
+    await composer.fill("Queue first task");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    const queue = page.getByRole("region", {name: "Core follow-up queue"});
+    await expect(queue).toContainText("Queue first task");
+    await composer.fill("Queue second task");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    await expect(queue.locator("li")).toHaveCount(2);
+    await queue.getByRole("button", {name: "Edit queued message 1", exact: true}).click();
+    await queue.getByRole("textbox", {name: "Edit queued text"}).fill("Edited queued first task");
+    await queue.getByRole("button", {name: "Save queued edit"}).click();
+    await expect(queue).toContainText("Edited queued first task");
+    await queue.getByRole("button", {name: "Move message 2 up"}).click();
+    await expect(queue.locator("li").first()).toContainText("Queue second task");
+    await testInfo.attach("queued-work", {body: await page.screenshot(), contentType: "image/png"});
+    await testInfo.attach("build-origin", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), assets: await page.locator("script[src]").evaluateAll(nodes => nodes.map(node => node.getAttribute("src")))}), contentType: "application/json"});
+    const secondDevice = await page.context().browser()!.newContext();
+    const secondPage = await secondDevice.newPage();
+    await secondPage.goto(url);
+    await expect(secondPage.getByRole("region", {name: "Core follow-up queue"}).locator("li").first()).toContainText("Queue second task");
+    await secondDevice.close();
+    await queue.getByRole("button", {name: "Resume queue", exact: true}).click();
+    await page.goto("about:blank");
+    await expect.poll(async () => {
+      const record = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: {status: string; detail?: string}[]};
+      if (record.items.some(item => item.status === "needs_review")) { throw new Error(JSON.stringify(record.items)); }
+      return record.items.map(item => item.status);
+    }, {timeout: 15_000}).toEqual(["complete", "complete"]);
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(3);
+    await expect(page.locator(".chat-message.operator").nth(1)).toContainText("Queue second task");
+    await operator.first().getByRole("button", {name: "Edit and branch"}).click();
     await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Hello");
     await expect(page.locator(".chat-message")).toHaveCount(0);
     await expect(page.getByRole("button", {name: "Open parent"})).toBeVisible();

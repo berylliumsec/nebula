@@ -444,7 +444,10 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     renamed = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
-        json={"title": "Renamed API conversation", "expected_revision": sessions.json()[0]["revision"]},
+        json={
+            "title": "Renamed API conversation",
+            "expected_revision": sessions.json()[0]["revision"],
+        },
     )
     assert renamed.status_code == 200
     assert renamed.json()["title"] == "Renamed API conversation"

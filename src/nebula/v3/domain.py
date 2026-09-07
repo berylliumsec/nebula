@@ -3283,8 +3283,20 @@ class HarnessInteraction(Entity):
         return self
 
 
+class ChatQueue(Entity):
+    """Revisioned dispatch order and retained idempotency receipts for one chat."""
+
+    entity_kind: ClassVar[str] = "chat_queues"
+    engagement_id: str
+    session_id: str
+    paused: bool = False
+    resume_after_turn_id: str | None = None
+    items: list[dict[str, Any]] = Field(default_factory=list, max_length=1000)
+
+
 class ChatBookmark(Entity):
     """An operator bookmark; message text remains in its canonical record."""
+
     entity_kind: ClassVar[str] = "chat_bookmarks"
     engagement_id: str
     session_id: str
@@ -3995,6 +4007,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ScopeImport,
     ChatSession,
     ChatBookmark,
+    ChatQueue,
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,
