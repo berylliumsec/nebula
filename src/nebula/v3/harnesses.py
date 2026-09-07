@@ -5980,6 +5980,24 @@ class HarnessRuntimeService:
                 session,
                 previous_session_id=forked_from_session_id,
             )
+        if (
+            profile.kind == HarnessKind.GROK_ACP
+            and session.external_session_id
+            and session.metadata.get("workspace_binding_version") != 1
+        ):
+            previous_session_id = session.id
+            handoff_context = self._chat_handoff_context(
+                chat, reason="a workspace connection update"
+            )
+            session = self._fork_session(session, reason="workspace_connection_changed")
+            chat = self._rebind_chat_session(
+                chat,
+                session,
+                previous_session_id=previous_session_id,
+                reason="workspace_connection_changed",
+            )
+            forked_from_session_id = previous_session_id
+            session_rollover_reason = "workspace_connection_changed"
         try:
             oci_components = self._ensure_oci_components(session)
         except HarnessCommandRuntimeSnapshotMismatch:
@@ -6240,6 +6258,10 @@ class HarnessRuntimeService:
             )
         elif isinstance(turn.metadata.get("forked_from_session_id"), str):
             previous_session_id = str(turn.metadata["forked_from_session_id"])
+            workspace_changed = (
+                turn.metadata.get("session_rollover_reason")
+                == "workspace_connection_changed"
+            )
             runtime_changed = (
                 turn.metadata.get("session_rollover_reason")
                 == "command_runtime_changed"
@@ -6256,12 +6278,17 @@ class HarnessRuntimeService:
                     model=session.model,
                     payload={
                         "phase": (
-                            "command_runtime_session_created"
+                            "workspace_session_created"
+                            if workspace_changed
+                            else "command_runtime_session_created"
                             if runtime_changed
                             else "parallel_session_created"
                         ),
                         "detail": (
-                            "The command runtime changed, so Nebula preserved the prior session "
+                            "The workspace connection was updated. Nebula preserved this chat "
+                            "and continued in a new runtime session with conversation context."
+                            if workspace_changed
+                            else "The command runtime changed, so Nebula preserved the prior session "
                             "and continued in a new session with the current runtime."
                             if runtime_changed
                             else "Started an independent harness session for parallel work."
@@ -8922,7 +8949,21 @@ class HarnessRuntimeService:
         launch = await gateway.start()
         self._gateways[session.id] = gateway
         isolated_workspace = gateway.root / "vendor-workspace"
-        isolated_workspace.mkdir(mode=0o700)
+        if portable_names and not analysis_only:
+            # Grok indexes native sessions by cwd. Keep this private directory
+            # stable across Core restarts, separately from the ephemeral socket.
+            isolated_workspace = (
+                self.artifact_store.root
+                / "harness-workspaces"
+                / hashlib.sha256(session.id.encode()).hexdigest()
+            )
+            session = self.store.update(
+                HarnessSession,
+                session.id,
+                {"metadata": {**session.metadata, "workspace_binding_version": 1}},
+                expected_revision=session.revision,
+            )
+        isolated_workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
         if analysis_only:
             raw_files = session.metadata.get("analysis_files", {})
             if isinstance(raw_files, dict):

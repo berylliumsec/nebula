@@ -2842,3 +2842,51 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
             await runtime.close_session(session.id)
 
     asyncio.run(scenario())
+
+
+def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    store.update(
+        HarnessProfile,
+        profile.id,
+        {"kind": "grok_acp"},
+        expected_revision=profile.revision,
+    )
+    chat, _, first = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Remember the project marker",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    store.update(
+        HarnessTurn, first.id, {"status": "complete"}, expected_revision=first.revision
+    )
+    old = store.get(HarnessSession, first.harness_session_id)
+    old = store.update(
+        HarnessSession,
+        old.id,
+        {"external_session_id": "legacy-native-session"},
+        expected_revision=old.revision,
+    )
+    updated, _, second = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Inspect project files",
+        chat_session_id=chat.id,
+        harness_session_id=old.id,
+        mcp_server_ids=[],
+    )
+    assert updated.id == chat.id
+    assert second.harness_session_id != old.id
+    assert second.metadata["session_rollover_reason"] == "workspace_connection_changed"
+    assert "Remember the project marker" in second.prompt
+    assert (
+        store.get(HarnessSession, old.id).external_session_id == "legacy-native-session"
+    )
+    assert (
+        store.get(HarnessSession, second.harness_session_id).external_session_id is None
+    )
