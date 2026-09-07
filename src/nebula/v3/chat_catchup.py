@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from datetime import datetime
+from typing import TYPE_CHECKING
 from hashlib import sha256
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -18,6 +19,10 @@ from .domain import (
 from .chat_naming import substantive_prompt
 from .storage import ConflictError, NotFoundError
 from .tool_results import sanitize_model_history_result
+
+
+if TYPE_CHECKING:
+    from .harnesses import HarnessRuntimeService
 
 
 def cursor_id(session_id, device_id):
@@ -193,7 +198,7 @@ class CursorWrite(BaseModel):
     device_id: str = Field(min_length=1, max_length=200)
 
 
-def catchup_router(store, harness):
+def catchup_router(store, harness: HarnessRuntimeService | None):
     router = APIRouter(tags=["chat"])
 
     def device(request, supplied):
@@ -342,13 +347,13 @@ def catchup_router(store, harness):
                 )
             events = (
                 harness.activity_events(harness_turn_id, limit=10000).events
-                if turn
+                if turn and harness is not None
                 else []
             )
             for event in events:
                 if (
                     event.type in {"tool_completed", "checkpoint", "error"}
-                    or event.item_type in {"file_change", "image"}
+                    or event.item_kind in {"file_change", "image"}
                     and event.type in {"item_completed", "item_upsert"}
                 ):
                     observations.append(

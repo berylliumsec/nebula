@@ -1585,6 +1585,8 @@ for (const runtime of [
       await page.goto(`${core.origin}/?view=chat&session=${session}#token=${encodeURIComponent(core.token)}`);
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_CHAT_ACCEPTED");
       await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
+      await page.locator(".chat-evidence").last().locator("summary").first().click();
+      await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
       await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model: runtime.model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
       await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
     } finally {await api.dispose(); await stopRealCore(core);}
