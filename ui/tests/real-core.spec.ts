@@ -1439,6 +1439,63 @@ test("clean real Core completes reviewed work and exposes every recovery state",
   }
 });
 
+test("assistant upgrade project creation switches canonical project and isolates chats", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub({ streamDelayMs: 50 });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const provider = await (await api.post("providers", { data: { name: "Project navigation acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "security-model" } } })).json() as { id: string };
+    const response = await api.post("chat/completions", { data: { backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{ role: "user", content: "Old project conversation" }], include_knowledge: false, stream: false } });
+    expect(response.ok(), await response.text()).toBe(true);
+    const oldChat = await response.json() as { session_id: string };
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Project creation browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Project creation browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projects[0].id}/workbench?view=chat&session=${oldChat.session_id}`);
+    await expect(page.locator(".chat-message.operator")).toContainText("Old project conversation");
+    const sidebar = page.getByRole("button", { name: "Show sidebar" });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.getByRole("button", { name: "Switch project" }).click();
+    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    await switcher.getByRole("button", { name: "New project" }).click();
+    await switcher.getByLabel("Name", { exact: true }).fill("New isolated project");
+    await switcher.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(switcher).toBeHidden();
+    const saved = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
+    const created = saved.find(project => project.name === "New isolated project")!;
+    expect(created).toBeTruthy();
+    await expect(page).toHaveURL(`${core.origin}/projects/${created.id}/workbench?view=chat`);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.engagement"))).toBe(created.id);
+    await expect(page.getByRole("button", { name: "Start new chat", exact: true })).toBeVisible();
+    await expect(page.locator(".chat-message.operator")).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Start new chat", exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.engagement"))).toBe(created.id);
+    await page.getByRole("button", { name: "Start new chat", exact: true }).click();
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("New project conversation");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.locator(".chat-message.operator")).toContainText("New project conversation");
+    await expect.poll(async () => {
+      const chats = await (await api.get(`chat-sessions?engagement_id=${created.id}`)).json() as Array<{ id: string }>;
+      return chats.length;
+    }).toBe(1);
+    const oldChats = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{ id: string }>;
+    expect(oldChats.map(chat => chat.id)).toEqual([oldChat.session_id]);
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(stub);
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
