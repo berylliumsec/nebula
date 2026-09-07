@@ -9,7 +9,7 @@
 .integrated-browser-assistant > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .integrated-browser-assistant > header > strong { margin-right: auto; }
 .integrated-browser-assistant .chat-panel { flex: 1; min-height: 0; }
-.integrated-browser-assistant .chat-panel > .chat-composer { max-height: none; }
+.integrated-browser-assistant .chat-panel > .chat-composer { flex: 0 1 auto; min-height: 0; max-height: calc(100% - 24px); overflow-y: auto; }
 .integrated-browser-assistant button { min-height: 44px; }
 .integrated-browser-assistant button > svg { pointer-events: none; }
 .managed-assistant-browser { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }

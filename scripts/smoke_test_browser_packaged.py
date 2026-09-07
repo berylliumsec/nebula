@@ -308,6 +308,17 @@ async def smoke(
                             response = await webdriver.post(
                                 prefix + f"/element/{identifier}/click", json={}
                             )
+                            if response.is_error:
+                                screenshot = await webdriver.get(prefix + "/screenshot")
+                                if screenshot.is_success:
+                                    (
+                                        evidence_root / "packaged-click-failure.png"
+                                    ).write_bytes(
+                                        base64.b64decode(screenshot.json()["value"])
+                                    )
+                                raise RuntimeError(
+                                    f"Native click failed for {selector}: {response.text}"
+                                )
                             response.raise_for_status()
 
                         await execute(

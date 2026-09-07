@@ -42,6 +42,13 @@ PR #251; it has not been merged. Historical checkpoints below retain their origi
 evidence and limitations. Codex with `~/.codex-2` is the operator-approved live runtime
 target; separate provider coverage remains automated.
 
+Latest checkpoint: CI passed all seven jobs on `ca39ce1` (run `34148230553`).
+The extracted production DEB passed the full live Codex journey at 1440x900.
+Its 1024x700 native run exposed a clipped Send control with attached context;
+the composer sizing follow-up is being validated before rebuilding. Physical
+iPhone testing is waiting for the operator to enable Safari Web Inspector and
+Remote Automation on the connected iPhone 16 Plus. Neither gate is waived.
+
 ### Implemented
 
 - Shared Chromium surface with authenticated Core streaming, manual input, tab
@@ -654,3 +661,26 @@ attachment using the extracted `3f346f9` package. The latest recovery/layout cha
 still require the final package rebuild and complete live 1024/1440 journeys.
 Physical phone touch, rotation, background/resume and software-keyboard evidence
 remain required and have not been substituted with emulation.
+
+### Packaged compact-window regression (2026-09-07)
+
+The `ca39ce1` DEB passed the complete 1440x900 native WebKitGTK journey with its
+bundled Core and live Codex from `~/.codex-2`: navigation, attached page context,
+answer, inline approval, and a fresh capture of the resulting Saved button.
+DEB SHA256: `272fa45b94c39d8a987ab99deed4c21d1afae3543cd169f48ad4b9d08d98a149`.
+Core SHA256: `22f3ecc7102ad23f68d8083232d454e97ab0fd430af311680f620e29bae42637`.
+Evidence: `/tmp/nebula-companion-validation/packaged-final-1440.log` and
+`packaged-final-1440/packaged-desktop-boot.png` under the same validation root.
+
+At 1024x700 the native driver reported `element not interactable` for Send.
+The retained `packaged-final-1024-diagnostic/packaged-click-failure.png` shows
+the attachment and wrapped footer extending beyond the panel's clipped edge.
+The browser composer now shrinks within its available height and scrolls its
+contents. It no longer has an unlimited maximum height inside a clipped panel.
+The native runner retains the exact driver error and screenshot on failed clicks.
+Native acceptance of the follow-up remains pending the rebuilt package.
+The production LAN answer/follow-up fixtures passed all six healthy/degraded
+cases in compact Chromium and landscape Chromium/WebKit after the change
+(`composer-bound-fixtures-headed.log`). The first launch used headless mode
+against the headed-only runtime root; four Chromium cases did not launch.
+The successful run explicitly used `--headed`; no product assertion was relaxed.
