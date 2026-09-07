@@ -1615,6 +1615,8 @@ def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_re
 def test_codex_gateway_thread_disables_vendor_execution_and_environment():
     config = _codex_thread_config({})
 
+    assert config["features"]["code_mode_host"] is True
+    assert config["features"]["code_mode"] is False
     assert config["features"]["shell_tool"] is False
     assert config["features"]["unified_exec"] is False
     assert config["features"]["plugins"] is False

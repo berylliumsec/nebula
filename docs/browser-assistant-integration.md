@@ -171,3 +171,51 @@ The same eight-profile LAN command recorded above passed again against this bund
 
 The screenshot-tool, protected-reference, upload, live-provider/harness, packaged
 desktop and broader lifecycle/mobile gaps listed above remain open.
+
+### Screenshot and live harness milestone (2026-09-07)
+
+Browser tool screenshots now become durable conversation-owned image artifacts.
+The provider routing/final-answer path adds the latest image only for a verified
+vision profile; MCP returns an image content block. Text-only or unknown harness
+models do not advertise region capture. Codex model discovery reads the installed
+protocol's `inputModalities`; API/UI model options expose `image_input`/`imageInput`.
+Operator image attachments in harness chat still require separate integration.
+Input, textarea, contenteditable and explicitly sensitive fields are masked in
+region screenshots. Literal page content remains untrusted.
+
+Captured controls retain actual DOM node identity in a browser-side handle. Replacing
+a button with an identical clone changes its page revision, and actions use an
+element handle rather than looking up a new node at the old list position. A real
+Chromium regression covers identical replacement and stale rejection.
+
+The managed Codex host was unable to execute MCP while `code_mode_host` was forced
+off. A live test confirmed enabling that stable host restores tool dispatch while
+code mode, shell, native browsing and computer control remain disabled. Managed
+gateway sessions now use the existing approval callback path instead of `never`;
+Core still owns consequential-action approvals. The initial `never` run was blocked
+by the harness's automatic approval review before reaching Core.
+
+The configured default Codex home failed token refresh. Using the operator-approved
+`/home/agent/.codex-2` through an isolated temporary launcher authenticated successfully;
+the installed profile and service were not changed. This passed:
+
+```sh
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browser_companion_core.py --runtime-root /tmp/nebula-companion-validation/playwright-browsers --harness-source-db /home/agent/.local/share/nebula/v3/nebula.db --codex-home /home/agent/.codex-2
+```
+
+Observed with live `gpt-6-astra`: MCP tab discovery, image screenshot result, answer
+reporting the visible button label, follow-up on the same conversation, pending
+Core click approval, approval completion, and the real page changing from Saved
+to Ready. The test also verifies a second viewer receives an 844x390 frame after
+the first disconnects. Evidence from the first model turn is retained at
+`/tmp/nebula-companion-validation/last-harness-events.json` (controlled fixture only).
+This is not a packaged UI or physical-device acceptance claim.
+
+Focused browser/chat/harness tests passed 73 tests. Static type checks passed all
+88 source files. The production bundle built successfully; index SHA256
+`0e8854cea4f091555804ceb4770564692949fbd65d1218129cd322a7df3b6cdb`.
+No local Ollama endpoint was available for a real provider check. Live provider,
+protected-reference filling, uploads, harness image attachments, full browser UI
+journey, packaged desktop, LAN with real runtime, physical phone, and remaining
+lifecycle gates are still outstanding. The earlier screenshot-tool gap is closed
+at implementation, focused-test and live-harness layers only.

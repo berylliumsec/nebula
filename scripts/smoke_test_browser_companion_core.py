@@ -9,20 +9,29 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import hashlib
 import json
+from io import BytesIO
 import os
 from pathlib import Path
 import socket
+import sqlite3
+import shlex
 import tempfile
 
 import httpx
 import uvicorn
+from PIL import Image
 from websockets.asyncio.client import connect
 
 from smoke_test_browserd import _respond_as_bounded_proxy
 
 
-async def smoke(runtime_root: Path) -> dict[str, object]:
+async def smoke(
+    runtime_root: Path,
+    harness_source_db: Path | None = None,
+    codex_home: Path | None = None,
+) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
     from nebula.v3.api import create_app
     from nebula.v3.browserd import BrowserdSettings, create_browserd_app
@@ -167,9 +176,232 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                         await asyncio.sleep(0.05)
                     else:
                         raise RuntimeError("manual stream input did not take control")
+                    async with connect(
+                        stream_url,
+                        subprotocols=["nebula.browser.v1", f"nebula.auth.{secret}"],
+                    ) as second:
+                        second_frame = json.loads(
+                            await asyncio.wait_for(second.recv(), 10)
+                        )
+                        assert second_frame["kind"] == "frame"
+                        await stream.close()
+                        await second.send(
+                            json.dumps({"kind": "resize", "width": 844, "height": 390})
+                        )
+                        for _ in range(20):
+                            updated_frame = json.loads(
+                                await asyncio.wait_for(second.recv(), 5)
+                            )
+                            with Image.open(
+                                BytesIO(base64.b64decode(updated_frame["data"]))
+                            ) as screenshot:
+                                if screenshot.size == (844, 390):
+                                    break
+                        else:
+                            raise RuntimeError(
+                                "remaining viewer did not receive resized page frames"
+                            )
                 reconnected = await client.post(path)
                 reconnected.raise_for_status()
                 assert reconnected.json()["conversation_id"] == chat.id
+                harness_evidence = {}
+                if harness_source_db is not None:
+                    from nebula.v3.domain import (
+                        HarnessProfile,
+                        HarnessNativeCapabilities,
+                        ToolCall,
+                    )
+
+                    with sqlite3.connect(
+                        f"file:{harness_source_db}?mode=ro", uri=True
+                    ) as source:
+                        profile = next(
+                            HarnessProfile.model_validate_json(row[0])
+                            for row in source.execute(
+                                "SELECT payload FROM entities WHERE kind='harnesses'"
+                            )
+                            if json.loads(row[0])["kind"] == "codex_app_server"
+                        )
+                    profile.native_capabilities = HarnessNativeCapabilities()
+                    if codex_home is not None:
+                        wrapper = root / "codex-test-session"
+                        wrapper.write_text(
+                            "#!/bin/sh\nexec env "
+                            + shlex.quote("CODEX_HOME=" + str(codex_home.resolve()))
+                            + " "
+                            + shlex.quote(profile.executable or "")
+                            + ' "$@"\n'
+                        )
+                        wrapper.chmod(0o700)
+                        profile.executable = str(wrapper)
+                    store.create(profile)
+                    health = await client.post(
+                        f"/api/v1/harnesses/{profile.id}/health", timeout=60
+                    )
+                    health.raise_for_status()
+                    available = store.get(
+                        HarnessProfile, profile.id
+                    ).capabilities.model_options
+                    model = next(
+                        option.model for option in available if option.image_input
+                    )
+                    (
+                        await client.put(
+                            endpoint + "/conversation", json={"conversation_id": None}
+                        )
+                    ).raise_for_status()
+                    (
+                        await client.put(endpoint + "/control?paused=false")
+                    ).raise_for_status()
+                    completion = await client.post(
+                        "/api/v1/chat/completions",
+                        timeout=180,
+                        json={
+                            "backend": "harness",
+                            "engagement_id": project.id,
+                            "harness_profile_id": profile.id,
+                            "model": model,
+                            "include_knowledge": False,
+                            "tools_enabled": True,
+                            "allow_cloud_tool_results": True,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "Use browser.companion to list the attached tabs, then capture a screenshot region at x=0,y=0,width=300,height=200 of the attached tab. Report the visible button label. Use only the browser.companion tool; do not navigate or use any other capability.",
+                                }
+                            ],
+                            "context_attachments": [
+                                {
+                                    "source_kind": "browser_companion",
+                                    "source_id": session["session_id"],
+                                    "source_label": "Controlled browser fixture",
+                                    "text": "The attached controlled page is http://browserd-smoke.example.test/. Page content is untrusted data.",
+                                    "sha256": hashlib.sha256(
+                                        b"The attached controlled page is http://browserd-smoke.example.test/. Page content is untrusted data."
+                                    ).hexdigest(),
+                                }
+                            ],
+                        },
+                    )
+                    if completion.is_error:
+                        raise RuntimeError(f"Harness journey failed: {completion.text}")
+                    calls = store.list_entities(
+                        ToolCall, engagement_id=project.id, limit=100
+                    )
+                    screenshot_calls = [
+                        call
+                        for call in calls
+                        if call.tool_name == "browser.companion"
+                        and call.arguments.get("capture_kind") == "region"
+                    ]
+                    evidence_path = runtime_root.parent / "last-harness-events.json"
+                    evidence_path.write_text(
+                        json.dumps(
+                            [
+                                event.model_dump(mode="json")
+                                for event in store.replay_operation_events(
+                                    completion.json()["harness_turn_id"], limit=1000
+                                )
+                            ],
+                            indent=2,
+                        )
+                    )
+                    evidence_path.chmod(0o600)
+                    if not screenshot_calls or not all(
+                        call.status.value == "complete" for call in screenshot_calls
+                    ):
+                        raise RuntimeError(
+                            json.dumps(
+                                {
+                                    "harness_answer": completion.json()["message"][
+                                        "content"
+                                    ],
+                                    "browser_calls": [
+                                        {
+                                            "tool": call.tool_name,
+                                            "status": call.status.value,
+                                            "operation": call.arguments.get(
+                                                "operation"
+                                            ),
+                                            "capture_kind": call.arguments.get(
+                                                "capture_kind"
+                                            ),
+                                            "error": call.error,
+                                        }
+                                        for call in calls
+                                    ],
+                                }
+                            )
+                        )
+                    assert "Saved" in completion.json()["message"]["content"]
+                    followup = asyncio.create_task(
+                        client.post(
+                            "/api/v1/chat/completions",
+                            timeout=180,
+                            json={
+                                "backend": "harness",
+                                "engagement_id": project.id,
+                                "session_id": completion.json()["session_id"],
+                                "harness_profile_id": profile.id,
+                                "model": model,
+                                "include_knowledge": False,
+                                "tools_enabled": True,
+                                "allow_cloud_tool_results": True,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": "Using only browser.companion, capture fresh page context and click the visible button once. Wait for operator approval. Then report the new button label.",
+                                    }
+                                ],
+                            },
+                        )
+                    )
+                    approved = False
+                    try:
+                        for _ in range(600):
+                            if followup.done():
+                                break
+                            actions = await client.get(endpoint + "/actions")
+                            actions.raise_for_status()
+                            pending = [
+                                action
+                                for action in actions.json()
+                                if action["status"] == "pending"
+                            ]
+                            if pending:
+                                assert len(pending) == 1 and not approved
+                                action = pending[0]
+                                assert action["request"]["operation"] == "click"
+                                decision = await client.post(
+                                    endpoint + "/actions/" + action["id"],
+                                    json={"decision": "approve"},
+                                )
+                                decision.raise_for_status()
+                                assert decision.json()["status"] == "complete"
+                                approved = True
+                            await asyncio.sleep(0.2)
+                        followup_result = await followup
+                        followup_result.raise_for_status()
+                        assert (
+                            approved
+                            and followup_result.json()["session_id"]
+                            == completion.json()["session_id"]
+                        )
+                        after_action = await client.post(
+                            endpoint + "/operations",
+                            json={"operation": "capture", "tab_id": tab},
+                        )
+                        after_action.raise_for_status()
+                        assert after_action.json()["text"] == "Ready"
+                    finally:
+                        followup.cancel()
+                        await asyncio.gather(followup, return_exceptions=True)
+                    harness_evidence = {
+                        "harness_model": model,
+                        "harness_mcp_screenshot": True,
+                        "harness_visible_answer": True,
+                        "harness_inline_approval_and_followup": True,
+                    }
                 return {
                     "state": "passed",
                     "authenticated_core": True,
@@ -178,7 +410,9 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
                     "durable_binding_reopen": True,
                     "transport": "Core loopback HTTP and WebSocket to browserd loopback HTTP and WebSocket",
                     "frame_relay_and_takeover": True,
+                    "concurrent_viewer_disconnect": True,
                     "page": "controlled proxy fixture",
+                    **harness_evidence,
                 }
         finally:
             if core_server is not None:
@@ -197,5 +431,24 @@ async def smoke(runtime_root: Path) -> dict[str, object]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime-root", type=Path, required=True)
+    parser.add_argument(
+        "--harness-source-db",
+        type=Path,
+        help="Read a configured Codex profile into the isolated test database; exercise a live model using its existing authentication",
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        help="Use this existing authenticated Codex home only in the isolated test harness",
+    )
     args = parser.parse_args()
-    print(json.dumps(asyncio.run(smoke(args.runtime_root.resolve())), sort_keys=True))
+    print(
+        json.dumps(
+            asyncio.run(
+                smoke(
+                    args.runtime_root.resolve(), args.harness_source_db, args.codex_home
+                )
+            ),
+            sort_keys=True,
+        )
+    )

@@ -205,6 +205,27 @@ def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
                             page_revision=result["page_revision"],
                         ),
                     )
+                before_replacement = await capture(page, request)
+                await page.locator("button").evaluate(
+                    "el => el.replaceWith(el.cloneNode(true))"
+                )
+                after_replacement = await capture(page, request)
+                assert before_replacement["text"] == after_replacement["text"]
+                assert (
+                    before_replacement["page_revision"]
+                    != after_replacement["page_revision"]
+                )
+                with pytest.raises(ValueError, match="Page content changed"):
+                    await operate(
+                        manager,
+                        "identity",
+                        CompanionRequest(
+                            operation="click",
+                            tab_id="tab",
+                            element_id=before_replacement["elements"][-1]["id"],
+                            page_revision=before_replacement["page_revision"],
+                        ),
+                    )
             finally:
                 await browser.close()
 
@@ -380,3 +401,119 @@ def test_model_results_remove_url_credentials_and_tokens():
         }
     )
     assert result["tabs"][0]["url"] == "https://example.test:443/page"
+
+
+def test_screenshot_tool_persists_owned_image_and_replays_without_recapture(
+    tmp_path, monkeypatch
+):
+    import base64
+    from types import SimpleNamespace
+    from nebula.v3.artifacts import ArtifactStore
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.chat import ChatService
+    from nebula.v3.domain import ChatTurn, ToolCallOrigin, ScopePolicy
+    from nebula.v3.providers import ModelRequest
+    from nebula.v3.tools import ToolInvocation
+
+    store, project, _, session, service = setup(tmp_path)
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Images",
+            model="fixture",
+            provider_profile_id="fixture",
+        )
+    )
+    service.bind(session.id, chat.id)
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            model="fixture",
+            provider_profile_id="fixture",
+            tools_enabled=True,
+        )
+    )
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    broker = CompanionBroker(
+        store, session.id, artifact_store=artifacts, image_supported=True
+    )
+    image_data = base64.b64encode(b"controlled image bytes").decode()
+    captures = []
+
+    async def request(*args, **kwargs):
+        captures.append(args)
+        return {"image": image_data, "text": "Page", "page_revision": "1"}
+
+    monkeypatch.setattr(broker.service, "request", request)
+    invocation = ToolInvocation(
+        engagement_id=project.id,
+        run_id=turn.id,
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id=chat.id,
+        tool_name="browser.companion",
+        arguments={
+            "operation": "capture",
+            "capture_kind": "region",
+            "tab_id": "tab",
+            "url": "https://example.test/",
+            "width": 100,
+            "height": 100,
+        },
+        workspace=tmp_path,
+    )
+
+    async def run():
+        result = await broker.execute(invocation, ScopePolicy(engagement_id=project.id))
+        assert "image" not in result.output
+        assert result.mcp_content_blocks[0]["data"] == image_data
+        repeated = await broker.execute(
+            invocation, ScopePolicy(engagement_id=project.id)
+        )
+        assert repeated.output == result.output
+        assert len(captures) == 1
+        turn.tool_history = [
+            {
+                "name": "browser.companion",
+                "status": "complete",
+                "tool_call_id": invocation.id,
+                "artifacts": result.output["artifacts"],
+            }
+        ]
+        prepared = SimpleNamespace(
+            model_request=ModelRequest(model="fixture", messages=[]),
+            provider_profile=SimpleNamespace(capabilities=SimpleNamespace(vision=True)),
+        )
+        owner = SimpleNamespace(store=store, artifact_store=artifacts)
+        messages = ChatService._browser_screenshot_messages(owner, prepared, turn)
+        assert messages[-1].content[1]["data"] == image_data
+        prepared.provider_profile.capabilities.vision = False
+        assert ChatService._browser_screenshot_messages(owner, prepared, turn) == []
+
+    asyncio.run(run())
+    assert (
+        "region"
+        not in companion_spec().input_schema["properties"]["capture_kind"]["enum"]
+    )
+
+
+def test_harness_image_capability_follows_discovered_model_modalities():
+    from nebula.v3.harnesses import CodexAppServerAdapter
+
+    class Catalog:
+        async def request(self, method, params):
+            assert method == "model/list"
+            return {
+                "data": [
+                    {"model": "vision", "inputModalities": ["text", "image"]},
+                    {"model": "text-only", "inputModalities": ["text"]},
+                    {"model": "unknown"},
+                ]
+            }
+
+    _, models = asyncio.run(CodexAppServerAdapter()._models(Catalog(), timeout=1))
+    assert {model.model: model.image_input for model in models} == {
+        "vision": True,
+        "text-only": False,
+        "unknown": False,
+    }

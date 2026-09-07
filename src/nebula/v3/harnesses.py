@@ -2451,6 +2451,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                     model_options.append(
                         HarnessModelOptions(
                             model=model,
+                            image_input="image" in item.get("inputModalities", []),
                             reasoning_efforts=effort_options,
                             default_reasoning_effort=(
                                 default_effort
@@ -2554,7 +2555,9 @@ class CodexAppServerAdapter(HarnessAdapter):
             request.session, request.profile
         )
         approval_policy: Literal["untrusted", "never"] = (
-            "untrusted" if _native_capability_names(native_capabilities) else "never"
+            "untrusted"
+            if managed_gateway or _native_capability_names(native_capabilities)
+            else "never"
         )
         effective_mcp, _ = _mcp_runtime_config(
             request.mcp_profiles,
@@ -2844,6 +2847,8 @@ def _codex_feature_policy(
         capabilities.workspace_access != HarnessWorkspaceAccess.NONE
     )
     enabled = {
+        # The stable host dispatches MCP calls even when code mode is disabled.
+        "code_mode_host": True,
         "shell_tool": shell,
         "unified_exec": shell,
         "browser_use": capabilities.browser,
@@ -7833,7 +7838,9 @@ class HarnessRuntimeService:
         tools: list[dict[str, Any]] = []
         current = self.store.get(HarnessSession, session.id)
         if current.metadata.get("browser_companion_session_id"):
-            spec = companion_spec()
+            spec = companion_spec(
+                image_supported=self._browser_image_supported(current)
+            )
             tools.append(
                 {
                     "name": spec.name,
@@ -8039,6 +8046,13 @@ class HarnessRuntimeService:
             self._gateway_target_gates[key] = gate
         return gate
 
+    def _browser_image_supported(self, session: HarnessSession) -> bool:
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        return any(
+            option.model == session.model and option.image_input
+            for option in profile.capabilities.model_options
+        )
+
     async def _gateway_call(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -8051,7 +8065,11 @@ class HarnessRuntimeService:
                     "No browser is attached to this conversation."
                 )
             components = companion_components(
-                self.store, turn.engagement_id, companion_id
+                self.store,
+                turn.engagement_id,
+                companion_id,
+                artifact_store=self.artifact_store,
+                image_supported=self._browser_image_supported(current),
             )
             invocation = ToolInvocation(
                 id=str(uuid4()),
@@ -8074,7 +8092,10 @@ class HarnessRuntimeService:
             async with self._gateway_execution_gate(turn):
                 result = await components.broker.execute(invocation, components.scope)
             return {
-                "content": [{"type": "text", "text": json.dumps(result.output)}],
+                "content": [
+                    {"type": "text", "text": json.dumps(result.output)},
+                    *result.mcp_content_blocks,
+                ],
                 "isError": False,
             }
         if name == "knowledge.list":

@@ -2621,6 +2621,7 @@ class HarnessRuntimeOption(NebulaModel):
 
 class HarnessModelOptions(NebulaModel):
     model: str = Field(min_length=1, max_length=500)
+    image_input: bool = False
     reasoning_efforts: list[HarnessRuntimeOption] = Field(
         default_factory=list, max_length=32
     )

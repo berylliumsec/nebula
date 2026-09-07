@@ -1394,6 +1394,7 @@ interface WireHarnessProfile extends WireEntity {
     models?: string[];
     model_options?: Array<{
       model: string;
+      image_input?: boolean;
       reasoning_efforts?: Array<{ id: string; label: string; description?: string }>;
       default_reasoning_effort?: string | null;
       service_tiers?: Array<{ id: string; label: string; description?: string }>;
@@ -3127,6 +3128,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     models: value.capabilities?.models ?? [],
     modelOptions: (value.capabilities?.model_options ?? []).map((option) => ({
       model: option.model,
+      imageInput: option.image_input === true,
       reasoningEfforts: (option.reasoning_efforts ?? []).map((item) => ({
         id: item.id,
         label: item.label,
