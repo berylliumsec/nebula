@@ -3983,6 +3983,7 @@ class CompanionRequest(NebulaModel):
         "capture",
         "click",
         "fill",
+        "upload",
         "select",
         "press",
         "scroll",
@@ -3993,6 +3994,7 @@ class CompanionRequest(NebulaModel):
     url: str | None = Field(default=None, max_length=16384)
     element_id: str | None = Field(default=None, max_length=200)
     text: str = Field(default="", max_length=4000)
+    file_ref: str | None = Field(default=None, max_length=200)
     credential_ref: str | None = Field(default=None, max_length=200)
     x: float = Field(default=0, ge=0, le=10000)
     y: float = Field(default=0, ge=0, le=10000)
@@ -4006,6 +4008,7 @@ class CompanionAction(Entity):
     entity_kind: ClassVar[str] = "browser_companion_actions"
     engagement_id: str
     browser_session_id: str
+    operator_requested: bool = False
     request: CompanionRequest
     status: Literal["pending", "running", "complete", "failed", "revoked"] = "pending"
     expires_at: datetime = Field(

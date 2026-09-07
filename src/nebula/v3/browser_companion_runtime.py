@@ -184,6 +184,19 @@ async def operate(
                 )
             elif request.operation == "click":
                 await element.click(timeout=5000)
+            elif request.operation == "upload":
+                upload = getattr(request, "upload_file", None)
+                if upload is None:
+                    raise ValueError("A Core-approved attached file is required.")
+                data = base64.b64decode(
+                    upload.content_base64.get_secret_value(), validate=True
+                )
+                if len(data) > 4 * 1024 * 1024:
+                    raise ValueError("The attached file exceeds the upload limit.")
+                await element.set_input_files(
+                    {"name": upload.name, "mimeType": upload.mime_type, "buffer": data},
+                    timeout=5000,
+                )
             elif request.operation == "fill":
                 await element.fill(request.text, timeout=5000)
             elif request.operation == "select":

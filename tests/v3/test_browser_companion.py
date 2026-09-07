@@ -135,6 +135,7 @@ def test_companion_tool_has_no_script_or_security_testing_operations(tmp_path):
         "capture",
         "click",
         "fill",
+        "upload",
         "select",
         "press",
         "scroll",
@@ -615,3 +616,76 @@ def test_protected_reference_fills_only_after_approval_and_redacts_echo(
         store, BrowserEngineRegistry([]), credentials=CredentialStore()
     )
     assert restarted.credential_catalog(session.id)[0]["available"] is False
+
+
+def test_attached_files_are_scoped_revocable_and_integrity_checked(tmp_path):
+    import base64
+    from pydantic import ValidationError
+    from nebula.v3.artifacts import ArtifactStore
+    from nebula.v3.browser_companion import CompanionFileCreate
+    from nebula.v3.domain import Artifact
+
+    store, project, identity, session, _ = setup(tmp_path)
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    service = BrowserCompanion(
+        store, BrowserEngineRegistry([]), artifact_store=artifacts
+    )
+    with pytest.raises(ValidationError):
+        CompanionFileCreate(filename="../secret.txt", content_base64="")
+    catalog = service.save_file(
+        session.id,
+        CompanionFileCreate(
+            filename="sample.txt",
+            media_type="text/plain",
+            content_base64=base64.b64encode(b"file fixture").decode(),
+        ),
+    )
+    reference = catalog[0]["reference"]
+    assert catalog[0]["size"] == 12
+    assert "content_base64" not in str(catalog)
+    assert (
+        service.file_payload(session.id, reference)["content_base64"]
+        == "ZmlsZSBmaXh0dXJl"
+    )
+    other = store.create(
+        BrowserSession(
+            engagement_id=project.id,
+            identity_id=identity.id,
+            name="Other browser",
+            metadata={"browser_companion_version": 1},
+        )
+    )
+    with pytest.raises(ValueError, match="attached"):
+        service.file_payload(other.id, reference)
+    request = CompanionRequest(
+        operation="upload",
+        file_ref=reference,
+        tab_id="tab",
+        page_revision="page",
+        element_id="2",
+    )
+    with pytest.raises(ValueError, match="inline approval"):
+        asyncio.run(service.request(session.id, request))
+    action = service.propose(session.id, request)
+    service.remove_file(session.id, reference)
+    assert store.get(CompanionAction, action.id).status == "revoked"
+    with pytest.raises(ValueError, match="attached"):
+        service.file_payload(session.id, reference)
+    catalog = service.save_file(
+        session.id,
+        CompanionFileCreate(filename="sample.txt", content_base64="ZmlsZSBmaXh0dXJl"),
+    )
+    reference = catalog[0]["reference"]
+    operator_action = service.propose(
+        session.id,
+        request.model_copy(update={"file_ref": reference}),
+        operator_requested=True,
+    )
+    assert operator_action.operator_requested
+    entry = service.session(session.id).metadata["browser_files"][reference]
+    artifact = store.get(Artifact, entry["artifact_id"])
+    path = artifacts.path_for(artifact)
+    path.chmod(0o600)
+    path.write_bytes(b"changed data")
+    with pytest.raises(ValueError, match="integrity"):
+        service.file_payload(session.id, reference)

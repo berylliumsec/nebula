@@ -6,17 +6,20 @@ This surface deliberately has no scanner, replay, or arbitrary script operations
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary
 from urllib.parse import quote
 from uuid import uuid4
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 
 from .browser_engine import BrowserEngineRegistry, LocalBrowserdAdapter
 from .browser_security import BrowserSecurityService
 from .domain import (
+    Artifact,
     BrowserIdentity,
     BrowserSession,
     ChatSession,
@@ -26,6 +29,7 @@ from .domain import (
     CompanionRequest,
     CompanionAction,
 )
+from .artifacts import ArtifactStore
 from .storage import NebulaStore
 from .credentials import CredentialStore, CredentialCreateRequest
 
@@ -43,9 +47,20 @@ class CompanionCredentialCreate(CredentialCreateRequest):
     persistence: Literal["vault", "session"] = "session"
 
 
+class CompanionFileCreate(NebulaModel):
+    filename: str = Field(min_length=1, max_length=200, pattern=r"^[^/\\\x00-\x1f]+$")
+    media_type: str = Field(
+        default="application/octet-stream",
+        max_length=100,
+        pattern=r"^[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+$",
+    )
+    content_base64: SecretStr = Field(max_length=5592408)
+
+
 class BrowserCompanion:
     _store_locks: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
     _store_credentials: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
+    _store_artifacts: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
 
     def __init__(
         self,
@@ -53,6 +68,7 @@ class BrowserCompanion:
         engines: BrowserEngineRegistry,
         *,
         credentials: CredentialStore | None = None,
+        artifact_store: ArtifactStore | None = None,
     ):
         self.store = store
         self.engines = engines
@@ -63,6 +79,106 @@ class BrowserCompanion:
         elif store not in self._store_credentials:
             self._store_credentials[store] = CredentialStore()
         self.credentials = self._store_credentials[store]
+        if artifact_store is not None:
+            self._store_artifacts[store] = artifact_store
+        self.artifact_store = self._store_artifacts.get(store)
+
+    def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
+        session = self.session(session_id)
+        return [
+            {
+                "reference": alias,
+                "filename": item["filename"],
+                "size": item["size"],
+                "media_type": item["media_type"],
+            }
+            for alias, item in session.metadata.get("browser_files", {}).items()
+        ]
+
+    def save_file(
+        self, session_id: str, request: CompanionFileCreate
+    ) -> list[dict[str, Any]]:
+        session = self.session(session_id)
+        if self.artifact_store is None:
+            raise ValueError(
+                "File storage is unavailable. Your saved conversation remains available."
+            )
+        entries = dict(session.metadata.get("browser_files", {}))
+        if len(entries) >= 8 or request.filename in {".", ".."}:
+            raise ValueError(
+                "Attach at most eight files with ordinary filenames. Remove a file before adding another."
+            )
+        data = base64.b64decode(
+            request.content_base64.get_secret_value(), validate=True
+        )
+        if len(data) > 4 * 1024 * 1024:
+            raise ValueError("Choose a file no larger than 4 MiB.")
+        artifact = self.artifact_store.put_bytes(
+            data,
+            engagement_id=session.engagement_id,
+            filename=request.filename,
+            media_type=request.media_type,
+            source="browser-upload",
+            metadata={"browser_session_id": session.id, "sensitive": True},
+        )
+        entries[uuid4().hex] = {
+            "artifact_id": artifact.id,
+            "filename": artifact.filename,
+            "size": artifact.size,
+            "media_type": artifact.media_type,
+        }
+        with self.store.transaction() as transaction:
+            transaction.add(artifact)
+            transaction.update(
+                BrowserSession,
+                session_id,
+                {"metadata": {**session.metadata, "browser_files": entries}},
+                expected_revision=session.revision,
+            )
+        return self.file_catalog(session_id)
+
+    def remove_file(self, session_id: str, reference: str) -> list[dict[str, Any]]:
+        self.takeover(session_id, True)
+        session = self.session(session_id)
+        entries = dict(session.metadata.get("browser_files", {}))
+        if entries.pop(reference, None) is None:
+            raise ValueError("This file is no longer attached to the browser.")
+        self.store.update(
+            BrowserSession,
+            session_id,
+            {"metadata": {**session.metadata, "browser_files": entries}},
+            expected_revision=session.revision,
+        )
+        return self.file_catalog(session_id)
+
+    def file_payload(self, session_id: str, reference: str | None) -> dict[str, str]:
+        session = self.session(session_id)
+        entry = session.metadata.get("browser_files", {}).get(reference)
+        if not entry or self.artifact_store is None:
+            raise ValueError(
+                "Choose a file attached to this browser. Removed files require a new attachment and approval."
+            )
+        artifact = self.store.get(Artifact, entry["artifact_id"])
+        if (
+            artifact.engagement_id != session.engagement_id
+            or artifact.source != "browser-upload"
+            or artifact.metadata.get("browser_session_id") != session_id
+        ):
+            raise ValueError("The file does not belong to this browser session.")
+        data = self.artifact_store.read(artifact)
+        if (
+            len(data) > 4 * 1024 * 1024
+            or len(data) != artifact.size
+            or hashlib.sha256(data).hexdigest() != artifact.sha256
+        ):
+            raise ValueError(
+                "The attached file failed integrity verification. Remove it and attach it again."
+            )
+        return {
+            "name": artifact.filename or "upload",
+            "mime_type": artifact.media_type,
+            "content_base64": base64.b64encode(data).decode("ascii"),
+        }
 
     def credential_catalog(self, session_id: str) -> list[dict[str, Any]]:
         session = self.session(session_id)
@@ -262,8 +378,17 @@ class BrowserCompanion:
         )
 
     async def request(
-        self, session_id: str, request: CompanionRequest, *, assistant: bool = False
+        self,
+        session_id: str,
+        request: CompanionRequest,
+        *,
+        assistant: bool = False,
+        approved: bool = False,
     ) -> dict[str, Any]:
+        if request.operation == "upload" and not approved:
+            raise ValueError(
+                "File uploads require an inline approval. Propose an upload before execution."
+            )
         if not assistant and request.operation not in {"tabs", "capture"}:
             # Takeover must precede the control queue so waiting assistant actions
             # see the pause before they can mutate the page.
@@ -309,6 +434,10 @@ class BrowserCompanion:
                 raise ValueError("Assistant control was paused before execution.")
             protected = self.protected_values(session_id)
             payload = request.model_dump()
+            if request.operation == "upload":
+                payload["upload_file"] = self.file_payload(session_id, request.file_ref)
+            elif request.file_ref:
+                raise ValueError("Attached file references are only valid for uploads.")
             if request.credential_ref:
                 if (
                     request.operation != "fill"
@@ -331,6 +460,7 @@ class BrowserCompanion:
                 )
             result = self.redact_result(response.json(), list(protected.values()))
             result["credentials"] = self.credential_catalog(session_id)
+            result["files"] = self.file_catalog(session_id)
             if "tabs" in result:
                 latest = self.session(session_id)
                 tab_ids = {tab["id"] for tab in result["tabs"]}
@@ -361,19 +491,28 @@ class BrowserCompanion:
             if item.browser_session_id == session_id
         ]
 
-    def propose(self, session_id: str, request: CompanionRequest) -> CompanionAction:
+    def propose(
+        self,
+        session_id: str,
+        request: CompanionRequest,
+        *,
+        operator_requested: bool = False,
+    ) -> CompanionAction:
         session = self.session(session_id)
-        if session.metadata.get("assistant_paused", True):
+        if session.metadata.get("assistant_paused", True) and not operator_requested:
             raise ValueError(
                 "Browser control is paused. Resume assistant control in the browser."
             )
         if not request.page_revision:
             raise ValueError("Capture the current page before proposing an action.")
+        if request.operation == "upload":
+            self.file_payload(session_id, request.file_ref)
         return self.store.create(
             CompanionAction(
                 engagement_id=session.engagement_id,
                 browser_session_id=session.id,
                 request=request,
+                operator_requested=operator_requested,
             )
         )
 
@@ -413,7 +552,10 @@ class BrowserCompanion:
         if (
             decision != "approve"
             or action.expires_at <= datetime.now(timezone.utc)
-            or session.metadata.get("assistant_paused", True)
+            or (
+                session.metadata.get("assistant_paused", True)
+                and not action.operator_requested
+            )
         ):
             return self.store.update(
                 CompanionAction,
@@ -428,7 +570,12 @@ class BrowserCompanion:
             expected_revision=action.revision,
         )
         try:
-            result = await self.request(session_id, action.request, assistant=True)
+            result = await self.request(
+                session_id,
+                action.request,
+                assistant=not action.operator_requested,
+                approved=True,
+            )
         except Exception:
             self.store.update(
                 CompanionAction,

@@ -5270,7 +5270,7 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
     } else if (path.endsWith("/browser-companion/browser-session/operations")) {
       await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.", page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
     } else if (path.includes("/browser-companion/")) {
-      await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") ? [] : {} });
+      await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
     } else if (path.endsWith("/chat/completions")) {
       const body = route.request().postDataJSON();
       const answer = body.session_id ? "Yes, that is the same page context." : "The Save button saves your changes.";
@@ -5314,7 +5314,7 @@ for (const imageInput of [true, false]) {
       } else if (path.endsWith("/browser-companion")) {
         await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
       } else if (path.includes("/browser-companion/")) {
-        await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") ? [] : {} });
+        await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
       } else if (path.endsWith("/chat/images")) {
         upload = route.request().postDataJSON();
         await route.fulfill({ json: { artifact_id: "image-artifact", preview_artifact_id: "image-preview", media_type: "image/png", width: 1, height: 1 } });
@@ -5370,4 +5370,58 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   expect(overflow).toBe(false);
   await page.getByRole("button", {name: "Close assistant settings"}).click();
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
+});
+
+test("browser Assistant uploads a selected device file only after inline approval", async ({ page }) => {
+  const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
+  const actions: Array<Record<string, any>> = [];
+  let decisions = 0;
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path.endsWith("/browser-companion")) {
+      await route.fulfill({ json: { session_id: "file-browser", tabs: [{ id: "file-tab", title: "Upload form", url: "https://example.test/" }] } });
+    } else if (path.endsWith("/file-browser/files")) {
+      if (method === "POST") {
+        const body = route.request().postDataJSON();
+        expect(body.filename).toBe("sample.txt");
+        files.push({ reference: "file-ref", filename: body.filename, size: 12, media_type: "text/plain" });
+      }
+      await route.fulfill({ json: files });
+    } else if (path.endsWith("/file-browser/files/file-ref")) {
+      files.splice(0); await route.fulfill({ json: files });
+    } else if (path.endsWith("/file-browser/operations")) {
+      expect(route.request().postDataJSON().operation).toBe("capture");
+      await route.fulfill({ json: { url: "https://example.test/", title: "Upload form", text: "Choose a document", page_revision: "file-page", captured_at: entity.updated_at, elements: [{ id: "file-input", tag: "input", type: "file", label: "Document", sensitive: false }] } });
+    } else if (path.endsWith("/file-browser/actions")) {
+      if (method === "POST") {
+        const body = route.request().postDataJSON();
+        expect(body).toMatchObject({ operation: "upload", file_ref: "file-ref", page_revision: "file-page", element_id: "file-input" });
+        expect(body).not.toHaveProperty("content_base64");
+        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: true, request: body });
+      }
+      await route.fulfill({ json: method === "POST" ? actions[0] : actions });
+    } else if (path.endsWith("/file-browser/actions/upload-action")) {
+      decisions += 1; actions[0].status = "complete"; await route.fulfill({ json: actions[0] });
+    } else if (path.includes("/browser-companion/")) {
+      await route.fulfill({ json: path.endsWith("/credentials") ? [] : { paused: true } });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=browser", "Workbench");
+  await page.getByText("Files for this page (0)", { exact: true }).click();
+  await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
+  await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
+  await page.getByText("Accessible page controls (1)", { exact: true }).click();
+  await page.getByRole("button", { name: "Upload selected file", exact: true }).click();
+  const approval = page.getByRole("region", { name: "Browser action approval" });
+  await expect(approval).toContainText("sample.txt");
+  expect(decisions).toBe(0);
+  await approval.getByRole("button", { name: "Approve action", exact: true }).click();
+  await expect(page.getByText("File upload completed.", { exact: true })).toBeVisible();
+  expect(decisions).toBe(1);
+  await page.getByRole("button", { name: "Remove sample.txt", exact: true }).click();
+  await expect(page.getByLabel("File to upload")).toHaveValue("");
+  expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });

@@ -3,18 +3,29 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ManagedAssistantBrowser } from "./ManagedAssistantBrowser";
 
-function fixture(active = true, fail = false, protectedField = false) {
+function fixture(active = true, fail = false, protectedField = false, fileField = false) {
+  let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
+  let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
   const connection = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
     if (path.endsWith("/browser-companion")) return { session_id: "browser-1", conversation_id: "chat-1", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] };
-    if (path.endsWith("/actions")) return [];
+    if (path.endsWith("/files")) {
+      if (options?.method === "POST") savedFiles = [{ reference: "file-1", filename: JSON.parse(String(options.body)).filename, size: 12, media_type: "text/plain" }];
+      return savedFiles;
+    }
+    if (path.endsWith("/files/file-1") && options?.method === "DELETE") { savedFiles = []; return savedFiles; }
+    if (path.endsWith("/actions")) {
+      if (options?.method === "POST") actions = [{ id: "action-1", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: true, request: JSON.parse(String(options.body)) }];
+      return options?.method === "POST" ? actions[0] : actions;
+    }
+    if (path.endsWith("/actions/action-1")) { actions[0] = { ...actions[0], status: "complete" }; return actions[0]; }
     if (path.endsWith("/credentials")) {
       if (options?.method === "POST") savedCredentials = [{ reference: "protected-1", label: JSON.parse(String(options.body)).label, available: true }];
       return savedCredentials;
     }
-    if (path.endsWith("/operations")) return { url: "https://example.test/?token=private-url-token", title: "Example", text: "Selected page content", page_revision: "revision-1", captured_at: "2026-09-07T12:00:00Z", structure: { tag: "main", role: "main" }, elements: protectedField ? [{ id: "0", tag: "input", type: "password", label: "Password", sensitive: true }] : [] };
+    if (path.endsWith("/operations")) return { url: "https://example.test/?token=private-url-token", title: "Example", text: "Selected page content", page_revision: "revision-1", captured_at: "2026-09-07T12:00:00Z", structure: { tag: "main", role: "main" }, elements: protectedField ? [{ id: "0", tag: "input", type: "password", label: "Password", sensitive: true }] : fileField ? [{ id: "2", tag: "input", type: "file", label: "Document", sensitive: false }] : [] };
     return {};
   });
   const onContext = vi.fn(); const onConversation = vi.fn();
@@ -25,6 +36,29 @@ function fixture(active = true, fail = false, protectedField = false) {
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("stages a device file and requires inline approval before the page receives it", async () => {
+    const { request } = fixture(true, false, false, true);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());
+    fireEvent.click(screen.getByText("Files for this page (0)"));
+    const file = new File(["file fixture"], "sample.txt", { type: "text/plain" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("file fixture").buffer });
+    fireEvent.change(screen.getByLabelText("Attach file for page upload"), { target: { files: [file] } });
+    await screen.findByRole("option", { name: "sample.txt · 12 bytes" });
+    fireEvent.click(screen.getByRole("button", { name: "Ask about page" }));
+    await screen.findByText("Selected page content");
+    fireEvent.click(screen.getByText("Accessible page controls (1)"));
+    fireEvent.click(screen.getByRole("button", { name: "Upload selected file" }));
+    await screen.findByRole("region", { name: "Browser action approval" });
+    expect(screen.getByRole("region", { name: "Browser action approval" })).toHaveTextContent("sample.txt");
+    expect(request.mock.calls.some(([path]) => path.endsWith("/actions/action-1"))).toBe(false);
+    const proposed = request.mock.calls.find(([path, options]) => path.endsWith("/actions") && options?.method === "POST");
+    expect(JSON.parse(String(proposed?.[1]?.body))).toMatchObject({ operation: "upload", file_ref: "file-1", page_revision: "revision-1", element_id: "2" });
+    expect(JSON.stringify(proposed)).not.toContain("ZmlsZSBmaXh0dXJl");
+    fireEvent.click(screen.getByRole("button", { name: "Approve action" }));
+    await waitFor(() => expect(request.mock.calls.some(([path]) => path.endsWith("/actions/action-1"))).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "Remove sample.txt" }));
+    await waitFor(() => expect(screen.queryByRole("option", { name: "sample.txt · 12 bytes" })).not.toBeInTheDocument());
+  });
   it("saves and selects a protected value without placing its text in fill actions or Assistant context", async () => {
     const { request, onContext } = fixture(true, false, true);
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());

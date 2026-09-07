@@ -318,3 +318,43 @@ and browser/LAN-access question is pending with the operator.
 
 The combined production/LAN fixture regression passed all **32 checks** across the
 eight desktop/mobile profiles in 1.3 minutes on the build above.
+
+### Page file upload contract
+
+Journey: choose a file from the current device beside the browser, review its name
+and size, select the target file input, then approve the upload inline. The assistant
+can discover the same attached-file catalog and propose the same operation. Core
+persists a browser-session-scoped artifact reference, never a host filesystem path
+in a tool argument. The default bound is eight attached files of at most 4 MiB each.
+Removing a file revokes pending actions; approval checks current membership, bytes,
+tab and page revision again. Uploads cannot run through the direct operations API
+without a decided action. Preview removal, scope isolation, stale/duplicate/revoked
+actions and real page file-input observation are required tests. Device file pickers
+select device files; arbitrary host paths remain unavailable.
+
+The upload implementation passed 83 focused browser/browserd/chat/harness tests,
+seven browser component tests, and all eight production-bundle LAN upload profiles
+(24.5 seconds). Build index SHA256:
+`a8dc3f8b3a4fac816a9158c37d396a11f45424528209c9fd2dc34ddc6c006742`.
+The profiles covered desktop 1440/1024 and emulated mobile Chromium/WebKit at
+320/390/430, on `http://192.168.1.155:15431`. File selection, reference-only proposal,
+inline approval, visible completion, removal and no horizontal overflow passed.
+
+The real headed Core/browserd script observed an empty file input before approval,
+then the expected file name and bytes after approval. Duplicate approval and
+revoked-file actions were rejected. The live Codex run using `~/.codex-2` discovered
+an attached file, proposed `browser.companion` upload, waited for inline approval,
+and uploaded the expected content. This ran alongside screenshot, image input,
+follow-up, click, credential masking, and concurrent-viewer checks.
+
+This upload path supplies a bounded Core-owned byte buffer. Browserd's existing
+arbitrary-host-file upload path still requires `upload_root` and its enumerated
+regular-file checks. Headed runtime, manifest hash and policy-proxy qualification
+requirements remain unchanged. File removal detaches/revokes the upload grant;
+normal project artifact retention still applies to stored bytes.
+
+All CI jobs passed on prior commit `3881b68` (Python 3.11/3.12/3.13, frontend,
+database migrations, desktop-macOS and security). The upload commit needs a fresh
+CI run. Remaining gates include the complete production UI against real managed
+Chromium/Codex, lifecycle coverage, packaged desktop, real LAN origin and physical
+phone interaction.

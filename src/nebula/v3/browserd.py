@@ -36,13 +36,20 @@ from .browser_engine import (
     BrowserEngineAction,
     BrowserEngineReceipt,
 )
-from .domain import BrowserEngineCapability, BrowserEngineState
+from .domain import BrowserEngineCapability, BrowserEngineState, NebulaModel
 
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
 
 
+class BrowserdUploadFile(NebulaModel):
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[^/\\\x00-\x1f]+$")
+    mime_type: str = Field(max_length=100)
+    content_base64: SecretStr = Field(max_length=5592408)
+
+
 class BrowserdCompanionRequest(CompanionRequest):
+    upload_file: BrowserdUploadFile | None = None
     protected_values: list[SecretStr] = Field(default_factory=list, max_length=128)
 
 

@@ -183,7 +183,10 @@ async def smoke(
                     BrowserSession, session["session_id"]
                 ).identity_id
                 live_page = await manager.page_for_screencast(identity_id, tab)
-                assert await live_page.locator("input").input_value() == secret
+                assert (
+                    await live_page.locator("input[type=password]").input_value()
+                    == secret
+                )
                 protected_capture = await client.post(
                     endpoint + "/operations",
                     json={
@@ -226,6 +229,68 @@ async def smoke(
                     },
                 )
                 cleared.raise_for_status()
+                file_bytes = b"controlled browser upload fixture"
+                file_saved = await client.post(
+                    endpoint + "/files",
+                    json={
+                        "filename": "browser-fixture.txt",
+                        "media_type": "text/plain",
+                        "content_base64": base64.b64encode(file_bytes).decode("ascii"),
+                    },
+                )
+                file_saved.raise_for_status()
+                file_ref = file_saved.json()[0]["reference"]
+                upload_request = {
+                    "operation": "upload",
+                    "tab_id": tab,
+                    "element_id": "2",
+                    "page_revision": cleared.json()["page_revision"],
+                    "file_ref": file_ref,
+                }
+                assert (
+                    await client.post(endpoint + "/operations", json=upload_request)
+                ).status_code == 409
+                proposed_upload = await client.post(
+                    endpoint + "/actions", json=upload_request
+                )
+                proposed_upload.raise_for_status()
+                assert (
+                    await live_page.locator("input[type=file]").evaluate(
+                        "el => el.files.length"
+                    )
+                    == 0
+                )
+                upload_id = proposed_upload.json()["id"]
+                uploaded = await client.post(
+                    endpoint + "/actions/" + upload_id, json={"decision": "approve"}
+                )
+                uploaded.raise_for_status()
+                assert uploaded.json()["status"] == "complete", uploaded.text
+                observed_file = await live_page.locator("input[type=file]").evaluate(
+                    "async el => ({name: el.files[0].name, text: await el.files[0].text()})"
+                )
+                assert observed_file == {
+                    "name": "browser-fixture.txt",
+                    "text": file_bytes.decode(),
+                }
+                assert (
+                    await client.post(
+                        endpoint + "/actions/" + upload_id, json={"decision": "approve"}
+                    )
+                ).status_code == 409
+                revoked_upload = await client.post(
+                    endpoint + "/actions", json=upload_request
+                )
+                revoked_upload.raise_for_status()
+                removed_file = await client.delete(endpoint + "/files/" + file_ref)
+                removed_file.raise_for_status()
+                assert removed_file.json() == []
+                assert (
+                    await client.post(
+                        endpoint + "/actions/" + revoked_upload.json()["id"],
+                        json={"decision": "approve"},
+                    )
+                ).status_code == 409
                 chat = store.create(
                     ChatSession(
                         engagement_id=project.id,
@@ -554,9 +619,82 @@ async def smoke(
                         for message in saved_messages.json()
                         for block in message.get("content_blocks", [])
                     )
+                    assistant_file = await client.post(
+                        endpoint + "/files",
+                        json={
+                            "filename": "assistant-upload.txt",
+                            "media_type": "text/plain",
+                            "content_base64": base64.b64encode(
+                                b"assistant upload fixture"
+                            ).decode("ascii"),
+                        },
+                    )
+                    assistant_file.raise_for_status()
+                    upload_turn = asyncio.create_task(
+                        client.post(
+                            "/api/v1/chat/completions",
+                            timeout=180,
+                            json={
+                                "backend": "harness",
+                                "engagement_id": project.id,
+                                "session_id": completion.json()["session_id"],
+                                "harness_profile_id": profile.id,
+                                "model": model,
+                                "include_knowledge": False,
+                                "tools_enabled": True,
+                                "allow_cloud_tool_results": True,
+                                "messages": [
+                                    {
+                                        "role": "user",
+                                        "content": "Using browser.companion only, discover the attached file assistant-upload.txt and the Document file input, capture fresh context, and upload that file once. Wait for operator approval. Report whether the upload completed.",
+                                    }
+                                ],
+                            },
+                        )
+                    )
+                    upload_approved = False
+                    try:
+                        for _ in range(600):
+                            if upload_turn.done():
+                                break
+                            current_actions = await client.get(endpoint + "/actions")
+                            current_actions.raise_for_status()
+                            pending_uploads = [
+                                action
+                                for action in current_actions.json()
+                                if action["status"] == "pending"
+                            ]
+                            if pending_uploads:
+                                assert len(pending_uploads) == 1 and not upload_approved
+                                action = pending_uploads[0]
+                                assert action["request"]["operation"] == "upload", (
+                                    action
+                                )
+                                approved_upload = await client.post(
+                                    endpoint + "/actions/" + action["id"],
+                                    json={"decision": "approve"},
+                                )
+                                approved_upload.raise_for_status()
+                                assert approved_upload.json()["status"] == "complete"
+                                upload_approved = True
+                            await asyncio.sleep(0.2)
+                        upload_answer = await upload_turn
+                        upload_answer.raise_for_status()
+                        assert upload_approved, upload_answer.json()
+                        actual = await live_page.locator("input[type=file]").evaluate(
+                            "async el => ({name: el.files[0].name, text: await el.files[0].text()})"
+                        )
+                        assert actual == {
+                            "name": "assistant-upload.txt",
+                            "text": "assistant upload fixture",
+                        }
+                    finally:
+                        upload_turn.cancel()
+                        await asyncio.gather(upload_turn, return_exceptions=True)
                     harness_evidence = {
                         "harness_model": model,
                         "harness_operator_image_attachment": True,
+                        "harness_approved_file_upload": True,
                         "harness_mcp_screenshot": True,
                         "harness_visible_answer": True,
                         "harness_inline_approval_and_followup": True,
@@ -567,6 +705,7 @@ async def smoke(
                     "headed_browserd": True,
                     "visible_change": True,
                     "protected_fill_and_screenshot_mask": True,
+                    "approved_scoped_file_upload": True,
                     "durable_binding_reopen": True,
                     "transport": "Core loopback HTTP and WebSocket to browserd loopback HTTP and WebSocket",
                     "frame_relay_and_takeover": True,

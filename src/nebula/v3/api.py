@@ -93,6 +93,7 @@ from .browser_companion import (
     CompanionBindingRequest,
     CompanionDecision,
     CompanionCredentialCreate,
+    CompanionFileCreate,
 )
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
@@ -1271,7 +1272,10 @@ def create_app(
     browser_automation = BrowserAutomationService(store)
     browser_assessments = BrowserAssessmentService(store)
     browser_companion = BrowserCompanion(
-        store, browser_assessments.engines, credentials=credentials
+        store,
+        browser_assessments.engines,
+        credentials=credentials,
+        artifact_store=artifact_store,
     )
     browser_automation_platform = BrowserAutomationToolPlatform(
         store, browser_automation
@@ -9546,6 +9550,48 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             return await browser_companion.request(session_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/files",
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_files(session_id: str) -> Any:
+        return browser_companion.file_catalog(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/files",
+        dependencies=[Depends(require_auth)],
+    )
+    async def save_browser_file(session_id: str, request: CompanionFileCreate) -> Any:
+        try:
+            return browser_companion.save_file(session_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.delete(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/files/{{reference}}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def remove_browser_file(session_id: str, reference: str) -> Any:
+        return browser_companion.remove_file(session_id, reference)
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
+        dependencies=[Depends(require_auth)],
+    )
+    async def propose_browser_upload(session_id: str, request: CompanionRequest) -> Any:
+        if request.operation != "upload":
+            raise HTTPException(
+                status_code=422,
+                detail="Choose a file input and attached file to propose an upload.",
+            )
+        try:
+            browser_companion.takeover(session_id, True)
+            return browser_companion.propose(
+                session_id, request, operator_requested=True
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
