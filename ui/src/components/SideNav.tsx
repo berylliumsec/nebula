@@ -1,12 +1,14 @@
-import { useState, type FormEvent } from "react";
-import { Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
+import { useRef, useState, type FormEvent } from "react";
+import { Archive, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { HostFolderPicker } from "./HostFolderPicker";
-import { useDialogPresence } from "./DialogSystem";
+import { useConfirmation, useDialogPresence } from "./DialogSystem";
+
+import "./ProjectSwitcher.css";
 
 interface SideNavProps {
   collapsed: boolean;
@@ -24,7 +26,15 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     activeOperator,
     engagement,
     engagements,
+    archivedEngagements,
+    setEngagementArchived,
   } = useWorkspace();
+  const confirm = useConfirmation();
+  const switcherButton = useRef<HTMLButtonElement>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [projectError, setProjectError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -42,6 +52,35 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     .join("") || "NE";
   const operatorName = activeOperator?.displayName ?? "No operator profile";
   const operatorInitials = operatorName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP";
+
+  const changeArchived = async (id: string, projectName: string, archived: boolean, trigger: HTMLButtonElement) => {
+    if (updating) return;
+    setUpdating(true);
+    setProjectError(undefined);
+    setNotice(undefined);
+    try {
+      if (archived && !await confirm({
+        title: `Remove ${projectName}?`,
+        message: "This archives the project and removes it from your active projects. Files and chat history are kept. Running work continues. You can restore it from Archived projects.",
+        confirmLabel: "Remove project",
+      })) return;
+      const wasSelected = id === engagement?.id;
+      const nextId = await setEngagementArchived(id, archived);
+      if (archived && wasSelected) {
+        navigate(nextId ? projectSurface(nextId, "workbench") : "/", { replace: true });
+      }
+      setNotice(archived ? "Project removed. You can restore it from Archived projects." : "Project restored. Select it from your active projects.");
+      if (!archived) setShowArchived(false);
+    } catch (failure) {
+      setProjectError(`Could not ${archived ? "remove" : "restore"} the project. ${failure instanceof Error ? failure.message : "Core could not save the change."} Try again.`);
+    } finally {
+      setUpdating(false);
+      requestAnimationFrame(() => {
+        if (trigger.isConnected) trigger.focus();
+        else switcherButton.current?.focus();
+      });
+    }
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -77,7 +116,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
       </div>
 
       <div className="engagement-picker">
-        <button className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <button ref={switcherButton} className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           <span className="engagement-avatar">{initials}</span>
           <span className="engagement-copy"><small>Active project</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
@@ -85,10 +124,18 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
         {open && <div className="engagement-menu" role="dialog" aria-label="Project switcher">
           <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
-            {engagements.map((item) => <button type="button" key={item.id} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>)}
-            {engagements.length === 0 && <p>No projects yet.</p>}
+            {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>
+              {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
+              <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
+            </div>)}
+            {(showArchived ? archivedEngagements : engagements).length === 0 && <p>{showArchived ? "No archived projects." : "No active projects. Create a project or restore an archived one."}</p>}
           </div>}
-          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
+          {!creating && <>
+            {projectError && <p className="project-switcher-feedback" role="alert">{projectError}</p>}
+            {notice && <p className="project-switcher-feedback" role="status">{notice}</p>}
+            <button className="engagement-new" type="button" disabled={updating} onClick={() => setShowArchived(!showArchived)}>{showArchived ? "Active projects" : `Archived projects (${archivedEngagements.length})`}</button>
+          </>}
+          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={updating || coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
         </div>}
       </div>
 
