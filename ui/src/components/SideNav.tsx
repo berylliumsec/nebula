@@ -72,6 +72,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
       setNotice(archived ? "Project removed. You can restore it from Archived projects." : "Project restored. Select it from your active projects.");
       if (!archived) setShowArchived(false);
     } catch (failure) {
+      void logCaughtDiagnostic("interface.project_switcher.archive_failed", "The project archive state could not be updated.", failure, "side_nav");
       setProjectError(`Could not ${archived ? "remove" : "restore"} the project. ${failure instanceof Error ? failure.message : "Core could not save the change."} Try again.`);
     } finally {
       setUpdating(false);
