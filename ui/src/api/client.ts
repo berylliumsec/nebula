@@ -5279,8 +5279,8 @@ export class ApiClient {
     ).then(mapHarnessSession);
   }
 
-  getAutomationRuntime(signal?: AbortSignal): Promise<import("./types").AutomationRuntimeInfo> {
-    return this.request<Record<string, unknown>>("automation/runtime", { signal }).then((value) => ({
+  getAutomationRuntime(signal?: AbortSignal, engagementId?: string): Promise<import("./types").AutomationRuntimeInfo> {
+    return this.request<Record<string, unknown>>(`automation/runtime${engagementId ? `?engagement_id=${encodeURIComponent(engagementId)}` : ""}`, { signal }).then((value) => ({
       configured: value.configured === true,
       ready: value.ready === true,
       image: typeof value.image === "string" ? value.image : undefined,
@@ -5306,6 +5306,8 @@ export class ApiClient {
     return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`).then((value) => ({
       id: String(value.id),
       engagementId: String(value.engagement_id),
+      executionMode: value.execution_mode === "host" ? "host" : "docker",
+      hostAccessAcknowledged: value.host_access_acknowledged === true,
       approvalPolicy: value.approval_policy as "always" | "on_boundary" | "never",
       networkEnabled: value.network_enabled === true,
       runnerProfileId: typeof value.runner_profile_id === "string" ? value.runner_profile_id : undefined,
@@ -5317,11 +5319,13 @@ export class ApiClient {
 
   updateAutomationPolicy(
     engagementId: string,
-    request: { approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; vpnProfileId?: string; maxTimeoutMs: number; expectedRevision: number },
+    request: { executionMode?: "docker" | "host"; hostAccessAcknowledged?: boolean; approvalPolicy: "always" | "on_boundary" | "never"; networkEnabled: boolean; runnerProfileId?: string; vpnProfileId?: string; maxTimeoutMs: number; expectedRevision: number },
   ): Promise<import("./types").AutomationProjectPolicy> {
     return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`, {
       method: "PUT",
       body: JSON.stringify({
+        execution_mode: request.executionMode,
+        host_access_acknowledged: request.hostAccessAcknowledged ?? false,
         approval_policy: request.approvalPolicy,
         network_enabled: request.networkEnabled,
         runner_profile_id: request.runnerProfileId ?? null,

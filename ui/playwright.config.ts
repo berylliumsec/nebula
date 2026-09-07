@@ -35,7 +35,7 @@ export default defineConfig({
         {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
         {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
       ]),
-    ].map(project => ({...project, testMatch: "**/real-core.spec.ts", grep: /assistant upgrade|project removal/})),
+    ].map(project => ({...project, testMatch: "**/real-core.spec.ts", grep: /assistant upgrade|project removal|project execution mode/})),
     ...[
       { name: "browser-chromium-landscape", device: "Pixel 5" },
       { name: "browser-webkit-landscape", device: "iPhone 13" },

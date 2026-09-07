@@ -210,6 +210,8 @@ export interface AutomationRuntimeInfo {
 }
 
 export interface AutomationProjectPolicy {
+  executionMode?: "docker" | "host";
+  hostAccessAcknowledged?: boolean;
   id: Identifier;
   engagementId: Identifier;
   approvalPolicy: "always" | "on_boundary" | "never";

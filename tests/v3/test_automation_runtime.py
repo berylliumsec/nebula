@@ -391,9 +391,8 @@ def test_command_receipt_records_workspace_changes(tmp_path):
     asyncio.run(scenario())
 
 
-def test_command_request_rejects_workspace_escape_and_nul():
-    with pytest.raises(ValidationError):
-        RunCommandRequest(command="pwd", cwd="../outside")
+def test_command_request_defers_path_boundary_to_selected_backend_and_rejects_nul():
+    assert RunCommandRequest(command="pwd", cwd="../outside").cwd == "../outside"
     with pytest.raises(ValidationError):
         RunCommandRequest(command="printf bad\0command")
 
@@ -1178,3 +1177,167 @@ def test_historical_raw_tool_output_fails_closed_to_a_receipt():
     assert result["schema"] == "nebula.tool-result/v2"
     assert result["incomplete"] is True
     assert "raw historical output" not in json.dumps(result)
+
+
+def test_host_mode_requires_consent_and_reads_external_folder_without_docker(tmp_path):
+    async def scenario():
+        manager, store, _, engagement, containers = runtime(tmp_path)
+        policy = manager.project_policy(engagement.id)
+        update = dict(
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=3000,
+            execution_mode="host",
+        )
+        with pytest.raises(AutomationPolicyDenied, match="Acknowledge"):
+            manager.update_project_policy(engagement.id, **update)
+        manager.update_project_policy(
+            engagement.id, **update, host_access_acknowledged=True
+        )
+        manager.runtime_image = ""
+        manager.runtime_digest = ""
+        assert (await manager.runtime_info(engagement_id=engagement.id)).ready
+        backup = tmp_path / "backup"
+        backup.mkdir()
+        (backup / "marker.txt").write_text("HOST_BACKUP_MARKER")
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="host-test",
+            request=RunCommandRequest(command="cat marker.txt", cwd=str(backup)),
+        )
+        assert result.exit_code == 0
+        execution = store.get(CommandExecution, result.execution_id)
+        assert execution.network == AutomationNetworkMode.HOST
+        assert execution.metadata["execution_mode"] == "host"
+        assert result.session_id
+        assert containers == []
+        # Mode changes never convert the already-created host session to Docker.
+        manager.update_project_policy(
+            engagement.id, **{**update, "execution_mode": "docker"}
+        )
+        retained = await manager.session(
+            engagement_id=engagement.id, owner_kind="api", owner_id="host-test"
+        )
+        assert retained.execution_mode == "host"
+        await manager.close_session(result.session_id)
+        assert policy.execution_mode == "docker"
+
+    asyncio.run(scenario())
+
+
+def test_docker_mode_rejects_host_paths_and_host_network_requests(tmp_path):
+    async def scenario():
+        manager, _, _, engagement, _ = runtime(tmp_path)
+        for request in [
+            RunCommandRequest(command="pwd", cwd="/tmp"),
+            RunCommandRequest(command="pwd", cwd="../outside"),
+            RunCommandRequest(command="pwd", network="host"),
+        ]:
+            with pytest.raises(AutomationPolicyDenied):
+                await manager.run_command(
+                    engagement_id=engagement.id,
+                    owner_kind="api",
+                    owner_id="docker-test",
+                    request=request,
+                )
+        session = await manager.session(
+            engagement_id=engagement.id, owner_kind="api", owner_id="docker-test"
+        )
+        await manager.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
+    async def scenario():
+        manager, store, _, engagement, _ = runtime(tmp_path)
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.ALWAYS,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=1000,
+        )
+        request = RunCommandRequest(command="sleep 30", background=True)
+        with pytest.raises(CommandApprovalRequired) as pending:
+            await manager.run_command(
+                engagement_id=engagement.id,
+                owner_kind="api",
+                owner_id="host-timeout",
+                request=request,
+            )
+        approval = pending.value.approval
+        assert "host filesystem" in approval.expected_effects[0]
+        approval = store.update(
+            Approval,
+            approval.id,
+            {
+                "status": "approved",
+                "decided_by": "test-operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="host-timeout",
+            request=request,
+            approval=approval,
+        )
+        await asyncio.sleep(1.2)
+        result = await manager.process_io(
+            result.process_id,
+            ProcessIORequest(),
+            engagement_id=engagement.id,
+            owner_id="host-timeout",
+        )
+        assert result.status == CommandExecutionStatus.TIMED_OUT
+        await manager.close_session(result.session_id)
+
+    asyncio.run(scenario())
+
+
+def test_host_scope_expiry_closes_running_commands(tmp_path):
+    from datetime import timedelta
+
+    async def scenario():
+        manager, store, _, engagement, _ = runtime(tmp_path)
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        store.update(
+            ScopePolicy,
+            scope.id,
+            {"not_after": utc_now() + timedelta(seconds=0.5)},
+            expected_revision=scope.revision,
+        )
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=5000,
+        )
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="api",
+            owner_id="expiring-host",
+            request=RunCommandRequest(command="sleep 30", background=True),
+        )
+        await asyncio.sleep(0.8)
+        assert (
+            store.get(AutomationSession, result.session_id).status
+            == AutomationSessionStatus.CLOSED
+        )
+        assert (
+            store.get(CommandExecution, result.execution_id).status
+            == CommandExecutionStatus.CANCELLED
+        )
+        await manager.shutdown()
+
+    asyncio.run(scenario())

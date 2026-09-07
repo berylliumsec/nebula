@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from jsonschema import Draft202012Validator
 
@@ -235,11 +237,30 @@ class AutomationBroker:
         manager: AutomationRuntimeManager,
         store: NebulaStore,
         output_service: ToolOutputService,
+        execution_mode: Literal["docker", "host"] = "docker",
     ) -> None:
         self.manager = manager
         self.store = store
         self.output_service = output_service
-        self.specs = command_specs(manager.binary_inventory)
+        self.execution_mode = execution_mode
+        self.specs = command_specs(
+            manager.binary_inventory if execution_mode == "docker" else ()
+        )
+        if execution_mode == "host":
+            command = self.specs[RUN_COMMAND_NAME]
+            schema = deepcopy(command.input_schema)
+            schema["properties"]["network"] = {
+                "type": "string",
+                "enum": ["host", "none", "project_scope"],
+                "default": "host",
+                "description": "Host OS networking applies to every host command; Docker network isolation is unavailable.",
+            }
+            self.specs[RUN_COMMAND_NAME] = command.model_copy(
+                update={
+                    "description": "Run Bash directly on the Nebula host as Core's OS user. The default cwd is the linked project folder. Absolute paths and other host folders or mounted devices are accessible subject to OS permissions. Host OS networking applies; container VPN and egress isolation do not. Use this tool for host paths outside the project.",
+                    "input_schema": schema,
+                }
+            )
         self.ledger = StoreToolLedger(store)
 
     async def execute(
@@ -302,6 +323,7 @@ class AutomationBroker:
                     approval=approval,
                     requested_by=invocation.requested_by,
                     tool_call_id=call.id,
+                    expected_execution_mode=self.execution_mode,
                 )
             else:
                 arguments = dict(invocation.arguments)
@@ -511,7 +533,8 @@ class AutomationToolPlatform:
         engagement_id: str,
         extra_components: Any | None = None,
     ) -> AutomationToolComponents:
-        if not self.manager.runtime_digest:
+        runtime_digest = self.manager.project_runtime_digest(engagement_id)
+        if not runtime_digest:
             raise AutomationRuntimeUnavailable(
                 "prepare the existing Kali headless runtime before enabling commands"
             )
@@ -525,6 +548,7 @@ class AutomationToolPlatform:
             manager=self.manager,
             store=self.store,
             output_service=ToolOutputService(self.store, self.artifact_store),
+            execution_mode=self.manager.project_policy(engagement_id).execution_mode,
         )
         specs = dict(broker.specs)
         selected: Any = broker
@@ -561,7 +585,7 @@ class AutomationToolPlatform:
             scope=scope,
             workspace=self.workspace_resolver(engagement_id),
             specs=specs,
-            runtime_digest=self.manager.runtime_digest,
+            runtime_digest=runtime_digest,
         )
 
     def mission_components(
@@ -669,7 +693,7 @@ class AutomationToolPlatform:
                 extra_components=extra_components,
             )
         runtime_digest = (
-            "browser-native-v1" if browser_only else self.manager.runtime_digest
+            "browser-native-v1" if browser_only else components.runtime_digest
         )
         snapshot = {
             "automation_runtime_digest": runtime_digest,
