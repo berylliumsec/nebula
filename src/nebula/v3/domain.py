@@ -4008,6 +4008,7 @@ class CompanionAction(Entity):
     entity_kind: ClassVar[str] = "browser_companion_actions"
     engagement_id: str
     browser_session_id: str
+    chat_turn_id: str | None = None
     operator_requested: bool = False
     request: CompanionRequest
     status: Literal["pending", "running", "complete", "failed", "revoked"] = "pending"

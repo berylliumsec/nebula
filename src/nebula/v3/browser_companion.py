@@ -24,6 +24,8 @@ from .domain import (
     BrowserIdentity,
     BrowserSession,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     NebulaModel,
     RiskClass,
@@ -408,6 +410,7 @@ class BrowserCompanion:
         *,
         assistant: bool = False,
         approved: bool = False,
+        chat_turn_id: str | None = None,
     ) -> dict[str, Any]:
         if request.operation == "upload" and not approved:
             raise ValueError(
@@ -419,6 +422,10 @@ class BrowserCompanion:
             self.takeover(session_id, True)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             session = self.session(session_id)
+            if not self.turn_active(chat_turn_id):
+                raise ValueError(
+                    "The originating Assistant turn ended; request a fresh action."
+                )
             adapter = await self.adapter()
             if request.operation not in {"tabs", "navigate", "new_tab", "close_tab"}:
                 tabs = await adapter._request(
@@ -456,6 +463,10 @@ class BrowserCompanion:
                 "assistant_paused", True
             ):
                 raise ValueError("Assistant control was paused before execution.")
+            if not self.turn_active(chat_turn_id):
+                raise ValueError(
+                    "The originating Assistant turn ended; request a fresh action."
+                )
             protected = self.protected_values(session_id)
             payload = request.model_dump()
             if request.operation == "upload":
@@ -515,12 +526,23 @@ class BrowserCompanion:
             if item.browser_session_id == session_id
         ]
 
+    def turn_active(self, chat_turn_id: str | None) -> bool:
+        if chat_turn_id is None:
+            return True
+        return self.store.get(ChatTurn, chat_turn_id).status not in {
+            ChatTurnStatus.COMPLETE,
+            ChatTurnStatus.CANCELLED,
+            ChatTurnStatus.FAILED,
+            ChatTurnStatus.INTERRUPTED,
+        }
+
     def propose(
         self,
         session_id: str,
         request: CompanionRequest,
         *,
         operator_requested: bool = False,
+        chat_turn_id: str | None = None,
     ) -> CompanionAction:
         session = self.session(session_id)
         if session.metadata.get("assistant_paused", True) and not operator_requested:
@@ -537,6 +559,7 @@ class BrowserCompanion:
                 browser_session_id=session.id,
                 request=request,
                 operator_requested=operator_requested,
+                chat_turn_id=chat_turn_id,
             )
         )
 
@@ -574,7 +597,8 @@ class BrowserCompanion:
                 "This action has already been decided; it will not be replayed."
             )
         if (
-            decision != "approve"
+            not self.turn_active(action.chat_turn_id)
+            or decision != "approve"
             or action.expires_at <= datetime.now(timezone.utc)
             or (
                 session.metadata.get("assistant_paused", True)
@@ -599,6 +623,7 @@ class BrowserCompanion:
                 action.request,
                 assistant=not action.operator_requested,
                 approved=True,
+                chat_turn_id=action.chat_turn_id,
             )
         except Exception:
             self.store.update(

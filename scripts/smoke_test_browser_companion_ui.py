@@ -6,6 +6,8 @@ Called by smoke_test_browser_companion_core.py; no API routes are mocked.
 from __future__ import annotations
 
 from contextlib import suppress
+import hashlib
+import json
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -50,7 +52,7 @@ async def exercise_ui(
         page = await context.new_page()
         page.set_default_timeout(20000)
         try:
-            print("UI journey: opening the browser workspace", flush=True)
+            print(f"UI journey ({profile}): opening the browser workspace", flush=True)
             await page.goto(
                 f"{origin}/#pair={pairing['secret']}&code={pairing['confirmation_code']}"
             )
@@ -62,11 +64,15 @@ async def exercise_ui(
                 else page.get_by_role("tab", name="Project browser", exact=True)
             ).to_be_visible(timeout=20000)
             await page.goto(f"{origin}/?view=browser&session={conversation_id}")
-            await expect(page.get_by_label("Browser engine")).to_have_value("managed")
+            await expect(page.get_by_label("Browser engine")).to_have_value("managed", timeout=30000)
             panel = page.get_by_role(
                 "complementary", name="Browser Assistant", exact=True
             )
             await expect(panel).to_be_visible()
+            if device:
+                await panel.get_by_role(
+                    "button", name="Collapse browser Assistant"
+                ).click()
             await expect(page.locator(".managed-browser-screen img")).to_be_visible()
             await page.get_by_label("Browser address").fill(target_url)
             await page.get_by_role("button", name="Go", exact=True).click()
@@ -85,13 +91,11 @@ async def exercise_ui(
             async def screen_point(x: float, y: float) -> dict[str, float]:
                 await screen.scroll_into_view_if_needed()
                 return await screen.evaluate(
-                    "(image, point) => { const r = image.getBoundingClientRect(); return {x:r.left + point.x*r.width/image.naturalWidth, y:r.top + point.y*r.height/image.naturalHeight}; }",
+                    "(image, point) => { const r = image.getBoundingClientRect(); return {x:point.x*r.width/image.naturalWidth, y:point.y*r.height/image.naturalHeight}; }",
                     {"x": x, "y": y},
                 )
 
-            point = await screen.evaluate(
-                "image => ({x:20*image.getBoundingClientRect().width/image.naturalWidth, y:18*image.getBoundingClientRect().height/image.naturalHeight})"
-            )
+            point = await screen_point(20, 18)
             if device:
                 await screen.tap(position=point)
             else:
@@ -108,10 +112,7 @@ async def exercise_ui(
             await page.get_by_role("button", name="Select region", exact=True).click()
             start = await screen_point(5, 5)
             end = await screen_point(65, 35)
-            await page.mouse.move(**start)
-            await page.mouse.down()
-            await page.mouse.move(**end, steps=5)
-            await page.mouse.up()
+            await screen.drag_to(screen, source_position=start, target_position=end)
             await expect(
                 preview.get_by_role("img", name="Selected page region")
             ).to_be_visible()
@@ -151,11 +152,17 @@ async def exercise_ui(
             )
             assert parse_qs(urlsplit(page.url).query)["view"] == ["browser"]
             assert parse_qs(urlsplit(page.url).query)["session"] == [conversation_id]
+            if device:
+                await panel.get_by_role(
+                    "button", name="Collapse browser Assistant"
+                ).click()
             resume = page.get_by_role(
                 "button", name="Resume assistant control", exact=True
             )
             if await resume.is_visible():
                 await resume.click()
+            if device:
+                await page.get_by_role("button", name="Assistant", exact=True).click()
             print("UI journey: requesting an approved browser action", flush=True)
             await send(
                 "Using browser.companion only, capture fresh page context, click the Ready button once, wait for operator approval, and report its new label."
@@ -172,6 +179,10 @@ async def exercise_ui(
             await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
                 "Saved"
             )
+            if device:
+                await panel.get_by_role(
+                    "button", name="Collapse browser Assistant"
+                ).click()
             await page.get_by_role("button", name="Ask about page", exact=True).click()
             await expect(preview).to_contain_text("Saved")
             await preview.get_by_role("button", name="Discard", exact=True).click()
@@ -183,14 +194,16 @@ async def exercise_ui(
             )
             await expect(page.locator(".managed-browser-screen img")).to_be_visible()
             assert parse_qs(urlsplit(page.url).query)["session"] == [conversation_id]
-            assert "handoff" not in parse_qs(urlsplit(page.url).query)
+            assert "handoff" not in parse_qs(urlsplit(page.url).query), (
+                "A cleared context handoff remained in the reload URL."
+            )
             await expect(panel.locator("#analyst-message")).to_be_in_viewport(ratio=1)
             await expect(
                 panel.get_by_role("button", name="Send message", exact=True)
             ).to_be_in_viewport(ratio=1)
             assert not await page.evaluate(
                 "document.documentElement.scrollWidth > innerWidth + 1"
-            )
+            ), "The browser workspace overflows the mobile viewport horizontally."
             await page.screenshot(
                 path=str(evidence_root / "real-browser-ui-desktop.png"), full_page=True
             )
@@ -203,18 +216,26 @@ async def exercise_ui(
             await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
                 "Saved", timeout=30000
             )
-            return {
+            result = {
                 "production_ui_real_core": True,
                 "production_ui_live_codex": True,
                 "ui_origin": origin,
                 "ui_viewport": f"{width}x{height}",
                 "ui_engine": f"headed {engine}",
+                "ui_browser_version": browser.version,
+                "ui_build_sha256": hashlib.sha256(
+                    (
+                        Path(__file__).resolve().parents[1] / "ui/dist/index.html"
+                    ).read_bytes()
+                ).hexdigest(),
                 "ui_device_emulation": device,
                 "ui_main_assistant_same_conversation": True,
                 "ui_same_conversation_reload": True,
                 "ui_inline_approval_page_change": True,
                 "ui_element_text_region_selection": True,
             }
+            (evidence_root / "result.json").write_text(json.dumps(result, indent=2))
+            return result
         except Exception:
             with suppress(Exception):
                 await page.screenshot(

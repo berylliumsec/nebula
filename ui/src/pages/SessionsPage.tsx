@@ -1,4 +1,5 @@
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
+import { BrowserAssistantPanel } from "../components/BrowserAssistantPanel";
 import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
@@ -429,6 +430,13 @@ export function SessionsPage() {
     params.delete("session");
     setSearchParams(params, { replace: true });
   };
+  const consumedSelectionHandoff = useRef<string | null>(null);
+  const clearSubmittedContext = () => {
+    consumedSelectionHandoff.current = currentSearchParams.current.get("handoff");
+    currentSearchParams.current = new URLSearchParams(currentSearchParams.current);
+    currentSearchParams.current.delete("handoff");
+    clearAssistantDrafts();
+  };
   const openSessionChatView = (id: string, preserveSurface = false) => {
     // Stream callbacks outlive the render that submitted the message. Preserve
     // newer navigation and cleared handoffs instead of restoring that old URL.
@@ -438,6 +446,7 @@ export function SessionsPage() {
       setViewState(nextView);
       params.set("view", nextView);
     }
+    if (params.get("handoff") === consumedSelectionHandoff.current) params.delete("handoff");
     params.set("session", id);
     setSearchParams(params, { replace: true });
   };
@@ -563,7 +572,7 @@ export function SessionsPage() {
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  useChatComposerAnchor(composerRef, (view === "chat" || view === "browser") && conversationOpen, view);
+  useChatComposerAnchor(composerRef, (view === "chat" || view === "browser") && conversationOpen, view === "browser" && window.matchMedia("(max-width: 760px)").matches ? "browser-sheet" : view);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);
@@ -2353,7 +2362,7 @@ export function SessionsPage() {
         setDraft(current => current.trim() === content ? "" : current);
         pendingImages.forEach(image => URL.revokeObjectURL(image.previewUrl));
         setPendingImages([]);
-        clearAssistantDrafts();
+        clearSubmittedContext();
       }
       setMessageActionStatus("Saved in Core. Queued work continues after all browser tabs close.");
       return true;
@@ -2364,7 +2373,7 @@ export function SessionsPage() {
       setDraft("");
       pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setPendingImages([]);
-      clearAssistantDrafts();
+      clearSubmittedContext();
     }
     setChatError(undefined);
     setSending(true);
@@ -2986,6 +2995,11 @@ export function SessionsPage() {
   };
   const [browserAssistantOpen, setBrowserAssistantOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
+  const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
+  const collapseBrowserAssistant = () => {
+    setBrowserAssistantOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
+  };
 
   const assistantPanel = (
             <div className="chat-panel">
@@ -3284,7 +3298,7 @@ export function SessionsPage() {
             {browserEngine === "managed" ? <ManagedAssistantBrowser key={engagement.id} api={api} projectId={engagement.id} active={view === "browser"}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestNebulaDraft(request, "browser"); }}
-              onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => void attachImageFiles([file])} /> : <WorkbenchBrowser
+              actionContainer={browserActionContainer} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} /> : <WorkbenchBrowser
               active={view === "browser"}
               api={api}
               operatorId={activeOperator?.id}
@@ -3301,10 +3315,9 @@ export function SessionsPage() {
               onUploadEvidence={uploadEvidence}
             />}
             </div>
-            {view === "browser" && browserAssistantOpen && <aside id="browser-assistant-panel" className="integrated-browser-assistant" aria-label="Browser Assistant">
-              <header><strong>Assistant</strong><button className="button quiet" type="button" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}>New conversation</button><button className="button quiet" type="button" aria-label="Collapse browser Assistant" onClick={() => setBrowserAssistantOpen(false)}><X size={16} /></button></header>
+            {view === "browser" && browserAssistantOpen && <BrowserAssistantPanel onActionContainer={setBrowserActionContainer} header={<><strong>Assistant</strong><button className="button quiet" type="button" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}>New conversation</button><button className="button quiet" type="button" aria-label="Collapse browser Assistant" onClick={collapseBrowserAssistant}><X size={16} /></button></>}>
               {assistantPanel}
-            </aside>}
+            </BrowserAssistantPanel>}
           </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>

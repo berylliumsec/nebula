@@ -6165,6 +6165,38 @@ class HarnessRuntimeService:
             return existing
         if turn.status != HarnessTurnStatus.QUEUED:
             raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
+        # Bind from Core at every entry point, including linked retries. A prior
+        # turn's attachment may have been removed or replaced since it ran.
+        from .browser_companion_tools import attached_session
+
+        companion_id = attached_session(
+            self.store, turn.engagement_id, turn.chat_session_id
+        )
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("browser_companion_session_id") != companion_id:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "browser_companion_session_id": companion_id,
+                    }
+                },
+                expected_revision=session.revision,
+            )
+        if turn.metadata.get("browser_companion_session_id") != companion_id:
+            turn = self.store.update(
+                HarnessTurn,
+                turn.id,
+                {
+                    "metadata": {
+                        **turn.metadata,
+                        "browser_companion_session_id": companion_id,
+                    }
+                },
+                expected_revision=turn.revision,
+            )
         task = create_diagnostic_task(
             self._drive_chat_turn(turn.id),
             feature="harnesses",

@@ -529,3 +529,50 @@ eight desktop/mobile profiles after that change; this remains fixture evidence.
 The new packaged runner uses a temporary XDG profile, an extracted DEB, staged
 tauri-driver/WebKitWebDriver, and a read-only copy of the approved Codex profile.
 It does not install the package or change the running installation.
+
+
+### Mobile sheet and cancellation follow-up (2026-09-07)
+
+The production DEB from `b1ccec9` passed the native WebKitGTK driver journey with
+its bundled Core: scoped navigation, page attachment, a live Codex answer and an
+inline approved click. The package was extracted under `/tmp`; no installation or
+service was changed. The current source includes a later main merge and mobile
+changes, so final package rebuilding and acceptance remain required.
+
+The mobile Assistant now uses an opaque expandable sheet. Its required actions
+remain visible within the sheet; collapsing returns focus to the Assistant toggle.
+It follows the visual viewport and reserves space for mobile navigation and safe
+areas. Chromium device emulation at 320/390/430 px previously completed the live
+journey. The latest WebKit 26.5 iPhone 13 emulation at 320x700 passed element/text/
+region selection, attachment, streamed answer, approved click, reload and the same
+conversation in main Assistant at `http://192.168.1.155:50089`. UI index SHA256:
+`20a7dc3f11090bd32df923b7914e33e73b1438cf6926a66e1fd693eb72e15125`.
+Physical touch, rotation and software-keyboard acceptance remain outstanding.
+
+Manual browser navigation now immediately reports operator takeover and an older
+control poll cannot overwrite an explicit control change. The live cancellation
+journey exposed an independent MCP task retaining its pending approval after Stop.
+Actions now retain their originating chat-turn ID; the broker revokes them when
+the durable turn ends and dispatch checks that status again before page mutation.
+Cancellation and late approval coverage passed within 18 companion backend tests.
+The live lifecycle retry is still in progress; this is not yet lifecycle acceptance.
+
+The attachment cleanup regression now creates a handoff before the browser chat
+sends and verifies the resulting URL no longer carries it. Seven Chromium profiles
+passed in the production fixture matrix. Three concurrent WebKit cases exceeded
+the 30-second whole-test limit; an isolated headed WebKit 320px rerun passed in
+27.3 seconds. The two-answer fixture has a 60-second whole-test limit for the
+remaining engine runs. Sixteen component/navigation tests passed. The complete
+required matrix, final source build, physical phone and final CI remain open.
+
+
+The subsequent headed production WebKit fixture matrix passed all three widths
+(320/390/430) with the 60-second whole-test limit; individual runs took
+27.1/29.9/44.2 seconds. Live cancellation now removes the approval and leaves the
+page unchanged. Linked retry then exposed a missing browser binding on replacement
+turns. Binding resolution now runs at the shared detached-turn start entry point,
+using the current Core association rather than the original turn's metadata.
+Regression coverage checks attached and removed-browser retries without changing
+the original cancelled execution. The focused harness/companion suite passed 67
+tests; Ruff and type checking of four affected backend modules passed. The live
+retry/takeover/recovery continuation remains pending.

@@ -195,12 +195,14 @@ class CompanionBroker:
                     raise InvalidToolArguments(
                         "Choose a file input from fresh page context."
                     )
-                result = self.service.propose(self.session_id, request)
+                result = self.service.propose(
+                    self.session_id, request, chat_turn_id=invocation.chat_turn_id
+                )
                 try:
                     while result.status in {"pending", "running"}:
-                        if (
-                            result.status == "pending"
-                            and result.expires_at <= datetime.now(timezone.utc)
+                        if result.status == "pending" and (
+                            result.expires_at <= datetime.now(timezone.utc)
+                            or not self.service.turn_active(result.chat_turn_id)
                         ):
                             result = await self.service.decide(
                                 self.session_id, result.id, "reject"

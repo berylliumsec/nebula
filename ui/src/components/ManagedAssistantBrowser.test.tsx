@@ -1,9 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ManagedAssistantBrowser } from "./ManagedAssistantBrowser";
 
-function fixture(active = true, fail = false, protectedField = false, fileField = false) {
+function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean }>) {
   let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
   let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
@@ -12,6 +12,7 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
     if (path.endsWith("/browser-companion")) return { session_id: "browser-1", conversation_id: "chat-1", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] };
+    if (path.endsWith("/control") && controlRead) return controlRead;
     if (path.endsWith("/files")) {
       if (options?.method === "POST") savedFiles = [{ reference: "file-1", filename: JSON.parse(String(options.body)).filename, size: 12, media_type: "text/plain" }];
       return savedFiles;
@@ -103,6 +104,23 @@ describe("ManagedAssistantBrowser", () => {
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "Take control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+  });
+  it("does not let an older control poll overwrite an explicit resume", async () => {
+    let resolveControl!: (value: { paused: boolean }) => void;
+    const controlRead = new Promise<{ paused: boolean }>(resolve => { resolveControl = resolve; });
+    const { onControlChange } = fixture(true, false, false, false, controlRead);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    await act(async () => { resolveControl({ paused: true }); await controlRead; });
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+  });
+  it("shows manual navigation takeover immediately after assistant control was resumed", async () => {
+    const { onControlChange } = fixture();
+    fireEvent.click(await screen.findByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+    expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeInTheDocument();
   });
   it("does not start a browser when the operator is using another workspace view", () => {
     const { request } = fixture(false);

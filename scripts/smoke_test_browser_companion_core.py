@@ -35,6 +35,7 @@ async def smoke(
     ui_host: str | None = None,
     automatic_host: bool = False,
     ui_profiles: str = "desktop",
+    ui_lifecycle: bool = False,
 ) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
     core_token = secrets.token_urlsafe(32)
@@ -828,7 +829,7 @@ async def smoke(
                     from smoke_test_browser_companion_ui import exercise_ui
 
                     ui_results = []
-                    for ui_profile in ui_profiles.split(","):
+                    for ui_profile in filter(None, ui_profiles.split(",")):
                         pairing = await client.post(
                             "/api/v1/auth/pairings",
                             json={"name": "Browser UI validation"},
@@ -845,6 +846,32 @@ async def smoke(
                             )
                         )
                     harness_evidence["ui_profiles"] = ui_results
+                    if ui_lifecycle:
+                        from smoke_test_browser_companion_lifecycle import (
+                            exercise_lifecycle,
+                        )
+
+                        pairing = await client.post(
+                            "/api/v1/auth/pairings",
+                            json={"name": "Browser lifecycle validation"},
+                        )
+                        pairing.raise_for_status()
+
+                        async def restart_browser() -> None:
+                            current = store.get(BrowserSession, session["session_id"])
+                            live = await manager.page_for_screencast(
+                                current.identity_id, current.active_tab_id
+                            )
+                            await live.context.close()
+
+                        harness_evidence["ui_lifecycle"] = await exercise_lifecycle(
+                            f"http://{ui_host}:{core_listener.getsockname()[1]}",
+                            pairing.json(),
+                            completion.json()["session_id"],
+                            runtime_root.parent,
+                            target_url,
+                            restart_browser,
+                        )
                 return {
                     "state": "passed",
                     "authenticated_core": True,
@@ -903,6 +930,11 @@ if __name__ == "__main__":
         default="desktop",
         help="Comma-separated desktop, compact, chromium-320/390/430, webkit-320/390/430 profiles",
     )
+    parser.add_argument(
+        "--ui-lifecycle",
+        action="store_true",
+        help="Exercise real visible cancellation, linked retry, takeover, concurrent viewers, and Chromium restart",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
@@ -914,6 +946,7 @@ if __name__ == "__main__":
                     args.ui_host,
                     args.automatic_host,
                     args.ui_profiles,
+                    args.ui_lifecycle,
                 )
             ),
             sort_keys=True,

@@ -254,7 +254,7 @@ def test_real_core_requires_auth_and_reports_absent_browser_runtime(
     assert "saved conversations remain available" in result.text
 
 
-@pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("cancel", [False, True, "saved-turn", "late-approval"])
 def test_assistant_waits_for_inline_approval_and_receives_actual_result(
     tmp_path, monkeypatch, cancel
 ):
@@ -300,6 +300,7 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
         run_id=turn.id,
         origin=ToolCallOrigin.CHAT,
         chat_session_id=chat.id,
+        chat_turn_id=turn.id,
         tool_name="browser.companion",
         arguments={
             "operation": "click",
@@ -325,6 +326,24 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
                 await asyncio.sleep(0.01)
             assert actions and not task.done()
             assert operations == ["capture"]
+            if cancel in {"saved-turn", "late-approval"}:
+                from nebula.v3.domain import ChatTurnStatus
+
+                store.update(
+                    ChatTurn,
+                    turn.id,
+                    {"status": ChatTurnStatus.CANCELLED},
+                    expected_revision=turn.revision,
+                )
+                if cancel == "late-approval":
+                    action = await broker.service.decide(
+                        session.id, actions[0].id, "approve"
+                    )
+                    assert action.status == "revoked"
+                result = await asyncio.wait_for(task, 2)
+                assert result.output["status"] == "revoked"
+                assert operations == ["capture"]
+                return
             if cancel:
                 from nebula.v3.domain import (
                     ToolCall as PersistedToolCall,
@@ -385,6 +404,47 @@ def test_manual_action_pauses_assistant_before_waiting_for_control(tmp_path):
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
+
+    asyncio.run(run())
+
+
+def test_cancelled_turn_cannot_dispatch_an_approved_action_waiting_for_control(
+    tmp_path,
+):
+    from nebula.v3.domain import ChatTurn, ChatTurnStatus
+
+    store, project, _, session, service = setup(tmp_path)
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id="chat",
+            model="fixture",
+            provider_profile_id="provider",
+        )
+    )
+    action = service.propose(
+        session.id,
+        CompanionRequest(
+            operation="click", tab_id="tab", page_revision="page-1", element_id="0"
+        ),
+        chat_turn_id=turn.id,
+    )
+
+    async def run():
+        lock = service._locks.setdefault(session.id, asyncio.Lock())
+        async with lock:
+            task = asyncio.create_task(service.decide(session.id, action.id, "approve"))
+            await asyncio.sleep(0)
+            assert store.get(CompanionAction, action.id).status == "running"
+            store.update(
+                ChatTurn,
+                turn.id,
+                {"status": ChatTurnStatus.CANCELLED},
+                expected_revision=turn.revision,
+            )
+        with pytest.raises(ValueError, match="originating Assistant turn ended"):
+            await task
+        assert store.get(CompanionAction, action.id).status == "failed"
 
     asyncio.run(run())
 

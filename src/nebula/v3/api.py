@@ -7738,37 +7738,6 @@ def create_app(
                 )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
-            from .browser_companion_tools import attached_session
-
-            companion_id = attached_session(store, engagement_id, chat.id)
-            runtime_session = store.get(HarnessSession, harness_turn.harness_session_id)
-            if (
-                runtime_session.metadata.get("browser_companion_session_id")
-                != companion_id
-            ):
-                store.update(
-                    HarnessSession,
-                    runtime_session.id,
-                    {
-                        "metadata": {
-                            **runtime_session.metadata,
-                            "browser_companion_session_id": companion_id,
-                        }
-                    },
-                    expected_revision=runtime_session.revision,
-                )
-            harness_turn = store.get(HarnessTurn, harness_turn.id)
-            store.update(
-                HarnessTurn,
-                harness_turn.id,
-                {
-                    "metadata": {
-                        **harness_turn.metadata,
-                        "browser_companion_session_id": companion_id,
-                    }
-                },
-                expected_revision=harness_turn.revision,
-            )
             harness_runtime.start_chat_turn(harness_turn.id)
 
             async def harness_events() -> Any:

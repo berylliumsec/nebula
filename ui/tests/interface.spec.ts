@@ -5261,10 +5261,13 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
 });
 
 test("browser Assistant stays beside the page through an answer and follow-up", async ({ page }) => {
+  test.setTimeout(60000);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/providers") && route.request().method() === "GET") {
       await route.fulfill({ json: [{ ...entity, id: "browser-provider", name: "Browser provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["browser-model"], capabilities: { streaming: true }, privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "browser-model" } }] });
+    } else if (path.endsWith("/handoffs") && route.request().method() === "POST") {
+      await route.fulfill({ json: { ...entity, id: "browser-selection-handoff", ...route.request().postDataJSON(), status: "pending" } });
     } else if (path.endsWith("/browser-companion")) {
       await route.fulfill({ json: { session_id: "browser-session", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
     } else if (path.endsWith("/browser-companion/browser-session/operations")) {
@@ -5288,14 +5291,18 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
   await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  if ((page.viewportSize()?.width ?? 1440) <= 760) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
   await page.getByRole("button", { name: "Attach to Assistant", exact: true }).click();
   const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+  if ((page.viewportSize()?.width ?? 1440) <= 760) expect(await panel.evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
   await expect(panel).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("browser-selection-handoff");
   await panel.locator("#analyst-message").fill("What does this button do?");
   await panel.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(panel.getByText("The Save button saves your changes.", { exact: true }).first()).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBeNull();
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   await panel.locator("#analyst-message").fill("Is this still the same context?");
   await panel.getByRole("button", { name: "Send message", exact: true }).click();
@@ -5420,6 +5427,7 @@ test("browser Assistant uploads a selected device file only after inline approva
     } else await route.fallback();
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
+  if ((page.viewportSize()?.width ?? 1440) <= 760) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByText("Files for this page (0)", { exact: true }).click();
   await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
   await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");

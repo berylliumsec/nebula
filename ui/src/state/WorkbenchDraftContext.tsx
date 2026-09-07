@@ -3,6 +3,7 @@ import {
   type PropsWithChildren,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -216,7 +217,16 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
   const [activeHandoffIds, setActiveHandoffIds] = useState<string[]>([]);
   const assistantHandoffs = useRef(new Map<string, number>());
+  const discardedAssistantHandoffs = useRef(new Set<string>());
   const assistantGeneration = useRef(0);
+  useLayoutEffect(() => {
+    const parameters = new URLSearchParams(location.search);
+    if (!discardedAssistantHandoffs.current.has(parameters.get("handoff") ?? "")) return;
+    // A streamed turn may finish navigation after a selection was cleared.
+    // Reconcile that stale URL without changing its current conversation/view.
+    parameters.delete("handoff");
+    navigate(`${location.pathname}${parameters.size ? `?${parameters}` : ""}${location.hash}`, { replace: true });
+  }, [assistantContext, location.pathname, location.search, location.hash, navigate]);
 
   const cancelSelectionHandoff = useCallback(async (id: string, revision: number) => {
     if (!api) return;
@@ -346,6 +356,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     setAssistantContext({ drafts: [] });
     assistantGeneration.current += 1;
     const handoffs = new Map(assistantHandoffs.current);
+    for (const id of handoffs.keys()) discardedAssistantHandoffs.current.add(id);
     assistantHandoffs.current.clear();
     setActiveHandoffIds(current => current.filter(id => !handoffs.has(id)));
     for (const [id, revision] of handoffs) void cancelSelectionHandoff(id, revision);
