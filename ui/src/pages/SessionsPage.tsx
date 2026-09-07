@@ -2241,11 +2241,11 @@ export function SessionsPage() {
       allowCloudKnowledge = true;
     }
 
-    const wantsTools = runtimeKind === "harness"
+    const wantsTools = browserControlEnabled || (runtimeKind === "harness"
       ? Boolean(harnessSessionId
         ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
         : selectedMcpIds.length)
-      : canUseTools || selectedMcpIds.length > 0;
+      : canUseTools || selectedMcpIds.length > 0);
     let allowCloudToolResults = false;
     const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
@@ -3035,6 +3035,7 @@ export function SessionsPage() {
     setSearchParams(params, { replace: true });
   };
   const [browserAssistantOpen, setBrowserAssistantOpen] = useState(true);
+  const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
 
   const assistantPanel = (
             <div className="chat-panel">
@@ -3320,7 +3321,7 @@ export function SessionsPage() {
             {browserEngine === "managed" ? <ManagedAssistantBrowser key={engagement.id} api={api} projectId={engagement.id} active={view === "browser"}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestNebulaDraft(request, "browser"); }}
-              imageSupported={imageInputEnabled} onImage={(file) => void attachImageFiles([file])} /> : <WorkbenchBrowser
+              onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => void attachImageFiles([file])} /> : <WorkbenchBrowser
               active={view === "browser"}
               api={api}
               operatorId={activeOperator?.id}

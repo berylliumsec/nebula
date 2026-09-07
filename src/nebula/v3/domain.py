@@ -3947,6 +3947,7 @@ class CompanionRequest(NebulaModel):
     url: str | None = Field(default=None, max_length=16384)
     element_id: str | None = Field(default=None, max_length=200)
     text: str = Field(default="", max_length=4000)
+    credential_ref: str | None = Field(default=None, max_length=200)
     x: float = Field(default=0, ge=0, le=10000)
     y: float = Field(default=0, ge=0, le=10000)
     delta: float = Field(default=0, ge=-2000, le=2000)

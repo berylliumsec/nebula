@@ -5254,7 +5254,7 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
     } else if (path.endsWith("/browser-companion/browser-session/operations")) {
       await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.", page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
     } else if (path.includes("/browser-companion/")) {
-      await route.fulfill({ json: path.endsWith("/actions") ? [] : {} });
+      await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") ? [] : {} });
     } else if (path.endsWith("/chat/completions")) {
       const body = route.request().postDataJSON();
       const answer = body.session_id ? "Yes, that is the same page context." : "The Save button saves your changes.";

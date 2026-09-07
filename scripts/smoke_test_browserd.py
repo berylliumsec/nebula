@@ -15,7 +15,7 @@ async def _respond_as_bounded_proxy(
 ) -> None:
     try:
         await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
-        body = b"<html><head><title>Nebula browserd smoke</title></head><body><button onclick=\"this.textContent=this.textContent==='Ready'?'Saved':'Ready'\">Ready</button></body></html>"
+        body = b"<html><head><title>Nebula browserd smoke</title></head><body><button onclick=\"this.textContent=this.textContent==='Ready'?'Saved':'Ready'\">Ready</button><input type=password aria-label=Password oninput=\"document.getElementById('echo').textContent=this.value\"><span id=echo></span></body></html>"
         writer.write(
             b"HTTP/1.1 200 OK\r\n"
             b"Content-Type: text/html; charset=utf-8\r\n"

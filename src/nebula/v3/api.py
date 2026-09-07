@@ -92,6 +92,7 @@ from .browser_companion import (
     CompanionRequest,
     CompanionBindingRequest,
     CompanionDecision,
+    CompanionCredentialCreate,
 )
 from .browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
@@ -1264,7 +1265,9 @@ def create_app(
     credentials = credential_store or CredentialStore()
     browser_automation = BrowserAutomationService(store)
     browser_assessments = BrowserAssessmentService(store)
-    browser_companion = BrowserCompanion(store, browser_assessments.engines)
+    browser_companion = BrowserCompanion(
+        store, browser_assessments.engines, credentials=credentials
+    )
     browser_automation_platform = BrowserAutomationToolPlatform(
         store, browser_automation
     )
@@ -9470,6 +9473,29 @@ def create_app(
             return await browser_companion.request(session_id, request)
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/credentials",
+        dependencies=[Depends(require_auth)],
+    )
+    async def browser_credentials(session_id: str) -> Any:
+        return browser_companion.credential_catalog(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/credentials",
+        dependencies=[Depends(require_auth)],
+    )
+    async def save_browser_credential(
+        session_id: str, request: CompanionCredentialCreate
+    ) -> Any:
+        return browser_companion.save_credential(session_id, request)
+
+    @app.delete(
+        f"{API_PREFIX}/browser-companion/{{session_id}}/credentials/{{reference}}",
+        dependencies=[Depends(require_auth)],
+    )
+    async def remove_browser_credential(session_id: str, reference: str) -> Any:
+        return browser_companion.remove_credential(session_id, reference)
 
     @app.put(
         f"{API_PREFIX}/browser-companion/{{session_id}}/active-tab/{{tab_id}}",

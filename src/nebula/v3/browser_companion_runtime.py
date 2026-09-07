@@ -48,6 +48,8 @@ async def page_runtime(page: Any) -> tuple[Any, Any]:
     """Keep node identity in a private browser handle, never in page attributes."""
     generation = await page.evaluate("performance.timeOrigin")
     cached = _page_contexts.get(page)
+    if cached is None:
+        page.on("close", lambda: _page_contexts.pop(page, None))
     if cached is not None and cached[0] == generation:
         return cached
     if cached is not None:
@@ -86,7 +88,13 @@ async def capture(page: Any, request: CompanionRequest) -> dict[str, Any]:
         if request.width < 1 or request.height < 1:
             raise ValueError("Select a nonempty screenshot region.")
         image = await page.screenshot(
-            mask=[page.locator("input,textarea,[contenteditable],[data-sensitive]")],
+            mask=[
+                page.locator("input,textarea,[contenteditable],[data-sensitive]"),
+                *[
+                    page.get_by_text(value.get_secret_value(), exact=False)
+                    for value in getattr(request, "protected_values", [])
+                ],
+            ],
             clip={
                 "x": request.x,
                 "y": request.y,
@@ -140,12 +148,14 @@ async def operate(
             _network_url(request.url), wait_until="domcontentloaded", timeout=20000
         )
         return await capture(
-            page, CompanionRequest(operation="capture", tab_id=request.tab_id)
+            page,
+            request.model_copy(update={"operation": "capture", "capture_kind": "page"}),
         )
     if request.operation == "capture":
         return await capture(page, request)
     current = await capture(
-        page, CompanionRequest(operation="capture", tab_id=request.tab_id)
+        page,
+        request.model_copy(update={"operation": "capture", "capture_kind": "page"}),
     )
     if not request.page_revision or request.page_revision != current["page_revision"]:
         raise ValueError(
@@ -192,5 +202,6 @@ async def operate(
         finally:
             await handle.dispose()
     return await capture(
-        page, CompanionRequest(operation="capture", tab_id=request.tab_id)
+        page,
+        request.model_copy(update={"operation": "capture", "capture_kind": "page"}),
     )

@@ -25,10 +25,10 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from playwright.async_api import async_playwright
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import uvicorn
 
-from .browser_companion import CompanionRequest
+from .browser_companion import CompanionRequest, BrowserCompanion
 from .browser_companion_runtime import operate as companion_operate
 
 from .browser_engine import (
@@ -40,6 +40,10 @@ from .domain import BrowserEngineCapability, BrowserEngineState
 
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
+
+
+class BrowserdCompanionRequest(CompanionRequest):
+    protected_values: list[SecretStr] = Field(default_factory=list, max_length=128)
 
 
 def _loopback_http_url(value: str) -> str:
@@ -244,6 +248,7 @@ class BrowserdManager:
         self._playwright: Any | None = None
         self._contexts: dict[str, Any] = {}
         self._tabs: dict[tuple[str, str], Any] = {}
+        self._companion_protected_values: dict[str, list[SecretStr]] = {}
         self._assessment_states: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._ledger = ActionLedger(settings.profile_root / "browserd-actions.sqlite3")
@@ -346,6 +351,7 @@ class BrowserdManager:
                 pass
         self._contexts.clear()
         self._tabs.clear()
+        self._companion_protected_values.clear()
         if self._playwright is not None:
             try:
                 await self._playwright.stop()
@@ -405,6 +411,7 @@ class BrowserdManager:
                 def forget_closed_context() -> None:
                     if self._contexts.get(identity_id) is context:
                         self._contexts.pop(identity_id, None)
+                        self._companion_protected_values.pop(identity_id, None)
                         for key in list(self._tabs):
                             if key[0] == identity_id:
                                 self._tabs.pop(key, None)
@@ -701,9 +708,26 @@ def create_browserd_app(
         return await runtime.lifecycle(assessment_id, states[action])
 
     @app.post("/v1/companion/{identity_id}", dependencies=[Depends(require_auth)])
-    async def companion(identity_id: str, request: CompanionRequest) -> dict[str, Any]:
+    async def companion(
+        identity_id: str, request: BrowserdCompanionRequest
+    ) -> dict[str, Any]:
         try:
-            return await companion_operate(runtime, identity_id, request)
+            known = runtime._companion_protected_values.setdefault(identity_id, [])
+            values = {value.get_secret_value() for value in known}
+            for value in request.protected_values:
+                if value.get_secret_value() not in values:
+                    if len(known) >= 128:
+                        raise ValueError(
+                            "Restart this browser before adding more protected values."
+                        )
+                    known.append(value)
+                    values.add(value.get_secret_value())
+            result = await companion_operate(
+                runtime,
+                identity_id,
+                request.model_copy(update={"protected_values": list(known)}),
+            )
+            return BrowserCompanion.redact_result(result, list(values))
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

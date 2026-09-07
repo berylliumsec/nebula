@@ -34,7 +34,14 @@ async def smoke(
 ) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
     from nebula.v3.api import create_app
-    from nebula.v3.browserd import BrowserdSettings, create_browserd_app
+    from nebula.v3.browserd import (
+        BrowserdSettings,
+        BrowserdManager,
+        create_browserd_app,
+    )
+    from nebula.v3.browser_companion import BrowserCompanion, CompanionRequest
+    from nebula.v3.browser_engine import BrowserEngineRegistry
+    from nebula.v3.domain import BrowserSession
     from nebula.v3.domain import Engagement, ScopePolicy, ChatSession
     from nebula.v3.storage import NebulaStore
 
@@ -51,8 +58,11 @@ async def smoke(
             policy_proxy_url=f"http://127.0.0.1:{proxy.sockets[0].getsockname()[1]}",
             runtime_root=runtime_root,
         )
+        manager = BrowserdManager(settings)
         server = uvicorn.Server(
-            uvicorn.Config(create_browserd_app(settings), log_level="error")
+            uvicorn.Config(
+                create_browserd_app(settings, manager=manager), log_level="error"
+            )
         )
         task = asyncio.create_task(server.serve(sockets=[listener]))
         core_server = None
@@ -130,6 +140,87 @@ async def smoke(
                 )
                 changed.raise_for_status()
                 assert changed.json()["text"] == "Saved"
+                secret = "protected-fixture-value"
+                saved = await client.post(
+                    endpoint + "/credentials",
+                    json={
+                        "label": "Fixture password",
+                        "secret": secret,
+                        "persistence": "session",
+                    },
+                )
+                saved.raise_for_status()
+                alias = saved.json()[0]["reference"]
+                (
+                    await client.put(endpoint + "/control?paused=false")
+                ).raise_for_status()
+                companion = BrowserCompanion(store, BrowserEngineRegistry())
+                protected_action = companion.propose(
+                    session["session_id"],
+                    CompanionRequest(
+                        operation="fill",
+                        tab_id=tab,
+                        element_id="1",
+                        page_revision=changed.json()["page_revision"],
+                        credential_ref=alias,
+                    ),
+                )
+                approved = await client.post(
+                    endpoint + "/actions/" + protected_action.id,
+                    json={"decision": "approve"},
+                )
+                approved.raise_for_status()
+                assert (
+                    approved.json()["status"] == "complete"
+                    and secret not in approved.text
+                )
+                identity_id = store.get(
+                    BrowserSession, session["session_id"]
+                ).identity_id
+                live_page = await manager.page_for_screencast(identity_id, tab)
+                assert await live_page.locator("input").input_value() == secret
+                protected_capture = await client.post(
+                    endpoint + "/operations",
+                    json={
+                        "operation": "capture",
+                        "tab_id": tab,
+                        "capture_kind": "region",
+                        "width": 640,
+                        "height": 300,
+                    },
+                )
+                protected_capture.raise_for_status()
+                assert secret not in protected_capture.text
+                box = await live_page.locator("#echo").bounding_box()
+                with Image.open(
+                    BytesIO(base64.b64decode(protected_capture.json()["image"]))
+                ) as masked:
+                    assert masked.convert("RGB").getpixel(
+                        (
+                            int(box["x"] + box["width"] / 2),
+                            int(box["y"] + box["height"] / 2),
+                        )
+                    ) == (255, 0, 255)
+                (
+                    await client.delete(endpoint + "/credentials/" + alias)
+                ).raise_for_status()
+                after_revoke = await client.post(
+                    endpoint + "/operations",
+                    json={"operation": "capture", "tab_id": tab},
+                )
+                after_revoke.raise_for_status()
+                assert secret not in after_revoke.text
+                cleared = await client.post(
+                    endpoint + "/operations",
+                    json={
+                        "operation": "fill",
+                        "tab_id": tab,
+                        "element_id": "1",
+                        "page_revision": protected_capture.json()["page_revision"],
+                        "text": "",
+                    },
+                )
+                cleared.raise_for_status()
                 chat = store.create(
                     ChatSession(
                         engagement_id=project.id,
@@ -407,6 +498,7 @@ async def smoke(
                     "authenticated_core": True,
                     "headed_browserd": True,
                     "visible_change": True,
+                    "protected_fill_and_screenshot_mask": True,
                     "durable_binding_reopen": True,
                     "transport": "Core loopback HTTP and WebSocket to browserd loopback HTTP and WebSocket",
                     "frame_relay_and_takeover": True,

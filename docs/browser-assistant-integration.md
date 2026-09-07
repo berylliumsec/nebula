@@ -219,3 +219,41 @@ protected-reference filling, uploads, harness image attachments, full browser UI
 journey, packaged desktop, LAN with real runtime, physical phone, and remaining
 lifecycle gates are still outstanding. The earlier screenshot-tool gap is closed
 at implementation, focused-test and live-harness layers only.
+
+### Protected-value and consent milestone (2026-09-07)
+
+The browser panel can save, select and remove private values through the existing
+CredentialStore. The UI defaults to session-only storage and explains restart
+expiry. Only a browser-owned alias enters an assistant action; Core resolves the
+value immediately before the approved fill. Unattached references and literal-text
+protected fills fail. Removing a reference pauses control and revokes pending
+actions. Expired approvals and unavailable credentials are explained in place.
+
+Known values are redacted from returned page text. Browserd masks form controls
+and matching echoed text in region screenshots. A bounded in-memory masking list
+survives reference removal and Core reconnection until the live browser context
+closes, so removing a fill grant does not reveal an already-echoed value. Raw values
+are not persisted in action records or browser-session metadata. UI tests verify
+the input is cleared and fill/context requests contain no literal secret.
+
+Resuming browser control now participates in the existing remote tool-results
+consent flow independently of command-runtime availability. The frontend CI
+diagnostic-audit failure was corrected by integrating the existing diagnostic
+logger with the component's visible error handling. The earlier PR run passed
+Python 3.11/3.12/3.13, migrations, macOS desktop and security jobs; the next push
+must re-run frontend CI rather than treating its earlier failure as waived.
+
+Focused browser/browserd/chat/harness tests passed 79 tests, the browser component
+passed six tests, both diagnostic audits passed, and type checks passed all 88
+Python source files. The real-Core headed script passed protected fill approval,
+actual input value observation, masking-pixel inspection of echoed text, and
+redaction after reference removal, alongside its existing viewer checks. These use
+controlled test values, not operator credentials.
+
+Production UI build index SHA256:
+`d92520e9ae916040bbbf5bae94b3ae5c2c8c8f03c3e913d5460851616470e7de`.
+The production/LAN eight-profile regression passed on this build (26.4 seconds). The
+provider selection question remains pending; no provider test has been substituted
+with a harness test. Uploads, harness image attachments, the full real-runtime UI
+journey, packaged desktop, physical-device acceptance and remaining lifecycle
+gates remain open.

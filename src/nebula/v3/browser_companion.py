@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary
 from urllib.parse import quote
+from uuid import uuid4
 
 from pydantic import Field
 
@@ -26,6 +27,7 @@ from .domain import (
     CompanionAction,
 )
 from .storage import NebulaStore
+from .credentials import CredentialStore, CredentialCreateRequest
 
 
 class CompanionBindingRequest(NebulaModel):
@@ -36,14 +38,125 @@ class CompanionDecision(NebulaModel):
     decision: Literal["approve", "reject"]
 
 
+class CompanionCredentialCreate(CredentialCreateRequest):
+    label: str = Field(min_length=1, max_length=100)
+    persistence: Literal["vault", "session"] = "session"
+
+
 class BrowserCompanion:
     _store_locks: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
+    _store_credentials: ClassVar[WeakKeyDictionary] = WeakKeyDictionary()
 
-    def __init__(self, store: NebulaStore, engines: BrowserEngineRegistry):
+    def __init__(
+        self,
+        store: NebulaStore,
+        engines: BrowserEngineRegistry,
+        *,
+        credentials: CredentialStore | None = None,
+    ):
         self.store = store
         self.engines = engines
         self.security = BrowserSecurityService(store)
         self._locks: dict[str, asyncio.Lock] = self._store_locks.setdefault(store, {})
+        if credentials is not None:
+            self._store_credentials[store] = credentials
+        elif store not in self._store_credentials:
+            self._store_credentials[store] = CredentialStore()
+        self.credentials = self._store_credentials[store]
+
+    def credential_catalog(self, session_id: str) -> list[dict[str, Any]]:
+        session = self.session(session_id)
+        return [
+            {
+                "reference": alias,
+                "label": value["label"],
+                "available": self.credentials.status(value["reference"]).available,
+            }
+            for alias, value in session.metadata.get("browser_credentials", {}).items()
+        ]
+
+    def save_credential(
+        self, session_id: str, request: CompanionCredentialCreate
+    ) -> list[dict[str, Any]]:
+        session = self.session(session_id)
+        entries = dict(session.metadata.get("browser_credentials", {}))
+        if any(
+            entry["label"].strip().casefold() == request.label.strip().casefold()
+            for entry in entries.values()
+        ):
+            raise ValueError(
+                "A protected value with this label already exists. Remove it before saving a replacement."
+            )
+        if len(entries) >= 16 or len(request.secret.get_secret_value()) > 4000:
+            raise ValueError(
+                "Use at most 16 browser credentials, each at most 4000 characters."
+            )
+        credential = self.credentials.create(request)
+        entries[uuid4().hex] = {
+            "label": request.label,
+            "reference": credential.reference,
+        }
+        try:
+            self.store.update(
+                BrowserSession,
+                session_id,
+                {"metadata": {**session.metadata, "browser_credentials": entries}},
+                expected_revision=session.revision,
+            )
+        except Exception:
+            # diagnostic-expected: roll back the secret if its association was not saved.
+            self.credentials.delete(credential.reference)
+            raise
+        return self.credential_catalog(session_id)
+
+    def remove_credential(
+        self, session_id: str, reference: str
+    ) -> list[dict[str, Any]]:
+        self.takeover(session_id, True)
+        session = self.session(session_id)
+        entries = dict(session.metadata.get("browser_credentials", {}))
+        removed = entries.pop(reference, None)
+        if removed is None:
+            raise ValueError("This credential is not attached to this browser.")
+        self.store.update(
+            BrowserSession,
+            session_id,
+            {"metadata": {**session.metadata, "browser_credentials": entries}},
+            expected_revision=session.revision,
+        )
+        self.credentials.delete(removed["reference"])
+        return self.credential_catalog(session_id)
+
+    def protected_values(self, session_id: str) -> dict[str, str]:
+        session = self.session(session_id)
+        values = {}
+        for alias, entry in session.metadata.get("browser_credentials", {}).items():
+            if self.credentials.status(entry["reference"]).available:
+                values[alias] = self.credentials.resolve(
+                    entry["reference"]
+                ).get_secret_value()
+        return values
+
+    @staticmethod
+    def redact_result(result: Any, values: list[str], key: str = "") -> Any:
+        if isinstance(result, dict):
+            return {
+                name: BrowserCompanion.redact_result(value, values, name)
+                for name, value in result.items()
+            }
+        if isinstance(result, list):
+            return [
+                BrowserCompanion.redact_result(value, values, key) for value in result
+            ]
+        if isinstance(result, str) and key not in {
+            "image",
+            "page_revision",
+            "id",
+            "reference",
+        }:
+            for value in sorted(values, key=len, reverse=True):
+                result = result.replace(value, "[protected]")
+        return result
 
     async def adapter(self) -> LocalBrowserdAdapter:
         adapter = await self.engines.adapter("managed-chromium")
@@ -194,16 +307,30 @@ class BrowserCompanion:
                 "assistant_paused", True
             ):
                 raise ValueError("Assistant control was paused before execution.")
+            protected = self.protected_values(session_id)
+            payload = request.model_dump()
+            if request.credential_ref:
+                if (
+                    request.operation != "fill"
+                    or request.text
+                    or request.credential_ref not in protected
+                ):
+                    raise ValueError(
+                        "Select an available credential attached to this browser; protected fills cannot contain plain text."
+                    )
+                payload["text"] = protected[request.credential_ref]
+            payload["protected_values"] = list(protected.values())
             response = await adapter._request(
                 "POST",
                 "/v1/companion/" + quote(session.identity_id, safe=""),
-                request.model_dump(),
+                payload,
             )
             if response.is_error:
                 raise ValueError(
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
                 )
-            result = response.json()
+            result = self.redact_result(response.json(), list(protected.values()))
+            result["credentials"] = self.credential_catalog(session_id)
             if "tabs" in result:
                 latest = self.session(session_id)
                 tab_ids = {tab["id"] for tab in result["tabs"]}

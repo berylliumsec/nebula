@@ -517,3 +517,101 @@ def test_harness_image_capability_follows_discovered_model_modalities():
         "text-only": False,
         "unknown": False,
     }
+
+
+def test_protected_reference_fills_only_after_approval_and_redacts_echo(
+    tmp_path, monkeypatch
+):
+    import json
+    from pydantic import SecretStr
+    from nebula.v3.browser_companion import CompanionCredentialCreate
+    from nebula.v3.credentials import CredentialStore
+
+    store, _, _, session, service = setup(tmp_path)
+    secret = "private-browser-value-123"
+    catalog = service.save_credential(
+        session.id,
+        CompanionCredentialCreate(label="Test password", secret=SecretStr(secret)),
+    )
+    reference = catalog[0]["reference"]
+    assert secret not in json.dumps(catalog)
+    assert secret not in service.session(session.id).model_dump_json()
+    action = service.propose(
+        session.id,
+        CompanionRequest(
+            operation="fill",
+            tab_id="tab",
+            page_revision="revision",
+            element_id="0",
+            credential_ref=reference,
+        ),
+    )
+    assert secret not in action.model_dump_json()
+    payloads = []
+
+    class Response:
+        is_error = False
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.payload
+
+    class Adapter:
+        async def _request(self, method, path, payload):
+            if payload["operation"] == "tabs":
+                return Response(
+                    {
+                        "tabs": [
+                            {
+                                "id": "tab",
+                                "url": "https://example.test/",
+                                "title": "Test",
+                            }
+                        ]
+                    }
+                )
+            payloads.append(payload)
+            assert payload["text"] == secret
+            return Response(
+                {
+                    "text": secret,
+                    "title": secret,
+                    "page_revision": "revision",
+                    "elements": [],
+                }
+            )
+
+    async def adapter():
+        return Adapter()
+
+    monkeypatch.setattr(service, "adapter", adapter)
+    monkeypatch.setattr(service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(service.security, "_require_in_scope", lambda *args: None)
+    assert payloads == []
+    result = asyncio.run(service.decide(session.id, action.id, "approve"))
+    assert result.status == "complete" and len(payloads) == 1
+    assert secret not in result.model_dump_json()
+    assert result.result["text"] == "[protected]"
+    with pytest.raises(ValueError):
+        asyncio.run(
+            service.request(
+                session.id,
+                CompanionRequest(
+                    operation="fill",
+                    tab_id="tab",
+                    page_revision="revision",
+                    element_id="0",
+                    credential_ref="env:UNATTACHED",
+                ),
+            )
+        )
+    assert len(payloads) == 1
+    restarted = BrowserCompanion(
+        store, BrowserEngineRegistry([]), credentials=CredentialStore()
+    )
+    assert restarted.credential_catalog(session.id)[0]["available"] is False

@@ -20,6 +20,10 @@
 .managed-browser-capture img { max-width: 100%; }
 .managed-browser-capture small { display: block; }
 .managed-browser-approval { padding: 12px; border: 1px solid currentColor; }
+.managed-browser-credentials { overflow-wrap: anywhere; }
+.managed-browser-credentials form, .managed-browser-credentials label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.managed-browser-credentials input, .managed-browser-credentials select { width: 100%; min-width: 0; box-sizing: border-box; }
+.managed-browser-credentials button { white-space: normal; }
 @media (max-width: 760px) {
   .integrated-browser-layout { flex-direction: column; }
   .integrated-browser-layout.assistant-open > .integrated-browser-page { flex: 1 1 40%; min-height: 100px; }
