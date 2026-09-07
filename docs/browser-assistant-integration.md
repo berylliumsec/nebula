@@ -291,3 +291,30 @@ profiles (34.8 seconds, origin `http://192.168.1.155:15431`). Model capability g
 preview removal, reference-only requests and in-browser answers were asserted.
 These are emulated profiles; the complete real-runtime UI and physical-device
 gates remain open. Uploads to page forms are a separate unfinished workflow.
+
+### Integration with current Assistant changes
+
+Merged `origin/main` at `c39c8fb`, preserving durable queues, decisions, catch-up,
+evidence, and the shared attachment menu in the reused browser conversation.
+Browser context/results drawers now overlay the browser workspace, and attaching
+from them keeps the current view. Composer anchoring observes the active surface.
+The incoming main-Assistant regression exposed a browser flex rule overriding
+`hidden`; the browser layout now explicitly honors it.
+
+After resolution, the full backend suite passed **773 tests, five skipped**
+(`PYTHONPATH=src poetry run pytest -q tests/v3`, 186.73 seconds), the focused
+chat/harness/queue/catch-up/decision set passed 118, Python type checking passed
+94 source files, and lint/format/diagnostic audits passed. The headed real-Core
+script with live Codex passed again, including structured operator image input.
+A corruption regression verifies that the exact preview bytes match the stored
+size and SHA256 immediately before either runtime receives them.
+
+Production build index SHA256:
+`faea9d2ed10b0de50e7070710f4890e8794c6c70d677ea4f9d645f71df233b63`.
+The combined browser/attachment/main-Assistant production LAN matrix is tracked
+separately below; it uses API fixtures and emulated devices. Physical USB discovery
+found no phone and neither adb nor idevice_id is currently installed. A device
+and browser/LAN-access question is pending with the operator.
+
+The combined production/LAN fixture regression passed all **32 checks** across the
+eight desktop/mobile profiles in 1.3 minutes on the build above.

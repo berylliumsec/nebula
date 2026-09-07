@@ -39,6 +39,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       "--port", "0",
       "--token", token,
       "--allow-insecure-device-pairing",
+      "--allow-browser-diagnostics",
       ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
@@ -154,6 +155,10 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
           }],
           usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
         }));
+        return;
+      }
+      if (tools.some(tool => tool.function?.name === "finish_response")) {
+        response.end(JSON.stringify({id: "chatcmpl-queue-routing", object: "chat.completion", created: 1, model: "security-model", choices: [{index: 0, message: {role: "assistant", content: null, tool_calls: [{id: "finish-queue", type: "function", function: {name: "finish_response", arguments: "{}"}}]}, finish_reason: "tool_calls"}], usage: {prompt_tokens: 12, completion_tokens: 4, total_tokens: 16}}));
         return;
       }
       const messages = Array.isArray(body.messages) ? body.messages as Array<{ content?: unknown }> : [];
@@ -351,7 +356,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
     const completion = await completionResponse.json() as { session_id: string };
     expect(completion.session_id).toBeTruthy();
-    expect(modelStub.requests).toHaveLength(2);
+    await expect.poll(() => modelStub.requests.length).toBe(2);
     const deliveredMessages = modelStub.requests[0].messages as Array<{ content?: string }>;
     const deliveredContent = deliveredMessages.at(-1)?.content ?? "";
     const deliveredContextJson = deliveredContent.match(
@@ -437,10 +442,10 @@ test("production assistant preserves exact research context and relaunch-safe dr
     const savedSession = sessions.find((session) => session.id === completion.session_id);
     expect(savedSession).toBeTruthy();
     expect(savedSession!.title).toBe("Expired HTTPS Certificate Review");
-    await page.locator(".session-select").filter({ hasText: "Switch target conversation" }).click();
+    await page.locator(`.session-select[data-session-id="${switchTarget.session_id}"]`).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(switchTarget.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Switch target conversation", { exact: true })).toBeVisible();
-    await page.locator(".session-select").filter({ hasText: savedSession!.title }).click();
+    await page.locator(`.session-select[data-session-id="${completion.session_id}"]`).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Review the exact 443/tcp observation.", { exact: true })).toBeVisible();
     const activeConversation = page.locator(".session-list-item.active");
@@ -518,17 +523,13 @@ test("production assistant work survives a project switch through real Core", as
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
 
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    const sourceSessionId = new URL(page.url()).searchParams.get("session")!;
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Background Project B/ }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Background Project B");
 
-    let sourceSessionId = "";
     await expect.poll(async () => {
-      const sessionsResponse = await api.get(`chat-sessions?engagement_id=${encodeURIComponent(projectA.id)}`);
-      if (!sessionsResponse.ok()) return "";
-      const sessions = await sessionsResponse.json() as Array<{ id: string; title: string }>;
-      sourceSessionId = sessions.find((session) => session.title === "Keep this response running while I switch projects")?.id ?? "";
-      if (!sourceSessionId) return "";
       const messagesResponse = await api.get(`chat/sessions/${sourceSessionId}/messages`);
       if (!messagesResponse.ok()) return "";
       const messages = await messagesResponse.json() as Array<{ role: string; content: string }>;
@@ -538,7 +539,7 @@ test("production assistant work survives a project switch through real Core", as
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: new RegExp(projectA.name) }).click();
     await page.getByRole("button", { name: "Show conversations" }).click();
-    await page.locator(".session-select").filter({ hasText: "Keep this response running while I switch projects" }).click();
+    await page.goto(`${core.origin}/?view=chat&session=${sourceSessionId}#token=${encodeURIComponent(core.token)}`);
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
     await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("and finished after the viewer detached.");
     expect(new URL(page.url()).hostname).toBe(lanAddress);
@@ -1436,4 +1437,216 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await api.dispose();
     await stopRealCore(core);
   }
+});
+
+test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({streamDelayMs: 250});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const provider = await (await api.post("providers", {data: {name: "Assistant acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Hello"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const chat = await response.json() as {session_id: string};
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toContainText("Hello");
+    await expect(page.locator(".chat-message.operator .activity-ledger")).toHaveCount(0);
+    await expect(page.locator(".chat-thread")).toHaveCount(1);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(1);
+    await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(page.getByRole("dialog", {name: "Assistant settings"})).toBeVisible();
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toContainText("Hello");
+    const operator = page.locator(".chat-message.operator");
+    await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.goto(url);
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.locator(".assistant-search > summary").click();
+    await page.getByLabel("Search transcript", {exact: true}).fill("Hello");
+    await page.getByRole("button", {name: "Search messages", exact: true}).click();
+    await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
+    await page.getByRole("button", {name: "Attach files", exact: true}).click();
+    await page.locator(".assistant-attachment-dialog input[type=file]").setInputFiles({name: "review.txt", mimeType: "text/plain", buffer: Buffer.from("Exact attachment preview\n")});
+    await expect(page.locator(".assistant-attachment-dialog pre")).toContainText("Exact attachment preview");
+    await page.getByRole("button", {name: "Attach this excerpt"}).click();
+    await expect(page.getByRole("region", {name: "Selected context pack"})).toContainText("review.txt");
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
+    await composer.fill("Preserve this unsent draft");
+    await page.getByRole("button", {name: "Results", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Conversation results"})).toBeVisible();
+    await page.getByRole("button", {name: "Context", exact: true}).click();
+    await expect(page.getByText("Prepared for your next message", {exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Close details"}).click();
+    await expect(composer).toHaveValue("Preserve this unsent draft");
+    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
+    const decisions = page.getByRole("region", {name: "Saved decisions and constraints"});
+    await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Keep future responses concise");
+    await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
+    await expect(decisions).toContainText("Keep future responses concise");
+    await decisions.getByRole("button", {name: "Edit decision", exact: true}).click();
+    await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Use concise plain language");
+    await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
+    await expect(decisions).toContainText("revision 2");
+    await decisions.getByRole("button", {name: "Promote to project", exact: true}).click();
+    await expect(decisions).toContainText("decision · project");
+    await page.getByRole("button", {name: "Close details"}).click();
+    await composer.fill("Queue first task");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    const queue = page.getByRole("region", {name: "Core follow-up queue"});
+    await expect(queue).toContainText("Queue first task");
+    await composer.fill("Queue second task");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    await expect(queue.locator("li")).toHaveCount(2);
+    await queue.getByRole("button", {name: "Edit queued message 1", exact: true}).click();
+    await queue.getByRole("textbox", {name: "Edit queued text"}).fill("Edited queued first task");
+    await queue.getByRole("button", {name: "Save queued edit"}).click();
+    await expect(queue).toContainText("Edited queued first task");
+    await queue.getByRole("button", {name: "Move message 2 up"}).click();
+    await expect(queue.locator("li").first()).toContainText("Queue second task");
+    const geometry = await page.locator(".chat-panel").evaluate(panel => {
+      const box = panel.getBoundingClientRect(); const composer = panel.querySelector(".chat-composer")!.getBoundingClientRect();
+      const thread = panel.querySelector(".chat-thread")!.getBoundingClientRect();
+      const queueTexts = [...panel.querySelectorAll(".chat-follow-up-queue li > div:first-child p")].map(node=>node.getBoundingClientRect().width);
+      return {panelBottom: box.bottom, composerBottom: composer.bottom, threadHeight: thread.height, queueTexts};
+    });
+    expect(geometry.composerBottom).toBeLessThanOrEqual(geometry.panelBottom + 1);
+    expect(geometry.threadHeight).toBeGreaterThan(50);
+    expect(geometry.queueTexts.every(width => width >= 120)).toBe(true);
+    await testInfo.attach("queued-work", {body: await page.screenshot(), contentType: "image/png"});
+    await testInfo.attach("build-origin", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), assets: await page.locator("script[src]").evaluateAll(nodes => nodes.map(node => node.getAttribute("src")))}), contentType: "application/json"});
+    const secondDevice = await page.context().browser()!.newContext();
+    const secondPage = await secondDevice.newPage();
+    await secondPage.goto(url);
+    await expect(secondPage.getByRole("region", {name: "Core follow-up queue"}).locator("li").first()).toContainText("Queue second task");
+    await secondDevice.close();
+    await queue.getByRole("button", {name: "Resume queue", exact: true}).click();
+    await page.goto("about:blank");
+    await expect.poll(async () => {
+      const record = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: {status: string; detail?: string}[]};
+      if (record.items.some(item => item.status === "needs_review")) { throw new Error(JSON.stringify(record.items)); }
+      return record.items.map(item => item.status);
+    }, {timeout: 15_000}).toEqual(["complete", "complete"]);
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(3);
+    await expect(page.locator(".chat-message.operator").nth(1)).toContainText("Queue second task");
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toBeVisible();
+    await page.getByRole("button", {name: "Dismiss catch-up", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(3);
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
+    await page.locator(".chat-evidence").first().locator("summary").first().click();
+    await expect(page.locator(".chat-evidence").first()).toContainText("No supporting citations");
+    const queuedModelRequests = stub.requests.filter(request => (request.stream === true || Array.isArray(request.tools) && request.tools.length > 0) && JSON.stringify(request.messages).includes("Queue second task"));
+    expect(queuedModelRequests.length).toBeGreaterThan(0);
+    expect(queuedModelRequests.every(request => JSON.stringify(request.messages).includes("Use concise plain language"))).toBe(true);
+    const recorded = await (await api.get(`chat/sessions/${chat.session_id}/context-sources`)).json() as {items: {operator_decisions: {text: string; scope: string}[]}[]};
+    expect(recorded.items.some(item => item.operator_decisions.some(entry => entry.text === "Use concise plain language" && entry.scope === "project"))).toBe(true);
+    await operator.first().getByRole("button", {name: "Edit and branch"}).click();
+    await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Hello");
+    await expect(page.locator(".chat-message")).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Open parent"})).toBeVisible();
+    await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
+for (const runtime of [
+  {name: "codex", kind: "codex_app_server", executable: process.env.NEBULA_ASSISTANT_CODEX_EXECUTABLE ?? "/home/agent/.local/bin/codex", model: "gpt-5.6-luna"},
+  {name: "grok", kind: "grok_acp", executable: "/home/agent/.local/bin/grok", model: "grok-4.6"},
+]) {
+  test(`assistant upgrade native ${runtime.name} production LAN conversation`, async ({page}, testInfo) => {
+    test.skip(process.env.NEBULA_ASSISTANT_NATIVE_ACCEPTANCE !== "1", "Requires an explicitly enabled local CLI login; fixture coverage runs separately.");
+    test.setTimeout(180_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    try {
+      const response = await api.post("harnesses", {data: {name: `Assistant acceptance ${runtime.name}`, kind: runtime.kind, executable: runtime.executable, connection_mode: "spawn", transport: "stdio", auth_mode: "existing_session", default_model: runtime.model, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
+      expect(response.ok(), await response.text()).toBe(true);
+      const profile = await response.json() as {id: string};
+      const health = await api.post(`harnesses/${profile.id}/health`);
+      expect(health.ok(), await health.text()).toBe(true);
+      const url = `${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`;
+      await page.goto(url);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await expect(composer).toBeEnabled({timeout: 30_000});
+      await composer.fill("Reply with exactly NEBULA_CHAT_ACCEPTED. Do not use tools, access files, or change anything.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_CHAT_ACCEPTED", {timeout: 120_000});
+      await expect(page.getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0, {timeout: 30_000});
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+      const session = new URL(page.url()).searchParams.get("session");
+      await page.goto(`${core.origin}/?view=chat&session=${session}#token=${encodeURIComponent(core.token)}`);
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_CHAT_ACCEPTED");
+      await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
+      await page.locator(".chat-evidence").last().locator("summary").first().click();
+      await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
+      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model: runtime.model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+      await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await api.dispose(); await stopRealCore(core);}
+  });
+}
+
+test("assistant upgrade deployed local service retains operator workflow", async ({page}, testInfo) => {
+  const origin = process.env.NEBULA_ASSISTANT_LIVE_ORIGIN;
+  const tokenFile = process.env.NEBULA_ASSISTANT_LIVE_TOKEN_FILE;
+  test.skip(!origin || !tokenFile, "Explicit deployed-service origin and a private token file are required.");
+  test.setTimeout(180_000);
+  const token = (await readFile(tokenFile!, "utf8")).trim();
+  const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${token}`}});
+  try {
+    const profiles = await (await api.get("harnesses")).json() as {id: string; kind: string}[];
+    const profile = profiles.find(item => item.kind === "codex_app_server"); expect(profile).toBeTruthy();
+    await page.goto(`${origin}/?view=chat#token=${encodeURIComponent(token)}`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await page.getByLabel("Chat runtime", {exact: true}).selectOption("harness");
+    await page.getByLabel("Chat harness", {exact: true}).selectOption(profile!.id);
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Reply exactly NEBULA_LOCAL_VALIDATED. Do not use tools, access files, or change anything.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_LOCAL_VALIDATED", {timeout: 120_000});
+    await expect(page.getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0);
+    const session = new URL(page.url()).searchParams.get("session"); expect(session).toBeTruthy();
+    const savedUrl = `${origin}/?view=chat&session=${session}#token=${encodeURIComponent(token)}`;
+    await page.goto(savedUrl);
+    const operator = page.locator(".chat-message.operator").first();
+    await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
+    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
+    const decisions = page.getByRole("region", {name: "Saved decisions and constraints"});
+    await decisions.getByRole("textbox", {name: "Operator context text"}).fill("This validation conversation uses text-only replies and no tools.");
+    await decisions.getByRole("button", {name: "Save operator context"}).click();
+    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
+    await page.getByRole("button", {name: "Close details"}).click();
+    await composer.fill("Reply exactly NEBULA_QUEUE_VALIDATED. Do not use tools or access files.");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    const queue = page.getByRole("region", {name: "Core follow-up queue"});
+    await expect(queue).toContainText("NEBULA_QUEUE_VALIDATED");
+    await queue.getByRole("button", {name: "Resume queue", exact: true}).click();
+    await page.goto("about:blank");
+    await expect.poll(async () => {
+      const record = await (await api.get(`chat/sessions/${session}/queue`)).json() as {items: {status: string; detail?: string}[]};
+      if (record.items.some(item => item.status === "needs_review")) throw new Error(JSON.stringify(record.items.map(item=>({status:item.status,detail:item.detail}))));
+      return record.items.every(item=>item.status === "complete");
+    }, {timeout: 90_000}).toBe(true);
+    await page.goto(savedUrl);
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_QUEUE_VALIDATED");
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.locator(".chat-evidence").last().locator("summary").first().click();
+    await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
+    await page.getByRole("button", {name: "Results", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Conversation results"})).toBeVisible();
+    await page.getByRole("button", {name: "Context", exact: true}).click();
+    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
+    await page.getByRole("button", {name: "Close details"}).click();
+    await testInfo.attach("deployed-build", {body: JSON.stringify({origin, session, assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+    await testInfo.attach("deployed-chat", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose();}
 });

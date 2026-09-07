@@ -65,12 +65,14 @@ export function ModalSurface({ children, className = "", labelledBy, onClose, as
         text: returnFocusRef.current.textContent?.replace(/\s+/g, " ").trim() ?? "",
       } : undefined;
     }
-    requestAnimationFrame(() => {
+    const focusFrame = requestAnimationFrame(() => {
+      if (!surface?.isConnected || surface.contains(document.activeElement)) return;
       const target = surface?.querySelector<HTMLElement>("[data-autofocus], [autofocus]")
         ?? surface?.querySelector<HTMLElement>(FOCUSABLE);
       target?.focus();
     });
     return () => {
+      cancelAnimationFrame(focusFrame);
       const previous = returnFocusRef.current;
       const identity = returnFocusIdentityRef.current;
       const restoreFocus = () => {

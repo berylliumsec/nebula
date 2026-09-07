@@ -3041,7 +3041,7 @@ function mapWorkspacePreview(value: WireWorkspacePreview): WorkspacePreview {
   };
 }
 
-function chatRequestBody(
+export function chatRequestBody(
   body: ChatCompletionRequest,
   stream: boolean,
 ): JsonObject {
@@ -7377,8 +7377,9 @@ export class ApiClient {
 
   forkChatSession(
     sessionId: string,
-    throughMessageId: string,
+    throughMessageId: string | undefined,
     title?: string,
+    beforeMessageId?: string,
   ): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>(
       `chat/sessions/${encodeURIComponent(sessionId)}/fork`,
@@ -7386,6 +7387,7 @@ export class ApiClient {
         method: "POST",
         body: JSON.stringify({
           through_message_id: throughMessageId,
+          before_message_id: beforeMessageId,
           title,
         }),
       },

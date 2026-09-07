@@ -1,6 +1,22 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+async function installCoreQueueFixture(page: Page) {
+  const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
+  const actions: string[] = [];
+  await page.route("**/api/v1/chat/sessions/*/queue", async route => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON(); actions.push(body.action);
+      if (body.expected_revision !== queue.revision) {await route.fulfill({status: 409, json: {detail: "Queue changed"}}); return;}
+      if (body.action === "enqueue") {const item = {id: String(queue.items.length + 1), key: body.idempotency_key, status: "queued", request: body.request}; if (body.first) queue.items.unshift(item); else queue.items.push(item); if (body.paused) queue.paused = true;}
+      if (body.action === "pause" || body.action === "resume") queue.paused = body.action === "pause";
+      queue.revision++;
+    }
+    await route.fulfill({status: 200, json: queue});
+  });
+  return {queue, actions};
+}
+
 const workspaces = [
   ["workbench", "/", "Workbench"],
   ["findings", "/findings", "Findings"],
@@ -120,7 +136,11 @@ async function installTruthfulCore(page: Page) {
     const path = url.pathname;
     let body: unknown = [];
     let responseStatus = 200;
-    if (path.endsWith("/health")) {
+    if (path.includes("/chat/sessions/") && path.endsWith("/queue")) {
+      body = {revision: 0, paused: false, items: []};
+    } else if (path.includes("/chat/sessions/") && path.endsWith("/catch-up")) {
+      body = {initialized: true, revision: 0, through_at: entity.updated_at, items: [], pending: [], truncated: false};
+    } else if (path.endsWith("/health")) {
       body = {
         status: "ok",
         version: "3.0.0",
@@ -2186,7 +2206,7 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(readerPosition + 2);
 });
 
-test("assistant follow-up queue sends ordered provider messages after the active turn", async ({ page }, testInfo) => {
+test("assistant follow-up queue delegates ordered provider messages to Core", async ({ page }, testInfo) => {
   test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant queue projects.");
   const provider = {
     ...entity,
@@ -2264,6 +2284,7 @@ test("assistant follow-up queue sends ordered provider messages after the active
     };
   });
 
+  const durable = await installCoreQueueFixture(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   const composer = page.getByPlaceholder("Ask about this project…");
@@ -2272,16 +2293,17 @@ test("assistant follow-up queue sends ordered provider messages after the active
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible();
 
-  const queueComposer = page.getByPlaceholder("Queue the next message while this response finishes…");
+  const queueComposer = page.getByRole("textbox", {name: "Message the analyst assistant"});
   await expect(queueComposer).toBeVisible();
   await queueComposer.fill("First queued follow-up.");
   await queueComposer.press("Enter");
+  await expect(queueComposer).toHaveValue("");
   await queueComposer.fill("Second queued follow-up.");
   await queueComposer.press("Enter");
-  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("2 messages");
-  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("First queued follow-up.");
-  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toContainText("Second queued follow-up.");
-  const queue = page.getByRole("region", { name: "Queued follow-up messages" });
+  await expect(page.getByRole("region", { name: "Core follow-up queue" }).locator("li")).toHaveCount(2);
+  await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("First queued follow-up.");
+  await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("Second queued follow-up.");
+  const queue = page.getByRole("region", { name: "Core follow-up queue" });
   const queueGeometry = await queue.evaluate((element) => ({
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
@@ -2292,18 +2314,13 @@ test("assistant follow-up queue sends ordered provider messages after the active
   const queueAccessibility = await new AxeBuilder({ page }).include(".chat-follow-up-queue").analyze();
   expect(queueAccessibility.violations).toEqual([]);
 
-  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __queueChatRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__queueChatRequests?.length ?? 0), { timeout: 15_000 }).toBe(3);
-  const requests = await page.evaluate(() => (globalThis as typeof globalThis & { __queueChatRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__queueChatRequests ?? []);
-  expect(requests.map((request) => request.messages?.at(-1)?.content)).toEqual([
-    "Start the first response.",
-    "First queued follow-up.",
-    "Second queued follow-up.",
-  ]);
-  await expect(page.getByText("The queued follow-up completed.").first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
+  expect(durable.queue.items.map(item => item.request.messages[0].content)).toEqual(["First queued follow-up.", "Second queued follow-up."]);
+  await expect(page.getByRole("button", {name: "Stop response"})).toHaveCount(0, {timeout: 15000});
+  expect(await page.evaluate(() => (globalThis as typeof globalThis & {__queueChatRequests?: unknown[]}).__queueChatRequests?.length)).toBe(1);
+  await expect(queue).toContainText("continues after all browser tabs close");
 });
 
-test("assistant live guidance steers an active Codex turn with stale saved capabilities", async ({ page }, testInfo) => {
+test("assistant live guidance steers an active Codex turn with advertised steering capabilities", async ({ page }, testInfo) => {
   test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant guidance projects.");
   const profile = {
     ...entity,
@@ -2320,7 +2337,7 @@ test("assistant live guidance steers an active Codex turn with stale saved capab
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true, skills: true },
-    capabilities: { models: ["gpt-5.6"], checked_at: entity.updated_at, harness_version: "0.149.0" },
+    capabilities: { models: ["gpt-5.6"], steering: true, interruption: true, checked_at: entity.updated_at, harness_version: "0.149.0" },
   };
   let guidance = "";
   await page.route("**/api/v1/**", async (route) => {
@@ -2403,7 +2420,7 @@ test("assistant live guidance steers an active Codex turn with stale saved capab
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
 });
 
-test("assistant live guidance exposes Grok send now as stop and immediate submit", async ({ page }, testInfo) => {
+test("assistant live guidance exposes interruption as stop and Core queue priority", async ({ page }, testInfo) => {
   test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile Assistant lifecycle projects.");
   const profile = {
     ...entity,
@@ -2517,6 +2534,7 @@ test("assistant live guidance exposes Grok send now as stop and immediate submit
     };
   });
 
+  const durable = await installCoreQueueFixture(page);
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   const composer = page.getByPlaceholder("Ask about this project…");
@@ -2527,22 +2545,17 @@ test("assistant live guidance exposes Grok send now as stop and immediate submit
   const activeComposer = page.getByPlaceholder("Queue a follow-up or send it now…");
   await activeComposer.fill("Keep this ordinary follow-up queued.");
   await activeComposer.press("Enter");
-  await expect(page.getByRole("button", { name: "Send queued message 1 now" })).toBeVisible();
+  await expect(page.getByRole("region", {name: "Core follow-up queue"})).toContainText("Keep this ordinary follow-up queued.");
+  await expect(activeComposer).toHaveValue("");
   await activeComposer.fill("Handle the urgent direction instead.");
   await expect(page.getByRole("button", { name: "Queue follow-up message" })).toBeVisible();
-  await page.getByRole("button", { name: "Send message now" }).click();
+  await page.getByRole("button", { name: "Stop and send" }).click();
 
   await expect.poll(() => stopped).toBe(true);
-  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __grokSendNowRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__grokSendNowRequests?.length ?? 0)).toBe(3);
-  const requests = await page.evaluate(() => (globalThis as typeof globalThis & { __grokSendNowRequests?: Array<{ messages?: Array<{ content?: string }> }> }).__grokSendNowRequests ?? []);
-  expect(requests.map((request) => request.messages?.at(-1)?.content)).toEqual([
-    "Start the long Grok task.",
-    "Handle the urgent direction instead.",
-    "Keep this ordinary follow-up queued.",
-  ]);
-  await expect(page.getByText("The urgent direction completed.").first()).toBeVisible();
-  await expect(page.getByRole("region", { name: "Queued follow-up messages" })).toHaveCount(0);
-  await expect(page.getByText("Harness is working")).toHaveCount(0);
+  await expect.poll(() => durable.actions.at(-1)).toBe("resume");
+  expect(durable.queue.items.map(item => item.request.messages[0].content)).toEqual(["Handle the urgent direction instead.", "Keep this ordinary follow-up queued."]);
+  expect(durable.queue.paused).toBe(false);
+  expect(await page.evaluate(() => (globalThis as typeof globalThis & {__grokSendNowRequests?: unknown[]}).__grokSendNowRequests?.length)).toBe(1);
   const composerGeometry = await page.locator(".chat-composer").evaluate((element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }));
   expect(composerGeometry.scrollWidth).toBeLessThanOrEqual(composerGeometry.clientWidth + 1);
   const accessibility = await new AxeBuilder({ page }).include(".chat-composer").analyze();
@@ -2781,7 +2794,7 @@ test("New chat detaches from an in-flight saved conversation load", async ({ pag
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
 });
 
-test("conversation switching commits URL identity before loading and defers saved work details", async ({ page }) => {
+test("conversation switching commits URL identity and keeps prefetched work details collapsed", async ({ page }) => {
   const sourceSessionId = "chat-switch-source";
   const targetSessionId = "chat-switch-target";
   let sourceMessageLoads = 0;
@@ -2904,7 +2917,8 @@ test("conversation switching commits URL identity before loading and defers save
   await expect(page.locator(".session-list-item.active")).toContainText("Target conversation");
   await expect(page.getByText("Target transcript")).toBeVisible();
   expect(sourceMessageLoads).toBe(1);
-  expect(targetActivityLoads).toBe(0);
+  await expect.poll(() => targetActivityLoads).toBe(1);
+  await expect(page.getByText("Deferred command")).toHaveCount(0);
 
   await page.locator(".chat-message.assistant").filter({ hasText: "Target transcript" }).getByRole("button", { name: "Show activity" }).click();
   await expect(page.getByText("Deferred command")).toBeVisible();
@@ -3344,7 +3358,6 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
   });
 
   await openWorkspace(page, "/?view=chat&session=chat-verbose-activity", "Workbench");
-  await page.getByRole("button", { name: "Show activity" }).click();
   const notice = page.locator(".chat-panel .diagnostic-error-notice.compact");
   await expect(notice).toBeVisible();
   await expect(notice.locator("strong")).toHaveText("The supplied summary exceeded its validated length limit.");
@@ -3452,8 +3465,9 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
 
   await openWorkspace(page, "/?view=chat&session=chat-activity-ledger", "Workbench");
   const ledger = page.getByRole("region", { name: "Work summary" });
-  await expect(ledger.getByText(/0 actions/).first()).toBeVisible();
-  expect(activityLoads).toBe(0);
+  await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
+  expect(activityLoads).toBe(1);
+  await expect(ledger.locator(".activity-ledger-header, .activity-ledger-receipt")).toHaveCount(0);
   const showActivity = ledger.getByRole("button", { name: "Show activity" });
   if (testInfo.project.name.startsWith("mobile-") || testInfo.project.name === "narrow") {
     const bounds = await showActivity.boundingBox();
@@ -3465,15 +3479,11 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
-    headerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-header")!).paddingLeft),
-    receiptPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-receipt")!).paddingLeft),
     footerPaddingInline: Number.parseFloat(getComputedStyle(element.querySelector(".activity-ledger-footer")!).paddingLeft),
   }));
   expect(geometry.left).toBeGreaterThanOrEqual(0);
   expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
-  expect(geometry.headerPaddingInline).toBeGreaterThanOrEqual(12);
-  expect(geometry.receiptPaddingInline).toBeGreaterThanOrEqual(12);
   expect(geometry.footerPaddingInline).toBeGreaterThanOrEqual(12);
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
@@ -3721,7 +3731,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   });
   const guidanceComposer = page.getByPlaceholder("Add guidance while the harness works…");
   await guidanceComposer.fill("Prioritize the TLS boundary and preserve exact output.");
-  await page.getByRole("button", { name: "Send guidance now" }).click();
+  await page.getByRole("button", { name: "Guide current turn" }).click();
   await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
   await expect(guidanceComposer).toHaveValue("");
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
@@ -3755,7 +3765,7 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   await collapsePlan.click();
   await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
   const ledger = page.getByRole("region", { name: "Work summary" });
-  await expect(ledger.getByText("Completed", { exact: true }).first()).toBeVisible({ timeout: 5_000 });
+  await expect(ledger.locator(".activity-ledger-footer > span")).toContainText("Completed", { timeout: 5_000 });
   await ledger.getByRole("button", { name: "Show activity" }).click();
   const activity = ledger.locator(".activity-ledger-entry-content details", { hasText: "Run verification" });
   await expect(activity).not.toHaveAttribute("open", "");
@@ -3777,7 +3787,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const chatScroll = page.locator(".chat-scroll");
   const commandOutput = activity.locator(".harness-output pre");
   await expect.poll(() => commandOutput.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(2);
-  await commandOutput.hover();
+  await commandOutput.evaluate(element => element.scrollIntoView({block: "start"}));
+  const visibleOutput = await commandOutput.evaluate(element => {
+    const box = element.getBoundingClientRect(); const viewport = element.closest(".chat-scroll")!.getBoundingClientRect();
+    return {x: Math.max(box.left, viewport.left) + 12, y: Math.max(box.top, viewport.top) + 12};
+  });
+  await page.mouse.move(visibleOutput.x, visibleOutput.y);
   const outerBefore = await chatScroll.evaluate((element) => element.scrollTop);
   if (!testInfo.project.name.startsWith("mobile-webkit")) {
     await page.mouse.wheel(0, 500);
@@ -5058,19 +5073,20 @@ test("browser research tools expose durable workflows on paired clients", async 
   expect(axe.violations).toEqual([]);
 });
 
-test("Assistant session details are optional and persist as a shell preference", async ({ page }) => {
-  test.skip((page.viewportSize()?.width ?? 1440) <= 1000, "The inspector is a wide-screen disclosure.");
+test("Assistant session details use reloadable drawer navigation", async ({ page }) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
-  await expect(page.getByRole("complementary", { name: "Session inspector" })).toHaveCount(0);
   await page.getByRole("button", { name: "More Workbench actions" }).click();
   await page.getByRole("menuitem", { name: /Show session details/ }).click();
-  await expect(page.getByRole("complementary", { name: "Session inspector" })).toBeVisible();
-  expect(await page.evaluate(() => localStorage.getItem("nebula.session-inspector.open"))).toBe("true");
+  const drawer = (page.viewportSize()?.width ?? 1440) <= 1100
+    ? page.getByRole("dialog", {name: "Conversation details"})
+    : page.getByRole("complementary", {name: "Session inspector"});
+  await expect(drawer).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("drawer")).toBe("context");
   await page.reload();
-  await expect(page.getByRole("complementary", { name: "Session inspector" })).toBeVisible();
-  await page.getByRole("button", { name: "More Workbench actions" }).click();
-  await page.getByRole("menuitem", { name: /Hide session details/ }).click();
-  expect(await page.evaluate(() => localStorage.getItem("nebula.session-inspector.open"))).toBe("false");
+  await expect(drawer).toBeVisible();
+  await page.getByRole("button", {name: "Close details"}).click();
+  await expect(drawer).toHaveCount(0);
+  await expect.poll(() => new URL(page.url()).searchParams.get("drawer")).toBeNull();
 });
 
 test("audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
@@ -5293,6 +5309,8 @@ for (const imageInput of [true, false]) {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/harnesses") && route.request().method() === "GET") {
         await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at } }] });
+      } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
+        await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
       } else if (path.endsWith("/browser-companion")) {
         await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
       } else if (path.includes("/browser-companion/")) {
@@ -5312,13 +5330,15 @@ for (const imageInput of [true, false]) {
     await openWorkspace(page, "/?view=browser", "Workbench");
     const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
     if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
-    const attach = panel.getByRole("button", { name: "Attach images", exact: true });
+    await panel.getByRole("button", { name: "Attach files", exact: true }).click();
+    const attachmentDialog = page.getByRole("dialog", { name: "Attach to next message" });
+    const attach = attachmentDialog.getByRole("button", { name: "Images from this device", exact: true });
     if (!imageInput) {
-      await expect(attach).toBeDisabled();
-      await expect(attach).toHaveAttribute("title", "The selected runtime does not advertise image input");
+      await expect(attach).toHaveCount(0);
       return;
     }
     await expect(attach).toBeEnabled();
+    await attachmentDialog.getByRole("button", { name: "Close attachments" }).click();
     const image = { name: "selection.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64") };
     await panel.getByLabel("Choose image attachments").setInputFiles(image);
     await expect(panel.getByRole("list", { name: "Image attachments" })).toBeVisible();
@@ -5336,3 +5356,18 @@ for (const imageInput of [true, false]) {
     expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   });
 }
+
+test("assistant upgrade foundation keeps empty chat quiet and settings opaque", async ({ page }) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.getByRole("button", {name: "Scroll to latest message"})).toHaveCount(0);
+  await expect(page.locator(".activity-ledger")).toHaveCount(0);
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  const settings = page.getByRole("dialog", {name: "Assistant settings"});
+  await expect(settings).toBeVisible();
+  expect(await settings.evaluate(el => getComputedStyle(el).backgroundColor)).not.toMatch(/rgba.*0\.[0-9]+\)/);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  expect(overflow).toBe(false);
+  await page.getByRole("button", {name: "Close assistant settings"}).click();
+  await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
+});

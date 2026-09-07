@@ -5753,6 +5753,8 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str] | None,
         title: str | None = None,
         runtime_context: str | None = None,
+        context_attachments: list[dict[str, Any]] | None = None,
+        queue_claim: tuple[str, int, str] | None = None,
         citations: list[ChatCitation] | None = None,
         allow_remote_mcp: bool = False,
         include_knowledge: bool = False,
@@ -6031,6 +6033,12 @@ class HarnessRuntimeService:
         native_capabilities = HarnessNativeCapabilities.model_validate(
             session.metadata.get("native_capabilities", {})
         )
+        from .chat_decisions import decision_snapshot, decision_instructions
+
+        operator_decisions = decision_snapshot(self.store, chat.id, engagement_id)
+        runtime_context = (runtime_context or "") + decision_instructions(
+            operator_decisions
+        )
         chat_turn = ChatTurn(
             id=str(uuid4()),
             engagement_id=engagement_id,
@@ -6045,6 +6053,7 @@ class HarnessRuntimeService:
             ),
             max_artifact_queries=max_artifact_queries,
             request_snapshot={
+                "operator_decisions": operator_decisions,
                 "runtime": "harness",
                 "harness_profile_id": profile_id,
                 "harness_session_id": session.id,
@@ -6112,6 +6121,9 @@ class HarnessRuntimeService:
         with self.store.transaction() as transaction:
             transaction.add(chat_turn)
             transaction.add(harness_turn)
+            from .chat_queue import link_queue_turn
+
+            link_queue_turn(transaction, queue_claim, chat_turn.id, harness_turn.id)
             sequence = max((item.sequence for item in prior_messages), default=0) + 1
             transaction.add(
                 ChatMessage(
@@ -6123,7 +6135,11 @@ class HarnessRuntimeService:
                     content=clean_prompt,
                     content_blocks=content_blocks or [],
                     model=session.model,
-                    metadata={"harness_turn_id": harness_turn.id},
+                    metadata={
+                        "harness_turn_id": harness_turn.id,
+                        "context_attachments": context_attachments or [],
+                        "operator_decisions": operator_decisions,
+                    },
                 )
             )
         return chat, chat_turn, harness_turn
@@ -7928,9 +7944,7 @@ class HarnessRuntimeService:
         tools: list[dict[str, Any]] = []
         current = self.store.get(HarnessSession, session.id)
         if current.metadata.get("browser_companion_session_id"):
-            spec = companion_spec(
-                image_supported=self._model_image_supported(current)
-            )
+            spec = companion_spec(image_supported=self._model_image_supported(current))
             tools.append(
                 {
                     "name": spec.name,

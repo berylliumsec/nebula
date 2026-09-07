@@ -2391,3 +2391,28 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 @media (forced-colors: active) {
   .side-nav, .top-bar, .activity-center, .modal-surface { backdrop-filter: none; }
 }
+
+/* Assistant surfaces must remain readable above the transcript. */
+.chat-settings-popover { background: var(--canvas); isolation: isolate; }
+.chat-settings-popover > .chat-context-bar { min-height: 0; }
+.activity-ledger-compact { margin-block: 8px; border: 0; background: transparent; }
+.activity-ledger-compact .activity-ledger-footer { min-height: 44px; margin: 0; }
+.assistant-starters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+.assistant-search { flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); max-height: 40%; overflow-y: auto; }
+.assistant-search summary { cursor: pointer; min-height: 28px; }
+.assistant-search form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.assistant-search li button { text-align: left; white-space: normal; width: 100%; }
+.assistant-search li span { display: block; overflow-wrap: anywhere; }
+.chat-message:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.chat-advanced-session { min-width: 0; }
+
+.assistant-drawer { background: var(--canvas); }
+.assistant-drawer pre, .assistant-attachment-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.assistant-drawer nav, .assistant-attachment-dialog nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.assistant-attachment-dialog { max-height: 85dvh; overflow-y: auto; }
+.assistant-drawer li { overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .session-inspector.assistant-drawer { display: block; width: min(100%, 620px); max-height: 85dvh; overflow-y: auto; border: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+  .assistant-drawer button, .assistant-attachment-dialog button { min-height: 44px; }
+}

@@ -24,7 +24,13 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from pydantic import Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    PrivateAttr,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
@@ -221,6 +227,7 @@ def resolve_chat_model_content(
 
 
 class ChatCompletionRequest(NebulaModel):
+    _queue_claim: tuple[str, int, str] | None = PrivateAttr(default=None)
     backend: ChatBackend = ChatBackend.PROVIDER
     provider_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -391,6 +398,7 @@ class PreparedChat:
     pending_session: ChatSession | None
     stored_messages: list[ChatMessage]
     new_messages: list[ChatRequestMessage]
+    operator_decisions: list[dict[str, Any]] = field(default_factory=list)
     context_attachments: list[ChatContextAttachment] = field(default_factory=list)
     context_usage: ChatTokenUsage = field(default_factory=ChatTokenUsage)
     context_snapshot: ContextSnapshot | None = None
@@ -398,6 +406,7 @@ class PreparedChat:
     tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
     turn: ChatTurn | None = None
     inputs_persisted: bool = False
+    queue_claim: tuple[str, int, str] | None = None
 
 
 @dataclass
@@ -604,6 +613,18 @@ class ChatService:
         self.knowledge_index = knowledge_index
         self.artifact_store = artifact_store
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
+        self._naming_tasks: set[asyncio.Task[Any]] = set()
+
+    def start_optional_naming(self, coroutine: Any) -> None:
+        task = create_diagnostic_task(
+            coroutine,
+            feature="chat",
+            event_code="chat.optional_naming",
+            failure_message="Optional conversation naming failed; the saved reply remains available.",
+            name="nebula-conversation-naming",
+        )
+        self._naming_tasks.add(task)
+        task.add_done_callback(self._naming_tasks.discard)
 
     async def startup(self) -> None:
         """Provider turns are attached lazily when the first request arrives."""
@@ -686,6 +707,7 @@ class ChatService:
             for task in (runtime.task, runtime.cleanup_task)
             if task is not None and not task.done()
         ]
+        tasks.extend(self._naming_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
@@ -925,7 +947,12 @@ class ChatService:
                 )
 
         citations: list[ChatCitation] = []
-        instructions = _CHAT_INSTRUCTIONS
+        from .chat_decisions import decision_snapshot, decision_instructions
+
+        operator_decisions = decision_snapshot(
+            self.store, session.id if session else None, engagement_id
+        )
+        instructions = _CHAT_INSTRUCTIONS + decision_instructions(operator_decisions)
         knowledge_budget = max(
             1,
             resolve_context_limits(
@@ -1203,6 +1230,7 @@ class ChatService:
                 scope_policy_id=tool_components.scope.id,
                 scope_revision=tool_components.scope.revision,
                 request_snapshot={
+                    "operator_decisions": operator_decisions,
                     "model_request": model_request.model_dump(mode="json"),
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
@@ -1233,6 +1261,7 @@ class ChatService:
                 model=selected_model,
                 tools_enabled=False,
                 request_snapshot={
+                    "operator_decisions": operator_decisions,
                     "model_request": model_request.model_dump(mode="json"),
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
@@ -1267,6 +1296,8 @@ class ChatService:
             tools_enabled=tools_enabled,
             tool_components=tool_components,
             turn=turn,
+            queue_claim=request._queue_claim,
+            operator_decisions=operator_decisions,
         )
         if turn is not None:
             self._persist_turn_inputs(prepared)
@@ -1288,7 +1319,9 @@ class ChatService:
         response = await prepared.provider.complete(prepared.model_request)
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
-        await self._name_initial_session(prepared, completion.message.content)
+        self.start_optional_naming(
+            self._name_initial_session(prepared, completion.message.content)
+        )
         self._complete_turn(prepared, completion)
         return completion
 
@@ -1335,7 +1368,9 @@ class ChatService:
                     raise ChatError("provider stream completed without a response")
                 completion = self._completion(prepared, event.response)
                 self._persist(prepared, completion)
-                await self._name_initial_session(prepared, completion.message.content)
+                self.start_optional_naming(
+                    self._name_initial_session(prepared, completion.message.content)
+                )
                 self._complete_turn(prepared, completion)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
@@ -1347,6 +1382,8 @@ class ChatService:
     async def _stream_tool_turn(
         self, prepared: PreparedChat
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        from .chat_decisions import decision_instructions
+
         turn = prepared.turn
         components = prepared.tool_components
         if turn is None or components is None or prepared.engagement_id is None:
@@ -1383,7 +1420,10 @@ class ChatService:
                 ]
                 routing = prepared.model_request.model_copy(
                     update={
-                        "instructions": _CHAT_TOOL_INSTRUCTIONS,
+                        "instructions": _CHAT_TOOL_INSTRUCTIONS
+                        + decision_instructions(
+                            turn.request_snapshot.get("operator_decisions", [])
+                        ),
                         "tools": [
                             ToolDefinition(
                                 name=spec.name,
@@ -1585,6 +1625,9 @@ class ChatService:
                 update={
                     "instructions": (
                         _CHAT_TOOL_RESULT_INSTRUCTIONS
+                        + decision_instructions(
+                            turn.request_snapshot.get("operator_decisions", [])
+                        )
                         + _tool_inventory_instructions(components.specs)
                         + _reference_instructions(
                             operator_help_chunks, trusted_operator_help=True
@@ -1626,8 +1669,8 @@ class ChatService:
                     prepared.turn = turn
                     completion = self._completion(prepared, event.response)
                     self._persist(prepared, completion)
-                    await self._name_initial_session(
-                        prepared, completion.message.content
+                    self.start_optional_naming(
+                        self._name_initial_session(prepared, completion.message.content)
                     )
                     turn = self.store.update(
                         ChatTurn,
@@ -2351,7 +2394,8 @@ class ChatService:
         self,
         session_id: str,
         *,
-        through_message_id: str,
+        through_message_id: str | None = None,
+        before_message_id: str | None = None,
         title: str | None = None,
         harness_session_id: str | None = None,
     ) -> ChatSession:
@@ -2364,7 +2408,12 @@ class ChatService:
             )
         messages = self._session_messages(source)
         boundary = next(
-            (message for message in messages if message.id == through_message_id), None
+            (
+                message
+                for message in messages
+                if message.id == (through_message_id or before_message_id)
+            ),
+            None,
         )
         if boundary is None:
             raise ChatHistoryConflict(
@@ -2395,6 +2444,7 @@ class ChatService:
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
                     "workspace_is_shared": True,
+                    "branch_before_message": bool(before_message_id),
                     "harness_context_handoff_pending": (
                         source.backend == ChatBackend.HARNESS
                     ),
@@ -2402,7 +2452,9 @@ class ChatService:
             )
         )
         for message in messages:
-            if message.sequence > boundary.sequence:
+            if message.sequence > boundary.sequence or (
+                before_message_id and message.sequence == boundary.sequence
+            ):
                 break
             self.store.create(
                 ChatMessage(
@@ -2423,6 +2475,14 @@ class ChatService:
                     metadata={**message.metadata, "fork_source_message_id": message.id},
                 )
             )
+        from .chat_decisions import fork_decisions
+
+        fork_decisions(
+            self.store,
+            source,
+            fork,
+            boundary.sequence - (1 if before_message_id else 0),
+        )
         return fork
 
     def context_status(self, session_id: str) -> ContextStatus:
@@ -3108,16 +3168,19 @@ class ChatService:
         if not session_id or not prepared.engagement_id:
             return
         session = self.store.get(ChatSession, session_id)
-        if session.metadata.get("initial_title_state") in {"generated", "failed"}:
+        from .chat_naming import should_name, substantive_prompt
+
+        if not should_name(session):
             return
-        first_prompt = next(
-            (
+        first_prompt = substantive_prompt(
+            [
                 message.content
-                for message in prepared.model_request.messages
-                if message.role == "user"
-            ),
-            "",
+                for message in self.session_messages(session_id)
+                if message.role == ChatRole.USER
+            ]
         )
+        if not first_prompt:
+            return
         request = ModelRequest(
             model=prepared.resolved_model,
             instructions=(
@@ -3168,11 +3231,20 @@ class ChatService:
             changes = {
                 "metadata": {**session.metadata, "initial_title_state": "failed"}
             }
+        latest = self.store.get(ChatSession, session.id)
+        if latest.metadata.get("initial_title_state") == "operator":
+            return
         prepared.session = self.store.update(
             ChatSession,
             session.id,
-            changes,
-            expected_revision=session.revision,
+            {
+                **changes,
+                "metadata": {
+                    **latest.metadata,
+                    "initial_title_state": changes["metadata"]["initial_title_state"],
+                },
+            },
+            expected_revision=latest.revision,
         )
 
     @staticmethod
@@ -3240,7 +3312,10 @@ class ChatService:
                 content=message.content,
                 content_blocks=message.content_blocks,
                 metadata=(
-                    _context_attachment_metadata(prepared.context_attachments)
+                    {
+                        **_context_attachment_metadata(prepared.context_attachments),
+                        "operator_decisions": prepared.operator_decisions,
+                    }
                     if index == len(prepared.new_messages) - 1
                     else {}
                 ),
@@ -3268,6 +3343,9 @@ class ChatService:
                     expected_revision=session.revision,
                 )
                 transaction.add_all([*messages, turn])
+                from .chat_queue import link_queue_turn
+
+                link_queue_turn(transaction, prepared.queue_claim, turn.id)
         browser_session_id = turn.request_snapshot.get("browser_session_id")
         if isinstance(browser_session_id, str):
             browser_session = self.store.get(BrowserSession, browser_session_id)
@@ -3318,7 +3396,10 @@ class ChatService:
                 content=message.content,
                 content_blocks=message.content_blocks,
                 metadata=(
-                    _context_attachment_metadata(prepared.context_attachments)
+                    {
+                        **_context_attachment_metadata(prepared.context_attachments),
+                        "operator_decisions": prepared.operator_decisions,
+                    }
                     if index == len(prepared.new_messages) - 1
                     else {}
                 ),
