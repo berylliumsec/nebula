@@ -7,6 +7,7 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
   let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
+  let liveTab = { id: "tab-1", url: "https://example.test/", title: "Example" };
   const connection = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
@@ -21,6 +22,7 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
       return options?.method === "POST" ? actions[0] : actions;
     }
     if (path.endsWith("/actions/action-1")) { actions[0] = { ...actions[0], status: "complete" }; return actions[0]; }
+    if (path.endsWith("/operations") && JSON.parse(String(options?.body)).operation === "tabs") return { tabs: [liveTab] };
     if (path.endsWith("/credentials")) {
       if (options?.method === "POST") savedCredentials = [{ reference: "protected-1", label: JSON.parse(String(options.body)).label, available: true }];
       return savedCredentials;
@@ -32,10 +34,25 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   const onControlChange = vi.fn();
   const api = { request, openBrowserCompanionStream: vi.fn(() => connection) } as unknown as ApiClient;
   render(<ManagedAssistantBrowser api={api} projectId="project-1" active={active} onConversation={onConversation} onContext={onContext} onControlChange={onControlChange} onImage={vi.fn()} imageSupported={false} />);
-  return { request, onContext, onConversation, connection, onControlChange };
+  return { request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; } };
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("refreshes live tab metadata without replacing historical context or unsent addresses", async () => {
+    const { navigate, connection } = fixture();
+    await waitFor(() => expect(screen.getByLabelText("Browser address")).toHaveValue("https://example.test/"));
+    fireEvent.click(screen.getByRole("button", { name: "Ask about page" }));
+    await screen.findByText("Selected page content");
+    navigate("https://example.test/next");
+    await waitFor(() => expect(screen.getByLabelText("Browser address")).toHaveValue("https://example.test/next"), { timeout: 4500 });
+    expect(screen.getByRole("region", { name: "Browser context preview" })).toHaveTextContent("Selected page content");
+    expect(connection.close).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "https://unsent.test/" } });
+    navigate("https://example.test/again");
+    await waitFor(() => expect(screen.getByRole("option", { name: "Navigated page" })).toBeInTheDocument());
+    await new Promise(resolve => setTimeout(resolve, 3100));
+    expect(screen.getByLabelText("Browser address")).toHaveValue("https://unsent.test/");
+  }, 10000);
   it("stages a device file and requires inline approval before the page receives it", async () => {
     const { request } = fixture(true, false, false, true);
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());

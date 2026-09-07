@@ -34,6 +34,7 @@ async def smoke(
     codex_home: Path | None = None,
     ui_host: str | None = None,
     automatic_host: bool = False,
+    ui_profiles: str = "desktop",
 ) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
     core_token = secrets.token_urlsafe(32)
@@ -511,11 +512,34 @@ async def smoke(
                     (
                         await client.put(endpoint + "/control?paused=false")
                     ).raise_for_status()
+                    # Start outside the browser, then attach it to the same native
+                    # thread. This catches stale vendor MCP catalogs on reuse.
+                    seeded = await client.post(
+                        "/api/v1/chat/completions",
+                        timeout=180,
+                        json={
+                            "backend": "harness",
+                            "engagement_id": project.id,
+                            "harness_profile_id": profile.id,
+                            "model": model,
+                            "include_knowledge": False,
+                            "tools_enabled": True,
+                            "allow_cloud_tool_results": True,
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": "Reply Ready. Do not use tools.",
+                                }
+                            ],
+                        },
+                    )
+                    seeded.raise_for_status()
                     completion = await client.post(
                         "/api/v1/chat/completions",
                         timeout=180,
                         json={
                             "backend": "harness",
+                            "session_id": seeded.json()["session_id"],
                             "engagement_id": project.id,
                             "harness_profile_id": profile.id,
                             "model": model,
@@ -789,6 +813,10 @@ async def smoke(
                         upload_turn.cancel()
                         await asyncio.gather(upload_turn, return_exceptions=True)
                     harness_evidence = {
+                        "harness_late_browser_attachment": completion.json()[
+                            "session_id"
+                        ]
+                        == seeded.json()["session_id"],
                         "harness_model": model,
                         "harness_operator_image_attachment": True,
                         "harness_approved_file_upload": True,
@@ -799,19 +827,24 @@ async def smoke(
                 if ui_host:
                     from smoke_test_browser_companion_ui import exercise_ui
 
-                    pairing = await client.post(
-                        "/api/v1/auth/pairings", json={"name": "Browser UI validation"}
-                    )
-                    pairing.raise_for_status()
-                    harness_evidence.update(
-                        await exercise_ui(
-                            f"http://{ui_host}:{core_listener.getsockname()[1]}",
-                            pairing.json(),
-                            completion.json()["session_id"],
-                            runtime_root.parent,
-                            target_url,
+                    ui_results = []
+                    for ui_profile in ui_profiles.split(","):
+                        pairing = await client.post(
+                            "/api/v1/auth/pairings",
+                            json={"name": "Browser UI validation"},
                         )
-                    )
+                        pairing.raise_for_status()
+                        ui_results.append(
+                            await exercise_ui(
+                                f"http://{ui_host}:{core_listener.getsockname()[1]}",
+                                pairing.json(),
+                                completion.json()["session_id"],
+                                runtime_root.parent,
+                                target_url,
+                                ui_profile,
+                            )
+                        )
+                    harness_evidence["ui_profiles"] = ui_results
                 return {
                     "state": "passed",
                     "authenticated_core": True,
@@ -865,6 +898,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Use Core-owned browserd and its authenticated identity policy proxy",
     )
+    parser.add_argument(
+        "--ui-profiles",
+        default="desktop",
+        help="Comma-separated desktop, compact, chromium-320/390/430, webkit-320/390/430 profiles",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
@@ -875,6 +913,7 @@ if __name__ == "__main__":
                     args.codex_home,
                     args.ui_host,
                     args.automatic_host,
+                    args.ui_profiles,
                 )
             ),
             sort_keys=True,

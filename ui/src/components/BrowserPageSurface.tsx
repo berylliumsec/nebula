@@ -49,7 +49,7 @@ export function BrowserPageSurface({ frame, mode, connected, send, onCapture }: 
         }}
         onPointerDown={event => {
           if (gesture.current || event.button !== 0) return;
-          event.currentTarget.focus();
+          event.currentTarget.focus({ preventScroll: true });
           const start = point(event);
           gesture.current = { start, pointerId: event.pointerId, touch: event.pointerType === "touch" };
           event.currentTarget.setPointerCapture(event.pointerId);

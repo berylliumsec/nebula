@@ -18,11 +18,33 @@ async def exercise_ui(
     conversation_id: str,
     evidence_root: Path,
     target_url: str = "http://browserd-smoke.example.test/",
+    profile: str = "desktop",
 ) -> dict[str, object]:
+    profiles = {
+        "desktop": ("chromium", None, 1440, 900),
+        "compact": ("chromium", None, 1024, 700),
+        **{
+            f"{engine}-{width}": (
+                engine,
+                "Pixel 5" if engine == "chromium" else "iPhone 13",
+                width,
+                height,
+            )
+            for engine in ("chromium", "webkit")
+            for width, height in ((320, 700), (390, 844), (430, 932))
+        },
+    }
+    engine, device, width, height = profiles[profile]
+    evidence_root = evidence_root / profile
+    evidence_root.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
+        browser = await getattr(playwright, engine).launch(headless=False)
         context = await browser.new_context(
-            viewport={"width": 1440, "height": 900}, reduced_motion="reduce"
+            **{
+                **(playwright.devices[device] if device else {}),
+                "viewport": {"width": width, "height": height},
+                "reduced_motion": "reduce",
+            }
         )
         await context.tracing.start(screenshots=True, snapshots=True, sources=True)
         page = await context.new_page()
@@ -35,7 +57,9 @@ async def exercise_ui(
             await page.get_by_label("Device name").fill("Browser UI validation")
             await page.get_by_role("button", name="Pair device", exact=True).click()
             await expect(
-                page.get_by_role("tab", name="Project browser", exact=True)
+                page.get_by_role("button", name="More workbench views", exact=True)
+                if device
+                else page.get_by_role("tab", name="Project browser", exact=True)
             ).to_be_visible(timeout=20000)
             await page.goto(f"{origin}/?view=browser&session={conversation_id}")
             await expect(page.get_by_label("Browser engine")).to_have_value("managed")
@@ -46,8 +70,54 @@ async def exercise_ui(
             await expect(page.locator(".managed-browser-screen img")).to_be_visible()
             await page.get_by_label("Browser address").fill(target_url)
             await page.get_by_role("button", name="Go", exact=True).click()
-            await page.get_by_role("button", name="Ask about page", exact=True).click()
             preview = page.get_by_role("region", name="Browser context preview")
+            await expect(preview).to_contain_text("Ready")
+            await preview.get_by_role("button", name="Discard", exact=True).click()
+            print(
+                "UI journey: selecting an element, text, and screenshot region",
+                flush=True,
+            )
+            screen = page.locator(".managed-browser-screen img")
+            await page.get_by_role("button", name="Pick element", exact=True).click()
+
+            # Coordinates belong to the controlled fixture's visible button. Scale
+            # through the actual image, just as an operator's pointer does.
+            async def screen_point(x: float, y: float) -> dict[str, float]:
+                await screen.scroll_into_view_if_needed()
+                return await screen.evaluate(
+                    "(image, point) => { const r = image.getBoundingClientRect(); return {x:r.left + point.x*r.width/image.naturalWidth, y:r.top + point.y*r.height/image.naturalHeight}; }",
+                    {"x": x, "y": y},
+                )
+
+            point = await screen.evaluate(
+                "image => ({x:20*image.getBoundingClientRect().width/image.naturalWidth, y:18*image.getBoundingClientRect().height/image.naturalHeight})"
+            )
+            if device:
+                await screen.tap(position=point)
+            else:
+                await screen.click(position=point)
+            await expect(preview.locator("pre")).to_have_text("Ready")
+            await preview.get_by_role("button", name="Discard", exact=True).click()
+            await screen.focus()
+            await screen.press("Control+a")
+            await page.get_by_role(
+                "button", name="Ask about selected text", exact=True
+            ).click()
+            await expect(preview.locator("pre")).to_contain_text("Ready")
+            await preview.get_by_role("button", name="Discard", exact=True).click()
+            await page.get_by_role("button", name="Select region", exact=True).click()
+            start = await screen_point(5, 5)
+            end = await screen_point(65, 35)
+            await page.mouse.move(**start)
+            await page.mouse.down()
+            await page.mouse.move(**end, steps=5)
+            await page.mouse.up()
+            await expect(
+                preview.get_by_role("img", name="Selected page region")
+            ).to_be_visible()
+            await preview.get_by_role("button", name="Discard", exact=True).click()
+            await expect(preview).to_be_hidden()
+            await page.get_by_role("button", name="Ask about page", exact=True).click()
             await expect(preview).to_contain_text("Ready")
             await preview.get_by_role(
                 "button", name="Attach to Assistant", exact=True
@@ -124,14 +194,26 @@ async def exercise_ui(
             await page.screenshot(
                 path=str(evidence_root / "real-browser-ui-desktop.png"), full_page=True
             )
+            await page.goto(f"{origin}/?view=chat&session={conversation_id}")
+            await expect(page.locator(".chat-message.assistant").last).to_contain_text(
+                "Saved", timeout=30000
+            )
+            assert parse_qs(urlsplit(page.url).query)["session"] == [conversation_id]
+            await page.goto(f"{origin}/?view=browser&session={conversation_id}")
+            await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
+                "Saved", timeout=30000
+            )
             return {
                 "production_ui_real_core": True,
                 "production_ui_live_codex": True,
                 "ui_origin": origin,
-                "ui_viewport": "1440x900",
-                "ui_engine": "headed Chromium",
+                "ui_viewport": f"{width}x{height}",
+                "ui_engine": f"headed {engine}",
+                "ui_device_emulation": device,
+                "ui_main_assistant_same_conversation": True,
                 "ui_same_conversation_reload": True,
                 "ui_inline_approval_page_change": True,
+                "ui_element_text_region_selection": True,
             }
         except Exception:
             with suppress(Exception):

@@ -2242,6 +2242,74 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
     asyncio.run(scenario())
 
 
+def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tmp_path):
+    from nebula.v3.harnesses import _harness_turn_prompt
+
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Existing conversation",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        assert '"browser.companion":"disabled"' in _harness_turn_prompt(turn)
+        assert '"browser.companion":"enabled"' in _harness_turn_prompt(
+            turn.model_copy(
+                update={
+                    "metadata": {
+                        **turn.metadata,
+                        "browser_companion_session_id": "attached-browser",
+                    }
+                }
+            )
+        )
+        first = await runtime._connection(session, turn)
+        assert not any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[0].gateway_tools
+        )
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "external_session_id": "same-native-thread",
+                "metadata": {
+                    **session.metadata,
+                    "browser_companion_session_id": "attached-browser",
+                },
+            },
+        )
+        second = await runtime._connection(session, turn)
+        assert second is not first and first.closed
+        assert adapter.opens[-1].session.external_session_id == "same-native-thread"
+        assert any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[-1].gateway_tools
+        )
+        assert await runtime._connection(session, turn) is second
+        assert len(adapter.opens) == 2
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {"metadata": {**session.metadata, "browser_companion_session_id": None}},
+        )
+        third = await runtime._connection(session, turn)
+        assert third is not second and second.closed
+        assert not any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[-1].gateway_tools
+        )
+        assert store.get(ChatSession, chat.id).harness_session_id == session.id
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
 def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)

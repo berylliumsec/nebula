@@ -5268,6 +5268,10 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
     } else if (path.endsWith("/browser-companion")) {
       await route.fulfill({ json: { session_id: "browser-session", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
     } else if (path.endsWith("/browser-companion/browser-session/operations")) {
+      if (route.request().postDataJSON()?.operation === "tabs") {
+        await route.fulfill({ json: { tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
+        return;
+      }
       await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.", page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
     } else if (path.includes("/browser-companion/")) {
       await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
@@ -5315,6 +5319,8 @@ for (const imageInput of [true, false]) {
         await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
       } else if (path.endsWith("/browser-companion")) {
         await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
+      } else if (path.endsWith("/image-browser/operations")) {
+        await route.fulfill({ json: { tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
       } else if (path.includes("/browser-companion/")) {
         await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
       } else if (path.endsWith("/chat/images")) {
@@ -5393,6 +5399,10 @@ test("browser Assistant uploads a selected device file only after inline approva
     } else if (path.endsWith("/file-browser/files/file-ref")) {
       files.splice(0); await route.fulfill({ json: files });
     } else if (path.endsWith("/file-browser/operations")) {
+      if (route.request().postDataJSON().operation === "tabs") {
+        await route.fulfill({ json: { tabs: [{ id: "file-tab", title: "Upload form", url: "https://example.test/" }] } });
+        return;
+      }
       expect(route.request().postDataJSON().operation).toBe("capture");
       await route.fulfill({ json: { url: "https://example.test/", title: "Upload form", text: "Choose a document", page_revision: "file-page", captured_at: entity.updated_at, elements: [{ id: "file-input", tag: "input", type: "file", label: "Document", sensitive: false }] } });
     } else if (path.endsWith("/file-browser/actions")) {

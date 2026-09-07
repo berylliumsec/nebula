@@ -23,8 +23,10 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   onControlChange?: (enabled: boolean) => void;
 }) {
   const [session, setSession] = useState<Session>();
+  const [tabs, setTabs] = useState<Tab[]>([]);
   const [tabId, setTabId] = useState("");
   const [address, setAddress] = useState("");
+  const addressEdited = useRef(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState("");
@@ -67,7 +69,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       const next = await request<Session>(`engagements/${encodeURIComponent(projectId)}/browser-companion`);
       if (!mounted.current) return;
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
-      setSession(next); setTabId(selected?.id ?? ""); setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
+      setSession(next); setTabs(next.tabs); setTabId(selected?.id ?? ""); addressEdited.current = false; setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
       if (next.page_state_reset) setError("The browser restarted. Your conversation is saved, but the previous live tabs were lost. Reopen a page to continue.");
       if (!conversationRef.current && next.conversation_id) onConversationRef.current(next.conversation_id);
     } catch (caught) { if (mounted.current) logCaughtDiagnosticFailure(caught); }
@@ -95,17 +97,27 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   useEffect(() => {
     if (!session || !active) return;
     let cancelled = false;
+    let refreshing = false;
     const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       try {
-        const [next, control, protectedValues, attachedFiles] = await Promise.all([
+        const [next, control, protectedValues, attachedFiles, currentTabs] = await Promise.all([
           request<Action[]>(`browser-companion/${session.session_id}/actions`, undefined, "GET"),
           request<{ paused?: boolean }>(`browser-companion/${session.session_id}/control`, undefined, "GET"),
           request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials`, undefined, "GET"),
           request<BrowserFile[]>(`browser-companion/${session.session_id}/files`, undefined, "GET"),
+          request<{ tabs: Tab[] }>(`browser-companion/${session.session_id}/operations`, { operation: "tabs" }),
         ]);
-        if (!cancelled) { setActions(next); setCredentials(protectedValues); setFiles(attachedFiles); if (typeof control.paused === "boolean") setPaused(control.paused); }
+        if (!cancelled) {
+          setActions(next); setCredentials(protectedValues); setFiles(attachedFiles); if (typeof control.paused === "boolean") setPaused(control.paused);
+          setTabs(currentTabs.tabs);
+          const selected = currentTabs.tabs.find(tab => tab.id === currentTabRef.current);
+          if (selected && !addressEdited.current) setAddress(selected.url === "about:blank" ? "" : selected.url);
+        }
       }
       catch (caught) { if (!cancelled) logCaughtDiagnosticFailure(caught); }
+      finally { refreshing = false; }
     };
     void refresh(); const timer = setInterval(() => void refresh(), 3000);
     return () => { cancelled = true; clearInterval(timer); };
@@ -116,7 +128,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     try {
       const next = await request<Capture>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId, page_revision: capture?.page_revision, ...extra });
       if (currentTabRef.current !== tabId) return;
-      setCapture(next); setAddress(next.url); return next;
+      setCapture(next); if (operation === "navigate") addressEdited.current = false; if (!addressEdited.current) setAddress(next.url); return next;
     } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { setBusy(false); }
   };
@@ -126,7 +138,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     try {
       const next = await request<Pick<Session, "tabs" | "active_tab_id">>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId });
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
-      setSession({ ...session, ...next }); setTabId(selected?.id ?? ""); setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? ""); setCapture(undefined);
+      setSession({ ...session, ...next }); setTabs(next.tabs); setTabId(selected?.id ?? ""); addressEdited.current = false; setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? ""); setCapture(undefined);
     } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { setBusy(false); }
   };
@@ -170,12 +182,12 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   };
   return <section className="managed-assistant-browser" aria-label="Shared Chromium browser">
     <form className="managed-browser-toolbar" onSubmit={(event) => { event.preventDefault(); void operate("navigate", { url: address }); }}>
-      <select aria-label="Browser tab" value={tabId} onChange={(event) => { setTabId(event.target.value); if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(event.target.value)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught)); setCapture(undefined); setAddress(session?.tabs.find(tab => tab.id === event.target.value)?.url ?? ""); }}>
-        {session?.tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.title || "New tab"}</option>)}
+      <select aria-label="Browser tab" value={tabId} onChange={(event) => { setTabId(event.target.value); if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(event.target.value)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught)); setCapture(undefined); addressEdited.current = false; setAddress(tabs.find(tab => tab.id === event.target.value)?.url ?? ""); }}>
+        {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.title || "New tab"}</option>)}
       </select>
       <button className="button quiet" type="button" disabled={busy || !session} onClick={() => void manageTab("new_tab")}>New tab</button>
       <button className="button quiet" type="button" disabled={busy || !session} onClick={() => void manageTab("close_tab")}>Close tab</button>
-      <input aria-label="Browser address" value={address} onChange={event => setAddress(event.target.value)} placeholder="https://…" />
+      <input aria-label="Browser address" value={address} onChange={event => { addressEdited.current = true; setAddress(event.target.value); }} placeholder="https://…" />
       <button className="button primary" disabled={busy || !session}>Go</button>
       <button className="button quiet" type="button" onClick={() => void open()} disabled={busy}>{session ? "Reconnect view" : "Prepare / retry"}</button>
     </form>

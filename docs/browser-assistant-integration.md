@@ -493,3 +493,39 @@ acceptance is still outstanding; this shell has no physical desktop display and
 headed automation has used Xvfb. Physical phone, real mobile UI profiles and the
 remaining lifecycle/context-selection matrix also remain required. The installed
 application and services have not been changed.
+
+### Packaged and selection validation follow-up (2026-09-07)
+
+Commit `8e057d8` fixes shutdown diagnostics; its full backend run passed 780 tests
+with five skips, and all jobs in CI run `34139184835` passed. The real LAN journey
+at `http://192.168.1.155:45209` exercised element picking, selected text, rectangle
+preview/discard, page attachment, a live Codex answer, approved click, and reload
+at 1440x900. The later compact 1024x700 run also opened the same conversation in
+main Assistant and returned to the browser. Mobile real-Core validation remains
+in progress; a missing mobile navigation locator was corrected, and a 320px
+selection failure is retained for investigation.
+
+The extracted production DEB built from `b872f45` starts its bundled Core and
+managed Chromium under native WebKitGTK WebDriver. The visible scoped-page
+navigation and context-attachment steps passed. Its live test found that attaching
+a browser to an existing Codex thread retained an obsolete tool inventory. The
+fix refreshes the gateway connection between turns while preserving external
+thread identity, carries browser availability in the Core-generated turn state,
+and rechecks the conversation binding on every gateway browser call. Live proof
+of that correction and a rebuilt package remain required.
+
+The subsequent real-Core run with both catalog refresh and per-turn capability
+state passed the late-attachment MCP screenshot, protected-value, image, upload,
+and approval checks before reaching mobile UI selection. The mobile selector
+test still failed before a preview appeared, so it is not a mobile pass. The
+gateway regression suite passed 67 tests; the two browser components passed 12
+tests. The native-thread identity remains unchanged in the connection-refresh
+regression. The packaged binary must be rebuilt before repeating its live test.
+
+Live tab metadata now refreshes independently of historical captures and preserves
+an address being edited. Component coverage checks that metadata updates do not
+reconnect the stream. The production fixture matrix passed 32 checks across the
+eight desktop/mobile profiles after that change; this remains fixture evidence.
+The new packaged runner uses a temporary XDG profile, an extracted DEB, staged
+tauri-driver/WebKitWebDriver, and a read-only copy of the approved Codex profile.
+It does not install the package or change the running installation.

@@ -444,6 +444,10 @@ def _harness_developer_instructions(
         "knowledge access. Questions about which knowledge sources are available are "
         "resource requests, not abstract capability questions; call knowledge.list "
         "when the turn enables it. For abstract capability questions, answer only "
+        "from the current turn capability state when it updates an inventory below. "
+        "When browser.companion is enabled, it is an assigned Nebula gateway tool "
+        "for the attached browser; discover and use it for browser requests. "
+        "For other abstract capability questions, answer only "
         "from the trusted inventories below and do not call a tool. The vendor "
         "scratch sandbox does not limit "
         "the separately brokered Nebula action capabilities; report each assigned "
@@ -480,6 +484,9 @@ def _harness_turn_prompt(turn: HarnessTurn) -> str:
     knowledge_enabled = turn.metadata.get("knowledge_access") is True
     capability_state = json.dumps(
         {
+            "browser.companion": "enabled"
+            if turn.metadata.get("browser_companion_session_id")
+            else "disabled",
             "knowledge.list": "enabled" if knowledge_enabled else "disabled",
             "knowledge.search": "enabled" if knowledge_enabled else "disabled",
             "knowledge_scope": "current_engagement" if knowledge_enabled else None,
@@ -4906,6 +4913,7 @@ class HarnessRuntimeService:
         self.adapter_factory = adapter_factory or self._default_adapter
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self._connections: dict[str, HarnessConnection] = {}
+        self._connection_browser_bindings: dict[str, str | None] = {}
         self._gateways: dict[str, McpGatewaySession] = {}
         self._gateway_tool_maps: dict[
             str, dict[str, tuple[McpServerProfile, McpToolSnapshot]]
@@ -5177,6 +5185,7 @@ class HarnessRuntimeService:
             stage="shutdown",
         )
         self._connections.clear()
+        self._connection_browser_bindings.clear()
         await gather_diagnostic(
             *(gateway.close() for gateway in self._gateways.values()),
             feature="harnesses",
@@ -5724,6 +5733,7 @@ class HarnessRuntimeService:
                 "cannot close a harness session with an active turn"
             )
         connection = self._connections.pop(session_id, None)
+        self._connection_browser_bindings.pop(session_id, None)
         if connection is not None:
             await connection.close()
         gateway = self._gateways.pop(session_id, None)
@@ -8164,7 +8174,15 @@ class HarnessRuntimeService:
         if name == "browser.companion":
             current = self.store.get(HarnessSession, session.id)
             companion_id = current.metadata.get("browser_companion_session_id")
-            if not isinstance(companion_id, str):
+            from .browser_companion_tools import attached_session
+
+            if (
+                not isinstance(companion_id, str)
+                or attached_session(
+                    self.store, turn.engagement_id, turn.chat_session_id
+                )
+                != companion_id
+            ):
                 raise HarnessConfigurationError(
                     "No browser is attached to this conversation."
                 )
@@ -8962,7 +8980,24 @@ class HarnessRuntimeService:
     async def _connection(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
+        session = self.store.get(HarnessSession, session.id)
+        browser_binding = session.metadata.get("browser_companion_session_id")
+        browser_binding = browser_binding if isinstance(browser_binding, str) else None
         existing = self._connections.get(session.id)
+        if (
+            existing is not None
+            and self._connection_browser_bindings.get(session.id) != browser_binding
+        ):
+            # Vendor MCP catalogs are fixed when the connection opens. Resume the
+            # saved external thread with a fresh gateway between turns, keeping
+            # the durable conversation and native transcript intact.
+            self._connections.pop(session.id, None)
+            self._connection_browser_bindings.pop(session.id, None)
+            await existing.close()
+            gateway = self._gateways.pop(session.id, None)
+            if gateway is not None:
+                await gateway.close()
+            existing = None
         if existing is not None:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
@@ -9055,6 +9090,7 @@ class HarnessRuntimeService:
             await gateway.close()
             raise
         self._connections[session.id] = connection
+        self._connection_browser_bindings[session.id] = browser_binding
         return connection
 
     async def _request_permission(
