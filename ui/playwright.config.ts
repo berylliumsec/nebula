@@ -28,6 +28,14 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   projects: [
+    ...[
+      {name: "assistant-real-desktop", use: {...devices["Desktop Chrome"], viewport: {width: 1440, height: 900}}},
+      {name: "assistant-real-compact", use: {...devices["Desktop Chrome"], viewport: {width: 1024, height: 768}}},
+      ...[320, 390, 430].flatMap(width => [
+        {name: `assistant-real-chromium-${width}`, use: {...devices["Pixel 5"], viewport: {width, height: 844}}},
+        {name: `assistant-real-webkit-${width}`, use: {...devices["iPhone 13"], viewport: {width, height: 844}}},
+      ]),
+    ].map(project => ({...project, testMatch: "**/real-core.spec.ts", grep: /assistant upgrade/})),
     {
       name: "desktop",
       testIgnore: ["**/real-core.spec.ts", "**/usage/**"],

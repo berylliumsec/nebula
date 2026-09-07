@@ -679,7 +679,8 @@ class ChatSessionRenameRequest(NebulaModel):
 
 
 class ChatSessionForkRequest(NebulaModel):
-    through_message_id: str = Field(min_length=1, max_length=200)
+    through_message_id: str | None = Field(default=None, min_length=1, max_length=200)
+    before_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
@@ -7719,7 +7720,9 @@ def create_app(
                         "harness turn completed without a durable message"
                     )
                 message = store.get(ChatMessage, completed_turn.final_message_id)
-                if chat.metadata.get("initial_title_state") == "pending":
+                from .chat_naming import should_name, substantive_prompt
+                naming_prompt = substantive_prompt([item.content for item in chat_service().session_messages(chat.id) if item.role.value == "user"])
+                if should_name(store.get(ChatSession, chat.id)) and naming_prompt:
                     try:
                         naming_turn = await harness_runtime.analyze_structured(
                             engagement_id=chat.engagement_id,
@@ -7728,7 +7731,7 @@ def create_app(
                             prompt=(
                                 "Name this conversation from its first exchange. Return only a concise, "
                                 "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
-                                f"Operator request:\n{prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
+                                f"Operator request:\n{naming_prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
                             ),
                         )
                         title = (
@@ -8119,6 +8122,9 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    from .chat_workspace import workspace_router
+    app.include_router(workspace_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)])
+
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
         response_model=list[ChatMessage],
@@ -8187,6 +8193,8 @@ def create_app(
     async def fork_chat_session(
         session_id: str, request: ChatSessionForkRequest
     ) -> ChatSession:
+        if bool(request.through_message_id) == bool(request.before_message_id):
+            raise HTTPException(status_code=422, detail="Choose exactly one branch boundary")
         source = store.get(ChatSession, session_id)
         harness_session_id: str | None = None
         if source.backend == ChatBackend.HARNESS:
@@ -8201,6 +8209,7 @@ def create_app(
         return chat_service().fork_session(
             session_id,
             through_message_id=request.through_message_id,
+            before_message_id=request.before_message_id,
             title=request.title,
             harness_session_id=harness_session_id,
         )

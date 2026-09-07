@@ -2398,3 +2398,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .activity-ledger-compact { margin-block: 8px; border: 0; background: transparent; }
 .activity-ledger-compact .activity-ledger-footer { min-height: 44px; margin: 0; }
 .assistant-starters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+
+.assistant-search { flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); max-height: 40%; overflow-y: auto; }
+.assistant-search summary { cursor: pointer; min-height: 28px; }
+.assistant-search form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.assistant-search li button { text-align: left; white-space: normal; width: 100%; }
+.assistant-search li span { display: block; overflow-wrap: anywhere; }
+.chat-message:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.chat-advanced-session { min-width: 0; }

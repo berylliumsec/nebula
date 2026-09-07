@@ -1459,6 +1459,19 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.getByRole("button", {name: "Close assistant settings"}).click();
     await page.goto(url);
     await expect(page.locator(".chat-message.operator")).toContainText("Hello");
+    const operator = page.locator(".chat-message.operator");
+    await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.goto(url);
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.locator(".assistant-search > summary").click();
+    await page.getByLabel("Search transcript", {exact: true}).fill("Hello");
+    await page.getByRole("button", {name: "Search messages", exact: true}).click();
+    await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
+    await operator.getByRole("button", {name: "Edit and branch"}).click();
+    await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Hello");
+    await expect(page.locator(".chat-message")).toHaveCount(0);
+    await expect(page.getByRole("button", {name: "Open parent"})).toBeVisible();
     await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });

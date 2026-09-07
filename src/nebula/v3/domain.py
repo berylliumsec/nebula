@@ -3283,6 +3283,15 @@ class HarnessInteraction(Entity):
         return self
 
 
+class ChatBookmark(Entity):
+    """An operator bookmark; message text remains in its canonical record."""
+    entity_kind: ClassVar[str] = "chat_bookmarks"
+    engagement_id: str
+    session_id: str
+    message_id: str
+    active: bool = True
+
+
 class ChatSession(Entity):
     """A durable engagement-scoped analyst conversation."""
 
@@ -3985,6 +3994,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     LibraryItem,
     ScopeImport,
     ChatSession,
+    ChatBookmark,
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,

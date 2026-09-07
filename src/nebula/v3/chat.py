@@ -2227,7 +2227,8 @@ class ChatService:
         self,
         session_id: str,
         *,
-        through_message_id: str,
+        through_message_id: str | None = None,
+        before_message_id: str | None = None,
         title: str | None = None,
         harness_session_id: str | None = None,
     ) -> ChatSession:
@@ -2240,7 +2241,7 @@ class ChatService:
             )
         messages = self._session_messages(source)
         boundary = next(
-            (message for message in messages if message.id == through_message_id), None
+            (message for message in messages if message.id == (through_message_id or before_message_id)), None
         )
         if boundary is None:
             raise ChatHistoryConflict(
@@ -2271,6 +2272,7 @@ class ChatService:
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
                     "workspace_is_shared": True,
+                    "branch_before_message": bool(before_message_id),
                     "harness_context_handoff_pending": (
                         source.backend == ChatBackend.HARNESS
                     ),
@@ -2278,7 +2280,7 @@ class ChatService:
             )
         )
         for message in messages:
-            if message.sequence > boundary.sequence:
+            if message.sequence > boundary.sequence or (before_message_id and message.sequence == boundary.sequence):
                 break
             self.store.create(
                 ChatMessage(
@@ -2984,16 +2986,12 @@ class ChatService:
         if not session_id or not prepared.engagement_id:
             return
         session = self.store.get(ChatSession, session_id)
-        if session.metadata.get("initial_title_state") in {"generated", "failed"}:
+        from .chat_naming import should_name, substantive_prompt
+        if not should_name(session):
             return
-        first_prompt = next(
-            (
-                message.content
-                for message in prepared.model_request.messages
-                if message.role == "user"
-            ),
-            "",
-        )
+        first_prompt = substantive_prompt([message.content for message in prepared.model_request.messages if message.role == "user"])
+        if not first_prompt:
+            return
         request = ModelRequest(
             model=prepared.resolved_model,
             instructions=(
@@ -3044,11 +3042,11 @@ class ChatService:
             changes = {
                 "metadata": {**session.metadata, "initial_title_state": "failed"}
             }
+        latest = self.store.get(ChatSession, session.id)
+        if latest.metadata.get("initial_title_state") == "operator":
+            return
         prepared.session = self.store.update(
-            ChatSession,
-            session.id,
-            changes,
-            expected_revision=session.revision,
+            ChatSession, session.id, {**changes, "metadata": {**latest.metadata, **changes["metadata"]}}, expected_revision=latest.revision,
         )
 
     @staticmethod
