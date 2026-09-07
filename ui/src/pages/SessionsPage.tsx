@@ -1,3 +1,4 @@
+import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ChatEvidence } from "../components/ChatEvidence";
@@ -552,6 +553,7 @@ export function SessionsPage() {
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  useChatComposerAnchor(composerRef, view === "chat" && conversationOpen);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);

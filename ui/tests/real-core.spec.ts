@@ -1590,3 +1590,61 @@ for (const runtime of [
     } finally {await api.dispose(); await stopRealCore(core);}
   });
 }
+
+test("assistant upgrade deployed local service retains operator workflow", async ({page}, testInfo) => {
+  const origin = process.env.NEBULA_ASSISTANT_LIVE_ORIGIN;
+  const tokenFile = process.env.NEBULA_ASSISTANT_LIVE_TOKEN_FILE;
+  test.skip(!origin || !tokenFile, "Explicit deployed-service origin and a private token file are required.");
+  test.setTimeout(180_000);
+  const token = (await readFile(tokenFile!, "utf8")).trim();
+  const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${token}`}});
+  try {
+    const profiles = await (await api.get("harnesses")).json() as {id: string; kind: string}[];
+    const profile = profiles.find(item => item.kind === "codex_app_server"); expect(profile).toBeTruthy();
+    await page.goto(`${origin}/?view=chat#token=${encodeURIComponent(token)}`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await page.getByLabel("Chat runtime", {exact: true}).selectOption("harness");
+    await page.getByLabel("Chat harness", {exact: true}).selectOption(profile!.id);
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Reply exactly NEBULA_LOCAL_VALIDATED. Do not use tools, access files, or change anything.");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_LOCAL_VALIDATED", {timeout: 120_000});
+    await expect(page.getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0);
+    const session = new URL(page.url()).searchParams.get("session"); expect(session).toBeTruthy();
+    const savedUrl = `${origin}/?view=chat&session=${session}#token=${encodeURIComponent(token)}`;
+    await page.goto(savedUrl);
+    const operator = page.locator(".chat-message.operator").first();
+    await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
+    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
+    const decisions = page.getByRole("region", {name: "Saved decisions and constraints"});
+    await decisions.getByRole("textbox", {name: "Operator context text"}).fill("This validation conversation uses text-only replies and no tools.");
+    await decisions.getByRole("button", {name: "Save operator context"}).click();
+    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
+    await page.getByRole("button", {name: "Close details"}).click();
+    await composer.fill("Reply exactly NEBULA_QUEUE_VALIDATED. Do not use tools or access files.");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+    const queue = page.getByRole("region", {name: "Core follow-up queue"});
+    await expect(queue).toContainText("NEBULA_QUEUE_VALIDATED");
+    await queue.getByRole("button", {name: "Resume queue", exact: true}).click();
+    await page.goto("about:blank");
+    await expect.poll(async () => {
+      const record = await (await api.get(`chat/sessions/${session}/queue`)).json() as {items: {status: string; detail?: string}[]};
+      if (record.items.some(item => item.status === "needs_review")) throw new Error(JSON.stringify(record.items.map(item=>({status:item.status,detail:item.detail}))));
+      return record.items.every(item=>item.status === "complete");
+    }, {timeout: 90_000}).toBe(true);
+    await page.goto(savedUrl);
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_QUEUE_VALIDATED");
+    await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
+    await page.locator(".chat-evidence").last().locator("summary").first().click();
+    await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
+    await page.getByRole("button", {name: "Results", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Conversation results"})).toBeVisible();
+    await page.getByRole("button", {name: "Context", exact: true}).click();
+    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
+    await page.getByRole("button", {name: "Close details"}).click();
+    await testInfo.attach("deployed-build", {body: JSON.stringify({origin, session, assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+    await testInfo.attach("deployed-chat", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose();}
+});

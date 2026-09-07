@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DialogProvider, ModalSurface, useDialogOpen } from "./DialogSystem";
 
 function DialogHarness() {
@@ -51,4 +51,18 @@ describe("ModalSurface", () => {
     await user.keyboard("{Escape}");
     expect(screen.getByLabelText("Dialog state")).toHaveTextContent("closed");
   });
+});
+
+
+it("does not steal focus when an operator reaches another field before initial focus runs", () => {
+  let focusFrame: FrameRequestCallback | undefined;
+  const request = vi.spyOn(window, "requestAnimationFrame").mockImplementation(callback => {focusFrame = callback; return 1;});
+  const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+  try {
+    const {unmount} = render(<ModalSurface labelledBy="focus-title" onClose={() => undefined}><h2 id="focus-title">Edit context</h2><button>Close</button><textarea aria-label="Immediate editing" /></ModalSurface>);
+    const field = screen.getByRole("textbox", {name: "Immediate editing"});
+    field.focus(); focusFrame?.(0);
+    expect(field).toHaveFocus();
+    unmount(); expect(cancel).toHaveBeenCalledWith(1);
+  } finally {request.mockRestore(); cancel.mockRestore();}
 });
