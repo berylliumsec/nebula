@@ -1034,7 +1034,13 @@ class NebulaStore:
             owned_records = or_(
                 and_(
                     EntityRow.kind.in_(
-                        ("chat_messages", "chat_turns", "chat_bookmarks", "chat_queues")
+                        (
+                            "chat_messages",
+                            "chat_turns",
+                            "chat_bookmarks",
+                            "chat_queues",
+                            "chat_decisions",
+                        )
                     ),
                     EntityRow.payload["session_id"].as_string() == session_id,
                 ),

@@ -480,6 +480,9 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "chat_bookmarks",
+    "chat_queues",
+    "chat_decisions",
     "action_intents",
     "automation_policies",
     "chat_turns",
@@ -1382,6 +1385,7 @@ def create_app(
         artifact_store=artifact_store,
     )
 
+    from .chat_decisions import decisions_router
     from .chat_queue import ChatQueueService, queue_router
 
     chat_queue = ChatQueueService(store, provider_chat, harness_runtime)
@@ -8139,6 +8143,9 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    app.include_router(
+        decisions_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)]
+    )
     app.include_router(
         queue_router(chat_queue),
         prefix=API_PREFIX,

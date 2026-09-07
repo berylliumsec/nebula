@@ -21,3 +21,9 @@
 .chat-follow-up-queue p { overflow-wrap: anywhere; white-space: pre-wrap; }
 .chat-follow-up-queue button { min-height: 44px; }
 .chat-follow-up-queue textarea { width: 100%; min-height: 80px; }
+
+.chat-decisions article { padding-block: 10px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.chat-decisions textarea { width: 100%; min-height: 110px; }
+.chat-decisions p { white-space: pre-wrap; }
+.chat-decisions button { min-height: 44px; }
+.decision-editor { display: grid; gap: 8px; }

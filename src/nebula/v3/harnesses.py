@@ -5970,6 +5970,12 @@ class HarnessRuntimeService:
         native_capabilities = HarnessNativeCapabilities.model_validate(
             session.metadata.get("native_capabilities", {})
         )
+        from .chat_decisions import decision_snapshot, decision_instructions
+
+        operator_decisions = decision_snapshot(self.store, chat.id, engagement_id)
+        runtime_context = (runtime_context or "") + decision_instructions(
+            operator_decisions
+        )
         chat_turn = ChatTurn(
             id=str(uuid4()),
             engagement_id=engagement_id,
@@ -5984,6 +5990,7 @@ class HarnessRuntimeService:
             ),
             max_artifact_queries=max_artifact_queries,
             request_snapshot={
+                "operator_decisions": operator_decisions,
                 "runtime": "harness",
                 "harness_profile_id": profile_id,
                 "harness_session_id": session.id,
@@ -6064,6 +6071,7 @@ class HarnessRuntimeService:
                     metadata={
                         "harness_turn_id": harness_turn.id,
                         "context_attachments": context_attachments or [],
+                        "operator_decisions": operator_decisions,
                     },
                 )
             )

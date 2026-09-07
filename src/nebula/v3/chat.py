@@ -329,6 +329,7 @@ class PreparedChat:
     pending_session: ChatSession | None
     stored_messages: list[ChatMessage]
     new_messages: list[ChatRequestMessage]
+    operator_decisions: list[dict[str, Any]] = field(default_factory=list)
     context_attachments: list[ChatContextAttachment] = field(default_factory=list)
     context_usage: ChatTokenUsage = field(default_factory=ChatTokenUsage)
     context_snapshot: ContextSnapshot | None = None
@@ -915,7 +916,12 @@ class ChatService:
                 )
 
         citations: list[ChatCitation] = []
-        instructions = _CHAT_INSTRUCTIONS
+        from .chat_decisions import decision_snapshot, decision_instructions
+
+        operator_decisions = decision_snapshot(
+            self.store, session.id if session else None, engagement_id
+        )
+        instructions = _CHAT_INSTRUCTIONS + decision_instructions(operator_decisions)
         knowledge_budget = max(
             1,
             resolve_context_limits(
@@ -1160,6 +1166,7 @@ class ChatService:
                 scope_policy_id=tool_components.scope.id,
                 scope_revision=tool_components.scope.revision,
                 request_snapshot={
+                    "operator_decisions": operator_decisions,
                     "model_request": model_request.model_dump(mode="json"),
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
@@ -1190,6 +1197,7 @@ class ChatService:
                 model=selected_model,
                 tools_enabled=False,
                 request_snapshot={
+                    "operator_decisions": operator_decisions,
                     "model_request": model_request.model_dump(mode="json"),
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
@@ -1225,6 +1233,7 @@ class ChatService:
             tool_components=tool_components,
             turn=turn,
             queue_claim=request._queue_claim,
+            operator_decisions=operator_decisions,
         )
         if turn is not None:
             self._persist_turn_inputs(prepared)
@@ -1305,6 +1314,8 @@ class ChatService:
     async def _stream_tool_turn(
         self, prepared: PreparedChat
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        from .chat_decisions import decision_instructions
+
         turn = prepared.turn
         components = prepared.tool_components
         if turn is None or components is None or prepared.engagement_id is None:
@@ -1341,7 +1352,10 @@ class ChatService:
                 ]
                 routing = prepared.model_request.model_copy(
                     update={
-                        "instructions": _CHAT_TOOL_INSTRUCTIONS,
+                        "instructions": _CHAT_TOOL_INSTRUCTIONS
+                        + decision_instructions(
+                            turn.request_snapshot.get("operator_decisions", [])
+                        ),
                         "tools": [
                             ToolDefinition(
                                 name=spec.name,
@@ -1542,6 +1556,9 @@ class ChatService:
                 update={
                     "instructions": (
                         _CHAT_TOOL_RESULT_INSTRUCTIONS
+                        + decision_instructions(
+                            turn.request_snapshot.get("operator_decisions", [])
+                        )
                         + _tool_inventory_instructions(components.specs)
                         + _reference_instructions(
                             operator_help_chunks, trusted_operator_help=True
@@ -2317,6 +2334,14 @@ class ChatService:
                     metadata={**message.metadata, "fork_source_message_id": message.id},
                 )
             )
+        from .chat_decisions import fork_decisions
+
+        fork_decisions(
+            self.store,
+            source,
+            fork,
+            boundary.sequence - (1 if before_message_id else 0),
+        )
         return fork
 
     def context_status(self, session_id: str) -> ContextStatus:
@@ -3146,7 +3171,10 @@ class ChatService:
                 content=message.content,
                 content_blocks=message.content_blocks,
                 metadata=(
-                    _context_attachment_metadata(prepared.context_attachments)
+                    {
+                        **_context_attachment_metadata(prepared.context_attachments),
+                        "operator_decisions": prepared.operator_decisions,
+                    }
                     if index == len(prepared.new_messages) - 1
                     else {}
                 ),
@@ -3220,7 +3248,10 @@ class ChatService:
                 content=message.content,
                 content_blocks=message.content_blocks,
                 metadata=(
-                    _context_attachment_metadata(prepared.context_attachments)
+                    {
+                        **_context_attachment_metadata(prepared.context_attachments),
+                        "operator_decisions": prepared.operator_decisions,
+                    }
                     if index == len(prepared.new_messages) - 1
                     else {}
                 ),

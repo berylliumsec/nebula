@@ -3283,6 +3283,23 @@ class HarnessInteraction(Entity):
         return self
 
 
+class ChatDecision(Entity):
+    entity_kind: ClassVar[str] = "chat_decisions"
+    engagement_id: str
+    session_id: str | None = None
+    scope: str = Field(default="conversation", pattern="^(conversation|project)$")
+    kind: str = Field(default="decision", pattern="^(decision|constraint|assumption)$")
+    text: str = Field(min_length=1, max_length=4000)
+    status: str = Field(default="active", pattern="^(active|superseded|removed)$")
+    source_message_id: str | None = None
+    source_session_id: str | None = None
+    source_selection: str | None = None
+    effective_sequence: int = Field(default=0, ge=0)
+    copied_from_id: str | None = None
+    copied_from_revision: int | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ChatQueue(Entity):
     """Revisioned dispatch order and retained idempotency receipts for one chat."""
 
@@ -4008,6 +4025,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatSession,
     ChatBookmark,
     ChatQueue,
+    ChatDecision,
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,

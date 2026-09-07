@@ -192,7 +192,11 @@ def results_router(store, artifacts):
                 .limit(41)
             )
             messages = [ChatMessage.model_validate(row.payload) for row in rows]
-        from .chat import _CHAT_INSTRUCTIONS
+        from .chat import (
+            _CHAT_INSTRUCTIONS,
+            _CHAT_TOOL_INSTRUCTIONS,
+            _CHAT_TOOL_RESULT_INSTRUCTIONS,
+        )
 
         return {
             "items": [
@@ -200,12 +204,20 @@ def results_router(store, artifacts):
                     "message_id": m.id,
                     "sequence": m.sequence,
                     "attachments": m.metadata.get("context_attachments", []),
+                    "operator_decisions": m.metadata.get("operator_decisions", []),
                 }
                 for m in messages[:40]
                 if m.metadata.get("context_attachments")
+                or m.metadata.get("operator_decisions")
             ],
             "next_offset": offset + 40 if len(messages) > 40 else None,
-            "core_instructions": _CHAT_INSTRUCTIONS
+            "core_instructions": (
+                _CHAT_TOOL_INSTRUCTIONS
+                + "\n\nFinal synthesis policy:\n"
+                + _CHAT_TOOL_RESULT_INSTRUCTIONS
+                if session.metadata.get("tools_enabled")
+                else _CHAT_INSTRUCTIONS
+            )
             if session.backend.value == "provider"
             else None,
             "instruction_note": "Core assistant policy; retrieval and operator context are additional inputs."
