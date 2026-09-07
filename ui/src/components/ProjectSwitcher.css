@@ -1,0 +1,10 @@
+.project-switcher-row { display: flex; align-items: center; min-width: 0; }
+.project-switcher-row > button { display: flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.project-switcher-row > button:first-child { flex: 1; justify-content: space-between; }
+.project-switcher-row > button:hover, .project-switcher-row > button[aria-current="true"] { background: var(--surface-hover); }
+.project-switcher-row > button > span, .project-switcher-name { display: flex; min-width: 0; flex: 1; flex-direction: column; overflow-wrap: anywhere; font-size: 11px; }
+.project-switcher-name { padding: 6px 8px; }
+.project-switcher-row > .project-switcher-action { flex: 0 0 44px; justify-content: center; }
+.project-switcher-row > button:disabled { opacity: .5; cursor: default; }
+.project-switcher-feedback { padding: 0 12px; font-size: 12px; overflow-wrap: anywhere; }
+.engagement-menu > .engagement-new { min-height: 44px; }
