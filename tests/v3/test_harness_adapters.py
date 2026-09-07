@@ -2107,3 +2107,73 @@ def test_claude_gateway_is_required_and_ready_before_the_session_opens(
         await connection.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("resumed", [False, True])
+def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
+    async def scenario():
+        rpc = FixtureGrokRpc()
+        profile = HarnessProfile(
+            id="grok-a",
+            name="Grok",
+            kind=HarnessKind.GROK_ACP,
+            executable="/bin/true",
+        )
+        session = HarnessSession(
+            engagement_id="linked-project",
+            harness_profile_id=profile.id,
+            model="grok-test",
+            external_session_id="existing-session" if resumed else None,
+        )
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = await FixtureGrokAdapter(rpc).open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=no_permission,
+                gateway_config={
+                    "nebula": {
+                        "transport": "stdio",
+                        "command": "/gateway/python",
+                        "args": ["-m", "nebula.gateway"],
+                        "env": {"NEBULA_MCP_GATEWAY_TOKEN": "fixture-token"},
+                    }
+                },
+                gateway_tools=(
+                    {"name": "workspace.read", "description": "Read project files"},
+                ),
+            )
+        )
+        method = "session/load" if resumed else "session/new"
+        params = next(params for name, params in rpc.calls if name == method)
+        assert params["mcpServers"] == [
+            {
+                "name": "nebula",
+                "command": "/gateway/python",
+                "args": ["-m", "nebula.gateway"],
+                "env": [{"name": "NEBULA_MCP_GATEWAY_TOKEN", "value": "fixture-token"}],
+            }
+        ]
+        for prompt in ("Inspect the project", "Check it again"):
+            _ = [
+                event async for event in connection.run_turn(prompt, model="grok-test")
+            ]
+        prompts = [
+            params["prompt"][0]["text"]
+            for name, params in rpc.calls
+            if name == "session/prompt"
+        ]
+        assert len(prompts) == 2
+        for prompt in prompts:
+            assert "private scratch, not the project workspace" in prompt
+            assert "workspace.read" in prompt
+            assert "fixture-token" not in prompt
+        await connection.close()
+
+    asyncio.run(scenario())
