@@ -54,27 +54,33 @@ export function ActivityLedger({
   renderEntryActions,
   onExpandedChange,
   emptyState,
+  compact = false,
+  historyPending = false,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
   renderEntryActions?: (entry: ActivityLedgerEntry) => ReactNode;
   onExpandedChange?: (expanded: boolean) => void;
   emptyState?: ReactNode;
+  compact?: boolean;
+  historyPending?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const auditId = useId();
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || entry.status === "failed");
   const receipt = receiptParts(model);
+  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || ["attention", "failed", "cancelled"].includes(entry.status));
+  if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
-    <section className={`activity-ledger ${statusClass(model.status)}`} aria-label={model.title}>
-      <header className="activity-ledger-header">
+    <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}`} aria-label={model.title}>
+      {!compact && <header className="activity-ledger-header">
         <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
         <strong>{model.title}</strong>
         <span>{activityLedgerStatusLabel(model.status)}{model.durationMs ? ` · ${durationLabel(model.durationMs)}` : ""}</span>
-      </header>
+      </header>}
 
-      {active ? <div className="activity-ledger-live">
+      {!compact && (active ? <div className="activity-ledger-live">
         {model.phases.length > 0 && <ol className="activity-ledger-phases" aria-label="Work phases">
           {model.phases.map((phase) => <li className={statusClass(phase.status)} key={phase.key}>
             <span className="activity-ledger-phase-marker" aria-hidden="true" />
@@ -86,7 +92,7 @@ export function ActivityLedger({
       </div> : <p className="activity-ledger-receipt">
         <strong>{activityLedgerStatusLabel(model.status)}</strong>
         {receipt.length > 0 && <span>{receipt.join(" · ")}</span>}
-      </p>}
+      </p>)}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
         {attentionEntries.map((entry) => <div className={statusClass(entry.status)} key={`attention:${entry.id}`}>
@@ -97,7 +103,7 @@ export function ActivityLedger({
       </div>}
 
       <footer className="activity-ledger-footer">
-        <span>{model.actionCount} action{model.actionCount === 1 ? "" : "s"}{model.attentionCount ? ` · ${model.attentionCount} need attention` : ""}</span>
+        <span>{compact ? [activityLedgerStatusLabel(model.status), ...receipt].join(" · ") : `${model.actionCount} actions`}</span>
         <button
           type="button"
           aria-expanded={expanded}
@@ -108,7 +114,7 @@ export function ActivityLedger({
             return next;
           })}
         >
-          {expanded ? "Hide activity" : "Show activity"}
+          {expanded ? "Hide activity" : historyPending ? "Inspect saved work" : "Show activity"}
           <ChevronDown size={14} aria-hidden="true" />
         </button>
       </footer>

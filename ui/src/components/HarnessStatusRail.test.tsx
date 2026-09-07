@@ -43,3 +43,9 @@ describe("HarnessStatusRail", () => {
     expect(screen.getByText("Action required")).toBeVisible();
   });
 });
+
+it("does not interpret an idle session as a failed connection", () => {
+  render(<HarnessStatusRail activity={{...activity, busy: false, live: false, sessionStatus: "idle", plan: []}} pendingRequests={0} />);
+  expect(screen.getByText("Ready for your next message")).toBeVisible();
+  expect(screen.queryByText("Connection unavailable")).toBeNull();
+});

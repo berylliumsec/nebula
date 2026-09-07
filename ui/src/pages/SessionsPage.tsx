@@ -538,6 +538,7 @@ export function SessionsPage() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatFollowBottomRef = useRef(true);
+  const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const previousChatSendingRef = useRef(false);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
@@ -568,6 +569,7 @@ export function SessionsPage() {
   const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
     chatFollowBottomRef.current = true;
+    setHasNewerMessages(false);
   }, [conversationOpen, sessionId]);
   useLayoutEffect(() => {
     const runStarted = sending && !previousChatSendingRef.current;
@@ -1441,6 +1443,15 @@ export function SessionsPage() {
       if (historicalActivityAbortRef.current.get(turnId) === controller) historicalActivityAbortRef.current.delete(turnId);
     }
   };
+
+  useEffect(() => {
+    // Read recent durable work so empty greetings do not retain placeholder cards.
+    // Older turns remain explicitly discoverable through Inspect saved work.
+    if (!api || loadingHistory || coreState !== "online") return;
+    for (const message of messages.slice(-20)) {
+      if (message.role === "assistant" && message.durable && message.harnessTurnId && !historicalActivityState[message.harnessTurnId]) void loadHistoricalHarnessActivity(message);
+    }
+  }, [api, sessionId, messages.length, loadingHistory, coreState]);
 
   const selectSession = async (id: string, updateUrl = true) => {
     explicitNewConversationRef.current = false;
@@ -3072,7 +3083,7 @@ export function SessionsPage() {
   const pendingHarnessRequests = harnessInteractions.filter((item) => item.status === "pending").length;
   const showHarnessStatusRail = runtimeKind === "harness"
     && Boolean(harnessActivity)
-    && Boolean(harnessActivity?.busy || pendingHarnessRequests || !harnessActivity?.live);
+    && Boolean(harnessActivity?.busy || pendingHarnessRequests);
   const assistantSource = runtimeKind === "harness"
     ? selectedHarness?.name ?? "Agent harness"
     : selectedProvider?.name ?? "Model provider";
@@ -3278,6 +3289,7 @@ export function SessionsPage() {
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
                       chatFollowBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 4;
+                      setHasNewerMessages(!chatFollowBottomRef.current);
                     }}
                     autoScroll
                     scrollToBottomOnInitialize
@@ -3293,7 +3305,7 @@ export function SessionsPage() {
                     .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
                     .filter((item): item is { key: string; text: string } => Boolean(item.text));
                   const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
-                  const historicalTurnId = message.durable ? message.harnessTurnId : undefined;
+                  const historicalTurnId = message.durable && message.role === "assistant" ? message.harnessTurnId : undefined;
                   const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
                   const historicalError = historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined;
                   const activityLedger = messageActivityItems.length > 0
@@ -3322,7 +3334,9 @@ export function SessionsPage() {
                         ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={runnableLanguages} onRun={setRunCandidate} />
                         : <p>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
-                      {activityLedger && <ActivityLedger
+                      {message.role === "assistant" && activityLedger && <ActivityLedger
+                        compact
+                        historyPending={Boolean(historicalTurnId && historicalState !== "loaded")}
                         model={activityLedger}
                         onExpandedChange={historicalTurnId ? (expanded) => {
                           if (expanded) void loadHistoricalHarnessActivity(message);
@@ -3363,16 +3377,17 @@ export function SessionsPage() {
                     </div>
                   </article>
                   );
-                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use the session-scoped command runtime when the exact model is verified.</p></div>}
-                    <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
+                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
+                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
                       <ChevronDown size={16} aria-hidden="true" />
-                    </ThreadPrimitive.ScrollToBottom>
+                    </ThreadPrimitive.ScrollToBottom>}
                   </ThreadPrimitive.Viewport>
                 </ThreadPrimitive.Root>
               </AssistantRuntimeProvider>
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
+              {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} />}
               {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue" aria-label="Queued follow-up messages" aria-live="polite">
                 <header><div><ListTodo size={14} aria-hidden="true" /><span><strong>Follow-up queue</strong><small>{queuedFollowUps.length} message{queuedFollowUps.length === 1 ? "" : "s"} · text only · current browser tab</small></span></div><button className="button quiet" type="button" disabled={queuedFollowUps.some((item) => item.status === "sending")} onClick={() => { followUpAutoDrainRef.current = false; followUpDrainIdRef.current = undefined; setQueuedFollowUps([]); setMessageActionStatus("Follow-up queue cleared."); }}>Clear</button></header>

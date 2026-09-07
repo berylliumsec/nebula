@@ -2391,3 +2391,10 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 @media (forced-colors: active) {
   .side-nav, .top-bar, .activity-center, .modal-surface { backdrop-filter: none; }
 }
+
+/* Assistant surfaces must remain readable above the transcript. */
+.chat-settings-popover { background: var(--canvas); isolation: isolate; }
+.chat-settings-popover > .chat-context-bar { min-height: 0; }
+.activity-ledger-compact { margin-block: 8px; border: 0; background: transparent; }
+.activity-ledger-compact .activity-ledger-footer { min-height: 44px; margin: 0; }
+.assistant-starters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }

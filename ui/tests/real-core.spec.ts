@@ -1437,3 +1437,28 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await stopRealCore(core);
   }
 });
+
+test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const provider = await (await api.post("providers", {data: {name: "Assistant acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Hello"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const chat = await response.json() as {session_id: string};
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toContainText("Hello");
+    await expect(page.locator(".chat-message.operator .activity-ledger")).toHaveCount(0);
+    await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(page.getByRole("dialog", {name: "Assistant settings"})).toBeVisible();
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toContainText("Hello");
+    await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});

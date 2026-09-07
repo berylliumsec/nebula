@@ -5243,3 +5243,19 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
     expect(contract.nestedFrames, `${route} contains decorative frame nesting`).toEqual([]);
   }
 });
+
+
+test("assistant upgrade foundation keeps empty chat quiet and settings opaque", async ({ page }) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.getByRole("button", {name: "Scroll to latest message"})).toHaveCount(0);
+  await expect(page.locator(".activity-ledger")).toHaveCount(0);
+  await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+  const settings = page.getByRole("dialog", {name: "Assistant settings"});
+  await expect(settings).toBeVisible();
+  expect(await settings.evaluate(el => getComputedStyle(el).backgroundColor)).not.toMatch(/rgba.*0\.[0-9]+\)/);
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  expect(overflow).toBe(false);
+  await page.getByRole("button", {name: "Close assistant settings"}).click();
+  await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
+});

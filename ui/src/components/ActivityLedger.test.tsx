@@ -101,3 +101,13 @@ describe("ActivityLedger", () => {
     expect(screen.queryByText("Newest first")).toBeNull();
   });
 });
+
+it("omits empty completed assistant work but keeps checkpoint controls discoverable", () => {
+  const empty = model({status: "complete", entries: [], phases: [], actionCount: 0});
+  const { rerender } = render(<ActivityLedger compact model={empty} />);
+  expect(screen.queryByRole("region")).toBeNull();
+  rerender(<ActivityLedger compact historyPending model={empty} />);
+  expect(screen.getByRole("button", {name: "Inspect saved work"})).toBeVisible();
+  rerender(<ActivityLedger compact model={{...empty, entries: [{...model().entries[0], countsAsAction: false, status: "complete", kind: "checkpoint"}]}} />);
+  expect(screen.getByRole("button", {name: "Show activity"})).toBeVisible();
+});
