@@ -88,6 +88,8 @@ export function EngagementPolicySettings() {
   const [localOnly, setLocalOnly] = useState(true);
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [approvalPolicy, setApprovalPolicy] = useState<AutomationProjectPolicy["approvalPolicy"]>("on_boundary");
+  const [executionMode, setExecutionMode] = useState<"docker" | "host">("docker");
+  const [hostAcknowledged, setHostAcknowledged] = useState(false);
   const [networkEnabled, setNetworkEnabled] = useState(false);
   const [vpnProfileId, setVpnProfileId] = useState("");
   const [vpnProfiles, setVpnProfiles] = useState<VpnProfile[]>([]);
@@ -112,6 +114,8 @@ export function EngagementPolicySettings() {
 
   const applyPolicy = (next: AutomationProjectPolicy) => {
     setPolicy(next);
+    setExecutionMode(next.executionMode ?? "docker");
+    setHostAcknowledged(next.hostAccessAcknowledged ?? false);
     setApprovalPolicy(next.approvalPolicy);
     setNetworkEnabled(next.networkEnabled);
     setVpnProfileId(next.vpnProfileId ?? "");
@@ -204,9 +208,12 @@ export function EngagementPolicySettings() {
       setValidationError("Maximum command timeout must be a whole number from 1000 through 86400000 milliseconds.");
       return;
     }
+    if (executionMode === "host" && !hostAcknowledged) { setValidationError("Acknowledge host access before enabling Host mode."); return; }
     setSaving("runtime"); setError(undefined); setValidationError(undefined);
     try {
       applyPolicy(await api.updateAutomationPolicy(engagement.id, {
+        executionMode,
+        hostAccessAcknowledged: hostAcknowledged,
         approvalPolicy,
         networkEnabled,
         runnerProfileId: policy.runnerProfileId,
@@ -229,11 +236,13 @@ export function EngagementPolicySettings() {
       <form className="panel policy-form" onSubmit={(event) => void saveRuntime(event)}>
         <header className="panel-header compact"><div><h3>Command runtime</h3><p>Workspace commands never need a target address.</p></div><TerminalSquare size={18} /></header>
         <div className="policy-form-body">
+          <label>Execution mode<select aria-label="Project execution mode" disabled={!policy || saving === "runtime"} value={executionMode} onChange={(event) => { setExecutionMode(event.target.value as "docker" | "host"); setHostAcknowledged(false); }}><option value="docker">Docker mode</option><option value="host">Host mode</option></select><small>{executionMode === "docker" ? "Commands run inside Docker with the project folder mounted at /workspace." : "Commands run directly on the Nebula server as its OS user, starting in the project folder."}</small></label>
+          {executionMode === "host" && <label className="provider-consent"><input type="checkbox" checked={hostAcknowledged} onChange={(event) => setHostAcknowledged(event.target.checked)} /><span><strong>Allow host filesystem and network access</strong><small>Agents can access and modify other host folders and mounted devices permitted by the server's OS account. Docker isolation, scope-filtered networking and container VPN routing do not apply. Command approvals and timeouts still apply. External MCP services keep their configured location.</small></span></label>}
           <label>Approval policy<select value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as AutomationProjectPolicy["approvalPolicy"])}><option value="on_boundary">On boundary · prompt once for project networking</option><option value="always">Always · prompt before every command</option><option value="never">Never · run without prompts</option></select></label>
           <label>Maximum command timeout (milliseconds)<input type="number" min={1000} max={86400000} value={maxTimeoutMs} onChange={(event) => setMaxTimeoutMs(Number(event.target.value))} /></label>
-          <label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Make project-scoped networking available</strong><small>The session receives the complete validated CIDR/domain/port policy. An approval never expands that scope.</small></span></label>
-          <label>VPN route<select value={vpnProfileId} disabled={!networkEnabled} onChange={(event) => setVpnProfileId(event.target.value)}><option value="">Direct, scope-filtered egress</option>{vpnProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.available}>{profile.name} · {profile.protocol.toUpperCase()} {profile.remoteHost}</option>)}</select><small>{vpnProfileId ? "New command sessions must establish this tunnel before network access is released." : "Select a saved profile to route authorized container traffic through OpenVPN."}</small></label>
-          <footer><span>Existing sessions keep their frozen policy revision.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime"}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
+          {executionMode === "docker" && <><label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Make project-scoped networking available</strong><small>The session receives the complete validated CIDR/domain/port policy. An approval never expands that scope.</small></span></label>
+          <label>VPN route<select value={vpnProfileId} disabled={!networkEnabled} onChange={(event) => setVpnProfileId(event.target.value)}><option value="">Direct, scope-filtered egress</option>{vpnProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.available}>{profile.name} · {profile.protocol.toUpperCase()} {profile.remoteHost}</option>)}</select><small>{vpnProfileId ? "New command sessions must establish this tunnel before network access is released." : "Select a saved profile to route authorized container traffic through OpenVPN."}</small></label></>}
+          <footer><span>Existing sessions keep their frozen policy revision.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime" || (executionMode === "host" && !hostAcknowledged)}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
         </div>
       </form>
       <form className="panel policy-form" onSubmit={(event) => void saveScope(event)}>

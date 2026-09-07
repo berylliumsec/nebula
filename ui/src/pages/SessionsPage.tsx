@@ -837,7 +837,7 @@ export function SessionsPage() {
       return;
     }
     let active = true;
-    void api.getAutomationRuntime().then((runtime) => {
+    void api.getAutomationRuntime(undefined, engagement?.id).then((runtime) => {
       if (!active) return;
       setCommandRuntimeReady(runtime.ready);
       setToolRuntimeReason(runtime.ready ? undefined : runtime.detail);

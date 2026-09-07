@@ -777,6 +777,8 @@ class ApprovalDecisionRequest(NebulaModel):
 
 
 class AutomationPolicyUpdateRequest(NebulaModel):
+    execution_mode: Literal["docker", "host"] | None = None
+    host_access_acknowledged: bool = False
     approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
     network_enabled: bool = True
     runner_profile_id: str | None = Field(default=None, max_length=200)
@@ -6457,7 +6459,7 @@ def create_app(
         tags=["automation"],
         dependencies=[Depends(require_auth)],
     )
-    async def automation_runtime_status() -> Any:
+    async def automation_runtime_status(engagement_id: str | None = None) -> Any:
         if automation_runtime is None:
             return {
                 "configured": False,
@@ -6465,7 +6467,7 @@ def create_app(
                 "detail": "automation runtime is not configured",
                 "inventory": [],
             }
-        return await automation_runtime.runtime_info()
+        return await automation_runtime.runtime_info(engagement_id=engagement_id)
 
     @app.post(
         f"{API_PREFIX}/automation/runtime/prepare",
@@ -6610,6 +6612,8 @@ def create_app(
         return automation_runtime.update_project_policy(
             engagement_id,
             approval_policy=request.approval_policy,
+            execution_mode=request.execution_mode,
+            host_access_acknowledged=request.host_access_acknowledged,
             network_enabled=request.network_enabled,
             runner_profile_id=request.runner_profile_id,
             vpn_profile_id=request.vpn_profile_id,
@@ -6770,7 +6774,9 @@ def create_app(
             and automation_runtime is not None
         ):
             default_command_runtime_ready = (
-                await automation_runtime.runtime_info()
+                await automation_runtime.runtime_info(
+                    engagement_id=request.engagement_id
+                )
             ).ready
         wants_command_tools = (
             default_command_runtime_ready

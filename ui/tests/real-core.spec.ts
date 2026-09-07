@@ -1816,3 +1816,53 @@ test("project removal archives, retries, restores and clears the last selection 
     await stopRealCore(core);
   }
 });
+
+test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const backup = await mkdtemp(path.join(tmpdir(), "nebula-host-mode-backup-"));
+  await writeFile(path.join(backup, "marker.txt"), "HOST_MODE_BACKUP_MARKER");
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
+    const openPolicy = async () => {
+      await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
+      await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("network ports");
+      await page.getByRole("option", { name: /Project policy and network scope/ }).click();
+    };
+    await openPolicy();
+    const mode = page.getByRole("combobox", { name: "Project execution mode" });
+    await expect(mode).toHaveValue("docker");
+    await mode.selectOption("host");
+    const save = page.getByRole("button", { name: "Save runtime policy" });
+    await expect(save).toBeDisabled();
+    await page.getByRole("checkbox", { name: /Allow host filesystem and network access/ }).check();
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0].id;
+    const policy = await (await api.get(`engagements/${projectId}/automation-policy`)).json();
+    expect(policy).toMatchObject({ execution_mode: "host", host_access_acknowledged: true });
+    const ready = await api.get(`automation/runtime?engagement_id=${projectId}`);
+    expect(await ready.json()).toMatchObject({ ready: true, runner_profile_id: "host" });
+    const command = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, { data: { command: "cat marker.txt", cwd: backup } });
+    expect(command.ok(), await command.text()).toBe(true);
+    expect(await command.json()).toMatchObject({ exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER" });
+    await page.goto("about:blank");
+    await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
+    await openPolicy();
+    await expect(mode).toHaveValue("host");
+    await expect(page.getByRole("checkbox", { name: /Allow host filesystem and network access/ })).toBeChecked();
+    await mode.selectOption("docker");
+    await save.click();
+    await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
+    expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    await rm(backup, { recursive: true, force: true });
+  }
+});

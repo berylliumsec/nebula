@@ -56,7 +56,7 @@ describe("NewMissionButton", () => {
     await user.click(screen.getByText("Advanced"));
     expect(screen.getByText("Supervised security automation")).toBeInTheDocument();
     expect(screen.getByText("Ready")).toBeInTheDocument();
-    expect(screen.getByText("Bash and process I/O use Nebula's pinned automation runtime.")).toBeInTheDocument();
+    expect(screen.getByText("Bash and process I/O use the project’s selected execution mode.")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol"));
     expect(screen.getByLabelText("Mission harness effort")).toHaveValue("high");
     expect(screen.getByLabelText("Mission harness speed")).toHaveValue("priority");

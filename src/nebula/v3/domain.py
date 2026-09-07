@@ -592,6 +592,8 @@ class AutomationApprovalPolicy(StringEnum):
 class AutomationNetworkMode(StringEnum):
     """Network boundary requested by the general command primitive."""
 
+    HOST = "host"
+
     NONE = "none"
     PROJECT_SCOPE = "project_scope"
 
@@ -866,6 +868,8 @@ class AutomationProjectPolicy(Entity):
     """Project-wide policy for the fixed automation command runtime."""
 
     entity_kind: ClassVar[str] = "automation_policies"
+    execution_mode: Literal["docker", "host"] = "docker"
+    host_access_acknowledged: bool = False
     engagement_id: str
     approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ON_BOUNDARY
     network_enabled: bool = True
@@ -873,6 +877,14 @@ class AutomationProjectPolicy(Entity):
     vpn_profile_id: str | None = Field(default=None, max_length=200)
     max_timeout_ms: int = Field(default=300_000, ge=1_000, le=86_400_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def host_mode_requires_acknowledgement(self) -> "AutomationProjectPolicy":
+        if self.execution_mode == "host" and not self.host_access_acknowledged:
+            raise ValueError(
+                "Host mode requires acknowledgement of host filesystem and network access"
+            )
+        return self
 
 
 class VpnProfile(Entity):
@@ -894,6 +906,7 @@ class AutomationSession(Entity):
     """One isolated OCI environment owned by an agent session."""
 
     entity_kind: ClassVar[str] = "automation_sessions"
+    execution_mode: Literal["docker", "host"] = "docker"
     engagement_id: str
     owner_kind: str = Field(pattern=r"^(chat|mission|harness|api)$")
     owner_id: str = Field(min_length=1, max_length=200)
