@@ -253,7 +253,14 @@ controlled test values, not operator credentials.
 Production UI build index SHA256:
 `d92520e9ae916040bbbf5bae94b3ae5c2c8c8f03c3e913d5460851616470e7de`.
 The production/LAN eight-profile regression passed on this build (26.4 seconds). The
-provider selection question remains pending; no provider test has been substituted
-with a harness test. Uploads, harness image attachments, the full real-runtime UI
+operator selected Codex using `~/.codex-2` as the live runtime acceptance target.
+A separately configured live provider is therefore no longer a required gate for
+this change. Provider-path automated coverage remains distinct from observed
+live harness behavior. Uploads, harness image attachments, the full real-runtime UI
 journey, packaged desktop, physical-device acceptance and remaining lifecycle
 gates remain open.
+
+The live Codex workflow was rerun successfully after commit `08f43e8`, using
+`--codex-home /home/agent/.codex-2` and model `gpt-6-astra`. The run included
+protected fill and screenshot masking, MCP screenshot delivery, a visible answer,
+same-conversation follow-up, inline approval and the observed page change.
