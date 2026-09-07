@@ -4849,6 +4849,16 @@ export class ApiClient {
     );
   }
 
+  async setEngagementArchived(id: string, archived: boolean): Promise<EngagementSummary> {
+    const path = `engagements/${encodeURIComponent(id)}`;
+    const current = await this.request<WireEngagement>(path);
+    if (current.status === (archived ? "archived" : "active")) return mapEngagement(current);
+    return mapEngagement(await this.request<WireEngagement>(path, {
+      method: "PATCH",
+      body: JSON.stringify({ changes: { status: archived ? "archived" : "active" }, expected_revision: current.revision }),
+    }));
+  }
+
   createEngagement(body: EngagementCreateRequest): Promise<EngagementSummary> {
     return this.request<WireEngagement>("engagements", {
       method: "POST",

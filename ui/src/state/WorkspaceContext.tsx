@@ -133,6 +133,8 @@ interface WorkspaceContextValue {
   setupStatus?: SetupStatus;
   resourceStatus: Record<WorkspaceResource, ResourceStatus>;
   engagements: EngagementSummary[];
+  archivedEngagements: EngagementSummary[];
+  setEngagementArchived: (id: string, archived: boolean) => Promise<string | undefined>;
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
   engagement?: EngagementSummary;
@@ -282,8 +284,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setEngagements(engagementItems);
         const urlProjectId = projectIdFromPath(window.location.pathname);
         const rememberedId = urlProjectId || selectedEngagementId || localStorage.getItem("nebula.engagement") || "";
-        const nextEngagement = engagementItems.find((item) => item.id === rememberedId)
-          ?? (urlProjectId ? undefined : engagementItems[0]);
+        const availableEngagements = engagementItems.filter((item) => item.status !== "archived");
+        const nextEngagement = availableEngagements.find((item) => item.id === rememberedId)
+          ?? (urlProjectId ? undefined : availableEngagements[0]);
         if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
           setSelectedEngagementId(nextEngagement.id);
           localStorage.setItem("nebula.engagement", nextEngagement.id);
@@ -538,6 +541,22 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setWorkspaceState("starting");
     return created;
   }, [api, coreState]);
+
+  const setEngagementArchived = useCallback(async (id: string, archived: boolean) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to update a project.");
+    await api.setEngagementArchived(id, archived);
+    const refreshed = await api.listEngagements();
+    setEngagements(refreshed.items);
+    const available = refreshed.items.filter((item) => item.status !== "archived");
+    const nextId = available.find((item) => item.id === selectedEngagementId)?.id ?? available[0]?.id;
+    if (archived && id === selectedEngagementId) {
+      if (nextId) localStorage.setItem("nebula.engagement", nextId);
+      else localStorage.removeItem("nebula.engagement");
+      setSelectedEngagementId(nextId ?? "");
+      setEngagement(available.find((item) => item.id === nextId));
+    }
+    return nextId;
+  }, [api, coreState, selectedEngagementId]);
 
   const resolveApproval = useCallback(
     async (id: string, request: ApprovalDecisionRequest) => {
@@ -927,7 +946,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       health,
       setupStatus,
       resourceStatus,
-      engagements,
+      engagements: engagements.filter((item) => item.status !== "archived"),
+      archivedEngagements: engagements.filter((item) => item.status === "archived"),
       operatorProfiles,
       activeOperator: operatorProfiles.find((profile) => profile.active),
       engagement,
@@ -957,6 +977,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteProvider,
       selectEngagement,
       createEngagement,
+      setEngagementArchived,
       addAsset,
       createFinding,
       updateFinding,
@@ -1016,6 +1037,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       deleteProvider,
       selectEngagement,
       createEngagement,
+      setEngagementArchived,
       addAsset,
       createFinding,
       updateFinding,

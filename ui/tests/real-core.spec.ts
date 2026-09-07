@@ -1,3 +1,4 @@
+import AxeBuilder from "@axe-core/playwright";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -1706,4 +1707,112 @@ test("assistant upgrade deployed local service retains operator workflow", async
     await testInfo.attach("deployed-build", {body: JSON.stringify({origin, session, assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
     await testInfo.attach("deployed-chat", {body: await page.screenshot(), contentType: "image/png"});
   } finally {await api.dispose();}
+});
+
+test("project removal archives, retries, restores and clears the last selection on production LAN", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string; scope_policy_id: string }>;
+    const project = projects[0];
+    const folder = path.join(core.dataDir, "retained-project");
+    await mkdir(folder);
+    await writeFile(path.join(folder, "keep.txt"), "project files stay intact");
+    const linkedResponse = await api.post("engagements", { data: { name: "Project with a long name that must wrap safely on a small phone", workspace_path: folder } });
+    expect(linkedResponse.ok(), await linkedResponse.text()).toBe(true);
+    const linked = await linkedResponse.json() as { id: string; name: string };
+    const provider = await (await api.post("providers", { data: { name: "Retention fixture", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false } } })).json() as { id: string };
+    const chatResponse = await api.post("chat/completions", { data: { backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: linked.id, messages: [{ role: "user", content: "Keep this project history" }], include_knowledge: false, stream: false } });
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const chat = await chatResponse.json() as { session_id: string };
+    const historyResponse = await api.get(`chat/sessions/${chat.session_id}/messages`);
+    expect(historyResponse.ok()).toBe(true);
+    const historyBefore = await historyResponse.json();
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Project removal browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Project removal browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${linked.id}/workbench`);
+    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    const openSwitcher = async () => {
+      const sidebar = page.getByRole("button", { name: "Show sidebar" });
+      if (await sidebar.isVisible()) await sidebar.click();
+      if (!await switcher.isVisible()) await page.getByRole("button", { name: "Switch project" }).click();
+    };
+    const remove = async (name: string) => {
+      await switcher.getByRole("button", { name: `Remove project ${name}`, exact: true }).click();
+      await page.getByRole("button", { name: "Remove project", exact: true }).click();
+    };
+    await openSwitcher();
+    const removeButton = switcher.getByRole("button", { name: `Remove project ${linked.name}`, exact: true });
+    const geometry = await removeButton.boundingBox();
+    expect(geometry!.width).toBeGreaterThanOrEqual(44);
+    expect(geometry!.height).toBeGreaterThanOrEqual(44);
+    expect(await switcher.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await expect(removeButton).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: testInfo.outputPath("project-switcher.png"), animations: "disabled" });
+    const menuBounds = await switcher.boundingBox();
+    expect(menuBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+    const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(accessibility.violations).toEqual([]);
+    await removeButton.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByText("Files and chat history are kept.", { exact: false })).toBeVisible();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(removeButton).toBeFocused();
+    await removeButton.click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(removeButton).toBeFocused();
+    expect((await (await api.get(`engagements/${linked.id}`)).json()).status).not.toBe("archived");
+    // A transient mutation failure must keep the project visible and permit a real retry.
+    await page.route(`**/api/v1/engagements/${linked.id}`, async route => {
+      if (route.request().method() === "PATCH") await route.fulfill({ status: 503, json: { detail: "Temporary save failure" } });
+      else await route.continue();
+    });
+    await remove(linked.name);
+    await expect(switcher.getByRole("alert")).toContainText("Try again");
+    await page.unroute(`**/api/v1/engagements/${linked.id}`);
+    await remove(linked.name);
+    await expect(removeButton).toHaveCount(0);
+    await expect(page).toHaveURL(`${core.origin}/projects/${project.id}/workbench`);
+    expect((await (await api.get(`engagements/${linked.id}`)).json()).status).toBe("archived");
+    expect(await readFile(path.join(folder, "keep.txt"), "utf8")).toBe("project files stay intact");
+    expect(await (await api.get(`chat/sessions/${chat.session_id}/messages`)).json()).toEqual(historyBefore);
+    await page.reload();
+    await openSwitcher();
+    await expect(removeButton).toHaveCount(0);
+    await switcher.getByRole("button", { name: "Archived projects (1)" }).click();
+    await switcher.getByRole("button", { name: `Restore project ${linked.name}` }).click();
+    await expect(removeButton).toBeVisible();
+    await switcher.locator(".project-switcher-row").filter({ hasText: linked.name }).getByRole("button").first().click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${linked.id}/`));
+    await page.goto(`${core.origin}/projects/${linked.id}/workbench?view=chat&session=${chat.session_id}`);
+    await expect(page.locator(".chat-message.operator")).toContainText("Keep this project history");
+    await openSwitcher();
+    await remove(linked.name);
+    await expect(removeButton).toHaveCount(0);
+    await remove(project.name);
+    await expect(page).toHaveURL(`${core.origin}/`);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.engagement"))).toBeNull();
+    await page.reload();
+    await openSwitcher();
+    await expect(switcher.getByText("No active projects.", { exact: false })).toBeVisible();
+    await expect(switcher.getByRole("button", { name: "New project" })).toBeEnabled();
+    await switcher.getByRole("button", { name: "Archived projects (2)" }).click();
+    await switcher.getByRole("button", { name: `Restore project ${project.name}` }).click();
+    await expect(switcher.getByRole("button", { name: `Remove project ${project.name}` })).toBeVisible();
+    const scopes = await (await api.get(`engagements/${project.id}/scope`)).json();
+    expect(scopes).toBeTruthy();
+    await testInfo.attach("project-removal-production-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), retainedFiles: true }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(stub);
+    await stopRealCore(core);
+  }
 });

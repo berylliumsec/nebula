@@ -671,7 +671,7 @@
     box-shadow: 24px 32px 90px rgb(0 0 0 / 66%), inset 0 1px rgb(255 255 255 / 6%);
   }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock > .brand-lockup { display: flex; min-height: 64px; height: auto; border-right: 0; border-bottom: 1px solid var(--border-soft); }
-  :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock > .engagement-picker { display: block; }
+  :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock > .engagement-picker { display: block; align-self: stretch; width: 100%; }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock .engagement-copy,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock .engagement-switcher > svg,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell:not(.sidebar-collapsed) .zero-anchor-dock .nav-item span,
