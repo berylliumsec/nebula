@@ -41,7 +41,12 @@ import claude_agent_sdk
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
 
-from .chat import ChatPrivacyError, HarnessKnowledgeSearchResult
+from .chat import (
+    ChatPrivacyError,
+    ChatRequestMessage,
+    HarnessKnowledgeSearchResult,
+    resolve_chat_model_content,
+)
 from .automation_runtime import AutomationRuntimeUnavailable
 from .credentials import CredentialError, CredentialStore
 from .artifacts import ArtifactStore
@@ -51,6 +56,7 @@ from .domain import (
     ApprovalStatus,
     ChatBackend,
     ChatCitation,
+    ChatContentBlock,
     ChatMessage,
     ChatRole,
     ChatSession,
@@ -99,6 +105,7 @@ from .domain import (
     utc_now,
 )
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
+from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
 from .storage import NebulaStore, NotFoundError
@@ -450,6 +457,10 @@ def _harness_developer_instructions(
         "knowledge access. Questions about which knowledge sources are available are "
         "resource requests, not abstract capability questions; call knowledge.list "
         "when the turn enables it. For abstract capability questions, answer only "
+        "from the current turn capability state when it updates an inventory below. "
+        "When browser.companion is enabled, it is an assigned Nebula gateway tool "
+        "for the attached browser; discover and use it for browser requests. "
+        "For other abstract capability questions, answer only "
         "from the trusted inventories below and do not call a tool. The vendor "
         "scratch sandbox does not limit "
         "the separately brokered Nebula action capabilities; report each assigned "
@@ -486,6 +497,9 @@ def _harness_turn_prompt(turn: HarnessTurn) -> str:
     knowledge_enabled = turn.metadata.get("knowledge_access") is True
     capability_state = json.dumps(
         {
+            "browser.companion": "enabled"
+            if turn.metadata.get("browser_companion_session_id")
+            else "disabled",
             "knowledge.list": "enabled" if knowledge_enabled else "disabled",
             "knowledge.search": "enabled" if knowledge_enabled else "disabled",
             "knowledge_scope": "current_engagement" if knowledge_enabled else None,
@@ -862,6 +876,7 @@ class HarnessConnection(ABC):
         model: str,
         mode: str | None = None,
         skill: HarnessSkillInvocation | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[HarnessEvent]: ...
 
     @abstractmethod
@@ -1457,11 +1472,19 @@ class CodexAppServerConnection(HarnessConnection):
         model: str,
         mode: str | None = None,
         skill: HarnessSkillInvocation | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         # Resumed harnesses own their conversation state. Notifications queued
         # while opening that session are historical replay, not this turn's output.
         _discard_queued_session_replay(self.rpc.events)
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for image in images or []:
+            turn_input.append(
+                {
+                    "type": "image",
+                    "url": f"data:{image['media_type']};base64,{image['data']}",
+                }
+            )
         if skill is not None:
             turn_input.append({"type": "skill", "name": skill.name, "path": skill.path})
         turn_params: dict[str, Any] = {
@@ -2463,6 +2486,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                     model_options.append(
                         HarnessModelOptions(
                             model=model,
+                            image_input="image" in item.get("inputModalities", []),
                             reasoning_efforts=effort_options,
                             default_reasoning_effort=(
                                 default_effort
@@ -2566,7 +2590,9 @@ class CodexAppServerAdapter(HarnessAdapter):
             request.session, request.profile
         )
         approval_policy: Literal["untrusted", "never"] = (
-            "untrusted" if _native_capability_names(native_capabilities) else "never"
+            "untrusted"
+            if managed_gateway or _native_capability_names(native_capabilities)
+            else "never"
         )
         effective_mcp, _ = _mcp_runtime_config(
             request.mcp_profiles,
@@ -2856,6 +2882,8 @@ def _codex_feature_policy(
         capabilities.workspace_access != HarnessWorkspaceAccess.NONE
     )
     enabled = {
+        # The stable host dispatches MCP calls even when code mode is disabled.
+        "code_mode_host": True,
         "shell_tool": shell,
         "unified_exec": shell,
         "browser_use": capabilities.browser,
@@ -2962,7 +2990,12 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         model: str,
         mode: str | None = None,
         skill: HarnessSkillInvocation | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
+        if images:
+            raise HarnessConfigurationError(
+                "This adapter does not advertise image input."
+            )
         del mode, skill  # Claude receives skills through its configured Skill tool.
         del model  # Locked into ClaudeAgentOptions for the connected session.
         self.active = True
@@ -3823,7 +3856,12 @@ class GrokAcpConnection(HarnessConnection):
         model: str,
         mode: str | None = None,
         skill: HarnessSkillInvocation | None = None,
+        images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
+        if images:
+            raise HarnessConfigurationError(
+                "This adapter does not advertise image input."
+            )
         del model  # Model selection is negotiated by the Grok ACP session.
         if skill is not None and f"${skill.name}" not in prompt:
             prompt = f"${skill.name} {prompt}"
@@ -4916,6 +4954,7 @@ class HarnessRuntimeService:
         self.adapter_factory = adapter_factory or self._default_adapter
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self._connections: dict[str, HarnessConnection] = {}
+        self._connection_browser_bindings: dict[str, str | None] = {}
         self._gateways: dict[str, McpGatewaySession] = {}
         self._gateway_tool_maps: dict[
             str, dict[str, tuple[McpServerProfile, McpToolSnapshot]]
@@ -5187,6 +5226,7 @@ class HarnessRuntimeService:
             stage="shutdown",
         )
         self._connections.clear()
+        self._connection_browser_bindings.clear()
         await gather_diagnostic(
             *(gateway.close() for gateway in self._gateways.values()),
             feature="harnesses",
@@ -5734,6 +5774,7 @@ class HarnessRuntimeService:
                 "cannot close a harness session with an active turn"
             )
         connection = self._connections.pop(session_id, None)
+        self._connection_browser_bindings.pop(session_id, None)
         if connection is not None:
             await connection.close()
         gateway = self._gateways.pop(session_id, None)
@@ -5774,11 +5815,43 @@ class HarnessRuntimeService:
         harness_skill: HarnessSkillInvocation | None = None,
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
+        content_blocks: list[ChatContentBlock] | None = None,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         profile = self.store.get(HarnessProfile, profile_id)
+        image_blocks = [
+            block for block in content_blocks or [] if block.type == "image"
+        ]
+        if len(image_blocks) > 4:
+            raise HarnessConfigurationError("Attach at most four images per message.")
+        if image_blocks:
+            image_model = (model or profile.default_model or "").strip()
+            if chat_session_id:
+                image_chat = self.store.get(ChatSession, chat_session_id)
+                image_model = self.store.get(
+                    HarnessSession, image_chat.harness_session_id or ""
+                ).model
+            elif harness_session_id:
+                image_model = self.store.get(HarnessSession, harness_session_id).model
+            if profile.kind != HarnessKind.CODEX_APP_SERVER or not any(
+                option.model == image_model and option.image_input
+                for option in profile.capabilities.model_options
+            ):
+                raise HarnessConfigurationError(
+                    "The selected runtime does not advertise image input."
+                )
+            resolve_chat_model_content(
+                self.store,
+                self.artifact_store,
+                ChatRequestMessage(
+                    role=ChatRole.USER,
+                    content=clean_prompt,
+                    content_blocks=image_blocks,
+                ),
+                engagement_id,
+            )
         negotiated = profile.capabilities
         if harness_mode:
             if harness_mode not in negotiated.modes:
@@ -6080,6 +6153,9 @@ class HarnessRuntimeService:
             prompt=clean_prompt + handoff_context + (runtime_context or ""),
             metadata={
                 "user_prompt": clean_prompt,
+                "image_blocks": [
+                    block.model_dump(mode="json") for block in image_blocks
+                ],
                 "forked_from_session_id": forked_from_session_id,
                 **(
                     {"session_rollover_reason": session_rollover_reason}
@@ -6126,6 +6202,7 @@ class HarnessRuntimeService:
                     sequence=sequence,
                     role=ChatRole.USER,
                     content=clean_prompt,
+                    content_blocks=content_blocks or [],
                     model=session.model,
                     metadata={
                         "harness_turn_id": harness_turn.id,
@@ -6147,6 +6224,38 @@ class HarnessRuntimeService:
             return existing
         if turn.status != HarnessTurnStatus.QUEUED:
             raise HarnessStateError(f"harness turn is not queued ({turn.status.value})")
+        # Bind from Core at every entry point, including linked retries. A prior
+        # turn's attachment may have been removed or replaced since it ran.
+        from .browser_companion_tools import attached_session
+
+        companion_id = attached_session(
+            self.store, turn.engagement_id, turn.chat_session_id
+        )
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.metadata.get("browser_companion_session_id") != companion_id:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "browser_companion_session_id": companion_id,
+                    }
+                },
+                expected_revision=session.revision,
+            )
+        if turn.metadata.get("browser_companion_session_id") != companion_id:
+            turn = self.store.update(
+                HarnessTurn,
+                turn.id,
+                {
+                    "metadata": {
+                        **turn.metadata,
+                        "browser_companion_session_id": companion_id,
+                    }
+                },
+                expected_revision=turn.revision,
+            )
         task = create_diagnostic_task(
             self._drive_chat_turn(turn.id),
             feature="harnesses",
@@ -6428,6 +6537,31 @@ class HarnessRuntimeService:
                     turn_options["skill"] = HarnessSkillInvocation.model_validate(
                         turn.metadata["harness_skill"]
                     )
+                if turn.metadata.get("image_blocks"):
+                    blocks = [
+                        ChatContentBlock.model_validate(block)
+                        for block in turn.metadata["image_blocks"]
+                    ]
+                    if not self._model_image_supported(session):
+                        raise HarnessConfigurationError(
+                            "Image input is no longer advertised by this runtime. Start a text-only turn or select an image-capable runtime."
+                        )
+                    resolved_content = resolve_chat_model_content(
+                        self.store,
+                        self.artifact_store,
+                        ChatRequestMessage(
+                            role=ChatRole.USER,
+                            content=str(
+                                turn.metadata.get("user_prompt") or "Attached images"
+                            ),
+                            content_blocks=blocks,
+                        ),
+                        turn.engagement_id,
+                    )
+                    assert isinstance(resolved_content, list)
+                    turn_options["images"] = [
+                        part for part in resolved_content if part["type"] == "image"
+                    ]
                 async for event in _coalesce_activity_deltas(
                     connection.run_turn(
                         _harness_turn_prompt(turn),
@@ -7190,6 +7324,10 @@ class HarnessRuntimeService:
                 profile_id=profile.id,
                 model=session.model,
                 prompt=str(original.metadata.get("user_prompt") or original.prompt),
+                content_blocks=[
+                    ChatContentBlock.model_validate(block)
+                    for block in original.metadata.get("image_blocks", [])
+                ],
                 chat_session_id=chat.id,
                 harness_session_id=None,
                 mcp_server_ids=None,
@@ -7914,6 +8052,17 @@ class HarnessRuntimeService:
         self, session: HarnessSession, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         tools: list[dict[str, Any]] = []
+        current = self.store.get(HarnessSession, session.id)
+        if current.metadata.get("browser_companion_session_id"):
+            spec = companion_spec(image_supported=self._model_image_supported(current))
+            tools.append(
+                {
+                    "name": spec.name,
+                    "description": spec.description,
+                    "inputSchema": spec.input_schema,
+                }
+            )
+
         mapping: dict[str, tuple[McpServerProfile, McpToolSnapshot]] = {}
         oci_mapping: dict[str, str] = {}
         if self.knowledge_retriever is not None:
@@ -8111,10 +8260,66 @@ class HarnessRuntimeService:
             self._gateway_target_gates[key] = gate
         return gate
 
+    def _model_image_supported(self, session: HarnessSession) -> bool:
+        profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        return any(
+            option.model == session.model and option.image_input
+            for option in profile.capabilities.model_options
+        )
+
     async def _gateway_call(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
+        if name == "browser.companion":
+            current = self.store.get(HarnessSession, session.id)
+            companion_id = current.metadata.get("browser_companion_session_id")
+            from .browser_companion_tools import attached_session
+
+            if (
+                not isinstance(companion_id, str)
+                or attached_session(
+                    self.store, turn.engagement_id, turn.chat_session_id
+                )
+                != companion_id
+            ):
+                raise HarnessConfigurationError(
+                    "No browser is attached to this conversation."
+                )
+            components = companion_components(
+                self.store,
+                turn.engagement_id,
+                companion_id,
+                artifact_store=self.artifact_store,
+                image_supported=self._model_image_supported(current),
+            )
+            invocation = ToolInvocation(
+                id=str(uuid4()),
+                engagement_id=turn.engagement_id,
+                run_id=turn.chat_turn_id or turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=turn.chat_session_id,
+                chat_turn_id=turn.chat_turn_id,
+                tool_name=name,
+                arguments=arguments,
+                workspace=components.workspace,
+                idempotency_key=f"browser:{turn.id}:"
+                + hashlib.sha256(
+                    json.dumps(arguments, sort_keys=True).encode()
+                ).hexdigest(),
+                requested_by="harness-gateway",
+                runtime_session_kind="harness",
+                runtime_session_id=session.id,
+            )
+            async with self._gateway_execution_gate(turn):
+                result = await components.broker.execute(invocation, components.scope)
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(result.output)},
+                    *result.mcp_content_blocks,
+                ],
+                "isError": False,
+            }
         if name == "knowledge.list":
             return await self._gateway_knowledge_list(turn, arguments)
         if name == "knowledge.search":
@@ -8875,7 +9080,24 @@ class HarnessRuntimeService:
     async def _connection(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
+        session = self.store.get(HarnessSession, session.id)
+        browser_binding = session.metadata.get("browser_companion_session_id")
+        browser_binding = browser_binding if isinstance(browser_binding, str) else None
         existing = self._connections.get(session.id)
+        if (
+            existing is not None
+            and self._connection_browser_bindings.get(session.id) != browser_binding
+        ):
+            # Vendor MCP catalogs are fixed when the connection opens. Resume the
+            # saved external thread with a fresh gateway between turns, keeping
+            # the durable conversation and native transcript intact.
+            self._connections.pop(session.id, None)
+            self._connection_browser_bindings.pop(session.id, None)
+            await existing.close()
+            gateway = self._gateways.pop(session.id, None)
+            if gateway is not None:
+                await gateway.close()
+            existing = None
         if existing is not None:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
@@ -9006,6 +9228,7 @@ class HarnessRuntimeService:
             await gateway.close()
             raise
         self._connections[session.id] = connection
+        self._connection_browser_bindings[session.id] = browser_binding
         return connection
 
     async def _request_permission(

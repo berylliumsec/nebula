@@ -1819,6 +1819,7 @@ export interface HarnessRuntimeOption {
 
 export interface HarnessModelOptions {
   model: string;
+  imageInput?: boolean;
   reasoningEfforts: HarnessRuntimeOption[];
   defaultReasoningEffort?: string;
   serviceTiers: HarnessRuntimeOption[];

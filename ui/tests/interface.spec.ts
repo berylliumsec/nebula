@@ -5260,6 +5260,136 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
   }
 });
 
+for (const degradedBrowserCore of [false, true]) {
+test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page }) => {
+  test.setTimeout(90000);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (degradedBrowserCore && path.endsWith("/health")) {
+      await route.fulfill({ json: { status: "degraded", version: "3.0.0", mode: "local", runner: "unavailable", diagnostics: { writable: false, degraded: true } } });
+      return;
+    }
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{ ...entity, id: "browser-provider", name: "Browser provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true, secret_ref: null, model_allowlist: ["browser-model"], capabilities: { streaming: true }, privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "browser-model" } }] });
+    } else if (path.endsWith("/handoffs") && route.request().method() === "POST") {
+      await route.fulfill({ json: { ...entity, id: "browser-selection-handoff", ...route.request().postDataJSON(), status: "pending" } });
+    } else if (path.endsWith("/browser-companion")) {
+      await route.fulfill({ json: { session_id: "browser-session", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
+    } else if (path.endsWith("/browser-companion/browser-session/operations")) {
+      if (route.request().postDataJSON()?.operation === "tabs") {
+        await route.fulfill({ json: { tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
+        return;
+      }
+      await route.fulfill({ json: { url: "https://example.test/", title: "Example", text: "The page has a Save button.\n\n" + "Additional bounded page context for reviewing the selected control. ".repeat(90), page_revision: "page-1", captured_at: "2026-09-07T12:00:00Z", elements: [] } });
+    } else if (path.includes("/browser-companion/")) {
+      await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
+    } else if (path.endsWith("/chat/completions")) {
+      const body = route.request().postDataJSON();
+      const answer = body.session_id
+        ? "Yes, that is the same page context.\n\n" + "The historical attachment remains available for this follow-up. ".repeat(80) + "\n\nhttps://example.test/" + "long-path-segment".repeat(70)
+        : "The Save button saves your changes.";
+      const frames = [
+        { type: "started", provider_id: "browser-provider", model: "browser-model", session_id: "browser-chat", turn_id: "browser-turn" },
+        { type: "delta", delta: answer },
+        { type: "done", provider_id: "browser-provider", model: "browser-model", session_id: "browser-chat", turn_id: "browser-turn", message: { id: "browser-answer", role: "assistant", content: answer }, usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 }, finish_reason: "stop", citations: [] },
+      ];
+      await route.fulfill({ contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n" });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=browser", "Workbench");
+  await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  await page.getByLabel("Browser address").fill("https://example.test/");
+  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
+  await page.getByRole("button", { name: "Attach to Assistant", exact: true }).click();
+  const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+  if (await page.locator(".browser-assistant-sheet").count()) expect(await panel.evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
+  await expect(panel).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("browser-selection-handoff");
+  await panel.locator("#analyst-message").fill("What does this button do?");
+  await panel.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(panel.getByText("The Save button saves your changes.", { exact: true }).first()).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBeNull();
+  expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  await panel.locator("#analyst-message").fill("Is this still the same context?");
+  await panel.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(panel.getByText("Yes, that is the same page context.", { exact: true }).first()).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("session")).toBe("browser-chat");
+  await expect(panel.locator("#analyst-message")).toBeInViewport({ ratio: 1 });
+  await expect(panel.getByRole("button", { name: "Send message", exact: true })).toBeInViewport({ ratio: 1 });
+  if (!degradedBrowserCore) {
+    const accessibility = await new AxeBuilder({ page })
+      .include(".integrated-browser-page")
+      .include("#browser-assistant-panel")
+      .analyze();
+    expect(accessibility.violations).toEqual([]);
+  }
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
+  expect(overflow).toBe(false);
+});
+
+}
+
+for (const imageInput of [true, false]) {
+  test(`browser Assistant harness image attachments follow model capability (${imageInput})`, async ({ page }) => {
+    test.setTimeout(60000);
+    let upload: Record<string, unknown> | undefined;
+    let sent: Record<string, any> | undefined;
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/harnesses") && route.request().method() === "GET") {
+        await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at } }] });
+      } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
+        await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
+      } else if (path.endsWith("/browser-companion")) {
+        await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
+      } else if (path.endsWith("/image-browser/operations")) {
+        await route.fulfill({ json: { tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
+      } else if (path.includes("/browser-companion/")) {
+        await route.fulfill({ json: path.endsWith("/actions") || path.endsWith("/credentials") || path.endsWith("/files") ? [] : {} });
+      } else if (path.endsWith("/chat/images")) {
+        upload = route.request().postDataJSON();
+        await route.fulfill({ json: { artifact_id: "image-artifact", preview_artifact_id: "image-preview", media_type: "image/png", width: 1, height: 1 } });
+      } else if (path.endsWith("/chat/completions")) {
+        sent = route.request().postDataJSON();
+        const frames = [
+          { type: "started", backend: "harness", harness_profile_id: "image-harness", model: "image-model", session_id: "image-chat", turn_id: "image-turn", harness_session_id: "image-harness-session" },
+          { type: "done", backend: "harness", harness_profile_id: "image-harness", model: "image-model", session_id: "image-chat", turn_id: "image-turn", message: { role: "assistant", content: "Image received." }, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 }, citations: [] },
+        ];
+        await route.fulfill({ contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n" });
+      } else await route.fallback();
+    });
+    await openWorkspace(page, "/?view=browser", "Workbench");
+    const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+    if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await panel.getByRole("button", { name: "Attach files", exact: true }).click();
+    const attachmentDialog = page.getByRole("dialog", { name: "Attach to next message" });
+    const attach = attachmentDialog.getByRole("button", { name: "Images from this device", exact: true });
+    if (!imageInput) {
+      await expect(attach).toHaveCount(0);
+      return;
+    }
+    await expect(attach).toBeEnabled();
+    await attachmentDialog.getByRole("button", { name: "Close attachments" }).click();
+    const image = { name: "selection.png", mimeType: "image/png", buffer: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jB1kAAAAASUVORK5CYII=", "base64") };
+    await panel.getByLabel("Choose image attachments").setInputFiles(image);
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toBeVisible();
+    await panel.getByRole("button", { name: "Remove selection.png" }).click();
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toHaveCount(0);
+    await panel.getByLabel("Choose image attachments").setInputFiles(image);
+    await expect(panel.getByRole("list", { name: "Image attachments" })).toBeVisible();
+    await panel.locator("#analyst-message").fill("Describe the selected image.");
+    await panel.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect.poll(() => sent?.backend).toBe("harness");
+    expect(upload?.filename).toBe("selection.png");
+    expect(sent?.messages[0].content_blocks).toContainEqual(expect.objectContaining({ type: "image", artifact_id: "image-artifact" }));
+    expect(JSON.stringify(sent)).not.toContain("iVBORw0");
+    await expect(panel.getByText("Image received.", { exact: true }).first()).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  });
+}
 
 test("assistant upgrade foundation keeps empty chat quiet and settings opaque", async ({ page }) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
@@ -5274,4 +5404,64 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   expect(overflow).toBe(false);
   await page.getByRole("button", {name: "Close assistant settings"}).click();
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
+});
+
+test("browser Assistant uploads a selected device file only after inline approval", async ({ page }) => {
+  test.setTimeout(60000);
+  const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
+  const actions: Array<Record<string, any>> = [];
+  let decisions = 0;
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    const method = route.request().method();
+    if (path.endsWith("/browser-companion")) {
+      await route.fulfill({ json: { session_id: "file-browser", tabs: [{ id: "file-tab", title: "Upload form", url: "https://example.test/" }] } });
+    } else if (path.endsWith("/file-browser/files")) {
+      if (method === "POST") {
+        const body = route.request().postDataJSON();
+        expect(body.filename).toBe("sample.txt");
+        files.push({ reference: "file-ref", filename: body.filename, size: 12, media_type: "text/plain" });
+      }
+      await route.fulfill({ json: files });
+    } else if (path.endsWith("/file-browser/files/file-ref")) {
+      files.splice(0); await route.fulfill({ json: files });
+    } else if (path.endsWith("/file-browser/operations")) {
+      if (route.request().postDataJSON().operation === "tabs") {
+        await route.fulfill({ json: { tabs: [{ id: "file-tab", title: "Upload form", url: "https://example.test/" }] } });
+        return;
+      }
+      expect(route.request().postDataJSON().operation).toBe("capture");
+      await route.fulfill({ json: { url: "https://example.test/", title: "Upload form", text: "Choose a document", page_revision: "file-page", captured_at: entity.updated_at, elements: [{ id: "file-input", tag: "input", type: "file", label: "Document", sensitive: false }] } });
+    } else if (path.endsWith("/file-browser/actions")) {
+      if (method === "POST") {
+        const body = route.request().postDataJSON();
+        expect(body).toMatchObject({ operation: "upload", file_ref: "file-ref", page_revision: "file-page", element_id: "file-input" });
+        expect(body).not.toHaveProperty("content_base64");
+        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: true, request: body });
+      }
+      await route.fulfill({ json: method === "POST" ? actions[0] : actions });
+    } else if (path.endsWith("/file-browser/actions/upload-action")) {
+      decisions += 1; actions[0].status = "complete"; await route.fulfill({ json: actions[0] });
+    } else if (path.includes("/browser-companion/")) {
+      await route.fulfill({ json: path.endsWith("/credentials") ? [] : { paused: true } });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=browser", "Workbench");
+  if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  await page.getByText("Files for this page (0)", { exact: true }).click();
+  await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
+  await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
+  await page.getByText("Accessible page controls (1)", { exact: true }).click();
+  await page.getByRole("button", { name: "Upload selected file", exact: true }).click();
+  const approval = page.getByRole("region", { name: "Browser action approval" });
+  await expect(approval).toContainText("sample.txt");
+  expect(decisions).toBe(0);
+  await approval.getByRole("button", { name: "Approve action", exact: true }).click();
+  await expect(page.getByText("File upload completed.", { exact: true })).toBeVisible();
+  expect(decisions).toBe(1);
+  await page.getByRole("button", { name: "Remove sample.txt", exact: true }).click();
+  await expect(page.getByLabel("File to upload")).toHaveValue("");
+  expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });

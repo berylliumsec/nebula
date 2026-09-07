@@ -18,25 +18,39 @@ import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, AsyncIterator, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from playwright.async_api import async_playwright
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import uvicorn
+
+from .browser_companion import CompanionRequest, BrowserCompanion
+from .browser_companion_runtime import operate as companion_operate
 
 from .browser_engine import (
     BROWSER_ENGINE_CONTRACT_VERSION,
     BrowserEngineAction,
     BrowserEngineReceipt,
 )
-from .domain import BrowserEngineCapability, BrowserEngineState
+from .domain import BrowserEngineCapability, BrowserEngineState, NebulaModel
 
 
 _OPAQUE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$")
+
+
+class BrowserdUploadFile(NebulaModel):
+    name: str = Field(min_length=1, max_length=200, pattern=r"^[^/\\\x00-\x1f]+$")
+    mime_type: str = Field(max_length=100)
+    content_base64: SecretStr = Field(max_length=5592408)
+
+
+class BrowserdCompanionRequest(CompanionRequest):
+    upload_file: BrowserdUploadFile | None = None
+    protected_values: list[SecretStr] = Field(default_factory=list, max_length=128)
 
 
 def _loopback_http_url(value: str) -> str:
@@ -235,12 +249,15 @@ class BrowserdManager:
         settings: BrowserdSettings,
         *,
         playwright_factory: Callable[[], Any] | None = None,
+        proxy_for_identity: Callable[[str], Awaitable[dict[str, str]]] | None = None,
     ) -> None:
         self.settings = settings
         self._playwright_factory = playwright_factory
+        self._proxy_for_identity = proxy_for_identity
         self._playwright: Any | None = None
         self._contexts: dict[str, Any] = {}
         self._tabs: dict[tuple[str, str], Any] = {}
+        self._companion_protected_values: dict[str, list[SecretStr]] = {}
         self._assessment_states: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._ledger = ActionLedger(settings.profile_root / "browserd-actions.sqlite3")
@@ -343,6 +360,7 @@ class BrowserdManager:
                 pass
         self._contexts.clear()
         self._tabs.clear()
+        self._companion_protected_values.clear()
         if self._playwright is not None:
             try:
                 await self._playwright.stop()
@@ -386,18 +404,37 @@ class BrowserdManager:
                 profile = self._identity_path(identity_id)
                 profile.mkdir(parents=True, exist_ok=True, mode=0o700)
                 os.chmod(profile, 0o700)
+                proxy = (
+                    await self._proxy_for_identity(identity_id)
+                    if self._proxy_for_identity is not None
+                    else {"server": self.settings.policy_proxy_url}
+                )
                 context = await playwright.chromium.launch_persistent_context(
                     str(profile),
                     headless=self.settings.headless,
                     executable_path=playwright.chromium.executable_path,
-                    proxy={"server": self.settings.policy_proxy_url},
-                    args=["--proxy-bypass-list=<-loopback>"],
+                    proxy=proxy,
+                    args=[
+                        "--proxy-bypass-list=<-loopback>",
+                        "--disable-quic",
+                        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                    ],
                     accept_downloads=True,
                 )
                 await context.tracing.start(
                     screenshots=True, snapshots=True, sources=False
                 )
                 self._contexts[identity_id] = context
+
+                def forget_closed_context() -> None:
+                    if self._contexts.get(identity_id) is context:
+                        self._contexts.pop(identity_id, None)
+                        self._companion_protected_values.pop(identity_id, None)
+                        for key in list(self._tabs):
+                            if key[0] == identity_id:
+                                self._tabs.pop(key, None)
+
+                context.on("close", forget_closed_context)
                 pages = list(context.pages) or [await context.new_page()]
                 for page in pages:
                     tab_id = str(uuid4())
@@ -688,6 +725,30 @@ def create_browserd_app(
         states = {"pause": "paused", "resume": "running", "stop": "stopped"}
         return await runtime.lifecycle(assessment_id, states[action])
 
+    @app.post("/v1/companion/{identity_id}", dependencies=[Depends(require_auth)])
+    async def companion(
+        identity_id: str, request: BrowserdCompanionRequest
+    ) -> dict[str, Any]:
+        try:
+            known = runtime._companion_protected_values.setdefault(identity_id, [])
+            values = {value.get_secret_value() for value in known}
+            for value in request.protected_values:
+                if value.get_secret_value() not in values:
+                    if len(known) >= 128:
+                        raise ValueError(
+                            "Restart this browser before adding more protected values."
+                        )
+                    known.append(value)
+                    values.add(value.get_secret_value())
+            result = await companion_operate(
+                runtime,
+                identity_id,
+                request.model_copy(update={"protected_values": list(known)}),
+            )
+            return BrowserCompanion.redact_result(result, list(values))
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.websocket("/v1/identities/{identity_id}/tabs/{tab_id}/screencast")
     async def screencast(websocket: WebSocket, identity_id: str, tab_id: str) -> None:
         protocols = [
@@ -759,7 +820,15 @@ def create_browserd_app(
             while True:
                 event = await websocket.receive_json()
                 kind = event.get("kind")
-                if kind == "mouse":
+                if kind == "resize":
+                    width = int(event.get("width", 1280))
+                    height = int(event.get("height", 800))
+                    if not 320 <= width <= 1920 or not 320 <= height <= 1080:
+                        raise ValueError(
+                            "Browser viewport is outside supported dimensions."
+                        )
+                    await page.set_viewport_size({"width": width, "height": height})
+                elif kind == "mouse":
                     await cdp.send(
                         "Input.dispatchMouseEvent",
                         {
@@ -768,14 +837,67 @@ def create_browserd_app(
                             "y": float(event["y"]),
                             "button": event.get("button", "none"),
                             "clickCount": int(event.get("clickCount", 0)),
+                            **(
+                                {
+                                    "deltaX": float(event.get("deltaX", 0)),
+                                    "deltaY": float(event.get("deltaY", 0)),
+                                }
+                                if event.get("type") == "mouseWheel"
+                                else {}
+                            ),
+                        },
+                    )
+                elif kind == "touch":
+                    touch_type = event.get("type")
+                    if touch_type not in {
+                        "touchStart",
+                        "touchMove",
+                        "touchEnd",
+                        "touchCancel",
+                    }:
+                        raise ValueError("Unsupported touch event.")
+                    points = event.get("touchPoints", [])
+                    if not isinstance(points, list) or len(points) > 1:
+                        raise ValueError("Only a single touch point is supported.")
+                    await cdp.send(
+                        "Input.dispatchTouchEvent",
+                        {
+                            "type": touch_type,
+                            "touchPoints": [
+                                {
+                                    "x": float(point["x"]),
+                                    "y": float(point["y"]),
+                                    "id": 0,
+                                }
+                                for point in points
+                            ],
                         },
                     )
                 elif kind == "key":
+                    key = str(event.get("key", ""))
+                    virtual_key = {
+                        "Backspace": 8,
+                        "Tab": 9,
+                        "Enter": 13,
+                        "Escape": 27,
+                        "PageUp": 33,
+                        "PageDown": 34,
+                        "End": 35,
+                        "Home": 36,
+                        "ArrowLeft": 37,
+                        "ArrowUp": 38,
+                        "ArrowRight": 39,
+                        "ArrowDown": 40,
+                        "Delete": 46,
+                    }.get(
+                        key, ord(key.upper()) if len(key) == 1 and key.isascii() else 0
+                    )
                     await cdp.send(
                         "Input.dispatchKeyEvent",
                         {
                             "type": event.get("type", "keyDown"),
-                            "key": str(event.get("key", "")),
+                            "key": key,
+                            "windowsVirtualKeyCode": virtual_key,
                             "code": str(event.get("code", "")),
                             "modifiers": int(event.get("modifiers", 0)),
                         },

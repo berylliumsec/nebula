@@ -11,7 +11,7 @@ from .diagnostics import record_caught_exception
 import ipaddress
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Literal
@@ -2634,6 +2634,7 @@ class HarnessRuntimeOption(NebulaModel):
 
 class HarnessModelOptions(NebulaModel):
     model: str = Field(min_length=1, max_length=500)
+    image_input: bool = False
     reasoning_efforts: list[HarnessRuntimeOption] = Field(
         default_factory=list, max_length=32
     )
@@ -3986,7 +3987,52 @@ class OperationEvent(NebulaModel):
         return value.astimezone(timezone.utc)
 
 
+class CompanionRequest(NebulaModel):
+    operation: Literal[
+        "tabs",
+        "new_tab",
+        "close_tab",
+        "navigate",
+        "capture",
+        "click",
+        "fill",
+        "upload",
+        "select",
+        "press",
+        "scroll",
+        "highlight",
+    ]
+    tab_id: str = Field(default="", max_length=200)
+    page_revision: str | None = Field(default=None, max_length=200)
+    url: str | None = Field(default=None, max_length=16384)
+    element_id: str | None = Field(default=None, max_length=200)
+    text: str = Field(default="", max_length=4000)
+    file_ref: str | None = Field(default=None, max_length=200)
+    credential_ref: str | None = Field(default=None, max_length=200)
+    x: float = Field(default=0, ge=0, le=10000)
+    y: float = Field(default=0, ge=0, le=10000)
+    delta: float = Field(default=0, ge=-2000, le=2000)
+    capture_kind: Literal["page", "selection", "element", "region"] = "page"
+    width: float = Field(default=0, ge=0, le=1920)
+    height: float = Field(default=0, ge=0, le=1080)
+
+
+class CompanionAction(Entity):
+    entity_kind: ClassVar[str] = "browser_companion_actions"
+    engagement_id: str
+    browser_session_id: str
+    chat_turn_id: str | None = None
+    operator_requested: bool = False
+    request: CompanionRequest
+    status: Literal["pending", "running", "complete", "failed", "revoked"] = "pending"
+    expires_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=5)
+    )
+    result: dict[str, Any] | None = None
+
+
 ENTITY_MODELS: tuple[type[Entity], ...] = (
+    CompanionAction,
     Engagement,
     ScopePolicy,
     AutomationProjectPolicy,

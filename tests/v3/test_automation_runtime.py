@@ -1042,6 +1042,7 @@ def test_api_runtime_lifecycle_uses_registered_diagnostics_feature(tmp_path):
     runtime_events = (diagnostics.log_dir / "runtime.log").read_text(encoding="utf-8")
     assert "runtime.runtime.started" in runtime_events
     assert "runtime.runtime.stopped" in runtime_events
+    assert "runtime.managed-browser-host.stopped" in runtime_events
 
 
 def test_runtime_info_is_not_ready_before_kali_image_preparation(tmp_path):

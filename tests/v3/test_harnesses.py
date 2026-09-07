@@ -28,7 +28,7 @@ from nebula.v3.browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
 )
-from nebula.v3.chat import ChatService
+from nebula.v3.chat import ChatService, ChatConfigurationError
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
@@ -37,6 +37,7 @@ from nebula.v3.domain import (
     ApprovalStatus,
     ChatBackend,
     ChatMessage,
+    ChatContentBlock,
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
@@ -109,8 +110,12 @@ class FakeConnection(HarnessConnection):
         self.closed = False
         self.steering: list[str] = []
         self.prompts: list[str] = []
+        self.images: list[list[dict]] = []
 
-    async def run_turn(self, prompt: str, *, model: str) -> AsyncIterator[HarnessEvent]:
+    async def run_turn(
+        self, prompt: str, *, model: str, images=None
+    ) -> AsyncIterator[HarnessEvent]:
+        self.images.append(images or [])
         self.prompts.append(prompt)
         self.external_session_id = self.external_session_id or "vendor-session-1"
         yield HarnessEvent(
@@ -2237,6 +2242,188 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
     asyncio.run(scenario())
 
 
+def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tmp_path):
+    from nebula.v3.harnesses import _harness_turn_prompt
+
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Existing conversation",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        assert '"browser.companion":"disabled"' in _harness_turn_prompt(turn)
+        assert '"browser.companion":"enabled"' in _harness_turn_prompt(
+            turn.model_copy(
+                update={
+                    "metadata": {
+                        **turn.metadata,
+                        "browser_companion_session_id": "attached-browser",
+                    }
+                }
+            )
+        )
+        first = await runtime._connection(session, turn)
+        assert not any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[0].gateway_tools
+        )
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "external_session_id": "same-native-thread",
+                "metadata": {
+                    **session.metadata,
+                    "browser_companion_session_id": "attached-browser",
+                },
+            },
+        )
+        second = await runtime._connection(session, turn)
+        assert second is not first and first.closed
+        assert adapter.opens[-1].session.external_session_id == "same-native-thread"
+        assert any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[-1].gateway_tools
+        )
+        assert await runtime._connection(session, turn) is second
+        assert len(adapter.opens) == 2
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {"metadata": {**session.metadata, "browser_companion_session_id": None}},
+        )
+        third = await runtime._connection(session, turn)
+        assert third is not second and second.closed
+        assert not any(
+            tool["name"] == "browser.companion"
+            for tool in adapter.opens[-1].gateway_tools
+        )
+        assert store.get(ChatSession, chat.id).harness_session_id == session.id
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("attached", [True, False])
+def test_linked_retry_refreshes_current_browser_binding(
+    tmp_path, monkeypatch, attached
+):
+    async def scenario():
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Retry browser",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Browser")
+        )
+        browser = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Browser",
+                metadata={
+                    "browser_companion_version": 1,
+                    "conversation_id": chat.id if attached else None,
+                },
+            )
+        )
+        store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "status": HarnessTurnStatus.CANCELLED,
+                "metadata": {
+                    **turn.metadata,
+                    "browser_companion_session_id": browser.id,
+                },
+            },
+            expected_revision=turn.revision,
+        )
+
+        async def drive(_):
+            pass
+
+        monkeypatch.setattr(runtime, "_drive_chat_turn", drive)
+        replacement = await runtime.retry_turn(turn.id)
+        await runtime._chat_turn_tasks[replacement.id]
+        current = store.get(HarnessTurn, replacement.id)
+        session = store.get(HarnessSession, current.harness_session_id)
+        assert current.chat_session_id == chat.id
+        assert current.metadata.get("browser_companion_session_id") == (
+            browser.id if attached else None
+        )
+        assert session.metadata.get("browser_companion_session_id") == (
+            browser.id if attached else None
+        )
+        assert current.metadata["retry_of_turn_id"] == turn.id
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.CANCELLED
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_browser_gateway_rechecks_conversation_binding_before_execution(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.browser_companion import BrowserCompanion
+    from nebula.v3.browser_engine import BrowserEngineRegistry
+    from nebula.v3.harnesses import HarnessConfigurationError
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Attached browser",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Browser")
+        )
+        browser = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Browser",
+                metadata={"browser_companion_version": 1, "conversation_id": chat.id},
+            )
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "browser_companion_session_id": browser.id,
+                }
+            },
+        )
+        monkeypatch.setattr(runtime, "_active_gateway_turn", lambda _: turn)
+        BrowserCompanion(store, BrowserEngineRegistry()).bind(browser.id, None)
+        with pytest.raises(HarnessConfigurationError, match="No browser is attached"):
+            await runtime._gateway_call(
+                session, "browser.companion", {"operation": "tabs"}
+            )
+
+    asyncio.run(scenario())
+
+
 def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
@@ -2733,6 +2920,91 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
         allow_remote_mcp=True,
     )
     assert chat.harness_session_id
+
+
+def test_harness_images_validate_ownership_and_persist_references(tmp_path):
+    store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
+    original = store.create(
+        runtime.artifact_store.put_bytes(
+            b"original image",
+            engagement_id=engagement.id,
+            media_type="image/png",
+            metadata={"chat_image_original": True},
+        )
+    )
+    preview = store.create(
+        runtime.artifact_store.put_bytes(
+            b"validated preview",
+            engagement_id=engagement.id,
+            media_type="image/png",
+            parent_artifact_id=original.id,
+            metadata={"chat_image_preview": True, "metadata_stripped": True},
+        )
+    )
+    block = ChatContentBlock(
+        type="image",
+        artifact_id=original.id,
+        metadata={"preview_artifact_id": preview.id},
+    )
+    args = dict(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Describe this image",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        content_blocks=[block],
+    )
+    with pytest.raises(HarnessConfigurationError, match="image input"):
+        runtime.prepare_chat(**args)
+    assert store.list_entities(ChatSession) == []
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": HarnessCapabilities(
+                models=["test-model"],
+                model_options=[
+                    HarnessModelOptions(model="test-model", image_input=True)
+                ],
+            )
+        },
+        expected_revision=profile.revision,
+    )
+    foreign = store.create(Engagement(name="Other project"))
+    with pytest.raises(ChatConfigurationError, match="belong"):
+        runtime.prepare_chat(**{**args, "engagement_id": foreign.id})
+    assert store.list_entities(ChatSession) == []
+
+    async def scenario():
+        chat, _, turn = runtime.prepare_chat(**args)
+        messages = store.list_entities(ChatMessage, engagement_id=engagement.id)
+        assert messages[0].content_blocks == [block]
+        assert "validated preview" not in turn.model_dump_json()
+        assert turn.metadata["image_blocks"][0]["artifact_id"] == original.id
+        events = [event async for event in runtime.stream_turn(turn.id)]
+        assert any(event.type == "completed" for event in events), events
+        assert adapter.connections[0].images[0][0]["data"] == "dmFsaWRhdGVkIHByZXZpZXc="
+        assert store.get(ChatSession, chat.id).id == chat.id
+        _, _, corrupted_turn = runtime.prepare_chat(
+            **{**args, "chat_session_id": chat.id, "mcp_server_ids": None}
+        )
+        preview_path = runtime.artifact_store.path_for(preview)
+        preview_path.chmod(0o600)
+        preview_path.write_bytes(b"changed after validation")
+        failed_events = [
+            event async for event in runtime.stream_turn(corrupted_turn.id)
+        ]
+        assert any(event.type == "error" for event in failed_events)
+        assert (
+            store.get(HarnessTurn, corrupted_turn.id).status
+            == HarnessTurnStatus.INTERRUPTED
+        )
+        assert len(adapter.connections[0].images) == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming(

@@ -929,6 +929,7 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
                 "inspect",
                 model="gpt-test",
                 mode="plan",
+                images=[{"media_type": "image/png", "data": "aW1hZ2U="}],
                 skill=HarnessSkillInvocation(
                     name="review",
                     path="/workspace/.codex/skills/review/SKILL.md",
@@ -937,6 +938,10 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
         ]
         assert events[-1].message == "done"
         turn = next(params for method, params in rpc.calls if method == "turn/start")
+        assert turn["input"][1] == {
+            "type": "image",
+            "url": "data:image/png;base64,aW1hZ2U=",
+        }
         assert turn["collaborationMode"] == {"mode": "plan"}
         assert turn["input"][-1] == {
             "type": "skill",
@@ -1615,6 +1620,8 @@ def test_codex_rpc_malformed_frame_fails_an_affected_request_without_stopping_re
 def test_codex_gateway_thread_disables_vendor_execution_and_environment():
     config = _codex_thread_config({})
 
+    assert config["features"]["code_mode_host"] is True
+    assert config["features"]["code_mode"] is False
     assert config["features"]["shell_tool"] is False
     assert config["features"]["unified_exec"] is False
     assert config["features"]["plugins"] is False

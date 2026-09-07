@@ -1,0 +1,53 @@
+.integrated-browser-layout[hidden] { display: none; }
+.session-layout.browser { grid-template-rows: minmax(0, 1fr); }
+.session-layout.browser .session-workspace { display: flex; flex-direction: column; overflow: hidden; }
+.session-layout.browser .integrated-browser-layout { flex: 1 1 0; height: auto; }
+.integrated-browser-layout { display: flex; min-height: 0; height: 100%; gap: 12px; }
+.integrated-browser-page { flex: 1 1 55%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.integrated-browser-page > .workbench-browser { flex: 1; min-height: 0; }
+.integrated-browser-assistant { flex: 1 1 45%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.integrated-browser-assistant > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.integrated-browser-assistant > header > strong { margin-right: auto; }
+.integrated-browser-assistant .chat-panel { flex: 1; min-height: 0; }
+.integrated-browser-assistant .chat-panel > .chat-composer { flex: 0 1 auto; min-height: 0; max-height: calc(100% - 24px); overflow-y: auto; }
+.integrated-browser-assistant button { min-height: 44px; }
+.integrated-browser-assistant button > svg { pointer-events: none; }
+.managed-assistant-browser { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: auto; }
+.managed-assistant-browser > * { flex-shrink: 0; }
+.managed-browser-toolbar { display: flex; gap: 6px; flex-wrap: wrap; }
+.managed-browser-toolbar input { flex: 1; min-width: 120px; }
+.managed-browser-toolbar select { max-width: 100%; }
+.managed-assistant-browser button, .managed-assistant-browser input, .managed-assistant-browser select { min-height: 44px; }
+.managed-browser-screen { position: relative; min-height: 100px; overflow: auto; }
+.managed-browser-screen > img { display: block; width: 100%; height: auto; touch-action: none; }
+.managed-browser-capture { max-height: 40vh; overflow: auto; }
+.managed-browser-capture pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.managed-browser-capture img { max-width: 100%; }
+.managed-browser-capture small { display: block; }
+.managed-browser-approval { padding: 12px; border: 1px solid currentColor; }
+.managed-browser-credentials { overflow-wrap: anywhere; }
+.managed-browser-credentials form, .managed-browser-credentials label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.managed-browser-credentials input, .managed-browser-credentials select { width: 100%; min-width: 0; box-sizing: border-box; }
+.managed-browser-credentials button { white-space: normal; }
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .main-content:has(> .sessions-page.screen-fit > .session-layout.browser) { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .sessions-page.screen-fit:has(> .session-layout.browser) { display: flex; flex-direction: column; flex: 1 1 0; min-height: 0; overflow: hidden; }
+  .sessions-page.screen-fit > .session-layout.browser { flex: 1 1 0; min-height: 0; }
+  .integrated-browser-layout { flex-direction: column; }
+  .integrated-browser-layout.assistant-open > .integrated-browser-page { flex: 1; min-height: 100px; }
+  .browser-assistant-sheet { position: fixed; z-index: 55; left: 8px; right: 8px; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--canvas); isolation: isolate; box-shadow: 0 -8px 30px #0004; }
+  .browser-assistant-sheet > header { flex-shrink: 0; }
+  .browser-assistant-required-actions { flex: 0 1 auto; min-height: 0; max-height: 45%; overflow: auto; }
+  .browser-assistant-required-actions:empty { display: none; }
+  .browser-assistant-sheet:has(.managed-browser-approval) .chat-panel { overflow: auto; }
+  .integrated-browser-assistant .chat-settings-popover { width: 100%; max-width: 100%; }
+}
+
+.managed-browser-region { position: absolute; pointer-events: none; border: 2px solid #84caff; background: #84caff33; box-sizing: border-box; }
+.managed-browser-keyboard label { display: flex; flex-direction: column; }
+.managed-browser-keyboard textarea { min-height: 80px; width: 100%; box-sizing: border-box; }
+
+@media (pointer: coarse) and (max-height: 500px) {
+  .main-content:has(> .sessions-page.screen-fit > .session-layout.browser) { overflow-y: auto; }
+  .sessions-page.screen-fit:has(> .session-layout.browser) { flex: 1 0 320px; min-height: 320px; }
+}

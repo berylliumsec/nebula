@@ -1394,6 +1394,7 @@ interface WireHarnessProfile extends WireEntity {
     models?: string[];
     model_options?: Array<{
       model: string;
+      image_input?: boolean;
       reasoning_efforts?: Array<{ id: string; label: string; description?: string }>;
       default_reasoning_effort?: string | null;
       service_tiers?: Array<{ id: string; label: string; description?: string }>;
@@ -3127,6 +3128,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     models: value.capabilities?.models ?? [],
     modelOptions: (value.capabilities?.model_options ?? []).map((option) => ({
       model: option.model,
+      imageInput: option.image_input === true,
       reasoningEfforts: (option.reasoning_efforts ?? []).map((item) => ({
         id: item.id,
         label: item.label,
@@ -4202,6 +4204,15 @@ export class ApiClient {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
     this.tokenSource = options.token;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+  }
+
+  openBrowserCompanionStream(sessionId: string, tabId: string): WebSocket {
+    const endpoint = new URL(`${this.baseUrl.replace(/\/$/, "")}/browser-companion/${encodeURIComponent(sessionId)}/tabs/${encodeURIComponent(tabId)}/stream`, globalThis.location.origin);
+    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+    const protocols = ["nebula.browser.v1"];
+    const token = this.getToken();
+    if (token) protocols.push(websocketAuthProtocol(token));
+    return new WebSocket(endpoint, protocols);
   }
 
   getToken(): string | undefined {

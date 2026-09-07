@@ -59,6 +59,7 @@ interface WorkbenchBrowserProps {
   scopeLoading?: boolean;
   onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
   onAskNebula: (request: NebulaDraftRequest) => void;
+  onAttachContext?: (request: NebulaDraftRequest) => void;
   assistantRuntimeLabel?: string;
   onAskSelection?: (
     request: { question: string; context: NebulaDraftRequest },
@@ -131,7 +132,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onAttachContext, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
@@ -785,6 +786,12 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
             "OPERATOR SELECTION",
             selectedText,
           ].join("\n");
+          if (onAttachContext) {
+            onAttachContext({ text: contextText, sourceKind: "browser_selection", sourceId: activeSession?.id,
+              sourceLabel: `Browser selection · ${payload.context.title || hostname}`.slice(0, 500),
+              truncated: payload.context.selectedText.length >= 4_000 });
+            return;
+          }
           selectionAbortRef.current?.abort();
           selectionAbortRef.current = undefined;
           setSelectionContext({
@@ -944,7 +951,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, operatorId, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, onAttachContext, operatorId, projectId, scope, updateTab]);
 
   useEffect(() => {
     if (typeof api.getSecurityBrowserAutomation !== "function") return;

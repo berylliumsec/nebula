@@ -1,7 +1,7 @@
 import { useLayoutEffect, type RefObject } from "react";
 
 /** Keep settings above the actual composer, including wrapped mobile controls. */
-export function useChatComposerAnchor(input: RefObject<HTMLTextAreaElement | null>, active: boolean) {
+export function useChatComposerAnchor(input: RefObject<HTMLTextAreaElement | null>, active: boolean, surface?: string) {
   useLayoutEffect(() => {
     if (!active) return;
     const composer = input.current?.closest<HTMLElement>(".chat-composer");
@@ -12,5 +12,5 @@ export function useChatComposerAnchor(input: RefObject<HTMLTextAreaElement | nul
     const observer = new ResizeObserver(update);
     observer.observe(composer); observer.observe(panel);
     return () => observer.disconnect();
-  }, [input, active]);
+  }, [input, active, surface]);
 }

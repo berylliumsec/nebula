@@ -418,6 +418,16 @@ class BrowserSecurityService:
         sessions = self.store.list_entities(
             BrowserSession, engagement_id=engagement_id, limit=1_000
         )
+        identities = [
+            item
+            for item in identities
+            if item.metadata.get("browser_companion_version") != 1
+        ]
+        sessions = [
+            item
+            for item in sessions
+            if item.metadata.get("browser_companion_version") != 1
+        ]
         if not identities:
             identity = BrowserIdentity(
                 engagement_id=engagement_id,

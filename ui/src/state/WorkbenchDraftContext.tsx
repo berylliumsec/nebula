@@ -3,7 +3,9 @@ import {
   type PropsWithChildren,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -42,7 +44,7 @@ interface WorkbenchDraftContextValue {
   executionDraft?: SelectionActionDraft;
   findingDraft?: FindingDraftRequest;
   activeHandoffIds: string[];
-  requestNebulaDraft(request: NebulaDraftRequest): void;
+  requestNebulaDraft(request: NebulaDraftRequest, view?: "chat" | "browser"): void;
   requestNoteDraft(request: NebulaDraftRequest): void;
   requestFindingDraft(request: FindingDraftRequest): void;
   removeAssistantDraft(index: number): void;
@@ -100,8 +102,8 @@ export function assistantHandoffSessionId(
   return new URLSearchParams(search).get("session") || undefined;
 }
 
-function assistantHandoffPath(projectId: string, sessionId?: string, handoffId?: string): string {
-  const parameters = new URLSearchParams({ view: "chat" });
+function assistantHandoffPath(projectId: string, sessionId?: string, handoffId?: string, view: "chat" | "browser" = "chat"): string {
+  const parameters = new URLSearchParams({ view });
   if (sessionId) parameters.set("session", sessionId);
   if (handoffId) parameters.set("handoff", handoffId);
   return `${projectSurface(projectId, "workbench")}?${parameters}`;
@@ -205,6 +207,8 @@ function sourceForRoute(pathname: string, element: Element | null): SelectionSou
 export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const { api, engagement } = useWorkspace();
   const location = useLocation();
+  const locationRef = useRef(location);
+  locationRef.current = location;
   const navigate = useNavigate();
   const [assistantContext, setAssistantContext] = useState<AssistantDraftMerge>({ drafts: [] });
   const { drafts: assistantDrafts, notice: assistantDraftNotice } = assistantContext;
@@ -212,6 +216,25 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
   const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
   const [activeHandoffIds, setActiveHandoffIds] = useState<string[]>([]);
+  const assistantHandoffs = useRef(new Map<string, number>());
+  const discardedAssistantHandoffs = useRef(new Set<string>());
+  const assistantGeneration = useRef(0);
+  useLayoutEffect(() => {
+    const parameters = new URLSearchParams(location.search);
+    if (!discardedAssistantHandoffs.current.has(parameters.get("handoff") ?? "")) return;
+    // A streamed turn may finish navigation after a selection was cleared.
+    // Reconcile that stale URL without changing its current conversation/view.
+    parameters.delete("handoff");
+    navigate(`${location.pathname}${parameters.size ? `?${parameters}` : ""}${location.hash}`, { replace: true });
+  }, [assistantContext, location.pathname, location.search, location.hash, navigate]);
+
+  const cancelSelectionHandoff = useCallback(async (id: string, revision: number) => {
+    if (!api) return;
+    try { await api.cancelHandoff(id, revision); }
+    catch (error) {
+      void logCaughtDiagnostic("interface.handoff.selection_cancel_failed", "The discarded selection was cleared locally, but its handoff could not be cancelled.", error, "handoffs");
+    }
+  }, [api]);
 
   const persistSelectionHandoff = useCallback(async (
     draft: SelectionActionDraft,
@@ -221,6 +244,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   ) => {
     if (!api || !engagement) return;
     const metadata = selectionHandoffMetadata(engagement.id, draft);
+    const origin = locationRef.current;
+    const generation = assistantGeneration.current;
     try {
       const envelope = await api.createHandoff({
         projectId: engagement.id,
@@ -231,9 +256,24 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         sourceLabels: metadata.sourceLabels,
         transient: true,
       });
+      if (actionId === "ask_nebula") {
+        if (generation !== assistantGeneration.current) {
+          await cancelSelectionHandoff(envelope.id, envelope.revision);
+          return;
+        }
+        assistantHandoffs.current.set(envelope.id, envelope.revision);
+      }
       setActiveHandoffIds((current) => [...new Set([...current, envelope.id])]);
+      if (view === "browser") {
+        const current = locationRef.current;
+        if (current.pathname !== origin.pathname || current.search !== origin.search) return;
+        const parameters = new URLSearchParams(current.search);
+        parameters.set("handoff", envelope.id);
+        navigate(`${current.pathname}?${parameters}`, { replace: true });
+        return;
+      }
       if (view === "chat") {
-        navigate(assistantHandoffPath(engagement.id, assistantSessionId, envelope.id), { replace: true });
+        navigate(assistantHandoffPath(engagement.id, assistantSessionId, envelope.id, view), { replace: true });
         return;
       }
       const parameters = new URLSearchParams({ view, handoff: envelope.id });
@@ -246,17 +286,17 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         "handoffs",
       );
     }
-  }, [api, engagement, navigate]);
+  }, [api, engagement, navigate, cancelSelectionHandoff]);
 
-  const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
+  const requestNebulaDraft = useCallback((request: NebulaDraftRequest, view: "chat" | "browser" = "chat") => {
     const next = toSelectionDraft(request);
     if (!next) return;
     const currentSessionId = engagement
       ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
       : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, next));
-    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
-    void persistSelectionHandoff(next, "ask_nebula", "chat", currentSessionId);
+    if (view !== "browser") navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId, undefined, view) : `/?view=${view}`);
+    void persistSelectionHandoff(next, "ask_nebula", view, currentSessionId);
   }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
 
   const requestNoteDraft = useCallback((request: NebulaDraftRequest) => {
@@ -314,7 +354,19 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, []);
   const clearAssistantDrafts = useCallback(() => {
     setAssistantContext({ drafts: [] });
-  }, []);
+    assistantGeneration.current += 1;
+    const handoffs = new Map(assistantHandoffs.current);
+    for (const id of handoffs.keys()) discardedAssistantHandoffs.current.add(id);
+    assistantHandoffs.current.clear();
+    setActiveHandoffIds(current => current.filter(id => !handoffs.has(id)));
+    for (const [id, revision] of handoffs) void cancelSelectionHandoff(id, revision);
+    const current = locationRef.current;
+    const parameters = new URLSearchParams(current.search);
+    if (handoffs.has(parameters.get("handoff") ?? "")) {
+      parameters.delete("handoff");
+      navigate(`${current.pathname}${parameters.size ? `?${parameters}` : ""}`, { replace: true });
+    }
+  }, [cancelSelectionHandoff, navigate]);
   const clearAssistantDraftNotice = useCallback(() => {
     setAssistantContext((current) => ({ drafts: current.drafts }));
   }, []);

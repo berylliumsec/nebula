@@ -1,3 +1,6 @@
+import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
+import { BrowserAssistantPanel, BROWSER_ASSISTANT_SHEET_QUERY } from "../components/BrowserAssistantPanel";
+import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
@@ -132,7 +135,7 @@ import {
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
-const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace"]);
+const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
 
 function isReadableContextStatus(value: ContextStatus, expectedOwnerId: string): boolean {
@@ -403,6 +406,8 @@ export function SessionsPage() {
     requestNebulaDraft,
   } = useWorkbenchDrafts();
   const [searchParams, setSearchParams] = useSearchParams();
+  const currentSearchParams = useRef(searchParams);
+  currentSearchParams.current = searchParams;
   const requestedView = searchParams.get("view");
   const requestedSessionId = searchParams.get("session") ?? "";
   const initialView = requestedView === "chat" || requestedView === "code" || requestedView === "terminal" || requestedView === "browser" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
@@ -413,21 +418,35 @@ export function SessionsPage() {
   const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "browser" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
   const setView = (next: SessionView) => {
     setViewState(next);
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", next);
     setSearchParams(params, { replace: true });
   };
   const openUnattachedChatView = () => {
-    setViewState("chat");
-    const params = new URLSearchParams(searchParams);
-    params.set("view", "chat");
+    const nextView = view === "browser" ? "browser" : "chat";
+    setViewState(nextView);
+    const params = new URLSearchParams(currentSearchParams.current);
+    params.set("view", nextView);
     params.delete("session");
     setSearchParams(params, { replace: true });
   };
-  const openSessionChatView = (id: string) => {
-    setViewState("chat");
-    const params = new URLSearchParams(searchParams);
-    params.set("view", "chat");
+  const consumedSelectionHandoff = useRef<string | null>(null);
+  const clearSubmittedContext = () => {
+    consumedSelectionHandoff.current = currentSearchParams.current.get("handoff");
+    currentSearchParams.current = new URLSearchParams(currentSearchParams.current);
+    currentSearchParams.current.delete("handoff");
+    clearAssistantDrafts();
+  };
+  const openSessionChatView = (id: string, preserveSurface = false) => {
+    // Stream callbacks outlive the render that submitted the message. Preserve
+    // newer navigation and cleared handoffs instead of restoring that old URL.
+    const params = new URLSearchParams(currentSearchParams.current);
+    if (!preserveSurface) {
+      const nextView = params.get("view") === "browser" ? "browser" : "chat";
+      setViewState(nextView);
+      params.set("view", nextView);
+    }
+    if (params.get("handoff") === consumedSelectionHandoff.current) params.delete("handoff");
     params.set("session", id);
     setSearchParams(params, { replace: true });
   };
@@ -553,7 +572,7 @@ export function SessionsPage() {
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  useChatComposerAnchor(composerRef, view === "chat" && conversationOpen);
+  useChatComposerAnchor(composerRef, (view === "chat" || view === "browser") && conversationOpen, view === "browser" && window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches ? "browser-sheet" : view);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
   const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);
@@ -601,7 +620,7 @@ export function SessionsPage() {
     const runStarted = sending && !previousChatSendingRef.current;
     previousChatSendingRef.current = sending;
     if (runStarted) chatFollowBottomRef.current = true;
-    if (view !== "chat" || !conversationOpen || !chatFollowBottomRef.current) return;
+    if ((view !== "chat" && view !== "browser") || !conversationOpen || !chatFollowBottomRef.current) return;
     const viewport = chatViewportRef.current;
     if (!viewport) return;
     const scrollToLatest = () => {
@@ -614,7 +633,7 @@ export function SessionsPage() {
     };
   }, [conversationOpen, messages, sending, view]);
   useEffect(() => {
-    if (!import.meta.env.DEV || view !== "chat" || !conversationOpen || !chatViewportRef.current) return;
+    if (!import.meta.env.DEV || (view !== "chat" && view !== "browser") || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
   }, [conversationOpen, sessionId, view]);
   const messagesById = useMemo(
@@ -709,7 +728,8 @@ export function SessionsPage() {
   const harnessServiceTiers = selectedHarnessModelOptions?.serviceTiers ?? [];
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
   const imageInputEnabled = runtimeKind === "provider"
-    && Boolean(selectedProvider?.capabilities.includes("vision"));
+    ? Boolean(selectedProvider?.capabilities.includes("vision"))
+    : Boolean(selectedHarnessModelOptions?.imageInput);
   const harnessIsLocal = selectedHarness?.localOnly === true;
   const runtimePermitsKnowledge = runtimeKind === "harness"
     ? harnessIsLocal || selectedHarness?.permitsSensitiveData === true
@@ -772,7 +792,7 @@ export function SessionsPage() {
   }, [view]);
 
   useEffect(() => {
-    if (runtimeKind !== "provider" || coreState !== "online" || view !== "chat" || !selectedProvider || !model.trim() || modelVerification) return;
+    if (runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
     const key = `${selectedProvider.id}:${model.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
@@ -794,7 +814,7 @@ export function SessionsPage() {
   }, [assistantDrafts]);
 
   useLayoutEffect(() => {
-    if (view !== "chat") return;
+    if (view !== "chat" && view !== "browser") return;
     const composer = composerRef.current;
     if (!composer) return;
     if (!draft) {
@@ -1191,7 +1211,7 @@ export function SessionsPage() {
     setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
     if (selectedId) {
       setSessionId(selectedId);
-      openSessionChatView(selectedId);
+      openSessionChatView(selectedId, true);
     }
   };
 
@@ -1862,7 +1882,7 @@ export function SessionsPage() {
   ) => {
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
-      openSessionChatView(streamEvent.sessionId);
+      openSessionChatView(streamEvent.sessionId, true);
       void refreshSessions();
     }
     if (streamEvent.type === "started") {
@@ -2224,11 +2244,11 @@ export function SessionsPage() {
       allowCloudKnowledge = true;
     }
 
-    const wantsTools = runtimeKind === "harness"
+    const wantsTools = browserControlEnabled || (runtimeKind === "harness"
       ? Boolean(harnessSessionId
         ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
         : selectedMcpIds.length)
-      : canUseTools || selectedMcpIds.length > 0;
+      : canUseTools || selectedMcpIds.length > 0);
     let allowCloudToolResults = false;
     const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
@@ -2342,7 +2362,7 @@ export function SessionsPage() {
         setDraft(current => current.trim() === content ? "" : current);
         pendingImages.forEach(image => URL.revokeObjectURL(image.previewUrl));
         setPendingImages([]);
-        clearAssistantDrafts();
+        clearSubmittedContext();
       }
       setMessageActionStatus("Saved in Core. Queued work continues after all browser tabs close.");
       return true;
@@ -2353,7 +2373,7 @@ export function SessionsPage() {
       setDraft("");
       pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setPendingImages([]);
-      clearAssistantDrafts();
+      clearSubmittedContext();
     }
     setChatError(undefined);
     setSending(true);
@@ -2444,64 +2464,6 @@ export function SessionsPage() {
   };
 
 
-  const askBrowserSelection = async (
-    request: { question: string; context: { text: string; sourceKind: string; sourceId?: string; sourceLabel: string; truncated?: boolean } },
-    signal: AbortSignal,
-    onDelta: (answer: string) => void,
-  ): Promise<{ sessionId: string; answer: string }> => {
-    if (!api || coreState !== "online" || !engagement) {
-      throw new Error("Core is offline, so this selection cannot be saved as a conversation.");
-    }
-    const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
-    const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if ((!providerRuntime && !harnessRuntime) || !model.trim()) {
-      throw new Error("Choose an enabled Assistant runtime and model first.");
-    }
-    const attachment = await createHashedSelectionAttachment({
-      text: request.context.text,
-      originalLength: request.context.text.length,
-      truncated: request.context.truncated ?? false,
-      source: {
-        kind: request.context.sourceKind,
-        id: request.context.sourceId,
-        label: request.context.sourceLabel,
-      },
-      anchor: { left: 0, top: 0, right: 0, bottom: 0 },
-    });
-    let answer = "";
-    let returnedSessionId = "";
-    const response = await api.streamChat({
-      backend: runtimeKind,
-      providerId: providerRuntime?.id,
-      harnessProfileId: harnessRuntime?.id,
-      engagementId: engagement.id,
-      model: model.trim(),
-      messages: [{ role: "user", content: request.question }],
-      contextAttachments: [attachment],
-      includeKnowledge: false,
-      toolsEnabled: false,
-      maxOutputTokens: 1_200,
-      harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
-      harnessReasoningEffort: runtimeKind === "harness" ? harnessReasoningEffort || undefined : undefined,
-      harnessServiceTier: runtimeKind === "harness" ? harnessServiceTier || undefined : undefined,
-    }, (streamEvent) => {
-      if (streamEvent.type === "started" && streamEvent.sessionId) returnedSessionId = streamEvent.sessionId;
-      if (streamEvent.type === "delta" || streamEvent.type === "message_delta") {
-        answer += streamEvent.delta;
-        onDelta(answer);
-      }
-      if (streamEvent.type === "done") {
-        returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
-        answer = streamEvent.message.content || answer;
-        onDelta(answer);
-      }
-    }, signal);
-    returnedSessionId = response?.sessionId ?? returnedSessionId;
-    answer = response?.message.content || answer;
-    if (!returnedSessionId) throw new Error("Core completed the response without returning its durable conversation.");
-    if (!answer.trim()) throw new Error("The Assistant returned an empty response.");
-    return { sessionId: returnedSessionId, answer };
-  };
 
   const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
     if (!pendingResponse || !api) return;
@@ -3025,176 +2987,24 @@ export function SessionsPage() {
     runtimeKind === "harness" && harnessServiceTier ? `${harnessServiceTier} speed` : "",
   ].filter(Boolean).join(" · ");
 
-  return (
-    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
-      <PageHeader
-        title="Workbench"
-        description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
-        showIntroduction={false}
-        actions={view === "chat" ? <button className="button primary mobile-primary-action" type="button" aria-label="New chat" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} aria-hidden="true" /><span>New chat</span></button> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
-      />
+  const browserEngine = searchParams.get("browserEngine") === "native" || (!searchParams.has("browserEngine") && searchParams.has("browserTool")) ? "native" : "managed";
+  const setBrowserEngine = (engine: "managed" | "native") => {
+    const params = new URLSearchParams(searchParams);
+    params.set("browserEngine", engine);
+    setSearchParams(params, { replace: true });
+  };
+  const [browserAssistantOpen, setBrowserAssistantOpen] = useState(true);
+  const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
+  const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
+  const collapseBrowserAssistant = () => {
+    setBrowserAssistantOpen(false);
+    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
+  };
 
-      <Toolbar className="session-toolbar" label="Workbench controls">
-        <TabBar className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
-          { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
-          { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
-          { id: "browser", label: "Browser", ariaLabel: "Project browser", icon: <Globe2 size={16} /> },
-          { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", icon: <MessageSquare size={16} /> },
-          { id: "workspace", label: "Files", ariaLabel: "Workspace files", icon: <FolderOpen size={16} /> },
-          { id: "notes", label: "Notes", ariaLabel: "Project notes", icon: <NotebookPen size={16} /> },
-          { id: "missions", label: "Missions", ariaLabel: "Autonomous missions", icon: <Bot size={16} /> },
-          { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
-        ] as const} />
-        <div className="session-toolbar-actions">
-          {view === "chat" && <button
-            className="button quiet session-conversations-toggle"
-            type="button"
-            aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            aria-expanded={conversationPanelOpen}
-            aria-controls="workbench-conversations"
-            onClick={toggleConversationPanel}
-          >
-            <MessageSquare size={15} aria-hidden="true" /> Conversations{sessions.length ? <span>{sessions.length}</span> : null}
-          </button>}
-          {fullScreen && <button className="icon-button subtle workbench-full-screen-toggle" type="button" aria-label="Exit full screen workbench" title="Exit focus mode" onClick={() => setFullScreen(false)}><Minimize2 size={17} aria-hidden="true" /></button>}
-          <div className="workbench-actions">
-            <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>
-            {workbenchActionsOpen && <div ref={workbenchActionsMenuRef} className="workbench-actions-menu" id="workbench-actions-menu" role="menu" aria-label="Workbench actions">
-              {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
-              {view === "chat" && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => {
-                setSessionInspectorOpen((open) => {
-                  localStorage.setItem("nebula.session-inspector.open", String(!open));
-                  return !open;
-                });
-                setWorkbenchActionsOpen(false);
-              }}><PanelRight size={16} aria-hidden="true" /><span><strong>{sessionInspectorOpen ? "Hide session details" : "Show session details"}</strong><small>Runtime, knowledge, and execution boundaries</small></span></button>}
-              <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setFullScreen((value) => !value); setWorkbenchActionsOpen(false); }}>
-                {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}<span><strong>{fullScreen ? "Exit focus mode" : "Enter focus mode"}</strong><small>{fullScreen ? "Restore the application shell" : "Use the full viewport for this tool"}</small></span>
-              </button>
-            </div>}
-          </div>
-        </div>
-      </Toolbar>
-
-      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
-        {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
-          <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
-          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search title or runtime" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
-          <nav>
-            <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {visibleSessions.map((session) => {
-              const actionsOpen = sessionActionsId === session.id;
-              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
-              const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"} · {new Date(session.updatedAt).toLocaleDateString()}</small></span></button><div className="session-item-actions"><button
-                ref={actionsOpen ? sessionActionsButtonRef : undefined}
-                id={`conversation-actions-trigger-${session.id}`}
-                className="icon-button subtle session-actions-trigger"
-                type="button"
-                aria-label={`More actions for ${session.title}`}
-                aria-haspopup="menu"
-                aria-expanded={actionsOpen}
-                aria-controls={actionsOpen ? `conversation-actions-${session.id}` : undefined}
-                disabled={actionsDisabled}
-                title={actionsDisabledReason ?? `More actions for ${session.title}`}
-                onClick={(event) => {
-                  sessionActionsButtonRef.current = event.currentTarget;
-                  if (sessionActionsId === session.id) {
-                    setSessionActionsId(undefined);
-                    return;
-                  }
-                  const bounds = event.currentTarget.getBoundingClientRect();
-                  const menuWidth = 196;
-                  const menuHeight = 176;
-                  const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
-                  setSessionActionsPosition({
-                    left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
-                    openAbove,
-                    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
-                  });
-                  setSessionActionsId(session.id);
-                }}
-              >{deletingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
-                ref={sessionActionsMenuRef}
-                id={`conversation-actions-${session.id}`}
-                className="session-actions-menu"
-                role="menu"
-                aria-label={`Actions for ${session.title}`}
-                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
-                onKeyDown={(event) => {
-                  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-                  event.preventDefault();
-                  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
-                  if (!items.length) return;
-                  const current = items.indexOf(document.activeElement as HTMLButtonElement);
-                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
-                  items[next]?.focus();
-                }}
-              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
-            })}
-            {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
-            {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
-          </nav>
-        </aside>}
-        <section className="session-workspace">
-          {api && engagement && <div className="persistent-terminal" hidden={view !== "terminal"}>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} /></Suspense>
-          </div>}
-          {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={(context) => { requestNebulaDraft(context); setView("chat"); }} /></Suspense>
-          </div>}
-          {api && engagement && <div className="persistent-browser" hidden={view !== "browser"}>
-            <WorkbenchBrowser
-              active={view === "browser"}
-              api={api}
-              operatorId={activeOperator?.id}
-              projectId={engagement.id}
-              scope={browserScope}
-              scopeLoading={browserScopeLoading}
-              onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
-              onAskNebula={requestNebulaDraft}
-              assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined}
-              onAskSelection={runtimeReady && model.trim() ? askBrowserSelection : undefined}
-              onContinueConversation={(id) => void openAttachedChat(id)}
-              onOpenFiles={() => setView("workspace")}
-              onScopeUpdated={setBrowserScope}
-              onUploadEvidence={uploadEvidence}
-            />
-          </div>}
-          {(view === "terminal" || view === "code") && (!api || !engagement) ? (
-            <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>
-          ) : view === "terminal" || view === "code" || (view === "browser" && engagement) ? null : view === "missions" && api && engagement ? (
-            <AgentsPage embedded />
-          ) : view === "activity" && api && engagement ? (
-            <div className="workbench-activity-stack">
-              <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} harnesses={harnesses} onChatAttached={openAttachedChat} />
-              <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
-            </div>
-          ) : view === "workspace" && api && engagement ? (
-            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} />
-          ) : view === "notes" && api && engagement ? (
-            <NotesPanel
-              api={api}
-              engagementId={engagement.id}
-              evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
-              assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
-              providers={providers}
-              harnesses={harnesses}
-              initialDraft={noteDraft}
-              onInitialDraftConsumed={clearNoteDraft}
-              createObservation={createObservation}
-              updateObservation={updateObservation}
-              deleteObservation={deleteObservation}
-              onAskNebula={requestNebulaDraft}
-            />
-          ) : view !== "chat" ? (
-            <div className="empty-state"><FolderOpen size={24} /><strong>Select a project</strong><p>Terminal, execution history, and workspace files are project-scoped.</p></div>
-          ) : !conversationOpen ? (
-            <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
-          ) : (
+  const assistantPanel = (
             <div className="chat-panel">
               <ChatSearchPanel key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
-                setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", "chat"); return next; });
+                setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", view === "browser" ? "browser" : "chat"); return next; });
               }} />
               {sessions.find(item => item.id === sessionId)?.parentSessionId && <div className="chat-action-status">Branched conversation · files remain shared. <button className="button quiet" onClick={() => void selectSession(sessions.find(item => item.id === sessionId)!.parentSessionId!)}>Open parent</button></div>}
               {chatNavigation.error && <div role="alert">{chatNavigation.error}<button className="button quiet" onClick={chatNavigation.reload}>Reload bookmarks</button></div>}
@@ -3357,15 +3167,195 @@ export function SessionsPage() {
                   <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<button className="button quiet" type="button" disabled={!sessionId} onClick={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})}>Results</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={requestNebulaDraft} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}>Queue for later</button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<button className="button quiet" type="button" disabled={!sessionId} onClick={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})}>Results</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestNebulaDraft(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}>Queue for later</button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>
+  );
+
+  return (
+    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
+      <PageHeader
+        title="Workbench"
+        description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
+        showIntroduction={false}
+        actions={view === "chat" ? <button className="button primary mobile-primary-action" type="button" aria-label="New chat" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} aria-hidden="true" /><span>New chat</span></button> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
+      />
+
+      <Toolbar className="session-toolbar" label="Workbench controls">
+        <TabBar className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
+          { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
+          { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
+          { id: "browser", label: "Browser", ariaLabel: "Project browser", icon: <Globe2 size={16} /> },
+          { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", icon: <MessageSquare size={16} /> },
+          { id: "workspace", label: "Files", ariaLabel: "Workspace files", icon: <FolderOpen size={16} /> },
+          { id: "notes", label: "Notes", ariaLabel: "Project notes", icon: <NotebookPen size={16} /> },
+          { id: "missions", label: "Missions", ariaLabel: "Autonomous missions", icon: <Bot size={16} /> },
+          { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
+        ] as const} />
+        <div className="session-toolbar-actions">
+          {view === "chat" && <button
+            className="button quiet session-conversations-toggle"
+            type="button"
+            aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
+            aria-expanded={conversationPanelOpen}
+            aria-controls="workbench-conversations"
+            onClick={toggleConversationPanel}
+          >
+            <MessageSquare size={15} aria-hidden="true" /> Conversations{sessions.length ? <span>{sessions.length}</span> : null}
+          </button>}
+          {fullScreen && <button className="icon-button subtle workbench-full-screen-toggle" type="button" aria-label="Exit full screen workbench" title="Exit focus mode" onClick={() => setFullScreen(false)}><Minimize2 size={17} aria-hidden="true" /></button>}
+          <div className="workbench-actions">
+            <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>
+            {workbenchActionsOpen && <div ref={workbenchActionsMenuRef} className="workbench-actions-menu" id="workbench-actions-menu" role="menu" aria-label="Workbench actions">
+              {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
+              {view === "chat" && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => {
+                setSessionInspectorOpen((open) => {
+                  localStorage.setItem("nebula.session-inspector.open", String(!open));
+                  return !open;
+                });
+                setWorkbenchActionsOpen(false);
+              }}><PanelRight size={16} aria-hidden="true" /><span><strong>{sessionInspectorOpen ? "Hide session details" : "Show session details"}</strong><small>Runtime, knowledge, and execution boundaries</small></span></button>}
+              <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setFullScreen((value) => !value); setWorkbenchActionsOpen(false); }}>
+                {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}<span><strong>{fullScreen ? "Exit focus mode" : "Enter focus mode"}</strong><small>{fullScreen ? "Restore the application shell" : "Use the full viewport for this tool"}</small></span>
+              </button>
+            </div>}
+          </div>
+        </div>
+      </Toolbar>
+
+      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
+        {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
+          <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
+          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search title or runtime" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
+          <nav>
+            <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+            {visibleSessions.map((session) => {
+              const actionsOpen = sessionActionsId === session.id;
+              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
+              const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
+                ref={actionsOpen ? sessionActionsButtonRef : undefined}
+                id={`conversation-actions-trigger-${session.id}`}
+                className="icon-button subtle session-actions-trigger"
+                type="button"
+                aria-label={`More actions for ${session.title}`}
+                aria-haspopup="menu"
+                aria-expanded={actionsOpen}
+                aria-controls={actionsOpen ? `conversation-actions-${session.id}` : undefined}
+                disabled={actionsDisabled}
+                title={actionsDisabledReason ?? `More actions for ${session.title}`}
+                onClick={(event) => {
+                  sessionActionsButtonRef.current = event.currentTarget;
+                  if (sessionActionsId === session.id) {
+                    setSessionActionsId(undefined);
+                    return;
+                  }
+                  const bounds = event.currentTarget.getBoundingClientRect();
+                  const menuWidth = 196;
+                  const menuHeight = 176;
+                  const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
+                  setSessionActionsPosition({
+                    left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
+                    openAbove,
+                    top: openAbove ? bounds.top - 5 : bounds.bottom + 5,
+                  });
+                  setSessionActionsId(session.id);
+                }}
+              >{deletingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
+                ref={sessionActionsMenuRef}
+                id={`conversation-actions-${session.id}`}
+                className="session-actions-menu"
+                role="menu"
+                aria-label={`Actions for ${session.title}`}
+                style={{ left: sessionActionsPosition.left, top: sessionActionsPosition.top, transform: sessionActionsPosition.openAbove ? "translateY(-100%)" : undefined }}
+                onKeyDown={(event) => {
+                  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+                  event.preventDefault();
+                  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')];
+                  if (!items.length) return;
+                  const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                  const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
+                  items[next]?.focus();
+                }}
+              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
+            })}
+            {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
+            {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
+          </nav>
+        </aside>}
+        <section className="session-workspace">
+          {api && engagement && <div className="persistent-terminal" hidden={view !== "terminal"}>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} /></Suspense>
+          </div>}
+          {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={(context) => { requestNebulaDraft(context); setView("chat"); }} /></Suspense>
+          </div>}
+          {api && engagement && <div className={`persistent-browser integrated-browser-layout${browserAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "browser"}>
+            <div className="integrated-browser-page">
+            <button className="button quiet" type="button" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}>Assistant</button>
+            <label>Browser<select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Shared Chromium</option><option value="native">Native browser</option></select></label>
+            {browserEngine === "managed" ? <ManagedAssistantBrowser key={engagement.id} api={api} projectId={engagement.id} active={view === "browser"}
+              conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
+              onContext={(request) => { setBrowserAssistantOpen(true); requestNebulaDraft(request, "browser"); }}
+              actionContainer={browserActionContainer} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} /> : <WorkbenchBrowser
+              active={view === "browser"}
+              api={api}
+              operatorId={activeOperator?.id}
+              projectId={engagement.id}
+              scope={browserScope}
+              scopeLoading={browserScopeLoading}
+              onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
+              onAskNebula={(request) => { setBrowserAssistantOpen(true); requestNebulaDraft(request, "browser"); }}
+              onAttachContext={(request) => { setBrowserAssistantOpen(true); requestNebulaDraft(request, "browser"); }}
+              assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined}
+              onContinueConversation={(id) => void openAttachedChat(id)}
+              onOpenFiles={() => setView("workspace")}
+              onScopeUpdated={setBrowserScope}
+              onUploadEvidence={uploadEvidence}
+            />}
+            </div>
+            {view === "browser" && browserAssistantOpen && <BrowserAssistantPanel onActionContainer={setBrowserActionContainer} header={<><strong>Assistant</strong><button className="button quiet" type="button" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}>New conversation</button><button className="button quiet" type="button" aria-label="Collapse browser Assistant" onClick={collapseBrowserAssistant}><X size={16} /></button></>}>
+              {assistantPanel}
+            </BrowserAssistantPanel>}
+          </div>}
+          {(view === "terminal" || view === "code") && (!api || !engagement) ? (
+            <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>
+          ) : view === "terminal" || view === "code" || (view === "browser" && engagement) ? null : view === "missions" && api && engagement ? (
+            <AgentsPage embedded />
+          ) : view === "activity" && api && engagement ? (
+            <div className="workbench-activity-stack">
+              <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} harnesses={harnesses} onChatAttached={openAttachedChat} />
+              <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
+            </div>
+          ) : view === "workspace" && api && engagement ? (
+            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} />
+          ) : view === "notes" && api && engagement ? (
+            <NotesPanel
+              api={api}
+              engagementId={engagement.id}
+              evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
+              assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
+              providers={providers}
+              harnesses={harnesses}
+              initialDraft={noteDraft}
+              onInitialDraftConsumed={clearNoteDraft}
+              createObservation={createObservation}
+              updateObservation={updateObservation}
+              deleteObservation={deleteObservation}
+              onAskNebula={requestNebulaDraft}
+            />
+          ) : view !== "chat" ? (
+            <div className="empty-state"><FolderOpen size={24} /><strong>Select a project</strong><p>Terminal, execution history, and workspace files are project-scoped.</p></div>
+          ) : !conversationOpen ? (
+            <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
+          ) : (
+            assistantPanel
           )}
         </section>
 
-        {view === "chat" && sessionInspectorOpen && <ChatWorkspaceDrawer tab={drawerTab} onTab={tab => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", tab); return next;})} onClose={() => setSessionInspectorOpen(false)}>
-          {drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={requestNebulaDraft} /> : <p>Results appear after the first saved turn.</p> : <>
+        {(view === "chat" || view === "browser") && sessionInspectorOpen && <ChatWorkspaceDrawer overlay={view === "browser"} tab={drawerTab} onTab={tab => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", tab); return next;})} onClose={() => setSessionInspectorOpen(false)}>
+          {drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestNebulaDraft(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
           {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
           <section><h3>Prepared for your next message</h3>{assistantDrafts.length ? assistantDrafts.map((item, index) => <details key={index}><summary>{item.source.label}{item.truncated ? " · excerpt" : ""}</summary><pre>{item.text}</pre></details>) : <p>No selected excerpts attached.</p>}<p>{pendingImages.length} image attachment{pendingImages.length === 1 ? "" : "s"}</p></section>
           {api && sessionId && <ChatDecisions key={`decisions:${sessionId}`} api={api} sessionId={sessionId} seed={decisionSeed} onSeedConsumed={() => setDecisionSeed(undefined)} onMessage={(id, sourceSession) => {if (sourceSession && sourceSession !== sessionId) {setSearchParams(current => {const next = new URLSearchParams(current); next.set("session", sourceSession); next.set("message", id); next.delete("drawer"); return next;});} else openDrawerMessage(id);}} />}
