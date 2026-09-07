@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 
-def matching_core_processes(core: Path) -> list[int]:
+def matching_core_processes(core: Path, session_id: int) -> list[int]:
     expected = core.resolve()
     matches = []
     for entry in Path("/proc").iterdir():
@@ -20,9 +20,10 @@ def matching_core_processes(core: Path) -> list[int]:
         try:
             executable = (entry / "exe").resolve()
             arguments = (entry / "cmdline").read_bytes().split(b"\0")
+            belongs_to_test = os.getsid(int(entry.name)) == session_id
         except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
             continue
-        if executable == expected and b"serve" in arguments:
+        if executable == expected and b"serve" in arguments and belongs_to_test:
             matches.append(int(entry.name))
     return matches
 
@@ -42,11 +43,12 @@ def main() -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         env=os.environ.copy(),
+        start_new_session=True,
     )
     observed = []
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline and process.poll() is None:
-        observed = matching_core_processes(core)
+        observed = matching_core_processes(core, process.pid)
         if observed:
             break
         time.sleep(0.02)
@@ -59,12 +61,14 @@ def main() -> int:
     process.wait()
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
-        remaining = matching_core_processes(core)
+        remaining = matching_core_processes(core, process.pid)
         if not remaining:
             return 0
         time.sleep(0.05)
 
-    remaining = matching_core_processes(core)
+    remaining = matching_core_processes(core, process.pid)
+    if not remaining:
+        return 0
     for pid in remaining:
         try:
             os.kill(pid, signal.SIGKILL)
