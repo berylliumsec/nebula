@@ -2733,3 +2733,34 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
         allow_remote_mcp=True,
     )
     assert chat.harness_session_id
+
+
+def test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/chat/completions",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "backend": "harness",
+                "engagement_id": engagement.id,
+                "harness_profile_id": profile.id,
+                "model": "test-model",
+                "stream": True,
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+        assert response.status_code == 200
+        frames = [
+            json.loads(line[5:])
+            for line in response.text.splitlines()
+            if line.startswith("data:") and "[DONE]" not in line
+        ]
+        assert frames[0]["type"] == "started"
+        done = next(frame for frame in frames if frame["type"] == "done")
+        assert frames[0]["session_id"] == done["session_id"]
+        assert frames[0]["turn_id"] == done["turn_id"]
+        assert store.get(ChatSession, frames[0]["session_id"])

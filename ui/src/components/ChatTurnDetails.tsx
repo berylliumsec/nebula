@@ -1,0 +1,8 @@
+import { useEffect, useState } from "react";
+import type { ApiClient } from "../api/client";
+import { logCaughtDiagnostic } from "../diagnostics";
+export function ChatTurnDetails({api, sessionId, turnId, onMessage}: {api: ApiClient; sessionId: string; turnId: string; onMessage: (id: string) => void}) {
+  const [turn, setTurn] = useState<{status: string; error?: string; model: string; created_at: string; message_id?: string}>(); const [error, setError] = useState<string>(); const [retry, setRetry] = useState(0);
+  useEffect(() => {const controller = new AbortController(); setTurn(undefined); setError(undefined); void api.request<NonNullable<typeof turn>>(`chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/summary`, {signal: controller.signal}).then(setTurn).catch(e => {if (!controller.signal.aborted) {void logCaughtDiagnostic("interface.assistant_chat.turn_read_failed", "The source response could not be read.", e, "assistant_chat"); setError("The response is unavailable. Its conversation may have changed.");}}); return () => controller.abort();}, [api, sessionId, turnId, retry]);
+  return <section aria-label="Recorded source response"><h3>Recorded response</h3>{error ? <><p role="alert">{error}</p><button className="button quiet" type="button" onClick={() => setRetry(value => value + 1)}>Retry source response</button></> : turn ? <><strong>{turn.status} · {turn.model}</strong><p>{new Date(turn.created_at).toLocaleString()}</p>{turn.error && <p>{turn.error}</p>}{turn.message_id ? <button className="button quiet" type="button" onClick={() => onMessage(turn.message_id!)}>Open source message</button> : <p>No transcript message was retained for this response.</p>}</> : <p>Reading source response…</p>}</section>;
+}

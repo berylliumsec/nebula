@@ -3283,6 +3283,52 @@ class HarnessInteraction(Entity):
         return self
 
 
+class ChatReadCursor(Entity):
+    entity_kind: ClassVar[str] = "chat_read_cursors"
+    engagement_id: str
+    session_id: str
+    device_id: str = Field(min_length=1, max_length=200)
+    through_at: datetime
+
+
+class ChatDecision(Entity):
+    entity_kind: ClassVar[str] = "chat_decisions"
+    engagement_id: str
+    session_id: str | None = None
+    scope: str = Field(default="conversation", pattern="^(conversation|project)$")
+    kind: str = Field(default="decision", pattern="^(decision|constraint|assumption)$")
+    text: str = Field(min_length=1, max_length=4000)
+    status: str = Field(default="active", pattern="^(active|superseded|removed)$")
+    source_message_id: str | None = None
+    source_session_id: str | None = None
+    source_selection: str | None = None
+    effective_sequence: int = Field(default=0, ge=0)
+    copied_from_id: str | None = None
+    copied_from_revision: int | None = None
+    history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ChatQueue(Entity):
+    """Revisioned dispatch order and retained idempotency receipts for one chat."""
+
+    entity_kind: ClassVar[str] = "chat_queues"
+    engagement_id: str
+    session_id: str
+    paused: bool = False
+    resume_after_turn_id: str | None = None
+    items: list[dict[str, Any]] = Field(default_factory=list, max_length=1000)
+
+
+class ChatBookmark(Entity):
+    """An operator bookmark; message text remains in its canonical record."""
+
+    entity_kind: ClassVar[str] = "chat_bookmarks"
+    engagement_id: str
+    session_id: str
+    message_id: str
+    active: bool = True
+
+
 class ChatSession(Entity):
     """A durable engagement-scoped analyst conversation."""
 
@@ -3985,6 +4031,10 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     LibraryItem,
     ScopeImport,
     ChatSession,
+    ChatBookmark,
+    ChatQueue,
+    ChatDecision,
+    ChatReadCursor,
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,

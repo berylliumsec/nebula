@@ -1,3 +1,17 @@
+import { useChatComposerAnchor } from "./useChatComposerAnchor";
+import { ChatTurnDetails } from "../components/ChatTurnDetails";
+import { ChatCatchUp } from "../components/ChatCatchUp";
+import { ChatEvidence } from "../components/ChatEvidence";
+import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
+import { useChatQueue } from "./useChatQueue";
+import { ChatQueuePanel } from "../components/ChatQueuePanel";
+import { ChatWorkspaceDrawer } from "../components/ChatWorkspaceDrawer";
+import { ChatAttachments } from "../components/ChatAttachments";
+import { ChatResults } from "../components/ChatResults";
+import { ChatRecordedContext } from "../components/ChatRecordedContext";
+import { useChatNavigation } from "./useChatNavigation";
+import { ChatSearchPanel } from "../components/ChatSearchPanel";
+import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -17,7 +31,6 @@ import {
   FolderOpen,
   Globe2,
   GitFork,
-  ImagePlus,
   LoaderCircle,
   ListTodo,
   Maximize2,
@@ -110,10 +123,9 @@ import { readConversationPanelOpen, writeConversationPanelOpen } from "./workben
 import { chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
 import {
   chatFollowUpStorageKey,
-  clearChatFollowUps,
   maxChatFollowUps,
+  clearChatFollowUps,
   readChatFollowUps,
-  validateChatFollowUpText,
   writeChatFollowUps,
   type ChatFollowUp,
 } from "./chatFollowUpStorage";
@@ -426,9 +438,13 @@ export function SessionsPage() {
     () => readConversationPanelOpen(localStorage),
   );
   const [workbenchActionsOpen, setWorkbenchActionsOpen] = useState(false);
-  const [sessionInspectorOpen, setSessionInspectorOpen] = useState(
-    () => localStorage.getItem("nebula.session-inspector.open") === "true",
-  );
+  const drawerTab = searchParams.get("drawer") === "results" ? "results" : "context";
+  const sessionInspectorOpen = ["context", "results"].includes(searchParams.get("drawer") ?? "");
+  const setSessionInspectorOpen = (value: boolean | ((open: boolean) => boolean)) => {
+    const open = typeof value === "function" ? value(sessionInspectorOpen) : value;
+    setSearchParams(current => {const next = new URLSearchParams(current); if(open) next.set("drawer", drawerTab); else next.delete("drawer"); return next;});
+  };
+  const openDrawerMessage = (id: string) => setSearchParams(current => {const next = new URLSearchParams(current); next.set("message", id); if(matchMedia("(max-width: 1100px)").matches) next.delete("drawer"); return next;});
   const {
     api,
     activeOperator,
@@ -515,6 +531,8 @@ export function SessionsPage() {
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
+  const coreQueue = useChatQueue(api, sessionId);
+  const [decisionSeed, setDecisionSeed] = useState<DecisionSeed>();
   const [expandedContextIndex, setExpandedContextIndex] = useState<number>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
   const [contextStatusError, setContextStatusError] = useState<string>();
@@ -535,9 +553,19 @@ export function SessionsPage() {
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  useChatComposerAnchor(composerRef, view === "chat" && conversationOpen);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const chatViewportRef = useRef<HTMLDivElement>(null);
+  const chatNavigation = useChatNavigation(api ?? undefined, engagement?.id, sessionId);
+  useEffect(() => {
+    const messageId = searchParams.get("message");
+    if (!messageId || loadingHistory) return;
+    const element = document.getElementById(`chat-message-${messageId}`);
+    if (element) { chatFollowBottomRef.current = false; element.scrollIntoView({block: "center"}); element.focus({preventScroll: true}); }
+  }, [searchParams, loadingHistory, messages.length]);
   const chatFollowBottomRef = useRef(true);
+  const [hasNewerMessages, setHasNewerMessages] = useState(false);
+  const chatTouchYRef = useRef<number | undefined>(undefined);
   const previousChatSendingRef = useRef(false);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
@@ -557,7 +585,6 @@ export function SessionsPage() {
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
-  const submitMessageRef = useRef<((queuedFollowUp?: ChatFollowUp) => Promise<void>) | undefined>(undefined);
   const chatRuntimeStore = useMemo(() => ({
     messages,
     convertMessage: convertConversationMessage,
@@ -568,6 +595,7 @@ export function SessionsPage() {
   const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
     chatFollowBottomRef.current = true;
+    setHasNewerMessages(false);
   }, [conversationOpen, sessionId]);
   useLayoutEffect(() => {
     const runStarted = sending && !previousChatSendingRef.current;
@@ -1442,7 +1470,16 @@ export function SessionsPage() {
     }
   };
 
-  const selectSession = async (id: string, updateUrl = true) => {
+  useEffect(() => {
+    // Read recent durable work so empty greetings do not retain placeholder cards.
+    // Older turns remain explicitly discoverable through Inspect saved work.
+    if (!api || loadingHistory || coreState !== "online") return;
+    for (const message of messages.slice(-20)) {
+      if (message.role === "assistant" && message.durable && message.harnessTurnId && !historicalActivityState[message.harnessTurnId]) void loadHistoricalHarnessActivity(message);
+    }
+  }, [api, sessionId, messages.length, loadingHistory, coreState]);
+
+  const selectSession = async (id: string, updateUrl = true, preserveTranscript = false) => {
     explicitNewConversationRef.current = false;
     if (!id) {
       newConversation();
@@ -1471,7 +1508,7 @@ export function SessionsPage() {
     setChatError(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
-    setMessages([]);
+    if (!preserveTranscript) setMessages([]);
     setToolCards([]);
     setActivityItems([]);
     setHarnessInteractions([]);
@@ -1705,6 +1742,14 @@ export function SessionsPage() {
     }
   };
 
+  const observedQueueRef = useRef("");
+  const queueTurnSignature = `${sessionId}:${coreQueue.queue?.items.filter(item => item.turn_id).map(item => `${item.turn_id}:${item.status}`).join("|") ?? ""}`;
+  useEffect(() => {
+    if (!coreQueue.queue?.items.some(item => item.turn_id) || sending || pendingResponse || loadingHistory || observedQueueRef.current === queueTurnSignature) return;
+    observedQueueRef.current = queueTurnSignature;
+    void selectSession(sessionId, false, true);
+  }, [queueTurnSignature, sending, pendingResponse, loadingHistory]);
+
   const forkConversation = async (message: ConversationMessage) => {
     if (!api || !sessionId || !message.durable || sending) return;
     setChatError(undefined);
@@ -1716,6 +1761,17 @@ export function SessionsPage() {
       void logCaughtDiagnostic("interface.sessions_page.fork", "Conversation fork failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not fork the conversation.");
     }
+  };
+
+  const editAndBranch = async (message: ConversationMessage) => {
+    if (!api || !sessionId || sending || !message.durable) return;
+    try {
+      const fork = await api.forkChatSession(sessionId, undefined, undefined, message.id);
+      setSessions(current => [fork, ...current]);
+      await selectSession(fork.id);
+      updateComposerDraft(message.content);
+      composerRef.current?.focus();
+    } catch (error) { void logCaughtDiagnostic("interface.assistant_chat.branch_failed", "The edited branch could not be created.", error, "assistant_chat"); setChatError(error instanceof Error ? error.message : "Could not branch this message."); }
   };
 
   const copyMessage = async (message: ConversationMessage) => {
@@ -2122,83 +2178,14 @@ export function SessionsPage() {
     }
   };
 
-  const queueFollowUp = (text: string): boolean => {
-    const validationError = validateChatFollowUpText(text);
-    if (validationError) {
-      setChatError(validationError);
-      return false;
-    }
-    if (pendingImages.length || assistantDrafts.length) {
-      setChatError("Only plain text can be queued while a response is active. Wait for the response before adding attachments or selected context.");
-      return false;
-    }
-    if (queuedFollowUps.length >= maxChatFollowUps()) {
-      setChatError(`The follow-up queue is full (${maxChatFollowUps()} messages). Remove one before adding another.`);
-      return false;
-    }
-    const item: ChatFollowUp = {
-      id: makeId("follow-up"),
-      text: text.trim(),
-      createdAt: new Date().toISOString(),
-      status: "queued",
-    };
-    const nextQueue = [...queuedFollowUps, item];
-    if (activeFollowUpStorageKey) {
-      writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, nextQueue);
-    }
-    setQueuedFollowUps(nextQueue);
-    followUpAutoDrainRef.current = true;
-    setDraft("");
-    if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
-    setSkillToken(undefined);
-    setHarnessSkillPath("");
-    setChatError(undefined);
-    setMessageActionStatus("Follow-up queued; it will send after the active response finishes.");
-    return true;
-  };
-
-  const stageImmediateFollowUp = (text: string): ChatFollowUp | undefined => {
-    const validationError = validateChatFollowUpText(text);
-    if (validationError) {
-      setChatError(validationError);
-      return undefined;
-    }
-    if (pendingImages.length || assistantDrafts.length) {
-      setChatError("Send now accepts plain text only. Remove attachments and selected context or wait for the active response to finish.");
-      return undefined;
-    }
-    if (queuedFollowUps.length >= maxChatFollowUps()) {
-      setChatError(`The follow-up queue is full (${maxChatFollowUps()} messages). Remove one before sending now.`);
-      return undefined;
-    }
-    const item: ChatFollowUp = {
-      id: makeId("follow-up-now"),
-      text: text.trim(),
-      createdAt: new Date().toISOString(),
-      status: "queued",
-    };
-    const nextQueue = [item, ...queuedFollowUps];
-    if (activeFollowUpStorageKey) {
-      writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, nextQueue);
-    }
-    setQueuedFollowUps(nextQueue);
-    followUpAutoDrainRef.current = false;
-    setDraft("");
-    if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
-    setSkillToken(undefined);
-    setHarnessSkillPath("");
-    setChatError(undefined);
-    return item;
-  };
-
-  const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp) => {
+  const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }) => {
     event?.preventDefault();
     const activeTurn = sending || Boolean(pendingResponse);
-    if (activeTurn && !queuedFollowUp) {
+    if (activeTurn && !queuedFollowUp && !queueOptions) {
       const text = draft.trim();
       const canSteer = sending
         && runtimeKind === "harness"
-        && Boolean(selectedHarness?.capabilities?.steering || selectedHarness?.kind === "codex_app_server")
+        && Boolean(selectedHarness?.capabilities?.steering)
         && Boolean(harnessProgress?.turnId || harnessActivity?.turnId)
         && !harnessControlBusy
         && !pendingImages.length
@@ -2206,14 +2193,14 @@ export function SessionsPage() {
       if (canSteer && text) {
         await steerCurrentHarness(text);
       } else if (text || pendingImages.length || assistantDrafts.length) {
-        queueFollowUp(text);
+        await submit(undefined, undefined, {});
       }
       return;
     }
     const content = (queuedFollowUp?.text ?? draft.trim()) || (pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if (!content || sending || pendingResponse || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+    if (!content || (!queueOptions && (sending || pendingResponse)) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
 
     const failQueuedFollowUp = (detail: string) => {
       if (!queuedFollowUp) return;
@@ -2277,7 +2264,7 @@ export function SessionsPage() {
       return;
     }
 
-    if (queuedFollowUp) {
+    if (queuedFollowUp && !queueOptions) {
       setQueuedFollowUps((current) => current.map((item) => item.id === queuedFollowUp.id
         ? { ...item, status: "sending", detail: undefined }
         : item));
@@ -2312,28 +2299,6 @@ export function SessionsPage() {
       state: "streaming",
       durable: false,
     };
-    setMessages((current) => [...current, userMessage, assistantMessage]);
-    if (!queuedFollowUp) {
-      if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
-      setDraft("");
-      pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
-      setPendingImages([]);
-      clearAssistantDrafts();
-    }
-    setChatError(undefined);
-    setSending(true);
-    if (runtimeKind === "harness") {
-      setHarnessProgress({
-        phase: "queued",
-        detail: harnessActivity?.busy
-          ? "Existing work is active; Core will start an independent harness session for this request."
-          : "Request accepted locally and waiting for the harness connection.",
-        sessionId: harnessSessionId || undefined,
-      });
-    }
-    const controller = new AbortController();
-    abortRef.current = controller;
-    streamBackendRef.current = runtimeKind;
     const initialSessionId = sessionId || undefined;
     let returnedSessionId = initialSessionId;
     const chatRequest: ChatCompletionRequest = {
@@ -2369,6 +2334,41 @@ export function SessionsPage() {
         ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
         : undefined,
     };
+    if (queueOptions) {
+      if (!sessionId) { setChatError("Send the first message to save this conversation before queueing follow-ups."); return; }
+      const accepted = await coreQueue.enqueue(chatRequest, queueOptions);
+      if (!accepted) return;
+      if (!queuedFollowUp) {
+        setDraft(current => current.trim() === content ? "" : current);
+        pendingImages.forEach(image => URL.revokeObjectURL(image.previewUrl));
+        setPendingImages([]);
+        clearAssistantDrafts();
+      }
+      setMessageActionStatus("Saved in Core. Queued work continues after all browser tabs close.");
+      return true;
+    }
+    setMessages((current) => [...current, userMessage, assistantMessage]);
+    if (!queuedFollowUp) {
+      if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
+      setDraft("");
+      pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
+      setPendingImages([]);
+      clearAssistantDrafts();
+    }
+    setChatError(undefined);
+    setSending(true);
+    if (runtimeKind === "harness") {
+      setHarnessProgress({
+        phase: "queued",
+        detail: harnessActivity?.busy
+          ? "Existing work is active; Core will start an independent harness session for this request."
+          : "Request accepted locally and waiting for the harness connection.",
+        sessionId: harnessSessionId || undefined,
+      });
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+    streamBackendRef.current = runtimeKind;
     if (chatRequest.harnessSkill) {
       // The structured invocation belongs to this accepted turn only. The
       // visible `$skill-name` remains in the submitted transcript, while the
@@ -2443,7 +2443,6 @@ export function SessionsPage() {
     }
   };
 
-  submitMessageRef.current = (queuedFollowUp) => submit(undefined, queuedFollowUp);
 
   const askBrowserSelection = async (
     request: { question: string; context: { text: string; sourceKind: string; sourceId?: string; sourceLabel: string; truncated?: boolean } },
@@ -2503,24 +2502,6 @@ export function SessionsPage() {
     if (!answer.trim()) throw new Error("The Assistant returned an empty response.");
     return { sessionId: returnedSessionId, answer };
   };
-
-  useEffect(() => {
-    const next = queuedFollowUps[0];
-    if (!followUpAutoDrainRef.current
-      || !next
-      || next.status !== "queued"
-      || followUpDrainIdRef.current
-      || sending
-      || pendingResponse
-      || loadingHistory
-      || coreState !== "online"
-      || !api
-      || !engagement
-      || !runtimeReady
-      || !model.trim()) return;
-    followUpDrainIdRef.current = next.id;
-    void submitMessageRef.current?.(next);
-  }, [api, coreState, engagement, loadingHistory, model, pendingResponse, queuedFollowUps, runtimeReady, sending]);
 
   const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
     if (!pendingResponse || !api) return;
@@ -2775,36 +2756,14 @@ export function SessionsPage() {
     return true;
   };
 
-  const sendGrokFollowUpNow = async (queuedId?: string) => {
+  const stopAndSend = async () => {
     if (harnessControlBusy) return;
-    let item: ChatFollowUp | undefined;
-    if (queuedId) {
-      item = queuedFollowUps.find((candidate) => candidate.id === queuedId);
-      if (!item || item.status === "sending") return;
-      const nextQueue = [item, ...queuedFollowUps.filter((candidate) => candidate.id !== queuedId)];
-      if (activeFollowUpStorageKey) {
-        writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, nextQueue);
-      }
-      setQueuedFollowUps(nextQueue);
-      followUpAutoDrainRef.current = false;
-    } else {
-      item = stageImmediateFollowUp(draft);
-    }
-    if (!item) return;
-
+    if (!await coreQueue.mutate({action: "pause"})) return;
+    if (!await submit(undefined, undefined, {paused: true, first: true})) return;
     setHarnessControlBusy(true);
-    setMessageActionStatus("Stopping the current Grok turn before sending this message…");
     const stopped = await stopCurrentResponse();
     setHarnessControlBusy(false);
-    if (!stopped) {
-      setQueuedFollowUps((current) => current.map((candidate) => candidate.id === item?.id
-        ? { ...candidate, status: "failed", detail: "The current Grok turn could not be stopped. Review this message before retrying." }
-        : candidate));
-      return;
-    }
-    followUpAutoDrainRef.current = true;
-    setMessageActionStatus("Current Grok turn stopped; sending your message now.");
-    setQueuedFollowUps((current) => [...current]);
+    if (stopped) await coreQueue.mutate({action: "resume"});
   };
 
   const steerCurrentHarness = async (guidance?: string) => {
@@ -3014,32 +2973,16 @@ export function SessionsPage() {
   const canSteerCurrentHarness = Boolean(
     sending
     && runtimeKind === "harness"
-    && (selectedHarness?.capabilities?.steering || selectedHarness?.kind === "codex_app_server")
+    && selectedHarness?.capabilities?.steering
     && (harnessProgress?.turnId || harnessActivity?.turnId)
     && !harnessControlBusy,
   );
-  const canSendNowCurrentGrok = Boolean(
+  const canStopAndSend = Boolean(
     sending
-    && runtimeKind === "harness"
-    && selectedHarness?.kind === "grok_acp"
-    && selectedHarness.capabilities?.interruption !== false
-    && (harnessProgress?.turnId || harnessActivity?.turnId)
+    && (runtimeKind === "provider" || (selectedHarness?.capabilities?.interruption === true && (harnessProgress?.turnId || harnessActivity?.turnId)))
     && !harnessControlBusy,
   );
   const queueMode = composerBusy && !canSteerCurrentHarness;
-  const removeQueuedFollowUp = (id: string) => {
-    setQueuedFollowUps((current) => current.filter((item) => item.id !== id));
-    if (followUpDrainIdRef.current === id) followUpDrainIdRef.current = undefined;
-    setMessageActionStatus("Queued follow-up removed.");
-  };
-  const retryQueuedFollowUp = (id: string) => {
-    if (queuedFollowUps[0]?.id !== id) return;
-    followUpAutoDrainRef.current = true;
-    setQueuedFollowUps((current) => current.map((item) => item.id === id
-      ? { ...item, status: "queued", detail: undefined }
-      : item));
-    setChatError(undefined);
-  };
   const reloadActiveConversation = async () => {
     if (!sessionId || reloadingConversation) return;
     setReloadingConversation(true);
@@ -3072,7 +3015,7 @@ export function SessionsPage() {
   const pendingHarnessRequests = harnessInteractions.filter((item) => item.status === "pending").length;
   const showHarnessStatusRail = runtimeKind === "harness"
     && Boolean(harnessActivity)
-    && Boolean(harnessActivity?.busy || pendingHarnessRequests || !harnessActivity?.live);
+    && Boolean(harnessActivity?.busy || pendingHarnessRequests);
   const assistantSource = runtimeKind === "harness"
     ? selectedHarness?.name ?? "Agent harness"
     : selectedProvider?.name ?? "Model provider";
@@ -3143,7 +3086,7 @@ export function SessionsPage() {
               const actionsOpen = sessionActionsId === session.id;
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"} · {new Date(session.updatedAt).toLocaleDateString()}</small></span></button><div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"
@@ -3250,12 +3193,17 @@ export function SessionsPage() {
             <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
           ) : (
             <div className="chat-panel">
+              <ChatSearchPanel key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
+                setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", "chat"); return next; });
+              }} />
+              {sessions.find(item => item.id === sessionId)?.parentSessionId && <div className="chat-action-status">Branched conversation · files remain shared. <button className="button quiet" onClick={() => void selectSession(sessions.find(item => item.id === sessionId)!.parentSessionId!)}>Open parent</button></div>}
+              {chatNavigation.error && <div role="alert">{chatNavigation.error}<button className="button quiet" onClick={chatNavigation.reload}>Reload bookmarks</button></div>}
               {assistantSettingsOpen && <section ref={assistantSettingsPanelRef} className="chat-settings-popover" id="assistant-settings-popover" role="dialog" aria-modal="false" aria-labelledby="assistant-settings-title" tabIndex={-1}>
                 <header><strong id="assistant-settings-title">Assistant settings</strong><button className="icon-button subtle" type="button" aria-label="Close assistant settings" onClick={() => { setAssistantSettingsOpen(false); assistantSettingsButtonRef.current?.focus(); }}><X size={16} aria-hidden="true" /></button></header>
                 <div className="chat-context-bar">
                 <div className="chat-settings-fields">
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={sending || Boolean(sessionId)} onChange={(event) => { const next = event.target.value as "provider" | "harness"; if (engagement) runtimeDefaultEngagementRef.current = engagement.id; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.models[0] ?? ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
-                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessId(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId)} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status}</option>)}</select></label></>}
+                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={sending || Boolean(sessionId)} onChange={(event) => selectProvider(event.target.value)}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessId(event.target.value)}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label><details className="chat-advanced-session"><summary>Advanced session binding</summary><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId)} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{sessions.find(chat => chat.harnessSessionId === item.id)?.title ?? "Unattached session"} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}</select></label></details></>}
                 {runtimeKind === "provider" ? <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={sending || Boolean(sessionId) || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => setModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId) || !harnessModelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessReasoningEffort(event.target.value)}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={sending || Boolean(sessionId) || Boolean(harnessSessionId)} onChange={(event) => setHarnessServiceTier(event.target.value)}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
@@ -3277,8 +3225,15 @@ export function SessionsPage() {
                     aria-live="polite"
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
-                      chatFollowBottomRef.current = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 4;
+                      const atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 4;
+                      if (atBottom) chatFollowBottomRef.current = true;
+                      setHasNewerMessages(!atBottom);
                     }}
+                    onWheel={event => {if (event.deltaY < 0) chatFollowBottomRef.current = false;}}
+                    onTouchStart={event => {chatTouchYRef.current = event.touches[0]?.clientY;}}
+                    onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined && y > chatTouchYRef.current) chatFollowBottomRef.current = false; chatTouchYRef.current = y;}}
+                    onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) chatFollowBottomRef.current = false;}}
+                    onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
                     autoScroll
                     scrollToBottomOnInitialize
                     scrollToBottomOnRunStart
@@ -3293,7 +3248,7 @@ export function SessionsPage() {
                     .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
                     .filter((item): item is { key: string; text: string } => Boolean(item.text));
                   const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
-                  const historicalTurnId = message.durable ? message.harnessTurnId : undefined;
+                  const historicalTurnId = message.durable && message.role === "assistant" ? message.harnessTurnId : undefined;
                   const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
                   const historicalError = historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined;
                   const activityLedger = messageActivityItems.length > 0
@@ -3306,6 +3261,7 @@ export function SessionsPage() {
                   return (
                   <article
                     className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
+                    id={`chat-message-${message.id}`}
                     data-sequence={message.sequence}
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
                     data-selection-source-id={message.id}
@@ -3322,16 +3278,17 @@ export function SessionsPage() {
                         ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={runnableLanguages} onRun={setRunCandidate} />
                         : <p>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
-                      {activityLedger && <ActivityLedger
+                      {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
+                      {message.role === "assistant" && activityLedger && <ActivityLedger
+                        compact
+                        historyPending={Boolean(historicalTurnId && historicalState !== "loaded" && !messageActivityItems.length && !messageToolCards.length)}
                         model={activityLedger}
                         onExpandedChange={historicalTurnId ? (expanded) => {
                           if (expanded) void loadHistoricalHarnessActivity(message);
                         } : undefined}
                         emptyState={historicalState === "loading"
                           ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading saved work…</div>
-                          : historicalState === "failed" && historicalError
-                            ? <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Could not load this turn's work details." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>
-                            : undefined}
+                          : undefined}
                         renderEntryDetails={(entry) => <AssistantLedgerEntryDetails entry={entry} />}
                         renderEntryActions={(entry) => {
                           const item = entry.sourceItem;
@@ -3348,40 +3305,39 @@ export function SessionsPage() {
                         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
                           const questionId = typeof question.id === "string" ? question.id : String(index);
                           const answerKey = `${interaction.id}:${questionId}`;
-                          return <label key={questionId}><span>{typeof question.question === "string" ? question.question : `Question ${index + 1}`}</span>{Array.isArray(question.options) ? <select value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))}><option value="">Select an answer</option>{question.options.map((option, optionIndex) => <option value={typeof option === "object" && option && "label" in option ? String(option.label) : String(option)} key={optionIndex}>{typeof option === "object" && option && "label" in option ? String(option.label) : String(option)}</option>)}</select> : <input type={interaction.containsSecret ? "password" : "text"} value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))} autoComplete="off" />}</label>;
+                          return <label key={questionId}><span>{typeof question.question === "string" ? question.question : `Question ${index + 1}`}</span>{Array.isArray(question.options) ? <><input type={interaction.containsSecret ? "password" : "text"} list={interaction.containsSecret ? undefined : `answers-${answerKey}`} autoComplete="off" placeholder="Choose a suggestion or write your answer" value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))} /><datalist id={`answers-${answerKey}`}>{question.options.map((option, optionIndex) => <option value={typeof option === "object" && option && "label" in option ? String(option.label) : String(option)} key={optionIndex} />)}</datalist></> : <input type={interaction.containsSecret ? "password" : "text"} value={interactionAnswers[answerKey] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [answerKey]: event.target.value }))} autoComplete="off" />}</label>;
                         }) : <label><span>JSON response</span>{interaction.containsSecret ? <input type="password" value={interactionAnswers[interaction.id] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [interaction.id]: event.target.value }))} autoComplete="off" /> : <textarea rows={3} value={interactionAnswers[interaction.id] ?? ""} onChange={(event) => setInteractionAnswers((current) => ({ ...current, [interaction.id]: event.target.value }))} autoComplete="off" />}</label>}
                         {interaction.containsSecret && <small>Secret answer is forwarded in memory and will not be persisted.</small>}
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
                       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
-                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><pre>{JSON.stringify(pendingResponse.approval.exact_request ?? {}, null, 2)}</pre><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
+                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
+                      {api && sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={api} sessionId={sessionId} messageId={message.id} onResults={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})} />}
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
                       {message.usage && message.usage.totalTokens > 0 && <details className="chat-message-usage"><summary>{message.usage.totalTokens.toLocaleString()} tokens</summary><span>{message.usage.inputTokens.toLocaleString()} input · {message.usage.outputTokens.toLocaleString()} output</span></details>}
-                      {message.content && <footer className="chat-message-actions" aria-label="Message actions"><button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
+                      {message.content && <footer className="chat-message-actions" aria-label="Message actions">{message.durable && <><button className="button quiet" type="button" onClick={event => {const selection = window.getSelection(); const container = event.currentTarget.closest(".chat-message"); const exact = selection && container?.contains(selection.anchorNode) && container.contains(selection.focusNode) ? selection.toString() : ""; const text = exact || message.content; setDecisionSeed({messageId: message.id, text, selection: text}); setSessionInspectorOpen(true); setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "context"); return next;});}}>Save as decision</button><button className="button quiet" type="button" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)}>Bookmark</button>{message.role === "user" && <button className="button quiet" type="button" disabled={sending} onClick={() => void editAndBranch(message)}>Edit and branch</button>}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
                     </div>
                   </article>
                   );
-                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>New chats can use the session-scoped command runtime when the exact model is verified.</p></div>}
-                    <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
+                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
+                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
                       <ChevronDown size={16} aria-hidden="true" />
-                    </ThreadPrimitive.ScrollToBottom>
+                    </ThreadPrimitive.ScrollToBottom>}
                   </ThreadPrimitive.Viewport>
                 </ThreadPrimitive.Root>
               </AssistantRuntimeProvider>
+              <div className="chat-operator-updates">
+              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} ready={!loadingHistory} atLatest={!hasNewerMessages} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reloadActiveConversation()} />}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
+              {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} />}
-              {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue" aria-label="Queued follow-up messages" aria-live="polite">
-                <header><div><ListTodo size={14} aria-hidden="true" /><span><strong>Follow-up queue</strong><small>{queuedFollowUps.length} message{queuedFollowUps.length === 1 ? "" : "s"} · text only · current browser tab</small></span></div><button className="button quiet" type="button" disabled={queuedFollowUps.some((item) => item.status === "sending")} onClick={() => { followUpAutoDrainRef.current = false; followUpDrainIdRef.current = undefined; setQueuedFollowUps([]); setMessageActionStatus("Follow-up queue cleared."); }}>Clear</button></header>
-                <ol>{queuedFollowUps.map((item, index) => <li key={item.id} className={`chat-follow-up-${item.status}`}>
-                  <div><span className="chat-follow-up-index">{index + 1}</span><p>{item.text}</p></div>
-                    <div className="chat-follow-up-meta"><span>{item.status === "sending" ? "Sending next" : item.status === "failed" ? "Needs review" : index === 0 && (sending || pendingResponse) ? "After current response" : "Waiting"}</span>{item.detail && <small>{item.detail}</small>}<div>{canSendNowCurrentGrok && item.status === "queued" && <button className="button quiet" type="button" aria-label={`Send queued message ${index + 1} now`} onClick={() => void sendGrokFollowUpNow(item.id)}>Send now</button>}{item.status === "failed" && index === 0 && <button className="button quiet" type="button" onClick={() => retryQueuedFollowUp(item.id)}>Retry</button>}<button className="icon-button subtle" type="button" aria-label={`Remove queued message ${index + 1}`} disabled={item.status === "sending"} onClick={() => removeQueuedFollowUp(item.id)}><X size={14} aria-hidden="true" /></button></div></div>
-                </li>)}</ol>
-                {!sending && !pendingResponse && queuedFollowUps[0]?.status === "queued" && !followUpAutoDrainRef.current && <footer><span>Recovered follow-ups are paused for review.</span><button className="button secondary" type="button" onClick={() => retryQueuedFollowUp(queuedFollowUps[0].id)}>Send next</button></footer>}
-              </section>}
+              {sessionId && <ChatQueuePanel queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
+              {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue"><strong>Old browser queue</strong><p>Import these messages into Core, paused for review. Uncertain sending entries need review.</p>{queuedFollowUps.map(item => <div key={item.id}><p>{item.text}</p><button type="button" onClick={() => void (async () => { if (await submit(undefined, item, {paused: true, key: `legacy-${item.id}`, uncertain: item.status !== "queued"})) { setQueuedFollowUps(current => current.filter(row => row.id !== item.id)); } })()}>Import paused</button><button type="button" onClick={() => setQueuedFollowUps(current => current.filter(row => row.id !== item.id))}>Discard</button></div>)}</section>}
+              </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
                   <header><div><strong>Context pack</strong><small>{assistantDrafts.length} selection{assistantDrafts.length === 1 ? "" : "s"} · {assistantDrafts.reduce((total, item) => total + item.text.length, 0).toLocaleString()} characters</small></div><button className="button quiet" type="button" onClick={clearAssistantDrafts}>Clear all</button></header>
@@ -3398,19 +3354,24 @@ export function SessionsPage() {
                 {pendingImages.length > 0 && <div className="chat-image-attachments" role="list" aria-label="Image attachments">{pendingImages.map((image, index) => <div role="listitem" key={`${image.block.artifactId}-${index}`}><img src={image.previewUrl} alt={image.filename} /><button className="icon-button subtle" type="button" aria-label={`Remove ${image.filename}`} onClick={() => removePendingImage(index)}><X size={14} /></button></div>)}</div>}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <div className="chat-composer-input" role="combobox" aria-label="Skill suggestions" aria-autocomplete="list" aria-expanded={Boolean(skillToken)} aria-controls={skillToken ? "harness-skill-menu" : undefined} aria-activedescendant={skillToken && matchingHarnessSkills.length ? `harness-skill-option-${skillMenuIndex}` : undefined}>
-                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canSendNowCurrentGrok ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
+                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} /><button className="button quiet square chat-composer-attachment" type="button" aria-label="Attach images" disabled={composerBusy || !imageInputEnabled || uploadingImage || pendingImages.length >= 4} title={composerBusy ? "Attachments are available after the active response finishes" : imageInputEnabled ? "Choose, paste, or drop PNG, JPEG, or WebP images" : "The selected runtime does not advertise image input"} onClick={() => imageInputRef.current?.click()}>{uploadingImage ? <LoaderCircle className="spin" size={15} /> : <ImagePlus size={15} />}</button>{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Send guidance now" title="Steer the active harness turn"><Send size={16} /></button>}{canSendNowCurrentGrok && draft.trim() && <><button className="button quiet square chat-composer-submit" type="submit" aria-label="Queue follow-up message" title="Queue this text after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Send message now" title="Stop the current Grok turn and send this message next" onClick={() => void sendGrokFollowUpNow()}><Send size={15} /><span className="chat-composer-send-now-label">Send now</span></button></>}{queueMode && !canSendNowCurrentGrok && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" aria-label="Queue follow-up message" title="Queue this text after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? "—" : contextPercent}</span><small>context</small></button>}<button className="button quiet" type="button" disabled={!sessionId} onClick={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})}>Results</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={requestNebulaDraft} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}>Queue for later</button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>
           )}
         </section>
 
-        {view === "chat" && sessionInspectorOpen && <aside className="session-inspector" aria-label="Session inspector">
-          <header><div><span>Context</span><strong>Session details</strong></div></header>
-          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{conversationOpen ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : "None selected"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div>{runtimeKind === "harness" && <div><dt>Model configuration</dt><dd>{model || "Not selected"}{harnessReasoningEffort ? ` · ${harnessReasoningEffort} effort` : ""}{harnessServiceTier ? ` · ${harnessServiceTier} speed` : ""}</dd></div>}{runtimeKind === "harness" && harnessSessionId && <div><dt>Harness session</dt><dd><code title={harnessSessionId}>{harnessSessionId}</code></dd></div>}<div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl>
+        {view === "chat" && sessionInspectorOpen && <ChatWorkspaceDrawer tab={drawerTab} onTab={tab => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", tab); return next;})} onClose={() => setSessionInspectorOpen(false)}>
+          {drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={requestNebulaDraft} /> : <p>Results appear after the first saved turn.</p> : <>
+          {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
+          <section><h3>Prepared for your next message</h3>{assistantDrafts.length ? assistantDrafts.map((item, index) => <details key={index}><summary>{item.source.label}{item.truncated ? " · excerpt" : ""}</summary><pre>{item.text}</pre></details>) : <p>No selected excerpts attached.</p>}<p>{pendingImages.length} image attachment{pendingImages.length === 1 ? "" : "s"}</p></section>
+          {api && sessionId && <ChatDecisions key={`decisions:${sessionId}`} api={api} sessionId={sessionId} seed={decisionSeed} onSeedConsumed={() => setDecisionSeed(undefined)} onMessage={(id, sourceSession) => {if (sourceSession && sourceSession !== sessionId) {setSearchParams(current => {const next = new URLSearchParams(current); next.set("session", sourceSession); next.set("message", id); next.delete("drawer"); return next;});} else openDrawerMessage(id);}} />}
+          {api && sessionId && <ChatRecordedContext key={`recorded-context:${sessionId}`} api={api} sessionId={sessionId} onMessage={openDrawerMessage} />}
+
+
           {sessionId && sessions.find((session) => session.id === sessionId)?.backend === "harness" && <button className="button primary full" type="button" disabled={sending} onClick={() => void continueAsMission()}><Bot size={15} /> Continue as mission</button>}
           <section className="session-context-health"><h3>Working context</h3>{!sessionId ? <p>Context becomes durable after the first saved turn.</p> : contextStatusLoading && !activeContextStatus ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Reading Core context…</div> : contextStatusError ? <div className="session-context-error"><p>{contextStatusError}</p><button className="button quiet" type="button" onClick={() => setContextRefreshKey((value) => value + 1)}>Retry</button></div> : activeContextStatus ? <><div className="session-context-summary"><span className={`status-dot ${activeContextStatus.status === "failed" ? "unavailable" : activeContextStatus.status === "stale" ? "pending" : "healthy"}`} /><div><strong>{activeContextStatus.status === "runtime_managed" ? "Harness managed" : activeContextStatus.status.replaceAll("_", " ")}</strong><small>{activeContextStatus.status === "runtime_managed" ? "The selected harness owns compaction and reports its usage through activity." : `${activeContextStatus.estimatedInputTokens.toLocaleString()} estimated · ${activeContextStatus.targetInputTokens.toLocaleString()} target input tokens`}</small></div></div>{contextPercent !== undefined && <div className="session-context-progress" aria-label={`${contextPercent} percent of target input used`}><span style={{ width: `${contextPercent}%` }} /></div>}{activeContextStatus.compactedThrough > 0 && <p>Core compacted through message {activeContextStatus.compactedThrough}; the source transcript remains unchanged.</p>}{activeContextStatus.snapshot?.memory && <details className="session-memory"><summary>Inspect saved memory</summary><div>{activeContextStatus.snapshot.memory.objective && <section><strong>Objective</strong><p>{activeContextStatus.snapshot.memory.objective}</p></section>}<section><strong>Summary</strong><p>{activeContextStatus.snapshot.memory.summary}</p></section>{([
               ["Confirmed facts", activeContextStatus.snapshot.memory.confirmedFacts],
@@ -3421,8 +3382,9 @@ export function SessionsPage() {
             ] as const).map(([label, items]) => items.length ? <section key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={`${label}-${index}`}>{item.text}</li>)}</ul></section> : null)}<small>{activeContextStatus.snapshot.sourceReferences.length} source reference{activeContextStatus.snapshot.sourceReferences.length === 1 ? "" : "s"} · private reasoning is not stored</small></div></details>}</> : <p>Context status has not been recorded yet.</p>}</section>
           <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} project · {libraryItems.length} Library</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
           <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? "Bash commands run in this session's isolated container; configured approvals pause this response." : commandRuntimeUnavailableReason ?? "Command runtime is unavailable for this session."}</p></div></section>
-          <section><h3>Session evidence</h3><div className="empty-state mini"><Braces size={19} /><p>Citations identify canonical ingested chunks and transcript messages.</p></div></section>
-        </aside>}
+
+        <details><summary>Technical session details</summary>          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{conversationOpen ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : "None selected"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div>{runtimeKind === "harness" && <div><dt>Model configuration</dt><dd>{model || "Not selected"}{harnessReasoningEffort ? ` · ${harnessReasoningEffort} effort` : ""}{harnessServiceTier ? ` · ${harnessServiceTier} speed` : ""}</dd></div>}{runtimeKind === "harness" && harnessSessionId && <div><dt>Harness session</dt><dd><code title={harnessSessionId}>{harnessSessionId}</code></dd></div>}<div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl></details></>}
+        </ChatWorkspaceDrawer>}
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>

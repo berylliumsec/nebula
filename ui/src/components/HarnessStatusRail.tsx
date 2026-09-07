@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Check, ChevronDown, Circle, LoaderCircle, OctagonAlert } from "lucide-react";
 import type { HarnessPlanEntry, HarnessSessionActivity } from "../api/types";
 
@@ -26,10 +26,20 @@ export function HarnessStatusRail({ activity, pendingRequests }: Props) {
   const planId = useId();
   const plan = activity.plan ?? [];
   const completed = plan.filter((entry) => entry.status === "completed").length;
-  const status = !activity.live ? "Connection unavailable" : pendingRequests ? "Action required" : "Working";
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!activity.busy || !activity.startedAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [activity.busy, activity.startedAt]);
+  const elapsed = activity.startedAt ? Math.max(0, Math.floor((now - Date.parse(activity.startedAt)) / 1000)) : undefined;
+  const status = pendingRequests || activity.turnStatus === "waiting_approval" ? "Action required" : activity.turnStatus === "queued" ? "Queued" : activity.busy ? "Working" : "Ready for your next message";
+  const currentStep = activity.goal?.currentStep ?? plan.find((entry) => entry.status === "in_progress")?.title;
   const summary = <>
-    <span className={`status-dot ${activity.live ? activity.busy ? "pending" : "available" : "unavailable"}`} />
+    <span className={`status-dot ${activity.busy ? "pending" : "available"}`} />
     <strong>{status}</strong>
+    {elapsed !== undefined && activity.busy && <span>{Math.floor(elapsed / 60)}m {elapsed % 60}s</span>}
+    {currentStep && !expanded && <span title={currentStep}>{currentStep}</span>}
     {activity.goal && <span title={activity.goal.objective}>Goal: {activity.goal.status}{typeof activity.goal.progress === "number" ? ` · ${Math.round(activity.goal.progress * 100)}%` : ""}</span>}
     {plan.length > 0 && <span>{completed}/{plan.length} plan steps</span>}
     {pendingRequests > 0 && <span>{pendingRequests} request{pendingRequests === 1 ? "" : "s"}</span>}
