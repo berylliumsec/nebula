@@ -42,7 +42,7 @@ PR #251; it has not been merged. Historical checkpoints below retain their origi
 evidence and limitations. Codex with `~/.codex-2` is the operator-approved live runtime
 target; separate provider coverage remains automated.
 
-Latest runtime checkpoint: CI passed all seven jobs on `fce1bd3` (run `34150415312`).
+Latest runtime checkpoint: CI passed all seven jobs on `0b3313a` (run `34151506417`).
 The rebuilt production DEB passed the full live Codex journey at 1024x700 and
 1440x900, with native wheel scrolling and clicks where needed. Both retained
 acceptance runs exited zero. Physical
@@ -762,3 +762,26 @@ each. The expanded long-content plus Axe workflow has a 90-second whole-test
 deadline; its WebKit cases completed in 53.4 and 53.0 seconds. No individual
 interaction or geometry assertion was weakened. This follow-up changes only
 tests and evidence; the accepted runtime build remains `fce1bd3`.
+
+### Host/Docker main update and final packaged checkpoint (2026-09-07)
+
+Main's project execution-mode update (`4d6fbe3`) was incorporated in `0b3313a`.
+The only merge conflict was the Playwright project filter: both main's execution-
+mode coverage and this branch's landscape browser projects are retained. The
+focused automation-runtime, harness and browser suite passed 100 tests in 23.41
+seconds, and the production UI build passed. All seven CI jobs passed on the
+merged runtime source (run `34151506417`).
+
+The rebuilt production DEB passed both native WebKitGTK journeys sequentially,
+1024x700 and 1440x900, with live Codex from `~/.codex-2` and exit zero for each.
+The workflow still covers late browser attachment, contextual answer, inline
+approval, visible page change and fresh Saved capture. Evidence:
+`/tmp/nebula-companion-validation/packaged-0b3313a-1024.log` and
+`packaged-0b3313a-1440.log`; matching directories retain screenshots.
+Manifest: `package-0b3313a-manifest.json` in the same validation root.
+DEB SHA256: `a4f7d422e23923118526532442196c78055bfc17c7d45974b5625cfbc0f2d6e9`.
+Core SHA256: `ea97add78bf8fe0763aecbe2ab2ddd76011d51e5aa5142b8b404ecddc4912be9`.
+UI index SHA256: `2be541b9f7ce787914b6d32ea909469fae7a461ac7c3045f0065c8a715954b31`.
+This package was extracted into an isolated profile; nothing was installed or
+deployed. Physical iPhone acceptance remains pending the same Safari settings
+prerequisite. The PR is draft and has not been merged.
