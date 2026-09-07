@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BrowserPageSurface } from "./BrowserPageSurface";
 import { logCaughtDiagnostic } from "../diagnostics";
 import type { ApiClient } from "../api/client";
 import type { NebulaDraftRequest } from "../state/WorkbenchDraftContext";
@@ -48,7 +49,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const currentTabRef = useRef(tabId);
   currentTabRef.current = tabId;
   const socket = useRef<WebSocket | undefined>(undefined);
-  const start = useRef<{ x: number; y: number } | undefined>(undefined);
   const mounted = useRef(true);
   const conversationRef = useRef(conversationId);
   conversationRef.current = conversationId;
@@ -168,11 +168,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (socket.current?.readyState !== WebSocket.OPEN) return;
     setPaused(true); socket.current.send(JSON.stringify(event));
   };
-  const point = (event: React.PointerEvent<HTMLImageElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return { x: (event.clientX - rect.left) * event.currentTarget.naturalWidth / rect.width,
-      y: (event.clientY - rect.top) * event.currentTarget.naturalHeight / rect.height };
-  };
   return <section className="managed-assistant-browser" aria-label="Shared Chromium browser">
     <form className="managed-browser-toolbar" onSubmit={(event) => { event.preventDefault(); void operate("navigate", { url: address }); }}>
       <select aria-label="Browser tab" value={tabId} onChange={(event) => { setTabId(event.target.value); if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(event.target.value)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught)); setCapture(undefined); setAddress(session?.tabs.find(tab => tab.id === event.target.value)?.url ?? ""); }}>
@@ -249,17 +244,8 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
         })}
       </details>
     </section>}
-    <div className="managed-browser-screen">
-      {frame ? <img src={frame} alt="Live shared browser page. Use Ask about page for accessible controls." draggable={false} tabIndex={0}
-        onKeyDown={event => { if (mode !== "browse" || event.key === "Tab") return; event.preventDefault(); send(event.key.length === 1 ? { kind: "text", text: event.key } : { kind: "key", type: "keyDown", key: event.key, code: event.code }); }}
-        onPointerDown={event => { start.current = point(event); event.currentTarget.setPointerCapture(event.pointerId); if (mode === "browse") send({ kind: "mouse", type: "mousePressed", button: "left", clickCount: 1, ...start.current }); }}
-        onPointerMove={event => { if (mode === "browse") send({ kind: "mouse", type: "mouseMoved", button: event.buttons ? "left" : "none", ...point(event) }); }}
-        onPointerUp={event => { const end = point(event); if (mode === "browse") send({ kind: "mouse", type: "mouseReleased", button: "left", clickCount: 1, ...end });
-          else if (mode === "element") void operate("capture", { capture_kind: "element", ...end });
-          else if (start.current) void operate("capture", { capture_kind: "region", x: Math.min(start.current.x,end.x), y: Math.min(start.current.y,end.y), width: Math.abs(end.x-start.current.x), height: Math.abs(end.y-start.current.y) });
-          start.current = undefined; setMode("browse"); }}
-        onWheel={event => { send({ kind: "mouse", type: "mouseWheel", x: event.nativeEvent.offsetX, y: event.nativeEvent.offsetY, deltaY: event.deltaY, deltaX: event.deltaX }); }}
-      /> : <p>The page will appear here when the managed browser connects.</p>}
-    </div>
+    <BrowserPageSurface frame={frame} mode={mode} connected={connected} send={send} onCapture={(captureKind, area) => {
+      void operate("capture", { capture_kind: captureKind, ...area }); setMode("browse");
+    }} />
   </section>;
 }

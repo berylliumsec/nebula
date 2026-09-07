@@ -5297,6 +5297,8 @@ test("browser Assistant stays beside the page through an answer and follow-up", 
   await panel.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(panel.getByText("Yes, that is the same page context.", { exact: true }).first()).toBeVisible();
   expect(new URL(page.url()).searchParams.get("session")).toBe("browser-chat");
+  await expect(panel.locator("#analyst-message")).toBeInViewport({ ratio: 1 });
+  await expect(panel.getByRole("button", { name: "Send message", exact: true })).toBeInViewport({ ratio: 1 });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
   expect(overflow).toBe(false);
 });

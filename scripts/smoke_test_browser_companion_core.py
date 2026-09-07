@@ -15,6 +15,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 import socket
+import secrets
 import sqlite3
 import shlex
 import tempfile
@@ -31,8 +32,12 @@ async def smoke(
     runtime_root: Path,
     harness_source_db: Path | None = None,
     codex_home: Path | None = None,
+    ui_host: str | None = None,
 ) -> dict[str, object]:
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(runtime_root)
+    core_token = secrets.token_urlsafe(32)
+    if ui_host and not harness_source_db:
+        raise ValueError("The real UI journey requires the configured Codex harness.")
     from nebula.v3.artifacts import ArtifactStore
     from nebula.v3.api import create_app
     from nebula.v3.browserd import (
@@ -94,11 +99,15 @@ async def smoke(
             store.update(Engagement, project.id, {"scope_policy_id": scope.id})
             app = create_app(
                 store,
-                auth_token="isolated-core-token",
+                auth_token=core_token,
+                static_dir=Path(__file__).resolve().parents[1] / "ui" / "dist"
+                if ui_host
+                else None,
+                allow_insecure_device_pairing=bool(ui_host),
                 artifact_store=ArtifactStore(root / "artifacts"),
             )
             core_listener = socket.socket()
-            core_listener.bind(("127.0.0.1", 0))
+            core_listener.bind(("0.0.0.0" if ui_host else "127.0.0.1", 0))
             core_listener.listen(128)
             core_listener.setblocking(False)
             core_server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
@@ -113,7 +122,7 @@ async def smoke(
             async with httpx.AsyncClient(base_url=core_origin) as client:
                 path = f"/api/v1/engagements/{project.id}/browser-companion"
                 assert (await client.post(path)).status_code == 401
-                client.headers["Authorization"] = "Bearer isolated-core-token"
+                client.headers["Authorization"] = "Bearer " + core_token
                 opened = await client.post(path)
                 if opened.is_error:
                     raise RuntimeError(f"Core browser open failed: {opened.text}")
@@ -309,7 +318,7 @@ async def smoke(
                 assert reopened.json()["active_tab_id"] == tab
                 assert reopened.json()["session_id"] == session["session_id"]
                 secret = (
-                    base64.urlsafe_b64encode(b"isolated-core-token")
+                    base64.urlsafe_b64encode(core_token.encode("ascii"))
                     .decode()
                     .rstrip("=")
                 )
@@ -362,6 +371,72 @@ async def smoke(
                             raise RuntimeError(
                                 "remaining viewer did not receive resized page frames"
                             )
+                        from playwright.async_api import expect
+
+                        button = live_page.locator("button")
+                        bounds = await button.bounding_box()
+                        assert bounds
+                        touch = {
+                            "x": bounds["x"] + bounds["width"] / 2,
+                            "y": bounds["y"] + bounds["height"] / 2,
+                            "id": 0,
+                        }
+                        for label in ("Ready", "Saved"):
+                            await second.send(
+                                json.dumps(
+                                    {
+                                        "kind": "touch",
+                                        "type": "touchStart",
+                                        "touchPoints": [touch],
+                                    }
+                                )
+                            )
+                            await second.send(
+                                json.dumps(
+                                    {
+                                        "kind": "touch",
+                                        "type": "touchEnd",
+                                        "touchPoints": [],
+                                    }
+                                )
+                            )
+                            await expect(button).to_have_text(label)
+                        # Keyboard focus and text pass through the same authenticated
+                        # stream; Playwright only observes the resulting host state.
+                        for event_type in ("keyDown", "keyUp"):
+                            await second.send(
+                                json.dumps(
+                                    {
+                                        "kind": "key",
+                                        "type": event_type,
+                                        "key": "Tab",
+                                        "code": "Tab",
+                                    }
+                                )
+                            )
+                        password = live_page.get_by_label("Password")
+                        await expect(password).to_be_focused()
+                        await second.send(
+                            json.dumps({"kind": "text", "text": "keyboard fixture"})
+                        )
+                        await expect(password).to_have_value("keyboard fixture")
+                        for key, code, modifiers in (
+                            ("a", "KeyA", 2),
+                            ("Backspace", "Backspace", 0),
+                        ):
+                            for event_type in ("keyDown", "keyUp"):
+                                await second.send(
+                                    json.dumps(
+                                        {
+                                            "kind": "key",
+                                            "type": event_type,
+                                            "key": key,
+                                            "code": code,
+                                            "modifiers": modifiers,
+                                        }
+                                    )
+                                )
+                        await expect(password).to_have_value("")
                 reconnected = await client.post(path)
                 reconnected.raise_for_status()
                 assert reconnected.json()["conversation_id"] == chat.id
@@ -699,6 +774,21 @@ async def smoke(
                         "harness_visible_answer": True,
                         "harness_inline_approval_and_followup": True,
                     }
+                if ui_host:
+                    from smoke_test_browser_companion_ui import exercise_ui
+
+                    pairing = await client.post(
+                        "/api/v1/auth/pairings", json={"name": "Browser UI validation"}
+                    )
+                    pairing.raise_for_status()
+                    harness_evidence.update(
+                        await exercise_ui(
+                            f"http://{ui_host}:{core_listener.getsockname()[1]}",
+                            pairing.json(),
+                            completion.json()["session_id"],
+                            runtime_root.parent,
+                        )
+                    )
                 return {
                     "state": "passed",
                     "authenticated_core": True,
@@ -710,6 +800,7 @@ async def smoke(
                     "transport": "Core loopback HTTP and WebSocket to browserd loopback HTTP and WebSocket",
                     "frame_relay_and_takeover": True,
                     "concurrent_viewer_disconnect": True,
+                    "stream_touch_and_keyboard": True,
                     "page": "controlled proxy fixture",
                     **harness_evidence,
                 }
@@ -740,12 +831,19 @@ if __name__ == "__main__":
         type=Path,
         help="Use this existing authenticated Codex home only in the isolated test harness",
     )
+    parser.add_argument(
+        "--ui-host",
+        help="Run the production UI journey on this host LAN address using the isolated Core",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
             asyncio.run(
                 smoke(
-                    args.runtime_root.resolve(), args.harness_source_db, args.codex_home
+                    args.runtime_root.resolve(),
+                    args.harness_source_db,
+                    args.codex_home,
+                    args.ui_host,
                 )
             ),
             sort_keys=True,

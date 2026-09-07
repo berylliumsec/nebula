@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,12 +6,13 @@ import { WorkbenchDraftProvider, useWorkbenchDrafts } from "./WorkbenchDraftCont
 
 const state = vi.hoisted(() => ({
   createHandoff: vi.fn(),
+  cancelHandoff: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../api/runtime", () => ({ desktopDeviceId: () => Promise.resolve("device-current") }));
 vi.mock("./WorkspaceContext", () => ({
   useWorkspace: () => ({
-    api: { createHandoff: state.createHandoff },
+    api: { createHandoff: state.createHandoff, cancelHandoff: state.cancelHandoff },
     engagement: { id: "project-1", name: "Project one" },
   }),
 }));
@@ -22,19 +23,45 @@ function LocationProbe() {
 }
 
 function AskFromAssistant({ view = "chat" }: { view?: "chat" | "browser" }) {
-  const { requestNebulaDraft } = useWorkbenchDrafts();
-  return <button type="button" onClick={() => requestNebulaDraft({
+  const { requestNebulaDraft, clearAssistantDrafts } = useWorkbenchDrafts();
+  return <><button type="button" onClick={() => requestNebulaDraft({
     text: "Keep this conversation visible",
     sourceKind: "assistant_message",
     sourceId: "message-1",
     sourceLabel: "Assistant response",
-  }, view)}>Ask Nebula</button>;
+  }, view)}>Ask Nebula</button><button onClick={clearAssistantDrafts}>Clear context</button></>;
 }
 
 describe("Ask Nebula conversation navigation", () => {
   beforeEach(() => {
     state.createHandoff.mockReset();
-    state.createHandoff.mockResolvedValue({ id: "handoff-1" });
+    state.cancelHandoff.mockClear();
+    state.createHandoff.mockResolvedValue({ id: "handoff-1", revision: 1 });
+  });
+
+  it("clears a sent or discarded context handoff without losing browser conversation identity", async () => {
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
+      <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
+    </MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-1"));
+    await userEvent.click(screen.getByRole("button", { name: "Clear context" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("?view=browser&session=conversation-1");
+    expect(screen.getByTestId("location")).not.toHaveTextContent("handoff=");
+    expect(state.cancelHandoff).toHaveBeenCalledWith("handoff-1", 1);
+  });
+
+  it("does not resurrect a handoff that finishes saving after its context was cleared", async () => {
+    let resolve: (value: { id: string; revision: number }) => void = () => {};
+    state.createHandoff.mockReturnValue(new Promise(value => { resolve = value; }));
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
+      <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
+    </MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Clear context" }));
+    await act(async () => resolve({ id: "late-handoff", revision: 2 }));
+    expect(screen.getByTestId("location")).not.toHaveTextContent("handoff=");
+    expect(state.cancelHandoff).toHaveBeenCalledWith("late-handoff", 2);
   });
 
   it("keeps the active conversation selected before and after the durable handoff is created", async () => {

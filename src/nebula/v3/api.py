@@ -9720,7 +9720,13 @@ def create_app(
                     while True:
                         event = await websocket.receive_json()
                         browser_companion.session(session_id)
-                        if event.get("kind") not in {"mouse", "key", "text", "resize"}:
+                        if event.get("kind") not in {
+                            "mouse",
+                            "touch",
+                            "key",
+                            "text",
+                            "resize",
+                        }:
                             continue
                         if len(json.dumps(event)) > 8000:
                             await websocket.close(code=4400, reason="input too large")

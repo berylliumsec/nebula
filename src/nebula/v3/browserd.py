@@ -836,12 +836,57 @@ def create_browserd_app(
                             ),
                         },
                     )
+                elif kind == "touch":
+                    touch_type = event.get("type")
+                    if touch_type not in {
+                        "touchStart",
+                        "touchMove",
+                        "touchEnd",
+                        "touchCancel",
+                    }:
+                        raise ValueError("Unsupported touch event.")
+                    points = event.get("touchPoints", [])
+                    if not isinstance(points, list) or len(points) > 1:
+                        raise ValueError("Only a single touch point is supported.")
+                    await cdp.send(
+                        "Input.dispatchTouchEvent",
+                        {
+                            "type": touch_type,
+                            "touchPoints": [
+                                {
+                                    "x": float(point["x"]),
+                                    "y": float(point["y"]),
+                                    "id": 0,
+                                }
+                                for point in points
+                            ],
+                        },
+                    )
                 elif kind == "key":
+                    key = str(event.get("key", ""))
+                    virtual_key = {
+                        "Backspace": 8,
+                        "Tab": 9,
+                        "Enter": 13,
+                        "Escape": 27,
+                        "PageUp": 33,
+                        "PageDown": 34,
+                        "End": 35,
+                        "Home": 36,
+                        "ArrowLeft": 37,
+                        "ArrowUp": 38,
+                        "ArrowRight": 39,
+                        "ArrowDown": 40,
+                        "Delete": 46,
+                    }.get(
+                        key, ord(key.upper()) if len(key) == 1 and key.isascii() else 0
+                    )
                     await cdp.send(
                         "Input.dispatchKeyEvent",
                         {
                             "type": event.get("type", "keyDown"),
-                            "key": str(event.get("key", "")),
+                            "key": key,
+                            "windowsVirtualKeyCode": virtual_key,
                             "code": str(event.get("code", "")),
                             "modifiers": int(event.get("modifiers", 0)),
                         },

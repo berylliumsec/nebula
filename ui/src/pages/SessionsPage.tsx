@@ -134,7 +134,7 @@ import {
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
-const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace"]);
+const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
 
 function isReadableContextStatus(value: ContextStatus, expectedOwnerId: string): boolean {
@@ -405,6 +405,8 @@ export function SessionsPage() {
     requestNebulaDraft,
   } = useWorkbenchDrafts();
   const [searchParams, setSearchParams] = useSearchParams();
+  const currentSearchParams = useRef(searchParams);
+  currentSearchParams.current = searchParams;
   const requestedView = searchParams.get("view");
   const requestedSessionId = searchParams.get("session") ?? "";
   const initialView = requestedView === "chat" || requestedView === "code" || requestedView === "terminal" || requestedView === "browser" || requestedView === "missions" || requestedView === "activity" || requestedView === "workspace" || requestedView === "notes"
@@ -415,23 +417,27 @@ export function SessionsPage() {
   const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "browser" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
   const setView = (next: SessionView) => {
     setViewState(next);
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", next);
     setSearchParams(params, { replace: true });
   };
   const openUnattachedChatView = () => {
     const nextView = view === "browser" ? "browser" : "chat";
     setViewState(nextView);
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", nextView);
     params.delete("session");
     setSearchParams(params, { replace: true });
   };
-  const openSessionChatView = (id: string) => {
-    const nextView = view === "browser" ? "browser" : "chat";
-    setViewState(nextView);
-    const params = new URLSearchParams(searchParams);
-    params.set("view", nextView);
+  const openSessionChatView = (id: string, preserveSurface = false) => {
+    // Stream callbacks outlive the render that submitted the message. Preserve
+    // newer navigation and cleared handoffs instead of restoring that old URL.
+    const params = new URLSearchParams(currentSearchParams.current);
+    if (!preserveSurface) {
+      const nextView = params.get("view") === "browser" ? "browser" : "chat";
+      setViewState(nextView);
+      params.set("view", nextView);
+    }
     params.set("session", id);
     setSearchParams(params, { replace: true });
   };
@@ -1196,7 +1202,7 @@ export function SessionsPage() {
     setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
     if (selectedId) {
       setSessionId(selectedId);
-      openSessionChatView(selectedId);
+      openSessionChatView(selectedId, true);
     }
   };
 
@@ -1867,7 +1873,7 @@ export function SessionsPage() {
   ) => {
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
-      openSessionChatView(streamEvent.sessionId);
+      openSessionChatView(streamEvent.sessionId, true);
       void refreshSessions();
     }
     if (streamEvent.type === "started") {
@@ -2984,7 +2990,7 @@ export function SessionsPage() {
   const assistantPanel = (
             <div className="chat-panel">
               <ChatSearchPanel key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
-                setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", "chat"); return next; });
+                setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", view === "browser" ? "browser" : "chat"); return next; });
               }} />
               {sessions.find(item => item.id === sessionId)?.parentSessionId && <div className="chat-action-status">Branched conversation · files remain shared. <button className="button quiet" onClick={() => void selectSession(sessions.find(item => item.id === sessionId)!.parentSessionId!)}>Open parent</button></div>}
               {chatNavigation.error && <div role="alert">{chatNavigation.error}<button className="button quiet" onClick={chatNavigation.reload}>Reload bookmarks</button></div>}

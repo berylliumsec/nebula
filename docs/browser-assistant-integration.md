@@ -354,7 +354,81 @@ requirements remain unchanged. File removal detaches/revokes the upload grant;
 normal project artifact retention still applies to stored bytes.
 
 All CI jobs passed on prior commit `3881b68` (Python 3.11/3.12/3.13, frontend,
-database migrations, desktop-macOS and security). The upload commit needs a fresh
-CI run. Remaining gates include the complete production UI against real managed
+database migrations, desktop-macOS and security). All CI jobs subsequently passed on upload commit `33eca54` (run
+`34132749347`). Remaining gates include the complete production UI against real managed
 Chromium/Codex, lifecycle coverage, packaged desktop, real LAN origin and physical
 phone interaction.
+
+### Production UI with the real runtime
+
+The optional `--ui-host <host-LAN-address>` mode of the committed Core smoke runner
+serves `ui/dist` through the isolated Core and invokes
+`scripts/smoke_test_browser_companion_ui.py`. Its entry point is the browser
+workspace with the durable conversation ID. It navigates, attaches page context,
+sends a visible question and follow-up, approves a requested click in the UI,
+observes the changed page, and reloads the same transcript and browser session.
+No API routes are mocked. Test authentication is randomized and the temporary
+Core enables HTTP device pairing explicitly; this does not change the installed
+service. UI screenshots and a Playwright trace are retained beside the staged
+runtime. This first UI journey targets headed desktop Chromium at 1440x900; it
+does not replace the remaining mobile, packaged-application or physical gates.
+
+### Manual input and production UI review (2026-09-07)
+
+The streamed surface now sends single-touch start/move/end/cancel events through
+Core to Chromium, scales pointer and wheel coordinates to the host viewport, and
+sends complete key down/up pairs with modifiers and virtual key codes. A Page
+keyboard disclosure provides a real editable field for composed/mobile text and
+explicit Tab/Shift-Tab/Enter controls without trapping focus in the streamed image.
+Rectangle selection has a visible drag preview. Browser Assistant search retains
+the browser workspace while selecting a conversation.
+
+The initial real UI run passed its functional journey at
+`http://192.168.1.155:60609`, headed Chromium 1440x900, with UI index SHA256
+`676f58d5ade09145b216e02ba31a2e4fb87734979013c5ac434c25278a8583e2`.
+Screenshot inspection then caught a composer below the workspace and a stale
+selection-handoff warning after sending. The browser is now included in the
+bounded workspace layout. Clearing/sending context cancels its transient handoff,
+removes its URL marker, and rejects late handoff creation after the context was
+cleared. New tests require the composer and Send control to remain fully in view
+and the sent handoff marker to be absent after reload. The strengthened real UI
+rerun passed at `http://192.168.1.155:49929`, headed Chromium 1440x900,
+with UI index SHA256
+`5a4fa7a61ebe601249639b9125dad31ccfec92122f05f6252b59d68c99f605a3`.
+Both the composer and Send control stayed fully in view after reload, and the
+stale handoff marker was absent. Screenshot review confirmed the visible page,
+conversation catch-up, and composer. Eight strengthened production/LAN viewport
+checks passed (23.7 seconds) after the 32 workflow/profile checks. Earlier mobile
+failures exposed a composer percentage-height cap; earlier reload failures exposed
+a stale stream callback restoring old URL parameters. Both have regression checks.
+
+Validation so far: 21 component/context tests, 21 focused browser/backend tests,
+32 production/LAN fixture checks across eight desktop/mobile profiles, production
+build, Python type checking and diagnostic audits passed. The real Core stream
+also observed touch activation, Tab focus, text insertion, Ctrl-A and Backspace
+through the authenticated relay. This is host-runtime observation, not a physical
+phone or software-keyboard acceptance claim.
+
+Outstanding host-readiness work is concrete: the packaged Core bootstrap supplies
+the verified Playwright runtime, but the browser registry currently discovers
+browserd only from `NEBULA_BROWSERD_URL` and `NEBULA_BROWSERD_TOKEN`. The UI's
+Prepare/retry control retries opening the session; it does not yet provision the
+host browserd/policy-proxy lifecycle. Complete that product path while retaining
+headed runtime and proxy qualification, then test the isolated packaged desktop.
+Also retain real mobile UI, physical phone, all context-selection modes, current
+tab metadata updates, process failure/restart, and remaining conversation lifecycle
+gates as outstanding. No deployment or installed-service changes have occurred.
+
+Evidence artifacts for this run (isolated test runtime, not the installation):
+`/tmp/nebula-companion-validation/real-browser-ui-desktop.png` and
+`/tmp/nebula-companion-validation/real-browser-ui-trace.zip`.
+
+```sh
+PYTHONPATH=src xvfb-run -a poetry run python scripts/smoke_test_browser_companion_core.py --runtime-root /tmp/nebula-companion-validation/playwright-browsers --harness-source-db /home/agent/.local/share/nebula/v3/nebula.db --codex-home /home/agent/.codex-2 --ui-host 192.168.1.155
+npm --prefix ui run test -- --run src/components/BrowserPageSurface.test.tsx src/components/ManagedAssistantBrowser.test.tsx src/state/WorkbenchDraftContext.navigation.test.tsx src/state/WorkbenchDraftContext.test.ts
+PYTHONPATH=src poetry run pytest -q tests/v3/test_browser_companion.py tests/v3/test_browserd.py
+```
+
+The desktop launcher currently clears its environment and does not pass DISPLAY,
+WAYLAND_DISPLAY, or browserd configuration to Core. Host startup work must address
+that deliberately; a manually injected test browserd is not packaged acceptance.

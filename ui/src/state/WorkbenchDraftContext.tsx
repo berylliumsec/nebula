@@ -215,6 +215,16 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const [executionDraft, setExecutionDraft] = useState<SelectionActionDraft>();
   const [findingDraft, setFindingDraft] = useState<FindingDraftRequest>();
   const [activeHandoffIds, setActiveHandoffIds] = useState<string[]>([]);
+  const assistantHandoffs = useRef(new Map<string, number>());
+  const assistantGeneration = useRef(0);
+
+  const cancelSelectionHandoff = useCallback(async (id: string, revision: number) => {
+    if (!api) return;
+    try { await api.cancelHandoff(id, revision); }
+    catch (error) {
+      void logCaughtDiagnostic("interface.handoff.selection_cancel_failed", "The discarded selection was cleared locally, but its handoff could not be cancelled.", error, "handoffs");
+    }
+  }, [api]);
 
   const persistSelectionHandoff = useCallback(async (
     draft: SelectionActionDraft,
@@ -225,6 +235,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     if (!api || !engagement) return;
     const metadata = selectionHandoffMetadata(engagement.id, draft);
     const origin = locationRef.current;
+    const generation = assistantGeneration.current;
     try {
       const envelope = await api.createHandoff({
         projectId: engagement.id,
@@ -235,6 +246,13 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         sourceLabels: metadata.sourceLabels,
         transient: true,
       });
+      if (actionId === "ask_nebula") {
+        if (generation !== assistantGeneration.current) {
+          await cancelSelectionHandoff(envelope.id, envelope.revision);
+          return;
+        }
+        assistantHandoffs.current.set(envelope.id, envelope.revision);
+      }
       setActiveHandoffIds((current) => [...new Set([...current, envelope.id])]);
       if (view === "browser") {
         const current = locationRef.current;
@@ -258,7 +276,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         "handoffs",
       );
     }
-  }, [api, engagement, navigate]);
+  }, [api, engagement, navigate, cancelSelectionHandoff]);
 
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest, view: "chat" | "browser" = "chat") => {
     const next = toSelectionDraft(request);
@@ -326,7 +344,18 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   }, []);
   const clearAssistantDrafts = useCallback(() => {
     setAssistantContext({ drafts: [] });
-  }, []);
+    assistantGeneration.current += 1;
+    const handoffs = new Map(assistantHandoffs.current);
+    assistantHandoffs.current.clear();
+    setActiveHandoffIds(current => current.filter(id => !handoffs.has(id)));
+    for (const [id, revision] of handoffs) void cancelSelectionHandoff(id, revision);
+    const current = locationRef.current;
+    const parameters = new URLSearchParams(current.search);
+    if (handoffs.has(parameters.get("handoff") ?? "")) {
+      parameters.delete("handoff");
+      navigate(`${current.pathname}${parameters.size ? `?${parameters}` : ""}`, { replace: true });
+    }
+  }, [cancelSelectionHandoff, navigate]);
   const clearAssistantDraftNotice = useCallback(() => {
     setAssistantContext((current) => ({ drafts: current.drafts }));
   }, []);
