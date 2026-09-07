@@ -544,6 +544,18 @@ class ChatService:
         self.knowledge_index = knowledge_index
         self.artifact_store = artifact_store
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
+        self._naming_tasks: set[asyncio.Task[Any]] = set()
+
+    def start_optional_naming(self, coroutine: Any) -> None:
+        task = create_diagnostic_task(
+            coroutine,
+            feature="chat",
+            event_code="chat.optional_naming",
+            failure_message="Optional conversation naming failed; the saved reply remains available.",
+            name="nebula-conversation-naming",
+        )
+        self._naming_tasks.add(task)
+        task.add_done_callback(self._naming_tasks.discard)
 
     async def startup(self) -> None:
         """Provider turns are attached lazily when the first request arrives."""
@@ -626,6 +638,7 @@ class ChatService:
             for task in (runtime.task, runtime.cleanup_task)
             if task is not None and not task.done()
         ]
+        tasks.extend(self._naming_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
@@ -1255,7 +1268,9 @@ class ChatService:
         response = await prepared.provider.complete(prepared.model_request)
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
-        await self._name_initial_session(prepared, completion.message.content)
+        self.start_optional_naming(
+            self._name_initial_session(prepared, completion.message.content)
+        )
         self._complete_turn(prepared, completion)
         return completion
 
@@ -1302,7 +1317,9 @@ class ChatService:
                     raise ChatError("provider stream completed without a response")
                 completion = self._completion(prepared, event.response)
                 self._persist(prepared, completion)
-                await self._name_initial_session(prepared, completion.message.content)
+                self.start_optional_naming(
+                    self._name_initial_session(prepared, completion.message.content)
+                )
                 self._complete_turn(prepared, completion)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
@@ -1599,8 +1616,8 @@ class ChatService:
                     prepared.turn = turn
                     completion = self._completion(prepared, event.response)
                     self._persist(prepared, completion)
-                    await self._name_initial_session(
-                        prepared, completion.message.content
+                    self.start_optional_naming(
+                        self._name_initial_session(prepared, completion.message.content)
                     )
                     turn = self.store.update(
                         ChatTurn,
@@ -3034,8 +3051,8 @@ class ChatService:
         first_prompt = substantive_prompt(
             [
                 message.content
-                for message in prepared.model_request.messages
-                if message.role == "user"
+                for message in self.session_messages(session_id)
+                if message.role == ChatRole.USER
             ]
         )
         if not first_prompt:

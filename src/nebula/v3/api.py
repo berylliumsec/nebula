@@ -480,6 +480,7 @@ READ_ONLY_RESOURCES = {
 }
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
+    "chat_read_cursors",
     "chat_bookmarks",
     "chat_queues",
     "chat_decisions",
@@ -1385,6 +1386,7 @@ def create_app(
         artifact_store=artifact_store,
     )
 
+    from .chat_catchup import catchup_router
     from .chat_decisions import decisions_router
     from .chat_queue import ChatQueueService, queue_router
 
@@ -7697,6 +7699,19 @@ def create_app(
             harness_runtime.start_chat_turn(harness_turn.id)
 
             async def harness_events() -> Any:
+                # Bind browser navigation before any runtime event or login failure.
+                yield (
+                    "started",
+                    {
+                        "type": "started",
+                        "session_id": chat.id,
+                        "turn_id": chat_turn.id,
+                        "harness_profile_id": chat.harness_profile_id,
+                        "harness_session_id": chat.harness_session_id,
+                        "harness_turn_id": harness_turn.id,
+                        "model": chat.model,
+                    },
+                )
                 failed: dict[str, Any] | None = None
                 async for event in harness_runtime.follow_turn(harness_turn.id):
                     if event.type == "error":
@@ -7734,84 +7749,88 @@ def create_app(
                         "harness turn completed without a durable message"
                     )
                 message = store.get(ChatMessage, completed_turn.final_message_id)
-                from .chat_naming import should_name, substantive_prompt
 
-                naming_prompt = substantive_prompt(
-                    [
-                        item.content
-                        for item in chat_service().session_messages(chat.id)
-                        if item.role.value == "user"
-                    ]
-                )
-                if should_name(store.get(ChatSession, chat.id)) and naming_prompt:
-                    try:
-                        naming_turn = await harness_runtime.analyze_structured(
-                            engagement_id=chat.engagement_id,
-                            profile_id=chat.harness_profile_id or "",
-                            model=chat.model,
-                            prompt=(
-                                "Name this conversation from its first exchange. Return only a concise, "
-                                "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
-                                f"Operator request:\n{naming_prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
-                            ),
-                        )
-                        title = (
-                            sanitize_display_text(naming_turn.response or "")
-                            .strip()
-                            .strip("\"'`# ")
-                        )
-                        title = " ".join(
-                            re.sub(
-                                r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)
-                            ).split()[:6]
-                        )[:120]
-                        if not title:
-                            raise HarnessError(
-                                "harness returned an empty conversation name"
+                async def name_conversation() -> None:
+                    from .chat_naming import should_name, substantive_prompt
+
+                    naming_prompt = substantive_prompt(
+                        [
+                            item.content
+                            for item in chat_service().session_messages(chat.id)
+                            if item.role.value == "user"
+                        ]
+                    )
+                    if should_name(store.get(ChatSession, chat.id)) and naming_prompt:
+                        try:
+                            naming_turn = await harness_runtime.analyze_structured(
+                                engagement_id=chat.engagement_id,
+                                profile_id=chat.harness_profile_id or "",
+                                model=chat.model,
+                                prompt=(
+                                    "Name this conversation from its first exchange. Return only a concise, "
+                                    "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
+                                    f"Operator request:\n{naming_prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
+                                ),
                             )
-                        latest_chat = store.get(ChatSession, chat.id)
-                        if (
-                            latest_chat.metadata.get("initial_title_state")
-                            != "operator"
-                        ):
-                            store.update(
-                                ChatSession,
-                                chat.id,
-                                {
-                                    "title": title,
-                                    "metadata": {
-                                        **latest_chat.metadata,
-                                        "initial_title_state": "generated",
+                            title = (
+                                sanitize_display_text(naming_turn.response or "")
+                                .strip()
+                                .strip("\"'`# ")
+                            )
+                            title = " ".join(
+                                re.sub(
+                                    r"[.!?:;]+$", "", re.sub(r"\s+", " ", title)
+                                ).split()[:6]
+                            )[:120]
+                            if not title:
+                                raise HarnessError(
+                                    "harness returned an empty conversation name"
+                                )
+                            latest_chat = store.get(ChatSession, chat.id)
+                            if (
+                                latest_chat.metadata.get("initial_title_state")
+                                != "operator"
+                            ):
+                                store.update(
+                                    ChatSession,
+                                    chat.id,
+                                    {
+                                        "title": title,
+                                        "metadata": {
+                                            **latest_chat.metadata,
+                                            "initial_title_state": "generated",
+                                        },
                                     },
-                                },
-                                expected_revision=latest_chat.revision,
+                                    expected_revision=latest_chat.revision,
+                                )
+                        except Exception as exc:
+                            # The first answer is already durable. Naming is an optional
+                            # embellishment and must never turn that success into a failed chat.
+                            record_caught_exception(
+                                "harnesses",
+                                "harnesses.chat.naming_fallback",
+                                "The harness could not name the conversation; the prompt-based fallback was retained.",
+                                exc,
+                                stage="conversation-naming",
                             )
-                    except Exception as exc:
-                        # The first answer is already durable. Naming is an optional
-                        # embellishment and must never turn that success into a failed chat.
-                        record_caught_exception(
-                            "harnesses",
-                            "harnesses.chat.naming_fallback",
-                            "The harness could not name the conversation; the prompt-based fallback was retained.",
-                            exc,
-                            stage="conversation-naming",
-                        )
-                        latest_chat = store.get(ChatSession, chat.id)
-                        if (
-                            latest_chat.metadata.get("initial_title_state")
-                            != "operator"
-                        ):
-                            store.update(
-                                ChatSession,
-                                chat.id,
-                                {
-                                    "metadata": {
-                                        **latest_chat.metadata,
-                                        "initial_title_state": "failed",
-                                    }
-                                },
-                                expected_revision=latest_chat.revision,
-                            )
+                            latest_chat = store.get(ChatSession, chat.id)
+                            if (
+                                latest_chat.metadata.get("initial_title_state")
+                                != "operator"
+                            ):
+                                store.update(
+                                    ChatSession,
+                                    chat.id,
+                                    {
+                                        "metadata": {
+                                            **latest_chat.metadata,
+                                            "initial_title_state": "failed",
+                                        }
+                                    },
+                                    expected_revision=latest_chat.revision,
+                                )
+
+                chat_service().start_optional_naming(name_conversation())
                 response = ChatCompletionResponse(
                     turn_id=completed_turn.id,
                     session_id=chat.id,
@@ -8143,6 +8162,11 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    app.include_router(
+        catchup_router(store, harness_runtime),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
     app.include_router(
         decisions_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)]
     )

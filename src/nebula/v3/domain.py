@@ -3283,6 +3283,14 @@ class HarnessInteraction(Entity):
         return self
 
 
+class ChatReadCursor(Entity):
+    entity_kind: ClassVar[str] = "chat_read_cursors"
+    engagement_id: str
+    session_id: str
+    device_id: str = Field(min_length=1, max_length=200)
+    through_at: datetime
+
+
 class ChatDecision(Entity):
     entity_kind: ClassVar[str] = "chat_decisions"
     engagement_id: str
@@ -4026,6 +4034,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatBookmark,
     ChatQueue,
     ChatDecision,
+    ChatReadCursor,
     ChatTurn,
     ChatMessage,
     PairedDeviceSession,

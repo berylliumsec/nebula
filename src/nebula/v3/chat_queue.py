@@ -22,7 +22,7 @@ from .domain import (
     utc_now,
 )
 from .storage import ConflictError, NotFoundError
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, create_diagnostic_task
 
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
 EDITABLE = {"queued", "needs_review"}
@@ -97,7 +97,7 @@ class ChatQueueService:
         session = self.store.get(ChatSession, session_id)
         try:
             return self.store.get(ChatQueue, "chat-queue-" + session_id)
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
             return ChatQueue(
                 id="chat-queue-" + session_id,
                 session_id=session_id,
@@ -108,7 +108,7 @@ class ChatQueueService:
         try:
             self.store.get(ChatQueue, "chat-queue-" + session_id)
             return True
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
             return False
 
     def latest_turn(self, session_id):
@@ -452,7 +452,9 @@ class ChatQueueService:
                     queue_claim=claim,
                 )
                 self.harness.start_chat_turn(turn.id)
-        except ConflictError:
+        except (
+            ConflictError
+        ):  # diagnostic-expected: concurrent mutation wins and dispatch is paused
             # A concurrent edit/pause or turn reservation wins. Do not run a stale request.
             current = self.store.get(ChatQueue, queue.id)
             if any(
@@ -496,15 +498,30 @@ class ChatQueueService:
 
     async def startup(self):
         for queue in self.queues():
-            await self.step(queue, recovering=True)
-        self.task = asyncio.create_task(self.run(), name="nebula-chat-follow-ups")
+            try:
+                await self.step(queue, recovering=True)
+            except (
+                ConflictError,
+                NotFoundError,
+            ):  # diagnostic-expected: concurrent queue changes will be reread by the worker
+                continue
+        self.task = create_diagnostic_task(
+            self.run(),
+            feature="chat",
+            event_code="chat.queue.worker_failed",
+            failure_message="Core follow-up dispatch stopped unexpectedly",
+            name="nebula-chat-follow-ups",
+        )
 
     async def run(self):
         while True:
             for queue in self.queues():
                 try:
                     await self.step(queue)
-                except (ConflictError, NotFoundError):
+                except (
+                    ConflictError,
+                    NotFoundError,
+                ):  # diagnostic-expected: reload concurrent queue changes on the next poll
                     continue  # Concurrent edits/deletion are re-read on the next iteration.
                 except Exception as exc:
                     record_caught_exception(

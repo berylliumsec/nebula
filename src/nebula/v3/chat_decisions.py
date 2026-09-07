@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, or_
@@ -191,7 +192,9 @@ def decisions_router(store):
             raise ConflictError(
                 "This entry is no longer active. Create a new entry to restore it explicitly"
             )
-        changes = {"history": [*current.history, revision_entry(current)]}
+        changes: dict[str, Any] = {
+            "history": [*current.history, revision_entry(current)]
+        }
         if body.action == "save":
             if not body.text.strip():
                 raise HTTPException(422, "Decision text cannot be empty")

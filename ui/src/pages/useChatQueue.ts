@@ -8,6 +8,10 @@ export interface QueueItem {
   request: { messages: {role: string; content: string; content_blocks?: {type: string; [key: string]: unknown}[]}[]; context_attachments?: unknown[]; [key: string]: unknown };
 }
 export interface ChatQueue { revision: number; paused: boolean; items: QueueItem[] }
+function validateQueue(value: ChatQueue): ChatQueue {
+  if (!value || !Array.isArray(value.items) || typeof value.revision !== "number" || typeof value.paused !== "boolean") throw new Error("Core returned an unsupported queue response");
+  return value;
+}
 export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
   const [queue, setQueue] = useState<ChatQueue>();
   const current = useRef<ChatQueue | undefined>(undefined);
@@ -19,7 +23,7 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
   const activePath = useRef(path); activePath.current = path;
   const reload = useCallback(async () => {
     if (!api || !sessionId) return;
-    const saved = await api.request<ChatQueue>(path);
+    const saved = validateQueue(await api.request<ChatQueue>(path));
     if (activePath.current === path) {current.current = saved; setQueue(saved);} return saved;
   }, [api, sessionId, path]);
   useEffect(() => {
@@ -27,7 +31,7 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
     current.current = undefined; setQueue(undefined); setError(undefined); pending.current = undefined;
     if (!api || !sessionId) return;
     const poll = async () => {
-      try { const saved = await api.request<ChatQueue>(path, {signal: controller.signal}); if (!disposed && !locked.current) {current.current = saved; setQueue(saved);} }
+      try { const saved = validateQueue(await api.request<ChatQueue>(path, {signal: controller.signal})); if (!disposed && !locked.current) {current.current = saved; setQueue(saved);} }
       catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat"); if (!disposed) setError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry."); }
     };
     void poll(); const timer = setInterval(() => void poll(), 2000);
@@ -39,7 +43,7 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
     try {
       const before = current.current ?? await reload();
       if (!before) return false;
-      const saved = await api.request<ChatQueue>(path, {method: "POST", body: JSON.stringify({...body, expected_revision: before.revision})});
+      const saved = validateQueue(await api.request<ChatQueue>(path, {method: "POST", body: JSON.stringify({...body, expected_revision: before.revision})}));
       if (activePath.current === path) {current.current = saved; setQueue(saved);} await reload(); return activePath.current === path;
     } catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");
       setError(`${e instanceof Error ? e.message : "Queue change failed"}. Reload the queue and reapply your edit; your draft is retained.`);

@@ -156,7 +156,7 @@ def results_router(store, artifacts):
                     continue
                 try:
                     turn = store.get(ChatTurn, call.chat_turn_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: optional or removed historical record remains unavailable
                     continue
                 if turn.final_message_id == message.id:
                     items.append(

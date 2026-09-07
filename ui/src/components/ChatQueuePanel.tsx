@@ -6,6 +6,7 @@ export function ChatQueuePanel({queue: controller, onRefreshConversation}: {queu
   const items = queue?.items.filter(item => !["complete", "cancelled"].includes(item.status)) ?? [];
   const editable = items.filter(item => ["queued", "needs_review"].includes(item.status));
   const move = (item: QueueItem, direction: number) => { const order = editable.map(row => row.id); const index = order.indexOf(item.id); const target = index + direction; if (target < 0 || target >= order.length) return; [order[index], order[target]] = [order[target], order[index]]; void mutate({action: "reorder", order}); };
+  if (!items.length && !error && !editing) return null;
   return <section className="chat-follow-up-queue" aria-label="Core follow-up queue">
     {(items.length > 0 || error) && <><header><strong>Follow-ups · {queue?.paused ? "Paused" : "Core dispatches in order"}</strong><button type="button" disabled={busy} onClick={() => void mutate({action: queue?.paused ? "resume" : "pause"})}>{queue?.paused ? "Resume queue" : "Pause queue"}</button><button type="button" disabled={busy} onClick={() => void mutate({action: "clear"})}>Clear queue</button></header><p>Explicitly queued work continues after all browser tabs close.</p></>}
     {error && <div role="alert"><p>{error}</p><button type="button" onClick={() => void reload()}>Reload queue</button></div>}

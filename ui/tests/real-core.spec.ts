@@ -39,6 +39,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       "--port", "0",
       "--token", token,
       "--allow-insecure-device-pairing",
+      "--allow-browser-diagnostics",
       ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
       "--static-dir", path.join(repository, "ui/dist"),
@@ -355,7 +356,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
     const completion = await completionResponse.json() as { session_id: string };
     expect(completion.session_id).toBeTruthy();
-    expect(modelStub.requests).toHaveLength(2);
+    await expect.poll(() => modelStub.requests.length).toBe(2);
     const deliveredMessages = modelStub.requests[0].messages as Array<{ content?: string }>;
     const deliveredContent = deliveredMessages.at(-1)?.content ?? "";
     const deliveredContextJson = deliveredContent.match(
@@ -441,10 +442,10 @@ test("production assistant preserves exact research context and relaunch-safe dr
     const savedSession = sessions.find((session) => session.id === completion.session_id);
     expect(savedSession).toBeTruthy();
     expect(savedSession!.title).toBe("Expired HTTPS Certificate Review");
-    await page.locator(".session-select").filter({ hasText: "Switch target conversation" }).click();
+    await page.locator(`.session-select[data-session-id="${switchTarget.session_id}"]`).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(switchTarget.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Switch target conversation", { exact: true })).toBeVisible();
-    await page.locator(".session-select").filter({ hasText: savedSession!.title }).click();
+    await page.locator(`.session-select[data-session-id="${completion.session_id}"]`).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Review the exact 443/tcp observation.", { exact: true })).toBeVisible();
     const activeConversation = page.locator(".session-list-item.active");
@@ -522,17 +523,13 @@ test("production assistant work survives a project switch through real Core", as
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
 
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    const sourceSessionId = new URL(page.url()).searchParams.get("session")!;
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Background Project B/ }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Background Project B");
 
-    let sourceSessionId = "";
     await expect.poll(async () => {
-      const sessionsResponse = await api.get(`chat-sessions?engagement_id=${encodeURIComponent(projectA.id)}`);
-      if (!sessionsResponse.ok()) return "";
-      const sessions = await sessionsResponse.json() as Array<{ id: string; title: string }>;
-      sourceSessionId = sessions.find((session) => session.title === "Keep this response running while I switch projects")?.id ?? "";
-      if (!sourceSessionId) return "";
       const messagesResponse = await api.get(`chat/sessions/${sourceSessionId}/messages`);
       if (!messagesResponse.ok()) return "";
       const messages = await messagesResponse.json() as Array<{ role: string; content: string }>;
@@ -542,7 +539,7 @@ test("production assistant work survives a project switch through real Core", as
     await page.getByRole("button", { name: "Switch project" }).click();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: new RegExp(projectA.name) }).click();
     await page.getByRole("button", { name: "Show conversations" }).click();
-    await page.locator(".session-select").filter({ hasText: "Keep this response running while I switch projects" }).click();
+    await page.goto(`${core.origin}/?view=chat&session=${sourceSessionId}#token=${encodeURIComponent(core.token)}`);
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
     await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("and finished after the viewer detached.");
     expect(new URL(page.url()).hostname).toBe(lanAddress);
@@ -1457,6 +1454,8 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.goto(url);
     await expect(page.locator(".chat-message.operator")).toContainText("Hello");
     await expect(page.locator(".chat-message.operator .activity-ledger")).toHaveCount(0);
+    await expect(page.locator(".chat-thread")).toHaveCount(1);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(1);
     await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await expect(page.getByRole("dialog", {name: "Assistant settings"})).toBeVisible();
@@ -1510,6 +1509,15 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(queue).toContainText("Edited queued first task");
     await queue.getByRole("button", {name: "Move message 2 up"}).click();
     await expect(queue.locator("li").first()).toContainText("Queue second task");
+    const geometry = await page.locator(".chat-panel").evaluate(panel => {
+      const box = panel.getBoundingClientRect(); const composer = panel.querySelector(".chat-composer")!.getBoundingClientRect();
+      const thread = panel.querySelector(".chat-thread")!.getBoundingClientRect();
+      const queueTexts = [...panel.querySelectorAll(".chat-follow-up-queue li > div:first-child p")].map(node=>node.getBoundingClientRect().width);
+      return {panelBottom: box.bottom, composerBottom: composer.bottom, threadHeight: thread.height, queueTexts};
+    });
+    expect(geometry.composerBottom).toBeLessThanOrEqual(geometry.panelBottom + 1);
+    expect(geometry.threadHeight).toBeGreaterThan(50);
+    expect(geometry.queueTexts.every(width => width >= 120)).toBe(true);
     await testInfo.attach("queued-work", {body: await page.screenshot(), contentType: "image/png"});
     await testInfo.attach("build-origin", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), assets: await page.locator("script[src]").evaluateAll(nodes => nodes.map(node => node.getAttribute("src")))}), contentType: "application/json"});
     const secondDevice = await page.context().browser()!.newContext();
@@ -1527,6 +1535,14 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.goto(url);
     await expect(page.locator(".chat-message.operator")).toHaveCount(3);
     await expect(page.locator(".chat-message.operator").nth(1)).toContainText("Queue second task");
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toBeVisible();
+    await page.getByRole("button", {name: "Dismiss catch-up", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
+    await page.goto(url);
+    await expect(page.locator(".chat-message.operator")).toHaveCount(3);
+    await expect(page.getByRole("region", {name: "Catch up on this conversation"})).toHaveCount(0);
+    await page.locator(".chat-evidence").first().locator("summary").first().click();
+    await expect(page.locator(".chat-evidence").first()).toContainText("No supporting citations");
     const queuedModelRequests = stub.requests.filter(request => (request.stream === true || Array.isArray(request.tools) && request.tools.length > 0) && JSON.stringify(request.messages).includes("Queue second task"));
     expect(queuedModelRequests.length).toBeGreaterThan(0);
     expect(queuedModelRequests.every(request => JSON.stringify(request.messages).includes("Use concise plain language"))).toBe(true);
@@ -1539,3 +1555,38 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
+
+for (const runtime of [
+  {name: "codex", kind: "codex_app_server", executable: process.env.NEBULA_ASSISTANT_CODEX_EXECUTABLE ?? "/home/agent/.local/bin/codex", model: "gpt-5.6-luna"},
+  {name: "grok", kind: "grok_acp", executable: "/home/agent/.local/bin/grok", model: "grok-4.6"},
+]) {
+  test(`assistant upgrade native ${runtime.name} production LAN conversation`, async ({page}, testInfo) => {
+    test.skip(process.env.NEBULA_ASSISTANT_NATIVE_ACCEPTANCE !== "1", "Requires an explicitly enabled local CLI login; fixture coverage runs separately.");
+    test.setTimeout(180_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    try {
+      const response = await api.post("harnesses", {data: {name: `Assistant acceptance ${runtime.name}`, kind: runtime.kind, executable: runtime.executable, connection_mode: "spawn", transport: "stdio", auth_mode: "existing_session", default_model: runtime.model, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
+      expect(response.ok(), await response.text()).toBe(true);
+      const profile = await response.json() as {id: string};
+      const health = await api.post(`harnesses/${profile.id}/health`);
+      expect(health.ok(), await health.text()).toBe(true);
+      const url = `${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`;
+      await page.goto(url);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await expect(composer).toBeEnabled({timeout: 30_000});
+      await composer.fill("Reply with exactly NEBULA_CHAT_ACCEPTED. Do not use tools, access files, or change anything.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_CHAT_ACCEPTED", {timeout: 120_000});
+      await expect(page.getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0, {timeout: 30_000});
+      await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+      const session = new URL(page.url()).searchParams.get("session");
+      await page.goto(`${core.origin}/?view=chat&session=${session}#token=${encodeURIComponent(core.token)}`);
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("NEBULA_CHAT_ACCEPTED");
+      await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
+      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model: runtime.model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+      await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await api.dispose(); await stopRealCore(core);}
+  });
+}
