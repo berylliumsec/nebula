@@ -454,6 +454,12 @@ controlled endpoints and exercise the production UI using automatic startup.
 
 ### Automatic host validation (2026-09-07)
 
+The first host-startup CI run exposed an invalid shutdown diagnostic category
+when diagnostics were enabled. Managed browser cleanup now uses the registered
+`runtime` category, with an explicit lifecycle regression assertion. The focused
+lifecycle, diagnostics API, and credential API checks passed (10 tests); the full
+backend suite and CI are rerun for this correction.
+
 Core-owned startup passed through the full production HTTP/WebSocket and paired
 LAN UI journey at `http://192.168.1.155:53161`, headed Chromium 1440x900, UI index
 SHA256 `5a4fa7a61ebe601249639b9125dad31ccfec92122f05f6252b59d68c99f605a3`.

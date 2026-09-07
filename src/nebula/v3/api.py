@@ -1547,7 +1547,7 @@ def create_app(
         install_asyncio_exception_hook()
         started: list[tuple[str, str, Callable[[], Any]]] = []
         # Lazy startup is driven by opening the browser; Core still owns shutdown.
-        started.append(("browser", "managed-host", managed_browser_host.close))
+        started.append(("runtime", "managed-browser-host", managed_browser_host.close))
 
         async def start_component(
             feature: str,
