@@ -7667,6 +7667,7 @@ def create_app(
                 harness_session_id=request.harness_session_id,
                 mcp_server_ids=request.mcp_server_ids,
                 runtime_context=runtime_context,
+                context_attachments=[item.model_dump(mode="json") for item in request.context_attachments],
                 allow_remote_mcp=request.allow_cloud_tool_results,
                 include_knowledge=request.include_knowledge,
                 allow_cloud_knowledge=request.allow_cloud_knowledge,
@@ -8122,6 +8123,8 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    from .chat_results import results_router
+    app.include_router(results_router(store, artifact_store), prefix=API_PREFIX, dependencies=[Depends(require_auth)])
     from .chat_workspace import workspace_router
     app.include_router(workspace_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)])
 

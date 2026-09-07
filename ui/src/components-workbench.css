@@ -2406,3 +2406,13 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .assistant-search li span { display: block; overflow-wrap: anywhere; }
 .chat-message:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .chat-advanced-session { min-width: 0; }
+
+.assistant-drawer { background: var(--canvas); }
+.assistant-drawer pre, .assistant-attachment-dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; }
+.assistant-drawer nav, .assistant-attachment-dialog nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.assistant-attachment-dialog { max-height: 85dvh; overflow-y: auto; }
+.assistant-drawer li { overflow-wrap: anywhere; }
+@media (max-width: 1100px) {
+  .session-inspector.assistant-drawer { display: block; width: min(100%, 620px); max-height: 85dvh; overflow-y: auto; border: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
+  .assistant-drawer button, .assistant-attachment-dialog button { min-height: 44px; }
+}

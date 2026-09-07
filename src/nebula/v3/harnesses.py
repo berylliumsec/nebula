@@ -5722,6 +5722,7 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str] | None,
         title: str | None = None,
         runtime_context: str | None = None,
+        context_attachments: list[dict[str, Any]] | None = None,
         citations: list[ChatCitation] | None = None,
         allow_remote_mcp: bool = False,
         include_knowledge: bool = False,
@@ -6056,7 +6057,7 @@ class HarnessRuntimeService:
                     role=ChatRole.USER,
                     content=clean_prompt,
                     model=session.model,
-                    metadata={"harness_turn_id": harness_turn.id},
+                    metadata={"harness_turn_id": harness_turn.id, "context_attachments": context_attachments or []},
                 )
             )
         return chat, chat_turn, harness_turn

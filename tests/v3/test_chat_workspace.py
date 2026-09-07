@@ -61,3 +61,22 @@ def test_naming_waits_for_content_and_preserves_manual_titles(tmp_path):
     session = store.get(ChatSession, "s")
     assert should_name(session)
     assert not should_name(session.model_copy(update={"metadata": {"initial_title_state": "operator"}}))
+
+
+def test_results_only_project_owned_retained_sources(tmp_path):
+    from nebula.v3.chat_results import results_router
+    from nebula.v3.artifacts import ArtifactStore
+    from nebula.v3.knowledge import ingest_document
+    store, _ = workspace(tmp_path)
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    source = ingest_document(store=store, artifact_store=artifacts, engagement_id="p", filename="notes.txt", data=b"Exact source\nwith whitespace\n")
+    app = FastAPI(); app.include_router(results_router(store, artifacts))
+    client = TestClient(app, raise_server_exceptions=False)
+    preview = client.get(f"/chat/projects/p/sources/{source.id}/preview")
+    assert preview.status_code == 200, preview.text
+    assert "Exact source" in preview.json()["text"]
+    assert client.get(f"/chat/projects/other/sources/{source.id}/preview").status_code >= 400
+    store.create(ChatMessage(engagement_id="p", session_id="s", role="assistant", sequence=4, content="Example:\n```text\nretained code\n```"))
+    results = client.get("/chat/sessions/s/results").json()
+    assert results["items"][0]["text"] == "retained code\n"
+    assert results["items"][0]["artifact_id"] is None
