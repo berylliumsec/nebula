@@ -4901,7 +4901,9 @@ test("Light preserves each critical workspace hierarchy", async ({ page }) => {
 });
 
 test("audit every primary workspace view", async ({ page }, testInfo) => {
-  test.setTimeout(150_000);
+  // This journey renders 24 full-page captures; software WebKit needs a larger
+  // total budget while each interaction and geometry assertion stays unchanged.
+  test.setTimeout(testInfo.project.name.includes("webkit") ? 300_000 : 150_000);
   if (testInfo.project.name === "desktop") {
     await page.setViewportSize({ width: 1756, height: 1194 });
   }
