@@ -5,12 +5,15 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import os
+from contextlib import closing
 import re
 from dataclasses import dataclass
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 import keyring
+import secretstorage
+from keyring.backends.SecretService import Keyring
 from pydantic import SecretStr, field_validator
 
 from .domain import NebulaModel
@@ -215,6 +218,12 @@ class CredentialStore:
         if self.keyring_backend is None or not self.vault_available:
             return None
         try:
+            if (
+                type(self.keyring_backend).__module__
+                == "keyring.backends.SecretService"
+            ):
+                if isinstance(self.keyring_backend, Keyring):
+                    return self._secret_service_value(reference)
             return self.keyring_backend.get_password(
                 _SERVICE_NAME, reference.removeprefix("vault:")
             )
@@ -227,6 +236,32 @@ class CredentialStore:
                 stage="credentials",
             )
             return None
+
+    def _secret_service_value(self, reference: str) -> str | None:
+        """Read an existing Linux vault without ever prompting to unlock/create it.
+
+        Status is also called by async API endpoints. SecretService's ordinary
+        get_password can wait indefinitely for a desktop unlock prompt there.
+        Locked collections/items must instead report unavailable.
+        """
+        backend = self.keyring_backend
+        with closing(secretstorage.dbus_init()) as connection:
+            preferred = getattr(backend, "preferred_collection", None)
+            collection = (
+                secretstorage.Collection(connection, preferred)
+                if preferred is not None
+                else secretstorage.get_collection_by_alias(connection, "default")
+            )
+            if collection.is_locked():
+                return None
+            query = backend._query(  # type: ignore[union-attr]
+                _SERVICE_NAME, reference.removeprefix("vault:")
+            )
+            for item in collection.search_items(query):
+                if item.is_locked():
+                    return None
+                return item.get_secret().decode("utf-8")
+        return None
 
     @staticmethod
     def _validate_reference(reference: str) -> None:
