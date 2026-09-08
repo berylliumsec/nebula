@@ -5287,8 +5287,8 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
 });
 
 for (const degradedBrowserCore of [false, true]) {
-test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page }) => {
-  test.setTimeout(90000);
+test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page, browserName }) => {
+  test.setTimeout(browserName === "webkit" ? 180000 : 90000);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (degradedBrowserCore && path.endsWith("/health")) {
@@ -5368,7 +5368,12 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(page.getByLabel("Page viewport")).toBeHidden();
   await page.screenshot({ path: test.info().outputPath("quiet-browser.png") });
   await page.getByLabel("Browser address").fill("https://example.test/");
+  await page.getByRole("button", { name: "Resume assistant control", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Go", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Stop assistant control", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Resume assistant control", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("region", { name: "Browser context preview" })).toContainText("Save button");
   const contextPreview = page.getByRole("region", { name: "Browser context preview" });

@@ -141,7 +141,7 @@ describe("ManagedAssistantBrowser", () => {
     expect(onControlChange).toHaveBeenLastCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
-    fireEvent.click(screen.getByRole("button", { name: "Take control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
   });
   it("does not let an older control poll overwrite an explicit resume", async () => {
@@ -154,14 +154,16 @@ describe("ManagedAssistantBrowser", () => {
     await act(async () => { resolveControl({ paused: true }); await controlRead; });
     expect(onControlChange).toHaveBeenLastCalledWith(true);
   });
-  it("shows manual navigation takeover immediately after assistant control was resumed", async () => {
+  it("keeps the explicit grant through manual navigation until stopped", async () => {
     const { onControlChange } = fixture();
     await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await screen.findByRole("region", { name: "Browser context preview" });
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
-    expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeInTheDocument();
   });
   it("does not start a browser when the operator is using another workspace view", () => {
     const { request } = fixture(false);

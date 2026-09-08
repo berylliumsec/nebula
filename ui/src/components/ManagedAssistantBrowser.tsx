@@ -41,7 +41,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [mode, setMode] = useState<"browse" | "element" | "region">("browse");
   const [paused, setPaused] = useState(true);
   const controlRevision = useRef(0);
-  const recordTakeover = () => { controlRevision.current += 1; setPaused(true); };
   const [text, setText] = useState("");
   const [connected, setConnected] = useState(false);
   const [credentials, setCredentials] = useState<BrowserCredential[]>([]);
@@ -135,7 +134,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (!session || busy) return;
     setBusy(true); setError("");
     try {
-      if (operation !== "capture" && operation !== "tabs") recordTakeover();
       const next = await request<Capture>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId, page_revision: capture?.page_revision, ...extra });
       if (currentTabRef.current !== tabId) return;
       setCapture(next); if (operation === "navigate") addressEdited.current = false; if (!addressEdited.current) setAddress(next.url); return next;
@@ -146,7 +144,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (!session || busy) return;
     setBusy(true); setError("");
     try {
-      recordTakeover();
       const next = await request<Pick<Session, "tabs" | "active_tab_id">>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId });
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
       setSession({ ...session, ...next }); setTabs(next.tabs); setTabId(selected?.id ?? ""); addressEdited.current = false; setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? ""); setCapture(undefined);
@@ -171,7 +168,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     setBusy(true); setError("");
     try {
       const action = await request<Action>(`browser-companion/${session.session_id}/actions`, { operation: "upload", file_ref: fileRef, tab_id: tabId, page_revision: capture.page_revision, element_id: elementId, url: capture.url });
-      recordTakeover(); setActions(current => [...current.filter(item => item.status !== "pending"), action]);
+      setActions(current => [...current.filter(item => item.status !== "pending"), action]);
     } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { setBusy(false); }
   };
@@ -193,7 +190,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   };
   const send = (event: Record<string, unknown>) => {
     if (socket.current?.readyState !== WebSocket.OPEN) return;
-    recordTakeover(); socket.current.send(JSON.stringify(event));
+    socket.current.send(JSON.stringify(event));
   };
   const requiredActions = <>
     {actions.filter(action => action.status === "pending").map(action => <section className="managed-browser-approval" key={action.id} aria-label="Browser action approval">
@@ -225,7 +222,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture", { capture_kind: "selection" })} aria-label="Ask about selected text" title="Ask about selected text"><TextSelect size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" aria-pressed={mode === "element"} onClick={() => setMode(mode === "element" ? "browse" : "element")} aria-label="Pick element" title="Pick element"><MousePointer2 size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" disabled={!imageSupported} title={imageSupported ? "Select a visual region" : "Choose an image-capable Assistant model"} aria-pressed={mode === "region"} onClick={() => setMode(mode === "region" ? "browse" : "region")} aria-label="Select region"><Scan size={18} aria-hidden="true" /></button>
-      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Take control"} title={paused ? "Resume assistant control" : "Take control"} disabled={busy || !session} onClick={() => {
+      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={busy || !session} onClick={() => {
         if (!session) return;
         const nextPaused = !paused;
         const revision = ++controlRevision.current;
@@ -252,7 +249,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <label>Protected value to fill<select value={credentialRef} onChange={event => setCredentialRef(event.target.value)}><option value="">Choose a saved value</option>{credentials.map(item => <option key={item.reference} value={item.reference} disabled={!item.available}>{item.label}{item.available ? "" : " · expired; add again"}</option>)}</select></label>
       {credentials.map(item => <div key={item.reference}><span>{item.label}{item.available ? "" : " · expired"}</span><button className="button quiet" disabled={credentialBusy} onClick={() => { if (!session) return; setCredentialBusy(true);
         void request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials/${encodeURIComponent(item.reference)}`, undefined, "DELETE")
-          .then(next => { setCredentials(next); setCredentialRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setCredentialBusy(false)); }}>Remove {item.label}</button></div>)}
+          .then(next => { setCredentials(next); setCredentialRef(""); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setCredentialBusy(false)); }}>Remove {item.label}</button></div>)}
     </div></details>
     <details className="managed-browser-credentials"><summary title={`Files for this page (${files.length})`} aria-label={`Files for this page (${files.length})`}><Paperclip size={18} aria-hidden="true" /><span className="sr-only">Files for this page ({files.length})</span></summary><div className="managed-browser-utility-panel">
       <p>Choose a file from this device for a page upload. Files stay attached to this browser until removed. Up to eight files, 4 MiB each; the page receives bytes only after approval.</p>
@@ -261,7 +258,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <label>File to upload<select value={fileRef} onChange={event => setFileRef(event.target.value)}><option value="">Choose an attached file</option>{files.map(file => <option key={file.reference} value={file.reference}>{file.filename} · {file.size.toLocaleString()} bytes</option>)}</select></label>
       {files.map(file => <div key={file.reference}><span>{file.filename} · {file.size.toLocaleString()} bytes</span><button className="button quiet" disabled={fileBusy} onClick={() => { if (!session) return; setFileBusy(true);
         void request<BrowserFile[]>(`browser-companion/${session.session_id}/files/${encodeURIComponent(file.reference)}`, undefined, "DELETE")
-          .then(next => { setFiles(next); setFileRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setFileBusy(false)); }}>Remove {file.filename}</button></div>)}
+          .then(next => { setFiles(next); setFileRef(""); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setFileBusy(false)); }}>Remove {file.filename}</button></div>)}
     </div></details>
     </div>
     </div>

@@ -363,13 +363,21 @@ async def smoke(
                         json.dumps({"kind": "resize", "width": 390, "height": 844})
                     )
                     for _ in range(100):
-                        control = await client.get(endpoint + "/control")
-                        control.raise_for_status()
-                        if control.json()["paused"]:
+                        resized = json.loads(await asyncio.wait_for(stream.recv(), 10))
+                        if resized.get("kind") == "frame" and Image.open(
+                            BytesIO(base64.b64decode(resized["data"]))
+                        ).size == (390, 844):
                             break
-                        await asyncio.sleep(0.05)
                     else:
-                        raise RuntimeError("manual stream input did not take control")
+                        raise RuntimeError("manual resize did not reach the browser")
+                    control = await client.get(endpoint + "/control")
+                    control.raise_for_status()
+                    assert control.json()["paused"] is False
+                    stopped = await client.put(endpoint + "/control?paused=true")
+                    stopped.raise_for_status()
+                    assert (await client.get(endpoint + "/control")).json()[
+                        "paused"
+                    ] is True
                     async with connect(
                         stream_url,
                         subprotocols=["nebula.browser.v1", f"nebula.auth.{secret}"],
@@ -954,7 +962,7 @@ async def smoke(
                     "approved_scoped_file_upload": True,
                     "durable_binding_reopen": True,
                     "transport": "Core loopback HTTP and WebSocket to browserd loopback HTTP and WebSocket",
-                    "frame_relay_and_takeover": True,
+                    "frame_relay_persistent_grant_and_explicit_stop": True,
                     "concurrent_viewer_disconnect": True,
                     "stream_touch_and_keyboard": True,
                     "stream_touch_scroll": True,
