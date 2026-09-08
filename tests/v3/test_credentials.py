@@ -168,3 +168,59 @@ def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_pat
         assert removed.status_code == 204
 
     assert b"never-persist-this" not in database_path.read_bytes()
+
+
+@pytest.mark.parametrize(
+    "collection_locked,item_locked,expected",
+    [
+        (True, False, None),
+        (False, True, None),
+        (False, False, "test-secret"),
+    ],
+)
+def test_linux_vault_reads_never_prompt(
+    monkeypatch, collection_locked, item_locked, expected
+):
+    import secretstorage
+    from keyring.backends.SecretService import Keyring
+
+    class Connection:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class Item:
+        def is_locked(self):
+            return item_locked
+
+        def unlock(self):
+            pytest.fail("must not prompt to unlock an item")
+
+        def get_secret(self):
+            assert not item_locked
+            return b"test-secret"
+
+    class Collection:
+        def is_locked(self):
+            return collection_locked
+
+        def unlock(self):
+            pytest.fail("must not prompt to unlock a collection")
+
+        def search_items(self, query):
+            assert not collection_locked
+            return [Item()]
+
+    connection = Connection()
+    monkeypatch.setattr(secretstorage, "dbus_init", lambda: connection)
+    monkeypatch.setattr(
+        secretstorage, "get_collection_by_alias", lambda *_: Collection()
+    )
+    monkeypatch.setattr(
+        Keyring, "get_password", lambda *_: pytest.fail("interactive read used")
+    )
+    monkeypatch.setattr(CredentialStore, "vault_available", property(lambda _: True))
+    store = CredentialStore(Keyring())
+    assert store._vault_value("vault:" + "a" * 32) == expected
+    assert connection.closed
