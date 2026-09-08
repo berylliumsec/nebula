@@ -34,11 +34,32 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
   const onContext = vi.fn(); const onConversation = vi.fn();
   const onControlChange = vi.fn();
   const api = { request, openBrowserCompanionStream: vi.fn(() => connection) } as unknown as ApiClient;
-  render(<ManagedAssistantBrowser api={api} projectId="project-1" active={active} onConversation={onConversation} onContext={onContext} onControlChange={onControlChange} onImage={vi.fn()} imageSupported={false} />);
-  return { request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; } };
+  const props = { api, projectId: "project-1", active, onConversation, onContext, onControlChange, onImage: vi.fn(), imageSupported: false };
+  const view = render(<ManagedAssistantBrowser {...props} />);
+  return { setControlsOpen: (controlsOpen: boolean) => view.rerender(<ManagedAssistantBrowser {...props} controlsOpen={controlsOpen} />), request, onContext, onConversation, connection, onControlChange, navigate: (url: string) => { liveTab = { ...liveTab, url, title: "Navigated page" }; } };
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("hides chrome without losing the address draft, captured context or browser stream", async () => {
+    const { setControlsOpen, connection } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Ask about page" }));
+    await screen.findByText("Selected page content");
+    fireEvent.change(screen.getByLabelText("Browser address"), { target: { value: "https://draft.test/" } });
+    setControlsOpen(false);
+    expect(screen.getByLabelText("Browser address")).not.toBeVisible();
+    expect(screen.getByRole("region", { name: "Browser context preview" })).toBeVisible();
+    expect(connection.close).not.toHaveBeenCalled();
+    setControlsOpen(true);
+    expect(screen.getByLabelText("Browser address")).toHaveValue("https://draft.test/");
+  });
+  it("keeps connection failure and recovery reachable with chrome hidden", async () => {
+    const { setControlsOpen } = fixture(true, true);
+    await screen.findByRole("alert");
+    setControlsOpen(false);
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reconnect view" })).toBeVisible();
+  });
   it("refreshes live tab metadata without replacing historical context or unsent addresses", async () => {
     const { navigate, connection } = fixture();
     await waitFor(() => expect(screen.getByLabelText("Browser address")).toHaveValue("https://example.test/"));
