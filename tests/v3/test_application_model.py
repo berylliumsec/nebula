@@ -16,8 +16,7 @@ from nebula.v3.application_model.solver import solve, isolated_solve
 
 
 @pytest.fixture
-def model(tmp_path, monkeypatch):
-    monkeypatch.setenv("NEBULA_APPLICATION_MODEL", "1")
+def model(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     project = store.create(Engagement(name="Recorded model"))
     identity = store.create(BrowserIdentity(engagement_id=project.id, name="Reader"))
@@ -69,7 +68,7 @@ def test_projection_deduplicates_history_and_retains_branches(model):
     assert service.store.get(BrowserTrafficExchange, first.id).status_code == 200
 
 
-def test_pause_and_disable(model, monkeypatch):
+def test_pause_and_resume(model):
     service, project, browser, collection = model
     service.transition(project.id, collection.id, "paused")
     exchange(service, project, browser, status_code=200)
@@ -77,10 +76,6 @@ def test_pause_and_disable(model, monkeypatch):
     assert not service.workspace(project.id, collection.id)["states"]
     service.transition(project.id, collection.id, "active")
     service.import_history(project.id, collection.id)
-    monkeypatch.delenv("NEBULA_APPLICATION_MODEL")
-    service.process_batch()
-    assert not service.workspace(project.id, collection.id)["states"]
-    monkeypatch.setenv("NEBULA_APPLICATION_MODEL", "1")
     service.process_batch()
     assert len(service.workspace(project.id, collection.id)["states"]) == 1
 

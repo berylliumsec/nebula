@@ -1067,11 +1067,11 @@ class BrowserToolPlatform:
             specs={broker.spec.name: broker.spec},
             runtime_digest="browser-native-v1",
         )
-        from .application_model.ingestion import enabled
-        if enabled():
-            from .application_model.tools import components
-            return combine_tool_components(result, components(self.store, session, scope, workspace))
-        return result
+        from .application_model.tools import components
+
+        return combine_tool_components(
+            result, components(self.store, session, scope, workspace)
+        )
 
 
 def combine_tool_components(

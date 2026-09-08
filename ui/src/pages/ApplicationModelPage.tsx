@@ -14,7 +14,7 @@ type Version = { id: string; object_id: string; properties: Record<string, Value
 type Formula = { op: string; field?: string; value?: string | number | boolean; args?: Formula[]; values?: unknown[] };
 type Query = { id: string; state_id: string; status: string; formula: Formula; assertion_ids: string[]; result?: string; base_result?: string; error?: string; assignments: Record<string, unknown>; unsat_core: string[] };
 type Workspace = { session: Collection; projection_errors?: string[]; states: State[]; observations: Observation[]; objects: { id: string; label: string }[]; object_versions: Version[]; assertions: { id: string; subject: string; predicate: string; support: string; lifecycle: string; formula?: unknown }[]; queries: Query[] };
-type Status = { enabled: boolean; solver_available: boolean; pending_count: number };
+type Status = { solver_available: boolean; pending_count: number };
 
 function browserSource(project: string | undefined, browser: string, observation: Observation) {
   const query = new URLSearchParams({ view: "browser", browserSession: browser });
@@ -122,8 +122,7 @@ export function ApplicationModelPage() {
     <PageHeader title="Application model" description="Recorded knowledge, evidence, and constraint analysis." />
     {(error || loadError) && <div role="alert"><p>{error || loadError}</p><button className="button" onClick={() => { setError(""); void load().catch(e => setLoadError(String(e))); }}>Retry</button>{collection && <button className="button" onClick={() => select("collection", "")}>Return to collections</button>}</div>}
     {!status && !error && !loadError && <p role="status">Loading application model…</p>}
-    {status && !status.enabled && <section className="panel model-section"><h2>Application model is disabled</h2><p>Your existing browser records remain available. Enable the Application Model feature on Core to collect states and run queries.</p></section>}
-    {status?.enabled && <>
+    {status && <>
       <section className="panel model-section"><h2>Collections</h2>
         <label>Collection<select value={collection} onChange={e => select("collection", e.target.value)}><option value="">Choose a collection</option>{sessions.map(s => <option key={s.id} value={s.id}>{browsers.find(b => b.id === s.browser_session_id)?.name ?? "Browser collection"} · {s.status} · {s.processed_count} records</option>)}</select></label>
         <form onSubmit={async e => { e.preventDefault(); const result = await mutate("/sessions", { browser_session_id: browser || browsers[0]?.id, import_history: history }); if (result?.id) select("collection", result.id); }}>

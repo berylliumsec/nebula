@@ -23,7 +23,7 @@ from .domain import (
     Value,
     semantic_hash,
 )
-from .ingestion import enabled, SOURCE_KINDS, envelope, enqueue_envelope
+from .ingestion import SOURCE_KINDS, envelope, enqueue_envelope
 from .solver import isolated_solve
 
 
@@ -36,7 +36,6 @@ class ApplicationModelService:
         self.solver_slots = asyncio.Semaphore(2)
 
     def retry_projection(self, project, collection):
-        self.check_enabled()
         self.get(ModelSession, project, collection)
         with self.store.database.session() as db:
             db.execute(
@@ -49,12 +48,6 @@ class ApplicationModelService:
                 .values(attempts=0, error=None)
             )
         return {"retry_scheduled": True}
-
-    def check_enabled(self):
-        if not enabled():
-            raise ValueError(
-                "Application model is disabled. Enable NEBULA_APPLICATION_MODEL on Core."
-            )
 
     def get(self, model, project, identifier, collection=None):
         item = self.store.get(model, identifier)
@@ -85,7 +78,6 @@ class ApplicationModelService:
             return [model.model_validate(x) for x in rows]
 
     def create(self, project, browser_session_id, import_history=False):
-        self.check_enabled()
         self.store.get(Engagement, project)
         self.get(BrowserSession, project, browser_session_id)
         item = self.store.create(
@@ -96,7 +88,6 @@ class ApplicationModelService:
         return item
 
     def import_history(self, project, collection):
-        self.check_enabled()
         session = self.get(ModelSession, project, collection)
         if session.status != "active":
             raise ValueError("Resume this collection before importing history")
@@ -128,7 +119,6 @@ class ApplicationModelService:
                 )
             )
         return {
-            "enabled": enabled(),
             "solver_available": importlib.util.find_spec("z3") is not None,
             "pending_count": lag,
         }
@@ -159,7 +149,6 @@ class ApplicationModelService:
         return result
 
     def transition(self, project, collection, status):
-        self.check_enabled()
         item = self.get(ModelSession, project, collection)
         return self.store.update(
             ModelSession, item.id, {"status": status}, expected_revision=item.revision
@@ -441,8 +430,6 @@ class ApplicationModelService:
             row.attempts += 1
 
     def process_batch(self):
-        if not enabled():
-            return
         with self.store.database.session() as db:
             ids = list(
                 db.scalars(
@@ -504,7 +491,6 @@ class ApplicationModelService:
         }
 
     def propose(self, project, collection, proposal):
-        self.check_enabled()
         self.get(ModelSession, project, collection)
         self.get(Object, project, proposal.subject, collection)
         for identifier in proposal.evidence_ids:
@@ -548,7 +534,6 @@ class ApplicationModelService:
         }
 
     async def submit(self, project, collection, request):
-        self.check_enabled()
         if len(self.queries) >= 16:
             raise ValueError("Solver queue is full; wait for a query to finish")
         self.get(ModelSession, project, collection)

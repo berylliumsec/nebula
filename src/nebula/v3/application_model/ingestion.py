@@ -1,6 +1,5 @@
 """Transaction-local, allowlisted observation envelopes from existing records."""
 
-import os
 from urllib.parse import urlsplit, urlunsplit
 from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
@@ -18,10 +17,6 @@ SOURCE_KINDS = frozenset(
         "evidence",
     }
 )
-
-
-def enabled():
-    return os.environ.get("NEBULA_APPLICATION_MODEL", "").lower() in {"1", "true"}
 
 
 def envelope(kind, payload, connection=None):
@@ -144,7 +139,7 @@ def envelope(kind, payload, connection=None):
 
 
 def enqueue_source(connection, entity):
-    if not enabled() or entity.entity_kind not in SOURCE_KINDS:
+    if entity.entity_kind not in SOURCE_KINDS:
         return
     payload = entity.model_dump(mode="json")
     data = envelope(entity.entity_kind, payload, connection)

@@ -44,6 +44,7 @@ import {
   MessageSquareQuote,
   Minimize2,
   MoreHorizontal,
+  Network,
   NotebookPen,
   PanelLeftClose,
   PanelRight,
@@ -59,7 +60,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type {
@@ -137,7 +138,7 @@ import {
 } from "./chatFollowUpStorage";
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
-type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
+type SessionView = "chat" | "code" | "terminal" | "browser" | "model" | "missions" | "activity" | "workspace" | "notes";
 const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
 
@@ -395,6 +396,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
 
 export function SessionsPage() {
   const confirm = useConfirmation();
+  const navigate = useNavigate();
   const {
     assistantDraftNotice,
     assistantDrafts,
@@ -420,6 +422,10 @@ export function SessionsPage() {
         : "terminal";
   const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "browser" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
   const setView = (next: SessionView) => {
+    if (next === "model") {
+      if (engagement) navigate(`/projects/${encodeURIComponent(engagement.id)}/application-model`);
+      return;
+    }
     setViewState(next);
     const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", next);
@@ -3192,6 +3198,7 @@ export function SessionsPage() {
           { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
           { id: "browser", label: "Browser", ariaLabel: "Project browser", icon: <Globe2 size={16} /> },
+          { id: "model", label: "Model", ariaLabel: "Application model", icon: <Network size={16} /> },
           { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", icon: <MessageSquare size={16} /> },
           { id: "workspace", label: "Files", ariaLabel: "Workspace files", icon: <FolderOpen size={16} /> },
           { id: "notes", label: "Notes", ariaLabel: "Project notes", icon: <NotebookPen size={16} /> },
@@ -3385,7 +3392,7 @@ export function SessionsPage() {
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>
         <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><GitFork size={19} aria-hidden="true" /><span>Conversations</span></button>
         <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><FileClock size={19} aria-hidden="true" /><span>Activity</span></button>
-        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
+        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser", "model"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
       </nav>
       {mobileMoreOpen && <div className="mobile-more-backdrop">
         <button className="mobile-more-scrim" type="button" aria-label="Close more workbench views" onClick={() => setMobileMoreOpen(false)} />
@@ -3399,6 +3406,7 @@ export function SessionsPage() {
               ["terminal", "Terminal", SquareTerminal, "Use the project terminal"],
               ["code", "Code", Braces, "Edit project files"],
               ["browser", "Browser", Globe2, "Open the project browser"],
+              ["model", "Model", Network, "Inspect recorded application states"],
             ] as const).map(([nextView, label, Icon, detail]) => <button type="button" aria-current={view === nextView ? "page" : undefined} key={nextView} onClick={() => { setView(nextView); setMobileMoreOpen(false); }}><span><Icon size={20} aria-hidden="true" /></span><span><strong>{label}</strong><small>{detail}</small></span></button>)}
           </div>
           <footer>

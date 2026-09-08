@@ -5381,15 +5381,7 @@ class HarnessRuntimeService:
         include_browser = include_browser or bool(
             snapshot and snapshot.get("browser_runtime_enabled") is True
         )
-        from .application_model.ingestion import enabled as application_model_enabled
-
-        include_application_model = application_model_enabled()
-        if (
-            self.automation_tool_platform is None
-            and not include_browser
-            and not include_application_model
-        ):
-            return None, None
+        application_model_available = False
         if snapshot is not None:
             if snapshot.get("schema") != "nebula.harness-command-runtime/v1":
                 raise HarnessConfigurationError(
@@ -5422,17 +5414,13 @@ class HarnessRuntimeService:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
-            if include_application_model:
-                engagement = self.store.get(Engagement, engagement_id)
-                scope = (
-                    self.store.get(ScopePolicy, engagement.scope_policy_id)
-                    if engagement.scope_policy_id is not None
-                    else None
-                )
-                if scope is None or scope.engagement_id != engagement_id:
-                    raise HarnessConfigurationError(
-                        "Project scope is required for application-model MCP tools"
-                    )
+            engagement = self.store.get(Engagement, engagement_id)
+            scope = (
+                self.store.get(ScopePolicy, engagement.scope_policy_id)
+                if engagement.scope_policy_id is not None
+                else None
+            )
+            if scope is not None and scope.engagement_id == engagement_id:
                 from .application_model.tools import project_components
 
                 model_components = project_components(
@@ -5445,6 +5433,7 @@ class HarnessRuntimeService:
                     components = model_components
                 else:
                     components = combine_tool_components(components, model_components)
+                application_model_available = True
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
                 return None, None
@@ -5459,12 +5448,12 @@ class HarnessRuntimeService:
                 "could not resolve the harness command runtime: " + _safe_error(exc)
             ) from exc
         if components is None:
-            raise HarnessConfigurationError("harness command runtime is unavailable")
+            return None, None
         resolved = self._oci_snapshot(components)
         if include_browser:
             resolved["browser_runtime_enabled"] = True
-        if include_application_model:
-            resolved["application_model_enabled"] = True
+        if application_model_available:
+            resolved["application_model_runtime"] = "v1"
         if snapshot is not None and resolved != snapshot:
             raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"
@@ -6900,13 +6889,18 @@ class HarnessRuntimeService:
                     session.id,
                     {
                         "metadata": {
-                            **session.metadata,
+                            **{
+                                key: value
+                                for key, value in session.metadata.items()
+                                if key != "command_runtime_snapshot"
+                            },
                             "browser_runtime_enabled": True,
                             "command_runtime_enabled": True,
                         }
                     },
                     expected_revision=session.revision,
                 )
+                self._gateway_oci_components.pop(session.id, None)
         forked_from_session_id: str | None = None
         if self.session_activity(session.id).busy:
             forked_from_session_id = session.id

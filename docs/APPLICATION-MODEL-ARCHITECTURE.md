@@ -9,7 +9,8 @@ extensions; V1 never dispatches a generated interaction.
 
 ### Implemented V1 decisions
 
-- Enable collection with `NEBULA_APPLICATION_MODEL=1` on Core; default is off.
+- The application model is an always-available project capability. Branch isolation
+  is the rollout boundary; Core does not use a runtime feature flag.
 - Use the existing Core entity repository and the additive
   `application_model_outbox` migration. The source transaction writes a bounded
   projection envelope; retries and historical import share the same adapter.

@@ -10,8 +10,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import Engagement, ScopePolicy, BrowserSession
 
 
-def test_browser_capture_to_state_to_query_survives_reload(tmp_path, monkeypatch):
-    monkeypatch.setenv("NEBULA_APPLICATION_MODEL", "1")
+def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(
         store,
@@ -19,7 +18,9 @@ def test_browser_capture_to_state_to_query_survives_reload(tmp_path, monkeypatch
         auth_token="test-token",
     )
     auth = {"Authorization": "Bearer test-token"}
-    assert not any(path.startswith("/api/v1/application-model-") for path in app.openapi()["paths"])
+    assert not any(
+        path.startswith("/api/v1/application-model-") for path in app.openapi()["paths"]
+    )
     with TestClient(app) as client:
         project = client.post(
             "/api/v1/engagements", headers=auth, json={"name": "Model fixture"}

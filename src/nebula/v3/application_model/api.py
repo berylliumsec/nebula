@@ -146,14 +146,12 @@ def model_router(service):
 
     @router.post("/sessions/{collection}/assertions")
     def propose(project: str, collection: str, request: AssertionRequest):
-        service.check_enabled()
         return service.propose(project, collection, request)
 
     @router.post("/sessions/{collection}/states/{state}/fork")
     def fork(project: str, collection: str, state: str, request: ForkRequest):
         from .domain import Assertion
 
-        service.check_enabled()
         original = service.get(KnowledgeState, project, state, collection)
         assertion_hashes = []
         for identifier in request.assertion_ids:

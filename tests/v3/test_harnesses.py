@@ -826,7 +826,9 @@ def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
         assert set(run.metadata["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
         frozen = run.runtime_snapshot["command_runtime_snapshot"]
         assert frozen["browser_runtime_enabled"] is True
-        assert set(frozen["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
+        assert set(AUTONOMOUS_BROWSER_TOOLS).issubset(frozen["tool_names"])
+        assert frozen["application_model_runtime"] == "v1"
+        assert any(name.endswith("model.get_updates") for name in frozen["tool_names"])
         status = platform.automation.status(engagement.id, run_id=run.id)
         assert status.leases[0].session_id == session.id
         assert status.leases[0].scope_policy_revision == scope.revision
@@ -1560,12 +1562,11 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
     asyncio.run(scenario())
 
 
-def test_harness_mcp_exposes_project_application_model(tmp_path, monkeypatch):
+def test_harness_mcp_exposes_project_application_model(tmp_path):
     async def scenario() -> None:
         from nebula.v3.application_model.service import ApplicationModelService
         from nebula.v3.domain import BrowserIdentity, BrowserSession
 
-        monkeypatch.setenv("NEBULA_APPLICATION_MODEL", "1")
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
         scope = store.create(ScopePolicy(engagement_id=engagement.id))
         engagement = store.update(

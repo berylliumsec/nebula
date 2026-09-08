@@ -3,7 +3,7 @@
 Worktree: `/home/agent/nebula-hypothesis-graph`
 
 Branch: `codex/hypothesis-graph`
-Feature flag: `NEBULA_APPLICATION_MODEL=1` on Core (disabled by default).
+Availability: always on in this branch; no runtime feature flag.
 
 ## Delivered implementation
 
@@ -145,9 +145,10 @@ This is **partially verified**, not an unqualified release-completion claim.
 
 On 2026-09-08 the operator requested a branch push and live deployment. Commit
 `7b47d8c` was deployed from the immutable checkout
-`/home/agent/nebula-live-7b47d8c`. The user service has
-`NEBULA_APPLICATION_MODEL=1`, uses that checkout for `PYTHONPATH` and static
-assets, and runs Z3 4.16.0 from the shared Nebula virtual environment.
+`/home/agent/nebula-live-7b47d8c`. The user service uses that checkout for
+`PYTHONPATH` and static assets, and runs Z3 4.16.0 from the shared Nebula virtual
+environment. The next branch deployment removes the former environment gate;
+branch isolation is the rollout boundary.
 
 Before restart, SQLite online backup
 `~/.local/share/nebula/v3/backups/pre-7b47d8c-20260908.db` passed

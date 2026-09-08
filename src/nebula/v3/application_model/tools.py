@@ -99,7 +99,6 @@ class ModelBroker:
         }
 
     async def execute(self, invocation, scope, *, approval=None):
-        self.service.check_enabled()
         if (
             invocation.engagement_id != self.engagement_id
             or scope.engagement_id != invocation.engagement_id
