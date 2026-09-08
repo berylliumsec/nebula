@@ -4716,7 +4716,11 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   }
 
   if (testInfo.project.name !== "desktop") {
-    await expect(page).toHaveScreenshot("workbench-zero-dark-responsive.png", { fullPage: true });
+    await expect(page).toHaveScreenshot("workbench-zero-dark-responsive.png", {
+      fullPage: true,
+      mask: [page.locator(".top-bar-public-ip")],
+      maskColor: "#11161c",
+    });
   }
 
   const persistentSurface = mobile ? page.locator(".sessions-page") : page.locator(".persistent-terminal");

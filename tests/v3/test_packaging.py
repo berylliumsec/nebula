@@ -123,12 +123,17 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_depl
     continuous_integration = (ROOT / ".github/workflows/ci.yml").read_text(
         encoding="utf-8"
     )
+    playwright_impact = (ROOT / ".github/workflows/playwright-impact.yml").read_text(
+        encoding="utf-8"
+    )
     command = "python -m scripts.stage_playwright_runtime"
     assert command in release
     assert command not in continuous_integration
-    assert "full-e2e:" in release
-    assert "needs: [validate, full-e2e]" in release
-    assert "npm --prefix ui run test:e2e" in release
+    assert "impact-baseline:" in release
+    assert "sandbox-integration:" in release
+    assert "playwright:" in release
+    assert "needs: [validate, impact-baseline, sandbox-integration, playwright]" in release
+    assert "npm --prefix ui run test:e2e" in playwright_impact
     assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
     assert "--dump-dom about:blank" in release
