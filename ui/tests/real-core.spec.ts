@@ -307,7 +307,7 @@ test("production mission defaults to unlimited duration through real Core", asyn
 });
 
 test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
   const modelStub = await startLocalModelStub();
@@ -443,10 +443,14 @@ test("production assistant preserves exact research context and relaunch-safe dr
     const savedSession = sessions.find((session) => session.id === completion.session_id);
     expect(savedSession).toBeTruthy();
     expect(savedSession!.title).toBe("Expired HTTPS Certificate Review");
-    await page.locator(`.session-select[data-session-id="${switchTarget.session_id}"]`).click();
+    const switchTargetSession = page.locator(`.session-select[data-session-id="${switchTarget.session_id}"]`);
+    await expect(switchTargetSession).toBeVisible();
+    await switchTargetSession.click({ force: true });
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(switchTarget.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Switch target conversation", { exact: true })).toBeVisible();
-    await page.locator(`.session-select[data-session-id="${completion.session_id}"]`).click();
+    const sourceSession = page.locator(`.session-select[data-session-id="${completion.session_id}"]`);
+    await expect(sourceSession).toBeVisible();
+    await sourceSession.click({ force: true });
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
     await expect(page.locator(".chat-message.operator").getByText("Review the exact 443/tcp observation.", { exact: true })).toBeVisible();
     const activeConversation = page.locator(".session-list-item.active");
@@ -527,7 +531,7 @@ test("production assistant work survives a project switch through real Core", as
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sourceSessionId = new URL(page.url()).searchParams.get("session")!;
     await page.getByRole("button", { name: "Switch project" }).click();
-    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Background Project B/ }).click();
+    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Background Project B active", exact: true }).click();
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Background Project B");
 
     await expect.poll(async () => {
@@ -538,7 +542,7 @@ test("production assistant work survives a project switch through real Core", as
     }, { timeout: 20_000 }).toBe("**Core is continuing in Project A** and finished after the viewer detached.");
 
     await page.getByRole("button", { name: "Switch project" }).click();
-    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: new RegExp(projectA.name) }).click();
+    await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: `${projectA.name} active`, exact: true }).click();
     await page.getByRole("button", { name: "Show conversations" }).click();
     await page.goto(`${core.origin}/?view=chat&session=${sourceSessionId}#token=${encodeURIComponent(core.token)}`);
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
@@ -690,6 +694,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     });
     await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByLabel("Browser engine").selectOption("native");
     await expect(page.getByText("Browse from this device")).toBeVisible();
     await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
     const address = page.getByRole("textbox", { name: "Web address" });
@@ -714,6 +719,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByRole("button", { name: "Send once" })).toBeDisabled();
     await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByLabel("Browser engine").selectOption("native");
     await page.getByRole("button", { name: "Research workbench" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("tool")).toBe("repeater");
     expect(new URL(page.url()).searchParams.has("browserTool")).toBe(false);

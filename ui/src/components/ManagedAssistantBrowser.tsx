@@ -206,7 +206,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     {actions.filter(action => action.status === "failed").slice(0, 3).map(action => <section className="managed-browser-approval" role="alert" key={action.id}><strong>Could not complete {action.request.operation}</strong><p>The page or attached file may have changed. Capture fresh context and request a new action; this action will not be replayed.</p><button className="button quiet" disabled={busy} onClick={() => void operate("capture")}>Capture current page</button></section>)}
   </>;
   return <section className="managed-assistant-browser" aria-label="Shared Chromium browser">
-    <div id="managed-browser-controls" className="managed-browser-controls" hidden={!controlsOpen}>
+    <div id="managed-browser-controls" className="managed-browser-controls" hidden={!controlsOpen} data-selection-actions-disabled>
     <form className="managed-browser-toolbar managed-browser-navigation" onSubmit={(event) => { event.preventDefault(); void operate("navigate", { url: address }); }}>
       <select aria-label="Browser tab" value={tabId} onChange={(event) => { setTabId(event.target.value); if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(event.target.value)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught)); setCapture(undefined); addressEdited.current = false; setAddress(tabs.find(tab => tab.id === event.target.value)?.url ?? ""); }}>
         {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.title || "New tab"}</option>)}

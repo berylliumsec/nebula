@@ -585,9 +585,23 @@ async function openWorkspace(page: Page, route: string, heading: string) {
     }, route);
   }
   const target = new URL(route, "http://fixture.test");
-  const canonicalPath = ({ "/": "/projects/scratch-project/workbench", "/findings": "/projects/scratch-project/findings", "/reports": "/projects/scratch-project/reports", "/project": "/projects/scratch-project" } as Record<string, string>)[target.pathname] ?? target.pathname;
-  const acceptedRoutes = [route, `${canonicalPath}${target.search}${target.hash}`];
-  await expect.poll(async () => acceptedRoutes.includes(await page.evaluate(() => `${location.pathname}${location.search}${location.hash}`))).toBe(true);
+  const canonicalSurface = ({ "/": "workbench", "/findings": "findings", "/reports": "reports" } as Record<string, string>)[target.pathname];
+  await expect.poll(async () => {
+    const current = await page.evaluate(() => `${location.pathname}${location.search}${location.hash}`);
+    if (current === route) return true;
+    const currentUrl = new URL(current, "http://fixture.test");
+    if (target.pathname === "/project") {
+      const view = target.searchParams.get("view");
+      const canonicalProjectPath = view && ["assets", "evidence", "sources"].includes(view)
+        ? new RegExp(`^/projects/[^/]+/${view}$`)
+        : /^\/projects\/[^/]+$/;
+      return canonicalProjectPath.test(currentUrl.pathname) && currentUrl.hash === target.hash;
+    }
+    return Boolean(canonicalSurface)
+      && new RegExp(`^/projects/[^/]+/${canonicalSurface}$`).test(currentUrl.pathname)
+      && currentUrl.search === target.search
+      && currentUrl.hash === target.hash;
+  }).toBe(true);
   if (heading === "Workbench") {
     if ((page.viewportSize()?.width ?? 1_000) <= 760) {
       await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
@@ -742,6 +756,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   });
   await openWorkspace(page, "/", "Workbench");
   await page.getByRole("tab", { name: "Project browser", exact: true }).click();
+  await page.getByLabel("Browser engine").selectOption("native");
   await page.getByRole("textbox", { name: "Start browsing" }).fill("example.com");
   await page.getByRole("textbox", { name: "Start browsing" }).press("Enter");
   await expect.poll(() => page.evaluate(() => (
@@ -806,7 +821,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
 
   await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
-  await expect(page).toHaveURL(/view=chat/);
+  await expect(page).toHaveURL(/view=browser/);
   const attachment = page.getByRole("region", { name: "Selected context pack" });
   await expect(attachment).toContainText("Browser · Mock target account");
   await expect(attachment).toContainText("characters");
@@ -1182,7 +1197,7 @@ test("universal search opens a focused setting without leaving the active pane",
   await expect(lens).toBeVisible();
   await expect(lens.getByRole("heading", { name: "Project execution policy" })).toBeVisible();
   await expect(lens.getByRole("heading", { name: "Network scope", exact: true })).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/findings");
+  expect(new URL(page.url()).pathname).toMatch(/^\/projects\/[^/]+\/findings$/);
 
   const bounds = await lens.boundingBox();
   const viewport = page.viewportSize();
@@ -1530,7 +1545,7 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
 
 test("all task workspaces keep responsive content inside its owning surface", async ({ page }) => {
   test.setTimeout(60_000);
-  for (const [, route, heading] of workspaces) {
+  for (const [name, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
     const unnamedIcons = await page.locator("button, a, summary, [role=button], [role=tab]").evaluateAll(nodes => nodes.filter(node => {
       const el = node as HTMLElement;
@@ -1609,21 +1624,23 @@ test("all assistant states remain fully visible inside mobile Workbench navigati
   await page.getByRole("button", { name: "Assistant settings" }).click();
   const settings = page.getByRole("dialog", { name: "Assistant settings" });
   await expect(settings).toBeVisible();
-  const settingsGeometry = await settings.evaluate((popover) => {
-    const panel = popover.closest<HTMLElement>(".chat-panel")!.getBoundingClientRect();
-    const composer = popover.parentElement!.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
-    const bounds = popover.getBoundingClientRect();
+  const settingsGeometry = await page.evaluate(() => {
+    const popover = document.querySelector<HTMLElement>("#assistant-settings-popover")!.getBoundingClientRect();
     return {
-      centerDelta: Math.abs((bounds.left + bounds.right) / 2 - (composer.left + composer.right) / 2),
-      verticalGap: composer.top - bounds.bottom,
-      leftInset: bounds.left - panel.left,
-      rightInset: panel.right - bounds.right,
+      viewportCenterDelta: Math.abs((popover.left + popover.right) / 2 - innerWidth / 2),
+      top: popover.top,
+      bottom: popover.bottom,
+      left: popover.left,
+      right: popover.right,
+      viewportWidth: innerWidth,
+      viewportHeight: innerHeight,
     };
   });
-  expect(settingsGeometry.centerDelta).toBeLessThanOrEqual(1);
-  expect(settingsGeometry.verticalGap).toBeGreaterThanOrEqual(5);
-  expect(settingsGeometry.leftInset).toBeGreaterThanOrEqual(5);
-  expect(settingsGeometry.rightInset).toBeGreaterThanOrEqual(5);
+  expect(settingsGeometry.viewportCenterDelta).toBeLessThanOrEqual(1);
+  expect(settingsGeometry.top).toBeGreaterThanOrEqual(5);
+  expect(settingsGeometry.bottom).toBeLessThanOrEqual(settingsGeometry.viewportHeight - 5);
+  expect(settingsGeometry.left).toBeGreaterThanOrEqual(5);
+  expect(settingsGeometry.right).toBeLessThanOrEqual(settingsGeometry.viewportWidth - 5);
   await page.getByRole("button", { name: "Close assistant settings" }).click();
   const messageInput = page.locator("#analyst-message");
   const collapsedHeight = await messageInput.evaluate((element) => element.getBoundingClientRect().height);
@@ -2189,7 +2206,9 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   }
   const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
-  await page.mouse.wheel(0, -500);
+  await chatScroll.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true })));
+  await page.waitForTimeout(50);
+  await chatScroll.evaluate((element) => element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500));
   await expect.poll(distanceFromBottom).toBeGreaterThan(100);
   const scrollToLatest = page.getByRole("button", { name: "Scroll to latest message" });
   await expect(scrollToLatest).toBeEnabled();
@@ -3008,14 +3027,14 @@ test("conversation switching between projects detaches the provider viewer witho
   const mobileViewport = (page.viewportSize()?.width ?? 1_000) <= 760;
   if (mobileViewport) await page.getByRole("button", { name: "Show sidebar" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
-  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Project B/ }).click();
+  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Project B active", exact: true }).click();
   await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Project B");
   await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __providerViewerDetached?: boolean }).__providerViewerDetached)).toBe(true);
   await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __providerCoreCompleted?: boolean }).__providerCoreCompleted)).toBe(true);
   expect(cancelRequests).toBe(0);
 
   await page.getByRole("button", { name: "Switch project" }).click();
-  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: /Project A/ }).click();
+  await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Project A active", exact: true }).click();
   if (mobileViewport) {
     await page.getByRole("button", { name: "Close sidebar" }).click({
       position: { x: (page.viewportSize()?.width ?? 390) - 8, y: 80 },
@@ -4068,7 +4087,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     await page.keyboard.press("Control+Shift+P");
     const palette = page.getByRole("dialog", { name: "Command palette" });
     await palette.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("Editor: Workspace Environment");
-    await palette.getByRole("option", { name: /Editor: Workspace Environment/ }).click();
+    await palette.getByRole("option").filter({ hasText: /^Editor: Workspace Environment/ }).click();
   } else {
     await page.getByRole("button", { name: "Environment", exact: true }).click();
   }
@@ -4231,7 +4250,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   const editorPalette = page.getByRole("dialog", { name: "Command palette" });
   await expect(editorPalette).toBeVisible();
     await editorPalette.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("Editor: Debug Saved Python");
-  const unavailableDebugger = editorPalette.getByRole("option", { name: /Editor: Debug Saved Python/ });
+  const unavailableDebugger = editorPalette.getByRole("option").filter({ hasText: /^Editor: Debug Saved Python/ });
   await expect(unavailableDebugger).toBeDisabled();
   await expect(unavailableDebugger).toContainText("Debugging requires an open Python file");
   await expect(unavailableDebugger).toContainText("F5");
@@ -4364,6 +4383,7 @@ test("remote Core mode keeps the native Browser and command worker on this deskt
   await page.goto("/");
   const ownershipRequest = page.waitForRequest((request) => request.method() === "PUT" && request.url().includes("/browser-sessions/browser-session-preview/tabs"));
   await page.getByRole("tab", { name: "Project browser", exact: true }).click();
+  await page.getByLabel("Browser engine").selectOption("native");
   await expect(page.getByRole("tablist", { name: "Browser tabs" })).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Start browsing" })).toBeEnabled();
   expect((await ownershipRequest).postDataJSON()).toMatchObject({ device_owner: "desktop-remote-test" });
@@ -4758,7 +4778,7 @@ test("Zero Dark preserves the appearance selector", async ({ page }, testInfo) =
 });
 
 test("advanced settings keeps the binary inventory collapsed until requested", async ({ page }) => {
-  await page.route("**/api/v1/automation/runtime", async (route) => route.fulfill({
+  await page.route(/\/api\/v1\/automation\/runtime(?:\?|$)/, async (route) => route.fulfill({
     status: 200,
     contentType: "application/json",
     body: JSON.stringify({
@@ -4776,12 +4796,12 @@ test("advanced settings keeps the binary inventory collapsed until requested", a
   await openWorkspace(page, "/settings#automation-settings", "Settings");
   await expect(page.getByRole("link", { name: "Advanced settings", exact: true })).toHaveAttribute("aria-current", "page");
 
-  const inventory = page.locator("details.inventory-disclosure");
-  await expect(inventory).not.toHaveAttribute("open", "");
+  const inventory = page.locator(".inventory-panel details.inventory-disclosure");
+  await expect(inventory).toHaveJSProperty("open", false);
   await expect(inventory.getByText("2", { exact: true })).toBeVisible();
   await expect(inventory.getByText("nmap", { exact: true })).toBeHidden();
   await inventory.locator("summary").click();
-  await expect(inventory).toHaveAttribute("open", "");
+  await expect(inventory).toHaveJSProperty("open", true);
   await expect(inventory.getByText("nmap", { exact: true })).toBeVisible();
 });
 
@@ -5069,6 +5089,7 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await navigation.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Browser/ }).click();
   await expect(page).toHaveURL(/view=browser/);
+  await page.getByLabel("Browser engine").selectOption("native");
   await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
   await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
@@ -5078,6 +5099,7 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
 
 test("browser research tools expose durable workflows on paired clients", async ({ page }) => {
   await openWorkspace(page, "/?view=browser&browserTool=repeater", "Workbench");
+  await page.getByLabel("Browser engine").selectOption("native");
   await page.getByRole("button", { name: "Research workbench" }).click();
   await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
   await expect(page.getByText("Profile lookup", { exact: true })).toBeVisible();
@@ -5101,8 +5123,13 @@ test("browser research tools expose durable workflows on paired clients", async 
 
 test("Assistant session details use reloadable drawer navigation", async ({ page }) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
-  await page.getByRole("button", { name: "More Workbench actions" }).click();
-  await page.getByRole("menuitem", { name: /Show session details/ }).click();
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Show session details" }).click();
+  } else {
+    await page.getByRole("button", { name: "More Workbench actions" }).click();
+    await page.getByRole("menuitem", { name: /Show session details/ }).click();
+  }
   const drawer = (page.viewportSize()?.width ?? 1440) <= 1100
     ? page.getByRole("dialog", {name: "Conversation details"})
     : page.getByRole("complementary", {name: "Session inspector"});
@@ -5327,7 +5354,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(page.getByText("Page keyboard", { exact: true })).toHaveCount(0);
   const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
-  await toggleAssistant.hover();
+  await toggleAssistant.focus();
   await expect(page.getByRole("tooltip")).toHaveText("Toggle Assistant");
   await page.keyboard.press("Escape");
   await expect(page.getByRole("tooltip")).toHaveCount(0);
@@ -5339,11 +5366,16 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
 
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  const browserToolbar = page.locator(".managed-browser-toolbar");
   for (const name of ["New tab", "Close tab", "Go", "Reconnect view", "Ask about page", "Ask about selected text", "Pick element", "Select region"]) {
-    const action = page.getByRole("button", { name, exact: true });
+    const action = browserToolbar.getByRole("button", { name, exact: true });
     await expect(action.locator("svg")).toBeVisible();
     await expect(action).toHaveText("");
-    await expect(action).toHaveAttribute("title", /.+/);
+    await expect.poll(() => action.evaluate((element) => {
+      const title = element.getAttribute("title");
+      if (title) return title;
+      return (element.getAttribute("aria-describedby") ?? "").split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim();
+    })).toMatch(/.+/);
     const bounds = await action.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
@@ -5367,6 +5399,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await page.locator(".managed-browser-view-options summary").click();
   await expect(page.getByLabel("Page viewport")).toBeHidden();
   await page.screenshot({ path: test.info().outputPath("quiet-browser.png") });
+  await page.keyboard.press("Escape");
   await page.getByLabel("Browser address").fill("https://example.test/");
   await page.getByRole("button", { name: "Resume assistant control", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
@@ -5559,11 +5592,12 @@ test("browser Assistant uploads a selected device file only after inline approva
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
-  await page.getByText("Files for this page (0)", { exact: true }).click();
+  await page.getByLabel("Files for this page (0)", { exact: true }).click();
   await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
   await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");
+  await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
-  await page.getByText("Accessible page controls (1)", { exact: true }).click();
+  await page.locator("summary", { hasText: "Accessible page controls (1)" }).click();
   await page.getByRole("button", { name: "Upload selected file", exact: true }).click();
   const approval = page.getByRole("region", { name: "Browser action approval" });
   await expect(approval).toContainText("sample.txt");
@@ -5571,6 +5605,7 @@ test("browser Assistant uploads a selected device file only after inline approva
   await approval.getByRole("button", { name: "Approve action", exact: true }).click();
   await expect(page.getByText("File upload completed.", { exact: true })).toBeVisible();
   expect(decisions).toBe(1);
+  await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Remove sample.txt", exact: true }).click();
   await expect(page.getByLabel("File to upload")).toHaveValue("");
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");

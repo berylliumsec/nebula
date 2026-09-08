@@ -155,6 +155,21 @@ describe("selection actions", () => {
     expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
   });
 
+  it("clears the browser selection when Escape dismisses the actions", () => {
+    render(<SelectionActionsProvider onAsk={vi.fn()}>
+      <p>selection to dismiss</p>
+    </SelectionActionsProvider>);
+    const paragraph = screen.getByText("selection to dismiss");
+    selectNodeText(paragraph.firstChild as Text);
+    fireEvent.pointerUp(paragraph);
+    expect(screen.getByRole("toolbar", { name: "Selected text actions" })).toBeVisible();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull();
+  });
+
   it("does not cover controls that opt out of selected-text actions", () => {
     render(<SelectionActionsProvider onAsk={vi.fn()}>
       <p>actionable transcript text</p>

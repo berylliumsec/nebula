@@ -2188,8 +2188,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .mobile-more-sheet > div > button > span:last-child { display: grid; min-width: 0; gap: 3px; }
   .mobile-more-sheet > div strong { font-size: 12px; }
   .mobile-more-sheet > div small { color: var(--muted); font-size: 11px; line-height: 1.35; white-space: normal; }
-  .mobile-more-sheet > footer { display: flex; margin-top: 10px; padding: 10px 2px 0; border-top: 1px solid var(--border-soft); }
-  .mobile-focus-action { width: 100%; min-height: 44px; justify-content: center; }
+  .mobile-more-sheet > footer { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; padding: 10px 2px 0; border-top: 1px solid var(--border-soft); }
+  .mobile-more-sheet > footer > button { flex: 1 1 150px; min-height: 44px; justify-content: center; }
   .session-layout:is(.terminal, .code, .browser) { min-height: calc(100dvh - var(--top-height) - 174px - env(safe-area-inset-bottom)); }
   .session-layout:is(.terminal, .code, .browser) .session-workspace { min-height: 0; overflow: auto; }
   .session-layout:is(.terminal, .code, .browser) :is(.persistent-terminal, .persistent-code-editor, .persistent-browser) { width: 100%; min-width: 0; min-height: 100%; }
@@ -2431,4 +2431,4 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .quiet-icon-action[aria-pressed="true"] { color: var(--blue); background: var(--blue-muted); }
 .quiet-icon-action:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
-.action-tooltip { position: fixed; z-index: 10000; max-width: min(280px, calc(100vw - 16px)); padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 4px 16px #0003; font-size: 12px; line-height: 1.4; font-weight: 400; overflow-wrap: anywhere; pointer-events: auto; }
+.action-tooltip { position: fixed; z-index: 10000; max-width: min(280px, calc(100vw - 16px)); padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 4px 16px #0003; font-size: 12px; line-height: 1.4; font-weight: 400; overflow-wrap: anywhere; pointer-events: none; }
