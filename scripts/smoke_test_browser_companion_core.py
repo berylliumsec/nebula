@@ -583,7 +583,7 @@ async def smoke(
                             "messages": [
                                 {
                                     "role": "user",
-                                    "content": "Use browser.companion to list the attached tabs, then make six separate sequential screenshot region capture calls at x=0,y=0,width=300,height=200 of the attached tab to verify repeated captures. Complete all six captures before replying. Report the visible button label. Use only the browser.companion tool; do not navigate or use any other capability.",
+                                    "content": "Use browser.companion to list the attached tabs, then make six separate sequential screenshot region capture calls of the attached tab, each at x=0,y=0,height=200 with distinct widths 300,301,302,303,304,305 respectively, to verify six distinct captures. Complete all six captures before replying. Report the visible button label. Use only the browser.companion tool; do not navigate or use any other capability.",
                                 }
                             ],
                             "context_attachments": [
@@ -609,6 +609,7 @@ async def smoke(
                         for call in calls
                         if call.tool_name == "browser.companion"
                         and call.arguments.get("capture_kind") == "region"
+                        and call.chat_turn_id == completion.json()["turn_id"]
                     ]
                     evidence_path = runtime_root.parent / "last-harness-events.json"
                     evidence_path.write_text(
