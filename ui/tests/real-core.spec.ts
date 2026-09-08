@@ -1504,7 +1504,9 @@ test("assistant upgrade project creation switches canonical project and isolates
 });
 
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
-  test.setTimeout(60_000);
+  // WebKit's production-LAN pass can spend more than a minute covering the
+  // complete durable-conversation lifecycle on shared CI runners.
+  test.setTimeout(120_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 250});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
