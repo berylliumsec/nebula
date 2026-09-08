@@ -81,12 +81,7 @@
 .managed-browser-capture { margin: 10px 12px; padding: 14px; background: var(--surface-muted); border: 1px solid var(--border-soft); border-radius: 12px; }
 .managed-browser-screen { flex: 1 0 160px; background: var(--canvas); }
 .managed-browser-icon:focus-visible, .managed-browser-utilities summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-@media (max-width: 1100px) {
-  .managed-browser-navigation { grid-template-columns: minmax(0, 1fr) 44px 44px 44px; }
-  .managed-browser-navigation input { grid-row: 2; grid-column: 1 / 4; }
-  .managed-browser-navigation button[aria-label="Go"] { grid-row: 2; grid-column: 4; }
-  .managed-browser-navigation button[aria-label="Reconnect view"], .managed-browser-navigation button[aria-label="Prepare / retry"] { grid-row: 1; grid-column: 4; }
-}
+
 @media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
   .integrated-browser-assistant { border-left: 0; padding: 8px; }
   .integrated-browser-assistant > header { min-height: 44px; margin-bottom: 4px; }
@@ -105,4 +100,28 @@
 @media (min-width: 761px) and (max-height: 800px) {
   .integrated-browser-assistant > header { min-height: 44px; margin-bottom: 0; }
   .integrated-browser-assistant { padding-bottom: 6px; }
+}
+
+/* A bounded strip leaves the page in place when utilities expand. */
+.browser-workspace-toolbar { min-height: 44px; padding: 2px 8px; gap: 4px; }
+.browser-workspace-toolbar > label { margin-right: auto; }
+.managed-browser-controls { position: relative; z-index: 4; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
+.managed-browser-controls[hidden] { display: none; }
+.managed-browser-navigation { padding: 2px 8px; overflow-x: auto; }
+.managed-browser-tool-strip { display: flex; align-items: center; padding: 0 8px; gap: 8px; }
+.managed-browser-actions { padding: 0; gap: 0; }
+.managed-browser-utilities { margin-left: auto; padding: 0; gap: 0; flex-wrap: nowrap; border: 0; }
+.managed-browser-utilities > details, .managed-browser-utilities > details[open] { flex: 0 0 44px; padding: 0; }
+.managed-browser-utilities summary { justify-content: center; width: 44px; height: 44px; border-radius: 10px; }
+.managed-browser-utilities summary::after { content: none; }
+.managed-browser-utilities summary:hover, .managed-browser-utilities details[open] > summary { color: var(--text); background: var(--surface-muted); }
+.managed-browser-utility-panel { position: absolute; z-index: 5; top: 100%; right: 8px; width: min(400px, calc(100% - 16px)); max-height: min(360px, 45dvh); overflow: auto; overscroll-behavior: contain; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--canvas); box-shadow: 0 8px 24px #0003; }
+.managed-browser-utility-panel > p:first-child { margin-top: 0; }
+.managed-browser-utility-panel label { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.managed-browser-utility-panel input, .managed-browser-utility-panel select { width: 100%; min-width: 0; }
+.managed-assistant-browser > p[role="status"] { padding: 2px 12px; }
+@media (max-width: 760px) {
+  .managed-browser-tool-strip { gap: 0; padding: 0 4px; }
+  .managed-browser-actions { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
+  .managed-browser-utilities { flex: 0 0 auto; margin-left: 4px; border-left: 1px solid var(--border-soft); }
 }

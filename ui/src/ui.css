@@ -70,3 +70,21 @@
 .chat-panel > .chat-composer:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
 
 .chat-settings-popover { bottom: var(--composer-anchor, 132px); max-height: min(500px, calc(100% - var(--composer-anchor, 132px) - 6px)); }
+
+/* Settings belong to the viewport, even when opened from a narrow Assistant. */
+.chat-settings-popover.chat-settings-floating {
+  position: fixed; z-index: 80; left: 50%; top: 50%; bottom: auto;
+  transform: translate(-50%, -50%); width: min(640px, calc(100vw - 24px));
+  max-width: none; max-height: calc(100dvh - 32px); border-radius: var(--radius-panel);
+  box-shadow: 0 16px 64px #0004;
+}
+.chat-settings-floating > header { padding: 8px 12px 8px 20px; }
+.chat-settings-floating > .chat-context-bar { display: block; flex: 1 1 auto; min-height: 0; padding: 20px; overflow-y: auto; scrollbar-gutter: stable; }
+.chat-settings-floating .chat-settings-fields { gap: 16px; }
+.chat-settings-floating .chat-settings-fields select { height: 44px; }
+.chat-settings-floating .chat-advanced-session { margin-block: 20px; }
+.chat-settings-floating .chat-settings-capabilities { margin-top: 20px; }
+@media (max-width: 480px) {
+  .chat-settings-floating > .chat-context-bar { padding: 16px; }
+  .chat-settings-floating .chat-settings-fields { grid-template-columns: minmax(0, 1fr); }
+}
