@@ -12,12 +12,16 @@ export function ActionTooltips() {
     let anchor: HTMLElement | null = null;
     let originalTitle: string | null = null;
     let originalDescription: string | null = null;
+    let temporaryLabel = false;
+    let hideTimer: ReturnType<typeof setTimeout> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let touch = false;
     const hide = () => {
       clearTimeout(timer);
+      clearTimeout(hideTimer);
       if (anchor) {
-        if (originalTitle !== null) anchor.setAttribute("title", originalTitle);
+        if (originalTitle !== null && !anchor.hasAttribute("title")) anchor.setAttribute("title", originalTitle);
+        if (temporaryLabel && anchor.getAttribute("aria-label") === originalTitle) anchor.removeAttribute("aria-label");
         if (originalDescription === null) anchor.removeAttribute("aria-describedby");
         else anchor.setAttribute("aria-describedby", originalDescription);
       }
@@ -25,6 +29,7 @@ export function ActionTooltips() {
       setActive(null);
     };
     const show = (target: EventTarget | null, immediate = false) => {
+      clearTimeout(hideTimer);
       const next = target instanceof Element ? target.closest<HTMLElement>(controls) : null;
       if (next === anchor) return;
       hide();
@@ -35,7 +40,9 @@ export function ActionTooltips() {
       anchor = next;
       originalTitle = next.getAttribute("title");
       originalDescription = next.getAttribute("aria-describedby");
-      // Suppress the delayed native popup while the app tooltip is responsible.
+      temporaryLabel = Boolean(originalTitle && !next.hasAttribute("aria-label") && !next.hasAttribute("aria-labelledby") && !next.innerText?.trim());
+      if (temporaryLabel) next.setAttribute("aria-label", text);
+      // Suppress the delayed native popup while preserving title-only accessible names.
       next.removeAttribute("title");
       const reveal = () => {
         if (!next.isConnected || anchor !== next) return;
@@ -45,10 +52,15 @@ export function ActionTooltips() {
       if (immediate) reveal();
       else timer = setTimeout(reveal, 200);
     };
-    const over = (event: PointerEvent) => { touch = event.pointerType === "touch"; if (!touch) show(event.target); };
+    const over = (event: PointerEvent) => {
+      clearTimeout(hideTimer);
+      if (event.target instanceof Node && tip.current?.contains(event.target)) return;
+      touch = event.pointerType === "touch";
+      if (!touch) show(event.target);
+    };
     const out = (event: PointerEvent) => {
-      if (anchor && event.relatedTarget instanceof Node && anchor.contains(event.relatedTarget)) return;
-      hide();
+      if (event.relatedTarget instanceof Node && (anchor?.contains(event.relatedTarget) || tip.current?.contains(event.relatedTarget))) return;
+      hideTimer = setTimeout(hide, 120);
     };
     const focus = (event: FocusEvent) => { if (!touch) show(event.target, true); };
     const key = (event: KeyboardEvent) => { touch = false; if (event.key === "Escape") hide(); };

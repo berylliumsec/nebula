@@ -36,6 +36,23 @@ describe("ActionTooltips", () => {
     act(() => vi.advanceTimersByTime(200));
     expect(screen.getByRole("tooltip")).toHaveTextContent("New conversation");
     fireEvent.pointerOut(screen.getByRole("button"));
+    act(() => vi.advanceTimersByTime(120));
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
+  it("preserves title-only accessible names and stays visible when hovered", () => {
+    vi.useFakeTimers();
+    render(<><button title="Close panel"><svg /></button><ActionTooltips /></>);
+    const button = screen.getByRole("button", { name: "Close panel" });
+    fireEvent.pointerOver(button);
+    act(() => vi.advanceTimersByTime(200));
+    expect(screen.getByRole("button", { name: "Close panel" })).toBe(button);
+    fireEvent.pointerOut(button);
+    fireEvent.pointerOver(screen.getByRole("tooltip"));
+    act(() => vi.advanceTimersByTime(150));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Close panel");
+    fireEvent.keyDown(button, { key: "Escape" });
+    expect(button).toHaveAttribute("title", "Close panel");
+    expect(button).not.toHaveAttribute("aria-label");
+  });
+
 });
