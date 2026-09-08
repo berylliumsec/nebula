@@ -141,6 +141,19 @@ This is **partially verified**, not an unqualified release-completion claim.
    the project-scoped harness MCP gateway. No generated-action or autonomous
    exploration catalog was added.
 
-No changes were deployed to the user's running Core, and the feature was not
-enabled in the user's production configuration. Source evidence remains governed
-by its existing lifecycle; deleting a collection removes derived model data only.
+## Authorized live deployment
+
+On 2026-09-08 the operator requested a branch push and live deployment. Commit
+`7b47d8c` was deployed from the immutable checkout
+`/home/agent/nebula-live-7b47d8c`. The user service has
+`NEBULA_APPLICATION_MODEL=1`, uses that checkout for `PYTHONPATH` and static
+assets, and runs Z3 4.16.0 from the shared Nebula virtual environment.
+
+Before restart, SQLite online backup
+`~/.local/share/nebula/v3/backups/pre-7b47d8c-20260908.db` passed
+`integrity_check`. After restart, Core reported healthy as 3.0.0-alpha.13, the
+database reported migration `0013_application_model_outbox`, the model API
+reported both collection and solver availability, and the LAN origin served the
+new production bundle. Generic CRUD continues to exclude application-model
+records. Source evidence remains governed by its existing lifecycle; deleting a
+collection removes derived model data only.
