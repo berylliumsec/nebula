@@ -10,8 +10,17 @@ on:
         description: Existing nebula-v3.* tag to prepare
         required: true
         type: string
+      scope:
+        description: Playwright coverage to run
+        required: true
+        default: impacted
+        type: choice
+        options:
+          - impacted
+          - full
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -62,7 +71,46 @@ jobs:
             printf 'build_timestamp=%s\n' "$build_timestamp"
           } >> "$GITHUB_OUTPUT"
 
-  full-e2e:
+  impact-baseline:
+    needs: validate
+    runs-on: ubuntu-22.04
+    outputs:
+      sha: ${{ steps.baseline.outputs.sha }}
+      tag: ${{ steps.baseline.outputs.tag }}
+      run_id: ${{ steps.baseline.outputs.run_id }}
+    steps:
+      - name: Check out the validated tag
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.validate.outputs.tag }}
+      - name: Resolve the latest successful preparation baseline
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.commit }}
+        run: |
+          gh api \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/nebula3-release.yml/runs?status=completed&per_page=100" \
+            > "$RUNNER_TEMP/release-runs.json"
+          baseline="$(python scripts/playwright_impact.py release-baseline \
+            --runs-json "$RUNNER_TEMP/release-runs.json" \
+            --candidate "$CANDIDATE_SHA")"
+          sha="$(jq -r '.sha // empty' <<<"$baseline")"
+          tag="$(jq -r '.tag // empty' <<<"$baseline")"
+          run_id="$(jq -r '.run_id // empty' <<<"$baseline")"
+          if test -n "$sha" && test -n "$tag" \
+            && git rev-parse --verify "$tag^{commit}" >/dev/null \
+            && test "$(git rev-parse "$tag^{commit}")" = "$sha" \
+            && git merge-base --is-ancestor "$sha" "$CANDIDATE_SHA"
+          then
+            printf 'sha=%s\ntag=%s\nrun_id=%s\n' "$sha" "$tag" "$run_id" >> "$GITHUB_OUTPUT"
+          else
+            printf 'No trustworthy successful release baseline; selector will run full coverage.\n'
+            printf 'sha=\ntag=\nrun_id=\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  sandbox-integration:
     needs: validate
     runs-on: ubuntu-22.04
     env:
@@ -76,17 +124,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: ui/package-lock.json
-      - name: Install full browser and Core test boundary
+      - name: Install sandbox integration boundary
         run: |
           python -m pip install "poetry==2.1.3"
           poetry install --with dev --no-interaction
-          npm --prefix ui ci
-          npx --prefix ui playwright install --with-deps chromium webkit
           sudo apt-get update
           sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
           podman info --format '{{.Host.Security.Rootless}}' | grep -Fx true
@@ -124,17 +165,23 @@ jobs:
             --file tests/v3/integration/Containerfile.operator-runtime \
             --tag localhost/nebula-operator-runtime:release \
             .
-      - name: Run full browser and runtime end-to-end suites
+      - name: Run sandbox integration suite
         env:
           NEBULA_TEST_RUNTIME_IMAGE: localhost/nebula-operator-runtime:release
-        run: |
-          poetry run pytest -q tests/v3/test_sandbox_integration.py
-          npm --prefix ui run build
-          export NEBULA_UI_TEST_COMMAND="npm run preview -- --host 0.0.0.0 --port 1420"
-          npm --prefix ui run test:e2e
+        run: poetry run pytest -q tests/v3/test_sandbox_integration.py
+
+  playwright:
+    needs: [validate, impact-baseline]
+    uses: ./.github/workflows/playwright-impact.yml
+    with:
+      baseline_sha: ${{ needs.impact-baseline.outputs.sha }}
+      candidate_sha: ${{ needs.validate.outputs.commit }}
+      candidate_ref: ${{ needs.validate.outputs.tag }}
+      scope: ${{ inputs.scope || 'impacted' }}
+      receipt_name: release-playwright-impact-${{ needs.validate.outputs.tag }}
 
   build:
-    needs: [validate, full-e2e]
+    needs: [validate, impact-baseline, sandbox-integration, playwright]
     environment: desktop-release
     permissions:
       contents: read

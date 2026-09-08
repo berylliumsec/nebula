@@ -1,0 +1,164 @@
+name: Change-aware Playwright matrix
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: Playwright coverage to run
+        required: true
+        default: impacted
+        type: choice
+        options: [impacted, full]
+  workflow_call:
+    inputs:
+      baseline_sha: {type: string, required: false, default: ""}
+      candidate_sha: {type: string, required: true}
+      candidate_ref: {type: string, required: true}
+      scope: {type: string, required: false, default: impacted}
+      receipt_name: {type: string, required: false, default: playwright-impact-receipt}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      has_jobs: ${{ steps.select.outputs.has_jobs }}
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.candidate_ref || github.event.pull_request.head.sha || github.sha }}
+      - name: Generate impact plan
+        id: select
+        env:
+          BASELINE_SHA: ${{ inputs.baseline_sha || github.event.pull_request.base.sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha || github.event.pull_request.head.sha || github.sha }}
+          REQUESTED_SCOPE: ${{ inputs.scope || github.event.inputs.scope || 'impacted' }}
+        run: |
+          args=(
+            --manifest ui/playwright-impact.json
+            --candidate "$CANDIDATE_SHA"
+            --scope "$REQUESTED_SCOPE"
+            --output playwright-impact-plan.json
+            --receipt playwright-impact-receipt.md
+          )
+          if test -n "$BASELINE_SHA" && git cat-file -e "$BASELINE_SHA^{commit}" 2>/dev/null; then
+            args+=(--baseline "$BASELINE_SHA")
+          fi
+          python scripts/playwright_impact.py select "${args[@]}" > "$RUNNER_TEMP/matrix.json"
+          matrix="$(cat "$RUNNER_TEMP/matrix.json")"
+          count="$(jq '.include | length' playwright-impact-plan.json)"
+          printf 'matrix=%s\nhas_jobs=%s\n' "$matrix" "$([[ "$count" -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          cat playwright-impact-receipt.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload impact receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.receipt_name || 'playwright-impact-receipt' }}
+          path: |
+            playwright-impact-plan.json
+            playwright-impact-receipt.md
+          if-no-files-found: error
+
+  playwright:
+    needs: plan
+    if: needs.plan.outputs.has_jobs == 'true'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-22.04
+    env:
+      POETRY_VIRTUALENVS_IN_PROJECT: "true"
+      NEBULA_PLAYWRIGHT_MATRIX: "1"
+    steps:
+      - name: Check out the candidate
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.candidate_ref || github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: matrix.runtime != 'mock'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install UI boundary and required browser
+        env:
+          PROJECT: ${{ matrix.project }}
+        run: |
+          npm --prefix ui ci
+          case "$PROJECT" in *webkit*) browser=webkit ;; *) browser=chromium ;; esac
+          npx --prefix ui playwright install --with-deps "$browser"
+      - name: Install real-Core boundary
+        if: matrix.runtime != 'mock'
+        run: |
+          python -m pip install "poetry==2.1.3"
+          poetry install --with dev --no-interaction
+      - name: Install full disposable-runtime boundary
+        if: matrix.runtime == 'real-core-sandbox'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Security.Rootless}}' | grep -Fx true
+          podman pull docker.io/kalilinux/kali-rolling:latest
+          runner_uid="$(id -u)"
+          user_service="/sys/fs/cgroup/user.slice/user-${runner_uid}.slice/user@${runner_uid}.service"
+          for control_group in \
+            /sys/fs/cgroup/user.slice \
+            "/sys/fs/cgroup/user.slice/user-${runner_uid}.slice" \
+            "$user_service" \
+            "$user_service/user.slice"
+          do
+            test -f "$control_group/cgroup.controllers"
+            grep -qw cpu "$control_group/cgroup.controllers"
+            echo +cpu | sudo tee "$control_group/cgroup.subtree_control" >/dev/null
+          done
+          repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
+          image_digest="${repository_digest##*@}"
+          source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
+          derived_tag="localhost/nebula-kali-headless:v5-${image_digest#sha256:}"
+          printf 'NEBULA_KALI_SOURCE_IMAGE=%s\n' "$source_reference" >> "$GITHUB_ENV"
+          printf 'NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/podman\n' >> "$GITHUB_ENV"
+          podman build \
+            --build-arg "KALI_SOURCE=${source_reference}" \
+            --file tests/v3/integration/Containerfile.real-core-runtime \
+            --tag "$derived_tag" \
+            .
+      - name: Build production UI
+        run: npm --prefix ui run build
+      - name: Run selected entry serially
+        env:
+          PROJECT: ${{ matrix.project }}
+          TEST_MATCH: ${{ matrix.test_match }}
+          TEST_GREP: ${{ matrix.grep }}
+          TEST_SHARD: ${{ matrix.shard }}
+          NEBULA_UI_TEST_COMMAND: npm run preview -- --host 0.0.0.0 --port 1420
+        run: |
+          args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
+          if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
+          npm --prefix ui run test:e2e -- "${args[@]}"
+
+  gate:
+    needs: [plan, playwright]
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require selector and every selected matrix entry
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          HAS_JOBS: ${{ needs.plan.outputs.has_jobs }}
+          PLAYWRIGHT_RESULT: ${{ needs.playwright.result }}
+        run: |
+          test "$PLAN_RESULT" = success
+          if test "$HAS_JOBS" = true; then
+            test "$PLAYWRIGHT_RESULT" = success
+          else
+            test "$PLAYWRIGHT_RESULT" = skipped
+          fi

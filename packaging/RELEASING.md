@@ -75,6 +75,16 @@ signature against a tampered copy, generates SBOMs and checksums, creates GitHub
 provenance attestations, and runs clean DEB install tests on Ubuntu 24.04,
 Debian 12, and Kali rolling containers.
 
+The preparation workflow diffs the candidate against the newest earlier
+successful Nebula preparation and uploads a `release-playwright-impact-*`
+receipt. Review its immutable baseline and candidate SHAs, changed files,
+matched rules, selected projects/tests, exclusions, and any fail-closed full
+suite fallback before draft finalization. A failed or cancelled release (for
+example, a tag whose preparation never reached success) is never a trusted
+baseline. If no valid successful baseline can be proved, the preparation runs
+the permanent full Playwright matrix. The same full matrix remains available
+manually by dispatching the workflow with `scope=full`.
+
 Record the successful preparation workflow run ID. Then manually run **Create
 Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
 
@@ -93,6 +103,7 @@ Linux artifact, signature, SBOM, and checksum set still exists.
 
 Before publishing the draft, a release manager must verify:
 
+- the Playwright impact receipt was reviewed and every selected matrix entry passed;
 - the Linux build and clean-install matrix passed;
 - the artifact names and counts match the workflow's immutable manifest;
 - updater signatures accept the original AppImage and reject the tampered test;
