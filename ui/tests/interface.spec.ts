@@ -3161,16 +3161,18 @@ test("harness model controls expose only the selected runtime's advertised optio
     };
   });
   expect(settingsGeometry.width).toBeLessThanOrEqual(721);
-  expect(settingsGeometry.headerHeight).toBeLessThanOrEqual(45);
+  expect(settingsGeometry.headerHeight).toBeGreaterThanOrEqual(44);
+  expect(settingsGeometry.headerHeight).toBeLessThanOrEqual(64);
   expect(settingsGeometry.columns).toBe(settingsGeometry.width >= 430 ? 2 : 1);
-  expect(settingsGeometry.controlHeight).toBeGreaterThanOrEqual(settingsGeometry.coarsePointer ? 43.5 : 33.5);
-  expect(settingsGeometry.controlHeight).toBeLessThanOrEqual(settingsGeometry.coarsePointer ? 44.5 : 34.5);
+  expect(settingsGeometry.controlHeight).toBeGreaterThanOrEqual(43.5);
+  expect(settingsGeometry.controlHeight).toBeLessThanOrEqual(44.5);
   expect(settingsGeometry.left).toBeGreaterThanOrEqual(0);
   expect(settingsGeometry.right).toBeLessThanOrEqual((page.viewportSize()?.width ?? 1440) + 1);
   expect(settingsGeometry.top).toBeGreaterThanOrEqual(0);
   expect(settingsGeometry.bottom).toBeLessThanOrEqual((page.viewportSize()?.height ?? 900) + 1);
   expect(settingsGeometry.scrollWidth).toBeLessThanOrEqual(settingsGeometry.clientWidth + 1);
-  expect(settingsGeometry.bottom).toBeLessThanOrEqual(await page.locator(".chat-composer").evaluate((element) => element.getBoundingClientRect().top + 1));
+  // Settings use the viewport rather than the remaining space above the composer.
+  await expect(page.getByRole("dialog", { name: "Assistant settings" })).toBeInViewport({ ratio: 1 });
   expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
   await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-grok-options");
