@@ -87,6 +87,9 @@ class ManagedBrowserHost:
                     profile_root=self.root / "profiles",
                     policy_proxy_url=fallback_config["server"],
                     runtime_root=runtime,
+                    # Chromium 149 stalls authenticated proxy navigation with HTTP/2.
+                    # Keep this compatibility restriction local to the built-in proxy.
+                    http1_only=True,
                 )
                 manager = BrowserdManager(
                     settings, proxy_for_identity=self._identity_proxy

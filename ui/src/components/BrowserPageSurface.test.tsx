@@ -48,13 +48,14 @@ describe("BrowserPageSurface", () => {
       { kind: "key", type: "keyUp", key: "a", code: "KeyA", modifiers: 2 },
     ]);
   });
-  it("accepts composed text through a real editable field and clears it after sending", () => {
-    const { send } = fixture();
-    fireEvent.click(screen.getByText("Page keyboard"));
-    fireEvent.change(screen.getByLabelText("Text to type on page"), { target: { value: "Hello 世界" } });
-    expect(send).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Type on page" }));
-    expect(send).toHaveBeenCalledWith({ kind: "text", text: "Hello 世界" });
-    expect(screen.getByLabelText("Text to type on page")).toHaveValue("");
+  it("types directly after clicking the page without a separate keyboard panel", () => {
+    const { send, page, pointer } = fixture();
+    pointer("pointerDown", 20, 40);
+    expect(page).toHaveFocus();
+    send.mockClear();
+    fireEvent.keyDown(page, { key: "a", code: "KeyA" });
+    expect(send).toHaveBeenCalledWith({ kind: "text", text: "a" });
+    expect(screen.queryByText("Page keyboard")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 });

@@ -15,6 +15,7 @@ from weakref import WeakKeyDictionary, ref
 from urllib.parse import quote
 from uuid import uuid4
 
+import httpx
 from pydantic import Field, SecretStr
 
 from .browser_engine import BrowserEngineRegistry, LocalBrowserdAdapter
@@ -485,11 +486,24 @@ class BrowserCompanion:
                     )
                 payload["text"] = protected[request.credential_ref]
             payload["protected_values"] = list(protected.values())
-            response = await adapter._request(
-                "POST",
-                "/v1/companion/" + quote(session.identity_id, safe=""),
-                payload,
-            )
+            try:
+                response = await adapter._request(
+                    "POST",
+                    "/v1/companion/" + quote(session.identity_id, safe=""),
+                    payload,
+                )
+            except httpx.TimeoutException as exc:
+                raise ValueError(
+                    "The host browser did not respond in time. Reconnect to check its current page before retrying; no action was replayed."
+                ) from exc
+            except httpx.TransportError as exc:
+                raise ValueError(
+                    "The host browser connection ended. Reconnect to restore the view; your conversation is saved."
+                ) from exc
+            if response.is_error and response.status_code == 504:
+                raise ValueError(
+                    "The host browser timed out loading or reading the page. Check the page and retry; no action was replayed."
+                )
             if response.is_error:
                 raise ValueError(
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."

@@ -11,7 +11,6 @@ export function BrowserPageSurface({ frame, mode, connected, send, onCapture }: 
 }) {
   const gesture = useRef<{ start: Point; pointerId: number; touch: boolean } | undefined>(undefined);
   const [region, setRegion] = useState<{ left: number; top: number; width: number; height: number }>();
-  const [typedText, setTypedText] = useState("");
   const point = (event: React.PointerEvent<HTMLImageElement>): Point => {
     const rect = event.currentTarget.getBoundingClientRect();
     return { x: (event.clientX - rect.left) * event.currentTarget.naturalWidth / rect.width,
@@ -40,8 +39,8 @@ export function BrowserPageSurface({ frame, mode, connected, send, onCapture }: 
     <div className="managed-browser-screen">
       {frame ? <img src={frame} alt="Live shared browser page. Use Ask about page for accessible controls." draggable={false} tabIndex={0}
         onKeyDown={event => {
-          // Tab remains available to leave the stream; page focus has explicit controls below.
-          if (mode !== "browse" || event.key === "Tab" || event.nativeEvent.isComposing) return;
+          // Tab remains available to leave the stream; focus can move to surrounding browser controls.
+          if (!connected || mode !== "browse" || event.key === "Tab" || event.nativeEvent.isComposing) return;
           event.preventDefault();
           const modifiers = (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0);
           if (event.key.length === 1 && !(modifiers & 7)) send({ kind: "text", text: event.key });
@@ -88,15 +87,5 @@ export function BrowserPageSurface({ frame, mode, connected, send, onCapture }: 
       /> : <p>The page will appear here when the managed browser connects.</p>}
       {region && <div className="managed-browser-region" aria-hidden="true" style={{ left: `${region.left}%`, top: `${region.top}%`, width: `${region.width}%`, height: `${region.height}%` }} />}
     </div>
-    <details className="managed-browser-keyboard"><summary>Page keyboard</summary>
-      <p>Tap a field on the page, then type here. Use Protected values for passwords. Tab moves focus between controls on the host page.</p>
-      <form onSubmit={event => { event.preventDefault(); if (connected && typedText) { send({ kind: "text", text: typedText }); setTypedText(""); } }}>
-        <label>Text to type on page<textarea value={typedText} onChange={event => setTypedText(event.target.value)} maxLength={2000} autoComplete="off" /></label>
-        <button className="button secondary" disabled={!connected || !typedText}>Type on page</button>
-      </form>
-      <div className="managed-browser-toolbar">{["Tab", "Enter", "Backspace", "Escape", "ArrowUp", "ArrowDown"].map(key => <button key={key} className="button quiet" disabled={!connected} onClick={() => pressKey(key)}>{key}</button>)}
-        <button className="button quiet" disabled={!connected} onClick={() => pressKey("Tab", "Tab", 8)}>Shift + Tab</button>
-      </div>
-    </details>
   </>;
 }

@@ -154,7 +154,9 @@ def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
 
     async def run():
         async with async_playwright() as playwright:
-            browser = await playwright.chromium.launch(headless=True)
+            browser = await playwright.chromium.launch(
+                headless=True, executable_path=playwright.chromium.executable_path
+            )
             try:
                 context = await browser.new_context()
                 page = await context.new_page()
@@ -241,6 +243,7 @@ def test_real_core_requires_auth_and_reports_absent_browser_runtime(
 
     monkeypatch.delenv("NEBULA_BROWSERD_URL", raising=False)
     monkeypatch.delenv("NEBULA_BROWSERD_TOKEN", raising=False)
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
     store = NebulaStore(tmp_path / "core.db")
     client = TestClient(create_app(store, auth_token="test-token"))
     headers = {"Authorization": "Bearer test-token"}
@@ -811,3 +814,31 @@ def test_background_tab_poll_preserves_lost_state_until_navigation(
         assert (await service.open(project.id))["page_state_reset"] is False
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("failure", ["transport", "timeout", "page_timeout"])
+def test_host_failure_explains_recovery_without_replaying(
+    tmp_path, monkeypatch, failure
+):
+    import httpx
+
+    _, _, _, session, service = setup(tmp_path)
+    calls = []
+
+    class Adapter:
+        async def _request(self, *args):
+            calls.append(args)
+            if failure == "transport":
+                raise httpx.ConnectError("private endpoint")
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private endpoint")
+            return httpx.Response(504, json={"detail": "private upstream details"})
+
+    async def adapter():
+        return Adapter()
+
+    monkeypatch.setattr(service, "adapter", adapter)
+    with pytest.raises(ValueError, match="[Rr]econnect|[Rr]etry") as error:
+        asyncio.run(service.request(session.id, CompanionRequest(operation="tabs")))
+    assert len(calls) == 1
+    assert "private" not in str(error.value)

@@ -24,7 +24,7 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket
 from fastapi.websockets import WebSocketDisconnect
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as BrowserTimeoutError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import uvicorn
 
@@ -33,6 +33,7 @@ from .browser_companion_runtime import operate as companion_operate
 
 from .browser_engine import (
     BROWSER_ENGINE_CONTRACT_VERSION,
+    BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS,
     BrowserEngineAction,
     BrowserEngineReceipt,
 )
@@ -131,6 +132,7 @@ class BrowserdSettings:
     runtime_root: Path
     upload_root: Path | None = None
     headless: bool = False
+    http1_only: bool = False
 
     def __post_init__(self) -> None:
         if not self.token or any(character.isspace() for character in self.token):
@@ -417,6 +419,7 @@ class BrowserdManager:
                     args=[
                         "--proxy-bypass-list=<-loopback>",
                         "--disable-quic",
+                        *(["--disable-http2"] if self.settings.http1_only else []),
                         "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
                     ],
                     accept_downloads=True,
@@ -740,12 +743,18 @@ def create_browserd_app(
                         )
                     known.append(value)
                     values.add(value.get_secret_value())
-            result = await companion_operate(
-                runtime,
-                identity_id,
-                request.model_copy(update={"protected_values": list(known)}),
-            )
+            async with asyncio.timeout(BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS):
+                result = await companion_operate(
+                    runtime,
+                    identity_id,
+                    request.model_copy(update={"protected_values": list(known)}),
+                )
             return BrowserCompanion.redact_result(result, list(values))
+        except (TimeoutError, BrowserTimeoutError) as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="The host browser timed out. Check the page, then retry; no action was replayed.",
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

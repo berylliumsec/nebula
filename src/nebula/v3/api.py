@@ -9676,7 +9676,7 @@ def create_app(
         import base64
         from urllib.parse import quote
         from websockets.asyncio.client import connect
-        from websockets.exceptions import ConnectionClosed
+        from websockets.exceptions import ConnectionClosed, InvalidHandshake
         from websockets.typing import Subprotocol
 
         protocols = [
@@ -9754,7 +9754,13 @@ def create_app(
                     sender.cancel()
                     receiver.cancel()
                     await asyncio.gather(sender, receiver, return_exceptions=True)
-        except (ValueError, OSError, ConnectionClosed, WebSocketDisconnect):
+        except (
+            ValueError,
+            OSError,
+            ConnectionClosed,
+            InvalidHandshake,
+            WebSocketDisconnect,
+        ):
             # diagnostic-expected: detached viewers do not terminate the host browser.
             if websocket.client_state.name != "DISCONNECTED":
                 await websocket.close(

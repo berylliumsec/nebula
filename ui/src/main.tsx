@@ -4,6 +4,7 @@ import { BrowserRouter } from "react-router-dom";
 import "@fontsource-variable/geist/wght.css";
 import "@fontsource-variable/geist-mono/wght.css";
 import { App } from "./App";
+import { ActionTooltips } from "./components/ActionTooltips";
 import { DialogProvider } from "./components/DialogSystem";
 import { PairingGate } from "./components/PairingGate";
 import {
@@ -61,6 +62,7 @@ createRoot(root).render(
           <WorkspaceProvider>
             <DialogProvider>
               <PairingGate><App /></PairingGate>
+              <ActionTooltips />
             </DialogProvider>
           </WorkspaceProvider>
         </ThemeProvider>
