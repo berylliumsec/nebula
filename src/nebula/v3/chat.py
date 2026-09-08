@@ -245,7 +245,7 @@ class ChatCompletionRequest(NebulaModel):
     include_knowledge: bool = True
     allow_cloud_knowledge: bool = False
     tools_enabled: bool = False
-    max_artifact_queries: int = Field(default=20, ge=0, le=200)
+    max_artifact_queries: int | None = Field(default=None, ge=0)
     allow_cloud_tool_results: bool = False
     # Optional vendor-native turn controls.  They are validated again against
     # the negotiated profile in HarnessRuntime.prepare_chat.
@@ -1400,24 +1400,29 @@ class ChatService:
                 if turn.status == ChatTurnStatus.WAITING_APPROVAL:
                     return
 
-            while (
-                turn.status != ChatTurnStatus.FINALIZING
-                and turn.next_step < turn.max_tool_calls + turn.max_artifact_queries
-            ):
+            while turn.status != ChatTurnStatus.FINALIZING:
                 available_specs = [
                     spec
                     for spec in components.specs.values()
                     if (
                         (
                             spec.budget_class == "artifact_query"
-                            and turn.artifact_queries < turn.max_artifact_queries
+                            and (
+                                turn.max_artifact_queries is None
+                                or turn.artifact_queries < turn.max_artifact_queries
+                            )
                         )
                         or (
                             spec.budget_class == "execution"
-                            and turn.execution_tool_calls < turn.max_tool_calls
+                            and (
+                                turn.max_tool_calls is None
+                                or turn.execution_tool_calls < turn.max_tool_calls
+                            )
                         )
                     )
                 ]
+                if not available_specs:
+                    break
                 routing = prepared.model_request.model_copy(
                     update={
                         "instructions": _CHAT_TOOL_INSTRUCTIONS

@@ -5810,7 +5810,7 @@ class HarnessRuntimeService:
         allow_remote_mcp: bool = False,
         include_knowledge: bool = False,
         allow_cloud_knowledge: bool = False,
-        max_artifact_queries: int = 20,
+        max_artifact_queries: int | None = None,
         harness_mode: str | None = None,
         harness_skill: HarnessSkillInvocation | None = None,
         harness_reasoning_effort: str | None = None,
