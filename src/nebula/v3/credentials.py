@@ -12,6 +12,8 @@ from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 import keyring
+import secretstorage
+from keyring.backends.SecretService import Keyring
 from pydantic import SecretStr, field_validator
 
 from .domain import NebulaModel
@@ -216,9 +218,10 @@ class CredentialStore:
         if self.keyring_backend is None or not self.vault_available:
             return None
         try:
-            if type(self.keyring_backend).__module__ == "keyring.backends.SecretService":
-                from keyring.backends.SecretService import Keyring
-
+            if (
+                type(self.keyring_backend).__module__
+                == "keyring.backends.SecretService"
+            ):
                 if isinstance(self.keyring_backend, Keyring):
                     return self._secret_service_value(reference)
             return self.keyring_backend.get_password(
@@ -241,8 +244,6 @@ class CredentialStore:
         get_password can wait indefinitely for a desktop unlock prompt there.
         Locked collections/items must instead report unavailable.
         """
-        import secretstorage
-
         backend = self.keyring_backend
         with closing(secretstorage.dbus_init()) as connection:
             preferred = getattr(backend, "preferred_collection", None)
