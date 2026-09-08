@@ -229,3 +229,31 @@ def test_browserd_readiness_requires_manifest_bound_full_chromium(tmp_path):
     assert capability.state == BrowserEngineState.READY
     assert capability.digest == f"sha256:{executable_sha256}"
     assert "cdp-screencast" in capability.protocols
+
+
+def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
+    tmp_path, monkeypatch
+):
+    from nebula.v3 import browserd
+    from playwright.async_api import TimeoutError as BrowserTimeoutError
+
+    configured = settings(tmp_path)
+    manager = BrowserdManager(configured)
+
+    async def timed_out(*args):
+        raise BrowserTimeoutError("private page URL and protected contents")
+
+    monkeypatch.setattr(browserd, "companion_operate", timed_out)
+    client = TestClient(create_browserd_app(configured, manager=manager))
+    response = client.post(
+        "/v1/companion/identity",
+        headers={"Authorization": "Bearer opaque-browserd-token"},
+        json={"operation": "navigate", "url": "https://example.test/", "tab_id": "tab"},
+    )
+    assert response.status_code == 504
+    assert "retry" in response.json()["detail"]
+    assert "private" not in response.text
+    assert (
+        client.post("/v1/companion/identity", json={"operation": "tabs"}).status_code
+        == 401
+    )

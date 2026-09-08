@@ -97,6 +97,9 @@ class BrowserEngineAdapter(ABC):
         raise NotImplementedError
 
 
+BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS = 30.0
+
+
 class LocalBrowserdAdapter(BrowserEngineAdapter):
     """Authenticated loopback client for the desktop-owned managed Chromium process."""
 
@@ -139,6 +142,12 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
     async def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> httpx.Response:
+        # Navigation plus capture outlives the short readiness/lifecycle budget.
+        timeout = (
+            max(self._timeout, BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS + 5)
+            if path.startswith("/v1/companion/")
+            else self._timeout
+        )
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/json",
@@ -149,10 +158,10 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
                 f"{self.base_url}{path}",
                 headers=headers,
                 json=payload,
-                timeout=self._timeout,
+                timeout=timeout,
             )
         else:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(
                     method,
                     f"{self.base_url}{path}",

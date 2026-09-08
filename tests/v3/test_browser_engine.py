@@ -120,3 +120,32 @@ def test_registry_discovers_configured_browserd_without_exposing_token(monkeypat
     registry = BrowserEngineRegistry()
     assert len(registry._adapters) == 1
     assert isinstance(registry._adapters[0], LocalBrowserdAdapter)
+
+
+def test_companion_navigation_outlives_the_health_check_deadline():
+    async def exercise():
+        async def slow_page(reader, writer):
+            await reader.readuntil(b"\r\n\r\n")
+            await asyncio.sleep(5.2)
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            )
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_server(slow_page, "127.0.0.1", 0)
+        try:
+            adapter = LocalBrowserdAdapter(
+                f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", "test-token"
+            )
+            response = await adapter._request(
+                "POST", "/v1/companion/identity", {"operation": "navigate"}
+            )
+            assert response.status_code == 200
+            assert adapter._timeout == 5.0  # readiness keeps its short deadline
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(exercise())

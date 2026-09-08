@@ -1532,6 +1532,12 @@ test("all task workspaces keep responsive content inside its owning surface", as
   test.setTimeout(60_000);
   for (const [, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
+    const unnamedIcons = await page.locator("button, a, summary, [role=button], [role=tab]").evaluateAll(nodes => nodes.filter(node => {
+      const el = node as HTMLElement;
+      return el.getBoundingClientRect().width > 0 && el.querySelector("svg") && !el.innerText.trim() &&
+        !el.getAttribute("aria-label") && !el.getAttribute("title") && !el.getAttribute("aria-labelledby");
+    }).map(node => node.outerHTML.slice(0, 240)));
+    expect(unnamedIcons, `${name} has unexplained icon controls`).toEqual([]);
     const overflow = await page.locator("body").evaluate(() => {
       const selector = [
         ".page",
@@ -5316,8 +5322,13 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
   await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  await expect(page.getByText("Page keyboard", { exact: true })).toHaveCount(0);
   const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
+  await toggleAssistant.hover();
+  await expect(page.getByRole("tooltip")).toHaveText("Toggle Assistant");
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
   await expect(page.getByRole("complementary", { name: "Browser Assistant", exact: true })).toHaveCount(0);
   await toggleAssistant.click();
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "true");
