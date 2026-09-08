@@ -64,7 +64,7 @@
   .chat-composer footer .chat-runtime-summary { max-width: 120px; }
   .chat-composer footer .chat-context-meter { min-width: 44px; }
   .chat-operator-updates { max-height: 30%; }
-  .assistant-search summary { min-height: 44px; display: list-item; align-content: center; }
+  .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
 .chat-panel > .chat-composer:has(.chat-skill-menu) { overflow: visible; z-index: 3; }

@@ -72,6 +72,8 @@ async def exercise_ui(
             panel = page.get_by_role(
                 "complementary", name="Browser Assistant", exact=True
             )
+            await expect(panel).to_have_count(0)
+            await page.get_by_role("button", name="Assistant", exact=True).click()
             await expect(panel).to_be_visible(timeout=30000)
             if device:
                 await panel.get_by_role(
@@ -192,6 +194,8 @@ async def exercise_ui(
             await preview.get_by_role("button", name="Discard", exact=True).click()
             print("UI journey: checking reload and durable conversation", flush=True)
             await page.reload()
+            await expect(panel).to_have_count(0)
+            await page.get_by_role("button", name="Assistant", exact=True).click()
             await expect(panel).to_be_visible(timeout=30000)
             await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
                 "Saved", timeout=30000
@@ -217,6 +221,7 @@ async def exercise_ui(
             )
             assert parse_qs(urlsplit(page.url).query)["session"] == [conversation_id]
             await page.goto(f"{origin}/?view=browser&session={conversation_id}")
+            await page.get_by_role("button", name="Assistant", exact=True).click()
             await expect(panel.locator(".chat-message.assistant").last).to_contain_text(
                 "Saved", timeout=30000
             )

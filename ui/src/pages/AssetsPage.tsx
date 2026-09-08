@@ -1,3 +1,5 @@
+import { IconAction } from "../components/IconAction";
+import { Eye } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Network, Plus, Search, Server, X } from "lucide-react";
 import type { AssetSummary } from "../api/types";
@@ -102,7 +104,7 @@ export function AssetsPage() {
           <table className="data-table assets-table">
             <thead><tr><th scope="col">Asset</th><th scope="col">Exposure</th><th scope="col">Criticality</th><th scope="col">Services</th><th scope="col">Findings</th><th scope="col">Last observed</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
             <tbody>
-              {visibleAssets.map((asset) => { const linkedFindingCount = findingCount(asset.id); return <tr key={asset.id}><td><div className="asset-name"><span><Server size={16} /></span><div><strong>{asset.displayName}</strong><small>{asset.kind} · {engagement?.name ?? "project"}</small></div></div></td><td><span className={`exposure-badge ${asset.exposure}`}>{asset.exposure}</span></td><td><span className={`severity-label ${asset.criticality}`}><span />{asset.criticality}</span></td><td><strong>{asset.serviceCount ?? "—"}</strong></td><td>{linkedFindingCount > 0 ? <span className="finding-count">{linkedFindingCount}</span> : "—"}</td><td>{displayTime(asset.lastSeenAt)}</td><td><button className="text-link" type="button" onClick={() => openResource(asset)}>Inspect</button></td></tr>; })}
+              {visibleAssets.map((asset) => { const linkedFindingCount = findingCount(asset.id); return <tr key={asset.id}><td><div className="asset-name"><span><Server size={16} /></span><div><strong>{asset.displayName}</strong><small>{asset.kind} · {engagement?.name ?? "project"}</small></div></div></td><td><span className={`exposure-badge ${asset.exposure}`}>{asset.exposure}</span></td><td><span className={`severity-label ${asset.criticality}`}><span />{asset.criticality}</span></td><td><strong>{asset.serviceCount ?? "—"}</strong></td><td>{linkedFindingCount > 0 ? <span className="finding-count">{linkedFindingCount}</span> : "—"}</td><td>{displayTime(asset.lastSeenAt)}</td><td><IconAction icon={Eye} label="Inspect" title={`Inspect ${asset.displayName}`} onClick={() => openResource(asset)} /></td></tr>; })}
               {visibleAssets.length === 0 && <tr><td colSpan={7}>{query || activeFilters ? "No assets match the current search and filters." : "No assets have been recorded for this project."}</td></tr>}
             </tbody>
           </table>

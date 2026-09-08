@@ -1,3 +1,4 @@
+import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
@@ -293,7 +294,7 @@ export function NotesPanel({
           <header>
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
             <div>
-              {selected && <button className="button quiet" type="button" onClick={() => void remove()}><Trash2 size={14} /> Delete</button>}
+              {selected && <IconAction icon={Trash2} label="Delete" title="Delete note" onClick={() => void remove()} />}
               <button className="button quiet" type="button" disabled={!draft.body.trim() || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
               <button className="button quiet" type="button" disabled={!draft.body.trim() || !onAskNebula} onClick={() => onAskNebula?.({ text: draft.body, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>

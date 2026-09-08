@@ -202,13 +202,14 @@ export function TerminalScreenshotAction({
 
   return <>
     <button
-      className="button secondary terminal-screenshot-button"
+      className="button quiet quiet-icon-action terminal-screenshot-button"
+      aria-label={busy ? "Preserving…" : "Screenshot"}
       type="button"
       disabled={busy}
       aria-busy={busy}
       title="Capture the visible terminal viewport as immutable evidence"
       onClick={() => void capture()}
-    ><Camera size={15} /> {busy ? "Preserving…" : "Screenshot"}</button>
+    ><Camera size={18} aria-hidden="true" /></button>
     {error && <DiagnosticErrorNotice error={error} fallback="The terminal capture could not be completed." compact />}
     {message && <span className="terminal-capture-feedback" role="status">{message}</span>}
     {editor && createPortal(<ModalSurface

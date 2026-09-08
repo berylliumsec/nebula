@@ -1,3 +1,5 @@
+import { IconAction } from "../components/IconAction";
+import { Eye } from "lucide-react";
 import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   BookMarked,
@@ -233,7 +235,7 @@ export function LibraryPage() {
               <span className={`source-state ${busy ? "indexing" : item.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : item.status}</span>
               <span className="source-updated">{displayTime(item.updatedAt)}</span>
               <div className="source-actions">
-                <button className="button quiet" type="button" onClick={() => openResource(item)}>Inspect</button>
+                <IconAction icon={Eye} label="Inspect" title={`Inspect ${item.name}`} onClick={() => openResource(item)} />
                 <button className="icon-button subtle" type="button" title="Reindex item" aria-label={`Reindex ${item.name}`} disabled={!canMutate || busy} onClick={() => void reindex(item)}><RefreshCw size={14} /></button>
                 <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${item.name}`} disabled={!item.artifactId || busy} onClick={() => void download(item)}><Download size={14} /></button>
                 <button className="icon-button subtle" type="button" title="Remove from Library" aria-label={`Remove ${item.name}`} disabled={!canMutate || busy} onClick={() => void remove(item)}><Trash2 size={14} /></button>
