@@ -35,9 +35,13 @@ def stable_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[tuple[str, ...], dict[str, Any]] = {}
     for entry in entries:
         key = tuple(str(entry.get(field, "")) for field in (
-            "area", "project", "test_match", "grep", "runtime", "shard"
+            "project", "test_match", "grep", "runtime", "shard"
         ))
-        unique[key] = entry
+        if key in unique:
+            areas = set(unique[key]["area"].split("+")) | set(entry["area"].split("+"))
+            unique[key]["area"] = "+".join(sorted(areas))
+        else:
+            unique[key] = dict(entry)
     return [unique[key] for key in sorted(unique)]
 
 

@@ -83,8 +83,18 @@ def test_entries_are_deduplicated_and_stably_ordered():
         "ui/src/components/MobileChat.tsx",
         "ui/src/components/UnclassifiedWidget.tsx",
     ])
-    keys = [(e["area"], e["project"], e.get("grep", "")) for e in result["include"]]
+    keys = [(e["project"], e.get("grep", "")) for e in result["include"]]
     assert keys == sorted(set(keys))
+
+
+def test_identical_entries_from_multiple_areas_run_once_and_retain_provenance():
+    result = select_plan(
+        MANIFEST, "base", "candidate", [],
+        selection=["area:core-api", "area:desktop-shell"],
+    )
+    real_core = [entry for entry in result["include"] if entry["project"] == "real-core"]
+    assert len(real_core) == 1
+    assert real_core[0]["area"] == "core-api+desktop-shell"
 
 
 def test_deleted_and_renamed_paths_preserve_all_impact_paths():
