@@ -1539,7 +1539,11 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   test.setTimeout(90_000);
   for (const [name, route, heading] of workspaces) {
     await openWorkspace(page, route, heading);
-    await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, { fullPage: true });
+    await expect(page).toHaveScreenshot(`${name}-${testInfo.project.name}.png`, {
+      fullPage: true,
+      mask: [page.locator(".top-bar-public-ip")],
+      maskColor: "#11161c",
+    });
   }
 });
 

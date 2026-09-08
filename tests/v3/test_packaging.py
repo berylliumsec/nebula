@@ -132,7 +132,9 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_depl
     assert "impact-baseline:" in release
     assert "sandbox-integration:" in release
     assert "playwright:" in release
-    assert "needs: [validate, impact-baseline, sandbox-integration, playwright]" in release
+    assert (
+        "needs: [validate, impact-baseline, sandbox-integration, playwright]" in release
+    )
     assert "npm --prefix ui run test:e2e" in playwright_impact
     assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
