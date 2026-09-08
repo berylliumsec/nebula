@@ -51,3 +51,60 @@
   .main-content:has(> .sessions-page.screen-fit > .session-layout.browser) { overflow-y: auto; }
   .sessions-page.screen-fit:has(> .session-layout.browser) { flex: 1 0 320px; min-height: 320px; }
 }
+
+/* Quiet chrome groups navigation, page tools and secondary disclosures. */
+.integrated-browser-layout { gap: 0; background: var(--surface); border: 1px solid var(--border-soft); border-radius: 16px; overflow: hidden; }
+.browser-workspace-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 56px; padding: 6px 14px; border-bottom: 1px solid var(--border-soft); }
+.browser-workspace-toolbar > label { display: flex; align-items: center; gap: 8px; order: -1; min-width: 0; color: var(--muted); }
+.browser-workspace-toolbar select { min-width: 0; max-width: 100%; min-height: 44px; border: 0; background: transparent; font-size: 12px; }
+.integrated-browser-assistant { border-left: 1px solid var(--border-soft); padding: 0 16px 12px; }
+.integrated-browser-assistant > header { min-height: 56px; flex-wrap: nowrap; border-bottom: 1px solid var(--border-soft); margin-bottom: 12px; }
+.integrated-browser-assistant > header > strong { font-size: 13px; font-weight: 600; }
+.managed-browser-navigation { display: grid; grid-template-columns: minmax(80px, 140px) 44px 44px minmax(80px, 1fr) 44px 44px; align-items: center; gap: 4px; padding: 10px 12px; }
+.managed-browser-navigation input, .managed-browser-navigation select { width: 100%; min-width: 0; font-size: 12px; border-radius: 10px; background: var(--surface-muted); border: 1px solid var(--border-soft); }
+.managed-browser-navigation input { padding: 0 12px; }
+.managed-browser-navigation select { padding-inline: 8px; text-overflow: ellipsis; }
+.managed-browser-icon.button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; padding: 0; border: 0; border-radius: 10px; background: transparent; box-shadow: none; color: var(--muted); }
+.managed-browser-icon.button:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); }
+.managed-browser-icon.button[aria-pressed="true"] { color: var(--blue); background: var(--blue-muted); }
+.managed-browser-actions { flex-wrap: nowrap; align-items: center; padding: 0 12px; gap: 4px; }
+.managed-browser-control { margin-left: auto; }
+.managed-assistant-browser > p[role="status"] { margin: 0; padding: 6px 16px; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.managed-browser-utilities { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 14px; padding: 0 16px 8px; border-bottom: 1px solid var(--border-soft); }
+.managed-browser-utilities > details { min-width: 0; max-width: 100%; font-size: 12px; }
+.managed-browser-utilities > details[open] { flex: 1 0 100%; padding-bottom: 12px; }
+.managed-browser-utilities summary { display: flex; align-items: center; gap: 7px; min-height: 44px; color: var(--muted); cursor: pointer; list-style: none; }
+.managed-browser-utilities summary::-webkit-details-marker { display: none; }
+.managed-browser-utilities summary::after { content: '⌄'; margin-left: 3px; }
+.managed-browser-utilities details[open] > summary { color: var(--text); }
+.managed-browser-view-options label { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.managed-browser-view-options select { max-width: 100%; }
+.managed-browser-error { margin: 0 12px 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.managed-browser-capture { margin: 10px 12px; padding: 14px; background: var(--surface-muted); border: 1px solid var(--border-soft); border-radius: 12px; }
+.managed-browser-screen { flex: 1 0 160px; background: var(--canvas); }
+.managed-browser-icon:focus-visible, .managed-browser-utilities summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+@media (max-width: 1100px) {
+  .managed-browser-navigation { grid-template-columns: minmax(0, 1fr) 44px 44px 44px; }
+  .managed-browser-navigation input { grid-row: 2; grid-column: 1 / 4; }
+  .managed-browser-navigation button[aria-label="Go"] { grid-row: 2; grid-column: 4; }
+  .managed-browser-navigation button[aria-label="Reconnect view"], .managed-browser-navigation button[aria-label="Prepare / retry"] { grid-row: 1; grid-column: 4; }
+}
+@media (max-width: 760px), (pointer: coarse) and (max-height: 500px) {
+  .integrated-browser-assistant { border-left: 0; padding: 8px; }
+  .integrated-browser-assistant > header { min-height: 44px; margin-bottom: 4px; }
+  .browser-workspace-toolbar { min-height: 48px; padding: 2px 8px; }
+  .managed-browser-navigation { padding: 6px 8px; }
+  .managed-browser-actions { padding-inline: 8px; }
+  .managed-browser-utilities { padding-inline: 12px; gap: 0 10px; }
+}
+
+/* Keep the input and Send together when host-status banners shorten the pane. */
+.integrated-browser-assistant .chat-panel > .chat-composer { flex: 0 0 auto; margin: 4px 0; width: 100%; }
+@container chat-panel (max-width: 500px) {
+  .integrated-browser-assistant .chat-runtime-summary { flex: 0 0 44px; width: 44px; min-width: 44px; padding: 0; justify-content: center; }
+  .integrated-browser-assistant .chat-runtime-summary > span { display: none; }
+}
+@media (min-width: 761px) and (max-height: 800px) {
+  .integrated-browser-assistant > header { min-height: 44px; margin-bottom: 0; }
+  .integrated-browser-assistant { padding-bottom: 6px; }
+}

@@ -1,3 +1,4 @@
+import { ArrowRight, Plus, X, RefreshCw, MessageSquareText, TextSelect, MousePointer2, Scan, Hand, Play, Settings2, KeyRound, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BrowserPageSurface } from "./BrowserPageSurface";
@@ -200,23 +201,23 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     {actions.filter(action => action.status === "failed").slice(0, 3).map(action => <section className="managed-browser-approval" role="alert" key={action.id}><strong>Could not complete {action.request.operation}</strong><p>The page or attached file may have changed. Capture fresh context and request a new action; this action will not be replayed.</p><button className="button quiet" disabled={busy} onClick={() => void operate("capture")}>Capture current page</button></section>)}
   </>;
   return <section className="managed-assistant-browser" aria-label="Shared Chromium browser">
-    <form className="managed-browser-toolbar" onSubmit={(event) => { event.preventDefault(); void operate("navigate", { url: address }); }}>
+    <form className="managed-browser-toolbar managed-browser-navigation" onSubmit={(event) => { event.preventDefault(); void operate("navigate", { url: address }); }}>
       <select aria-label="Browser tab" value={tabId} onChange={(event) => { setTabId(event.target.value); if (session) void request(`browser-companion/${session.session_id}/active-tab/${encodeURIComponent(event.target.value)}`, undefined, "PUT").catch(caught => logCaughtDiagnosticFailure(caught)); setCapture(undefined); addressEdited.current = false; setAddress(tabs.find(tab => tab.id === event.target.value)?.url ?? ""); }}>
         {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.title || "New tab"}</option>)}
       </select>
-      <button className="button quiet" type="button" disabled={busy || !session} onClick={() => void manageTab("new_tab")}>New tab</button>
-      <button className="button quiet" type="button" disabled={busy || !session} onClick={() => void manageTab("close_tab")}>Close tab</button>
+      <button className="button quiet managed-browser-icon" type="button" disabled={busy || !session} onClick={() => void manageTab("new_tab")} aria-label="New tab" title="New tab"><Plus size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon" type="button" disabled={busy || !session} onClick={() => void manageTab("close_tab")} aria-label="Close tab" title="Close tab"><X size={18} aria-hidden="true" /></button>
       <input aria-label="Browser address" value={address} onChange={event => { addressEdited.current = true; setAddress(event.target.value); }} placeholder="https://…" />
-      <button className="button primary" disabled={busy || !session}>Go</button>
-      <button className="button quiet" type="button" onClick={() => void open()} disabled={busy}>{session ? "Reconnect view" : "Prepare / retry"}</button>
+      <button className="button quiet managed-browser-icon" disabled={busy || !session} aria-label="Go" title="Go"><ArrowRight size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon" type="button" onClick={() => void open()} disabled={busy} aria-label={session ? "Reconnect view" : "Prepare / retry"} title={session ? "Reconnect view" : "Prepare / retry"}><RefreshCw size={18} aria-hidden="true" /></button>
     </form>
-    {error && <div role="alert">{error}</div>}
-    <div className="managed-browser-toolbar">
-      <button className="button quiet" disabled={!session || busy} onClick={() => void operate("capture")}>Ask about page</button>
-      <button className="button quiet" disabled={!session || busy} onClick={() => void operate("capture", { capture_kind: "selection" })}>Ask about selected text</button>
-      <button className="button quiet" aria-pressed={mode === "element"} onClick={() => setMode(mode === "element" ? "browse" : "element")}>Pick element</button>
-      <button className="button quiet" disabled={!imageSupported} title={imageSupported ? "Select a visual region" : "Choose an image-capable Assistant model"} aria-pressed={mode === "region"} onClick={() => setMode(mode === "region" ? "browse" : "region")}>Select region</button>
-      <button className="button quiet" disabled={busy || !session} onClick={() => {
+    {error && <div className="managed-browser-error" role="alert">{error}</div>}
+    <div className="managed-browser-toolbar managed-browser-actions" role="group" aria-label="Page actions">
+      <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture")} aria-label="Ask about page" title="Ask about page"><MessageSquareText size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture", { capture_kind: "selection" })} aria-label="Ask about selected text" title="Ask about selected text"><TextSelect size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon" aria-pressed={mode === "element"} onClick={() => setMode(mode === "element" ? "browse" : "element")} aria-label="Pick element" title="Pick element"><MousePointer2 size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon" disabled={!imageSupported} title={imageSupported ? "Select a visual region" : "Choose an image-capable Assistant model"} aria-pressed={mode === "region"} onClick={() => setMode(mode === "region" ? "browse" : "region")} aria-label="Select region"><Scan size={18} aria-hidden="true" /></button>
+      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Take control"} title={paused ? "Resume assistant control" : "Take control"} disabled={busy || !session} onClick={() => {
         if (!session) return;
         const nextPaused = !paused;
         const revision = ++controlRevision.current;
@@ -224,11 +225,13 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
         void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
           .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); } })
           .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setBusy(false));
-      }}>{paused ? "Resume assistant control" : "Take control"}</button>
+      }}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
     </div>
-    <label>Page viewport<select aria-label="Page viewport" disabled={!connected} defaultValue="" onChange={event => { const [width,height] = event.target.value.split("x").map(Number); send({ kind: "resize", width, height }); setCapture(undefined); }}><option value="" disabled>Current host viewport</option><option value="1280x800">Desktop · 1280 × 800</option><option value="390x844">Phone · 390 × 844</option><option value="844x390">Phone landscape · 844 × 390</option></select></label>
     <p role="status">{busy ? "Working…" : connected ? `${mode === "browse" ? "Shared Chromium" : `Select ${mode} on the page`} · ${paused ? "You have control" : "Assistant control enabled"}` : "Browser view disconnected"}</p>
-    <details className="managed-browser-credentials"><summary>Protected values ({credentials.length})</summary>
+    <div className="managed-browser-utilities">
+    <details className="managed-browser-view-options"><summary title="Page viewport"><Settings2 size={16} aria-hidden="true" /><span>View</span></summary>    <label>Page viewport<select aria-label="Page viewport" disabled={!connected} defaultValue="" onChange={event => { const [width,height] = event.target.value.split("x").map(Number); send({ kind: "resize", width, height }); setCapture(undefined); }}><option value="" disabled>Current host viewport</option><option value="1280x800">Desktop · 1280 × 800</option><option value="390x844">Phone · 390 × 844</option><option value="844x390">Phone landscape · 844 × 390</option></select></label>
+</details>
+    <details className="managed-browser-credentials"><summary><KeyRound size={16} aria-hidden="true" />Protected values ({credentials.length})</summary>
       <p>Save a password or other private value for this browser. The Assistant receives its label and a protected reference. Values expire when Core restarts.</p>
       <form onSubmit={event => { event.preventDefault(); if (!session || credentialBusy) return; setCredentialBusy(true); setError("");
         void request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials`, { label: credentialLabel, secret: credentialSecret, persistence: "session" })
@@ -243,7 +246,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
         void request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials/${encodeURIComponent(item.reference)}`, undefined, "DELETE")
           .then(next => { setCredentials(next); setCredentialRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setCredentialBusy(false)); }}>Remove {item.label}</button></div>)}
     </details>
-    <details className="managed-browser-credentials"><summary>Files for this page ({files.length})</summary>
+    <details className="managed-browser-credentials"><summary><Paperclip size={16} aria-hidden="true" />Files for this page ({files.length})</summary>
       <p>Choose a file from this device for a page upload. Files stay attached to this browser until removed. Up to eight files, 4 MiB each; the page receives bytes only after approval.</p>
       <label>Attach file for page upload<input type="file" disabled={!session || fileBusy || files.length >= 8} onChange={event => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void attachPageFile(file); }} /></label>
       {fileBusy && <p role="status">Saving file…</p>}
@@ -252,6 +255,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
         void request<BrowserFile[]>(`browser-companion/${session.session_id}/files/${encodeURIComponent(file.reference)}`, undefined, "DELETE")
           .then(next => { setFiles(next); setFileRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setFileBusy(false)); }}>Remove {file.filename}</button></div>)}
     </details>
+    </div>
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}
     {capture && <section className="managed-browser-capture" aria-label="Browser context preview"><strong>{capture.title || capture.url}</strong><small>{capture.captured_at}</small><pre>{capture.text}</pre>

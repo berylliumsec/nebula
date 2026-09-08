@@ -1,3 +1,4 @@
+import { Search } from "lucide-react";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useRef, useState } from "react";
 import type { ChatSearchHit, ChatSearchPage } from "../pages/useChatNavigation";
@@ -19,7 +20,7 @@ export function ChatSearchPanel({search, onSelect}: {search: (q: string, bookmar
     finally { if (generation.current === request) setBusy(false); }
   };
   const jump = (next: number) => { if (page?.items[next]) { setIndex(next); onSelect(page.items[next]); } };
-  return <details className="assistant-search"><summary>Search messages and bookmarks</summary><form onSubmit={event => {event.preventDefault(); void run();}}>
+  return <details className="assistant-search"><summary aria-label="Search messages and bookmarks" title="Search messages and bookmarks"><Search size={18} aria-hidden="true" /></summary><form onSubmit={event => {event.preventDefault(); void run();}}>
     <label>Search transcript<input type="search" value={query} maxLength={512} onChange={event => setQuery(event.target.value)} /></label>
     <label><input type="checkbox" checked={currentOnly} onChange={event => setCurrentOnly(event.target.checked)} />This conversation</label>
     <label><input type="checkbox" checked={bookmarked} onChange={event => setBookmarked(event.target.checked)} />Bookmarks only</label>

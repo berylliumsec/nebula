@@ -2416,3 +2416,17 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .session-inspector.assistant-drawer { display: block; width: min(100%, 620px); max-height: 85dvh; overflow-y: auto; border: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
   .assistant-drawer button, .assistant-attachment-dialog button { min-height: 44px; }
 }
+
+/* Familiar composer utilities share one quiet icon treatment. */
+.chat-composer footer .chat-composer-icon,
+.chat-composer footer .chat-context-meter { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; width: 44px; min-width: 44px; min-height: 44px; padding: 0; border-radius: 10px; }
+.chat-composer footer .chat-composer-icon svg { width: 18px; height: 18px; }
+
+.assistant-search > summary { display: flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; padding: 0; border-radius: 10px; color: var(--muted); cursor: pointer; list-style: none; }
+.assistant-search > summary::-webkit-details-marker { display: none; }
+.assistant-search > summary:hover, .assistant-search[open] > summary { color: var(--text); background: var(--surface-muted); }
+.assistant-search > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+.quiet-icon-action.icon-button, .quiet-icon-action.button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; min-width: 44px; width: 44px; min-height: 44px; height: 44px; padding: 0; border-radius: 10px; }
+.quiet-icon-action[aria-pressed="true"] { color: var(--blue); background: var(--blue-muted); }
+.quiet-icon-action:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

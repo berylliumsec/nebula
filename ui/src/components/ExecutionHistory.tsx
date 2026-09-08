@@ -1,3 +1,4 @@
+import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Ban, Clipboard, FileClock, LoaderCircle, MessageSquare, NotebookPen, Play, RefreshCw } from "lucide-react";
 import type { ApiClient } from "../api/client";
@@ -197,7 +198,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         <label>Operator<input value={operatorId} placeholder="Any operator" onChange={(event) => setOperatorId(event.target.value)} /></label>
         <label>From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} /></label>
         <label>Through<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} /></label>
-        <button className="button quiet" type="button" disabled={loading} onClick={() => void load()}><RefreshCw className={loading ? "spin" : undefined} size={14} /> Refresh</button>
+        <IconAction icon={RefreshCw} label="Refresh" className={loading ? "is-loading" : undefined} disabled={loading} onClick={() => void load()} />
       </header>
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
       {validationError && <InlineValidationNotice message={validationError} />}
@@ -213,7 +214,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
         </aside>
         <section className={`execution-detail${selected ? "" : " is-empty"}`}>
           {selected ? <>
-            <header><div><h3>{selected.language} execution</h3><p>{selected.status.replaceAll("_", " ")} · exit {selected.exitCode ?? "—"} · {duration(selected)}</p></div><div><button className="button quiet" type="button" onClick={() => void copySource(selected)}><Clipboard size={13} /> Copy</button><button className="button secondary" type="button" onClick={() => void rerun(selected)}><Play size={13} /> Rerun through review</button>{!ACTIVE.has(selected.status) && <><button className="button secondary" type="button" onClick={() => setInsightAction("draft")}><NotebookPen size={13} /> Draft note</button><button className="button secondary" type="button" onClick={() => setInsightAction("chat")}><MessageSquare size={13} /> Discuss in chat</button></>}{ACTIVE.has(selected.status) && <button className="button danger" type="button" onClick={() => void cancel(selected)}><Ban size={13} /> Cancel</button>}</div></header>
+            <header><div><h3>{selected.language} execution</h3><p>{selected.status.replaceAll("_", " ")} · exit {selected.exitCode ?? "—"} · {duration(selected)}</p></div><div><IconAction icon={Clipboard} label="Copy" title="Copy execution source" onClick={() => void copySource(selected)} /><button className="button secondary" type="button" onClick={() => void rerun(selected)}><Play size={13} /> Rerun through review</button>{!ACTIVE.has(selected.status) && <><button className="button secondary" type="button" onClick={() => setInsightAction("draft")}><NotebookPen size={13} /> Draft note</button><button className="button secondary" type="button" onClick={() => setInsightAction("chat")}><MessageSquare size={13} /> Discuss in chat</button></>}{ACTIVE.has(selected.status) && <button className="button danger" type="button" onClick={() => void cancel(selected)}><Ban size={13} /> Cancel</button>}</div></header>
             <dl><div><dt>Image</dt><dd><code>{selected.runtime.image}</code></dd></div><div><dt>Runtime digest</dt><dd><code>{selected.runtime.runtimeDigest}</code></dd></div><div><dt>Network</dt><dd>{selected.network.mode === "none" ? "Offline" : `${selected.network.target} · ${selected.network.ports.join(", ")}`}</dd></div><div><dt>Policy</dt><dd>{selected.policyDecision}{selected.errorCode ? ` · ${selected.errorCode}` : ""}</dd></div></dl>
             {selected.errorDetail && <p className="execution-error">{selected.errorDetail}</p>}
             {selected.workspaceChanges.length > 0 && <details><summary>{selected.workspaceChanges.length} workspace change{selected.workspaceChanges.length === 1 ? "" : "s"}</summary><ul>{selected.workspaceChanges.map((change) => <li key={`${change.change}-${change.path}`}><span>{change.change}</span><code>{change.path}</code></li>)}</ul></details>}

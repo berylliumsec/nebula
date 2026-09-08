@@ -1,3 +1,5 @@
+import { IconAction } from "../components/IconAction";
+import { Eye } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   BookOpen,
@@ -332,7 +334,7 @@ export function KnowledgePage() {
                   <span className={`source-state ${busy ? "indexing" : source.status}`}>{busy && <RefreshCw className="spin" size={13} />}{busy ? "working" : source.status}</span>
                   <span className="source-updated">{displayTime(source.updatedAt)}</span>
                   <div className="source-actions">
-                    <button className="text-link" type="button" onClick={() => openResource(source)}>Inspect</button>
+                    <IconAction icon={Eye} label="Inspect" title={`Inspect ${source.name}`} onClick={() => openResource(source)} />
                     <button className="icon-button subtle" type="button" title="Reindex source" aria-label={`Reindex ${source.name}`} disabled={!canMutate || busy} onClick={() => void reindex(source)}><RefreshCw size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Download original" aria-label={`Download ${source.name}`} disabled={!source.artifactId || !api || busy} onClick={() => void download(source)}><Download size={14} /></button>
                     <button className="icon-button subtle" type="button" title="Remove from retrieval" aria-label={`Remove ${source.name}`} disabled={!canMutate || busy} onClick={() => void remove(source)}><Trash2 size={14} /></button>

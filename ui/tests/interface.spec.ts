@@ -584,14 +584,10 @@ async function openWorkspace(page: Page, route: string, heading: string) {
       }
     }, route);
   }
-  if (route === "/?view=browser") {
-    await expect.poll(() => page.evaluate(() => ({
-      pathname: location.pathname,
-      view: new URLSearchParams(location.search).get("view"),
-    }))).toEqual({ pathname: "/", view: "browser" });
-  } else {
-    await expect.poll(() => page.evaluate(() => `${location.pathname}${location.search}${location.hash}`)).toBe(route);
-  }
+  const target = new URL(route, "http://fixture.test");
+  const canonicalPath = ({ "/": "/projects/scratch-project/workbench", "/findings": "/projects/scratch-project/findings", "/reports": "/projects/scratch-project/reports", "/project": "/projects/scratch-project" } as Record<string, string>)[target.pathname] ?? target.pathname;
+  const acceptedRoutes = [route, `${canonicalPath}${target.search}${target.hash}`];
+  await expect.poll(async () => acceptedRoutes.includes(await page.evaluate(() => `${location.pathname}${location.search}${location.hash}`))).toBe(true);
   if (heading === "Workbench") {
     if ((page.viewportSize()?.width ?? 1_000) <= 760) {
       await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 15_000 });
@@ -4940,6 +4936,26 @@ test("audit every primary workspace view", async ({ page }, testInfo) => {
     expect(overflow, `${name} contains horizontally clipped UI`).toEqual([]);
     expect(await findPathologicalText(page), `${name} renders prose in a pathologically narrow column`).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
+    // Optional, inert design snapshots use fixture data and never ship in the app.
+    if (process.env.NEBULA_DESIGN_EXPORT_DIR) {
+      const { mkdir, writeFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const markup = await page.evaluate(() => {
+        const copy = document.documentElement.cloneNode(true) as HTMLElement;
+        copy.querySelectorAll("script").forEach(node => node.remove());
+        const liveInputs = document.querySelectorAll("input, textarea, select");
+        copy.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input, textarea, select").forEach((node, index) => {
+          const live = liveInputs[index] as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+          if (node instanceof HTMLTextAreaElement) node.textContent = live.value;
+          else if (node instanceof HTMLInputElement) { node.setAttribute("value", live.value); if (node.checked) node.setAttribute("checked", ""); }
+          else for (const option of node.options) option.toggleAttribute("selected", option.value === live.value);
+        });
+        return "<!doctype html>" + copy.outerHTML;
+      });
+      await mkdir(process.env.NEBULA_DESIGN_EXPORT_DIR, { recursive: true });
+      await writeFile(join(process.env.NEBULA_DESIGN_EXPORT_DIR, `${name}.html`), markup);
+    }
+
   };
 
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -5298,7 +5314,30 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   });
   await openWorkspace(page, "/?view=browser", "Workbench");
   await expect(page.getByLabel("Browser engine")).toHaveValue("managed");
+  const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
+  await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("complementary", { name: "Browser Assistant", exact: true })).toHaveCount(0);
+  await toggleAssistant.click();
+  await expect(toggleAssistant).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  await expect(toggleAssistant).toBeFocused();
+  await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
+
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  for (const name of ["New tab", "Close tab", "Go", "Reconnect view", "Ask about page", "Ask about selected text", "Pick element", "Select region"]) {
+    const action = page.getByRole("button", { name, exact: true });
+    await expect(action.locator("svg")).toBeVisible();
+    await expect(action).toHaveText("");
+    await expect(action).toHaveAttribute("title", /.+/);
+    const bounds = await action.boundingBox();
+    expect(bounds?.width).toBeGreaterThanOrEqual(44);
+    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  }
+  await page.locator(".managed-browser-view-options summary").click();
+  await expect(page.getByLabel("Page viewport")).toBeVisible();
+  await page.locator(".managed-browser-view-options summary").click();
+  await expect(page.getByLabel("Page viewport")).toBeHidden();
+  await page.screenshot({ path: test.info().outputPath("quiet-browser.png") });
   await page.getByLabel("Browser address").fill("https://example.test/");
   await page.getByRole("button", { name: "Go", exact: true }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
@@ -5307,6 +5346,21 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
   if (await page.locator(".browser-assistant-sheet").count()) expect(await panel.evaluate(element => getComputedStyle(element).backgroundColor)).toMatch(/^rgb\(\d+, \d+, \d+\)$/);
   await expect(panel).toBeVisible();
+  const searchToggle = panel.locator(".assistant-search > summary");
+  await expect(searchToggle).toHaveAccessibleName("Search messages and bookmarks");
+  await expect(searchToggle.locator("svg")).toBeVisible();
+  await searchToggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeHidden();
+  for (const name of ["Results", "Attach files"]) {
+    const action = panel.getByRole("button", { name, exact: true });
+    await expect(action.locator("svg")).toBeVisible();
+    await expect(action).toHaveText("");
+    await expect(action).toHaveAttribute("title", name);
+  }
+
   await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("browser-selection-handoff");
   await panel.locator("#analyst-message").fill("What does this button do?");
   await panel.getByRole("button", { name: "Send message", exact: true }).click();

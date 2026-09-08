@@ -109,14 +109,16 @@ describe("ManagedAssistantBrowser", () => {
     let resolveControl!: (value: { paused: boolean }) => void;
     const controlRead = new Promise<{ paused: boolean }>(resolve => { resolveControl = resolve; });
     const { onControlChange } = fixture(true, false, false, false, controlRead);
-    fireEvent.click(await screen.findByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     await act(async () => { resolveControl({ paused: true }); await controlRead; });
     expect(onControlChange).toHaveBeenLastCalledWith(true);
   });
   it("shows manual navigation takeover immediately after assistant control was resumed", async () => {
     const { onControlChange } = fixture();
-    fireEvent.click(await screen.findByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
