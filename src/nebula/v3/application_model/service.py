@@ -87,6 +87,24 @@ class ApplicationModelService:
             self.import_history(project, item.id)
         return item
 
+    def ensure_browser_collection(self, project, browser_session_id):
+        """Return the existing collection for a browser, or create and backfill one.
+
+        A paused collection is still authoritative: automatic collection must not
+        silently bypass an operator pause by creating another active collection.
+        """
+        self.get(BrowserSession, project, browser_session_id)
+        existing = [
+            item
+            for item in self.store.list_entities(
+                ModelSession, engagement_id=project, limit=1000
+            )
+            if item.browser_session_id == browser_session_id
+        ]
+        if existing:
+            return existing[0]
+        return self.create(project, browser_session_id, import_history=True)
+
     def browser_sessions(self, project):
         self.store.get(Engagement, project)
         return self.store.list_entities(

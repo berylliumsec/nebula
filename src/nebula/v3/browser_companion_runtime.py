@@ -15,7 +15,14 @@ CAPTURE = """({kind, x, y}) => {
   const sensitive = el => !!el.closest('input,textarea,[contenteditable],[data-sensitive],[autocomplete="one-time-code"]');
   const text = el => {
     const clone = el.cloneNode(true);
-    clone.querySelectorAll('script,style,input,textarea,[contenteditable],[data-sensitive]').forEach(n => n.remove());
+    const originals = [el, ...el.querySelectorAll('input,textarea,select')];
+    const copies = [clone, ...clone.querySelectorAll('input,textarea,select')];
+    originals.forEach((original, index) => {
+      const copy = copies[index];
+      if (!copy || !('value' in original)) return;
+      copy.setAttribute('value', original.value);
+      if (copy.tagName === 'TEXTAREA') copy.textContent = original.value;
+    });
     return (clone.textContent || '').trim().slice(0,12000);
   };
   const nodes = Array.from(document.querySelectorAll('a,button,input,select,textarea,[role="button"]')).slice(0,200);
@@ -25,18 +32,20 @@ CAPTURE = """({kind, x, y}) => {
     const id = nodeIds.get(el); currentNodes.set(id, el); return id;
   };
   const elements = nodes.map(el => ({id:nodeId(el), tag:el.tagName.toLowerCase(),
-    label:(el.getAttribute('aria-label') || el.labels?.[0]?.textContent || (sensitive(el) ? '' : el.textContent) || el.getAttribute('placeholder') || el.tagName).trim().slice(0,200),
+    label:(el.getAttribute('aria-label') || el.labels?.[0]?.textContent || el.textContent || el.getAttribute('placeholder') || el.tagName).trim().slice(0,200),
+    value:'value' in el ? String(el.value).slice(0,12000) : null,
     sensitive:el.getAttribute('type') === 'password' || /password|secret|token|one.?time|cc-number|cc-csc/i.test([el.getAttribute('name'),el.getAttribute('autocomplete')].join(' ')), type:el.getAttribute('type') || ''}));
   let chosen = document.body;
   if (kind === 'element') chosen = document.elementFromPoint(x,y);
-  let content = chosen && !sensitive(chosen) ? text(chosen) : '';
+  let content = chosen ? text(chosen) : '';
   if (kind === 'selection') {
     const selection = window.getSelection();
     const anchor = selection?.anchorNode?.parentElement;
     const focus = selection?.focusNode?.parentElement;
-    content = anchor && focus && !sensitive(anchor) && !sensitive(focus) ? selection.toString().slice(0,12000) : '';
+    content = anchor && focus ? selection.toString().slice(0,12000) : '';
   }
-  return {url:location.href, title:document.title.slice(0,500), text:content, elements,
+  return {url:location.href, title:document.title.slice(0,500), text:content,
+    html:chosen ? chosen.outerHTML : '', elements,
     structure:chosen ? {tag:chosen.tagName.toLowerCase(), role:chosen.getAttribute('role')?.slice(0,200) || null} : null};
 }"""
 
@@ -88,13 +97,6 @@ async def capture(page: Any, request: CompanionRequest) -> dict[str, Any]:
         if request.width < 1 or request.height < 1:
             raise ValueError("Select a nonempty screenshot region.")
         image = await page.screenshot(
-            mask=[
-                page.locator("input,textarea,[contenteditable],[data-sensitive]"),
-                *[
-                    page.get_by_text(value.get_secret_value(), exact=False)
-                    for value in getattr(request, "protected_values", [])
-                ],
-            ],
             clip={
                 "x": request.x,
                 "y": request.y,

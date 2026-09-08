@@ -25,7 +25,8 @@ describe("Application Model inspector", () => {
     request.mockImplementation(async (url: string) => url.endsWith("/status") ? { solver_available: true, pending_count: 0 } : url.endsWith("browser-sessions") ? [{ id: "browser", name: "Reader" }] : []);
     render(<MemoryRouter><ApplicationModelPage /></MemoryRouter>);
     expect(await screen.findByRole("button", { name: "Create collection" })).toBeEnabled();
-    expect(screen.getByLabelText("Browser session")).toHaveValue("browser");
+    expect(screen.getByLabelText("Source browser for new model")).toHaveValue("browser");
     expect(screen.getByLabelText("Include recorded history")).toBeChecked();
+    expect(screen.getByText(/creates its collection automatically/)).toBeVisible();
   });
 });

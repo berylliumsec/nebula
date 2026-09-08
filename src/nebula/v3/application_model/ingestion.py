@@ -39,6 +39,7 @@ def envelope(kind, payload, connection=None):
                     "identity_id",
                     "browser_session_id",
                     "chat_turn_id",
+                    "artifact_id",
                 )
                 if key in metadata
             },

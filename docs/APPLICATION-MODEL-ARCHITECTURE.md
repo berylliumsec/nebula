@@ -35,8 +35,9 @@ extensions; V1 never dispatches a generated interaction.
   object, query, and view selections use URL parameters.
 - Existing browser chat context advertises bounded `model.*` discovery,
   inspection, proposal, and consistency-query tools. Shared Chromium navigation,
-  capture, and page actions are persisted as redacted interaction observations;
-  page text, credentials, URL queries, and fragments are not copied into the model.
+  capture, and page actions are persisted as interaction observations. Complete
+  Shared Chromium capture results are retained as project artifacts without field
+  masking; URL query and fragment data is omitted from normalized route facts.
 - Harness agents receive the same project-scoped capabilities through Nebula's
   authenticated MCP gateway and frozen command-runtime snapshot. The incremental
   `model.get_updates` capability returns immutable states and observations after

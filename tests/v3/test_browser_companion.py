@@ -147,7 +147,7 @@ def test_companion_tool_has_no_script_or_security_testing_operations(tmp_path):
         companion_components(store, other.id, session.id)
 
 
-def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
+def test_real_chromium_capture_retains_fields_and_rejects_changed_document():
     from playwright.async_api import async_playwright
     from nebula.v3.browser_companion_runtime import capture, operate
     from types import SimpleNamespace
@@ -165,8 +165,9 @@ def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
                 )
                 request = CompanionRequest(operation="capture", tab_id="tab")
                 result = await capture(page, request)
-                assert "do-not-export" not in result["text"]
-                assert "private-draft" not in result["text"]
+                assert result["elements"][0]["value"] == "do-not-export"
+                assert result["elements"][1]["value"] == "private-draft"
+                assert "private-draft" in result["html"]
                 assert result["elements"][0]["sensitive"] is True
                 await page.locator("button").evaluate("el => el.textContent = 'Delete'")
 
@@ -654,7 +655,7 @@ def test_harness_image_capability_follows_discovered_model_modalities():
     }
 
 
-def test_protected_reference_fills_only_after_approval_and_redacts_echo(
+def test_protected_reference_fills_only_after_approval_and_retains_capture(
     tmp_path, monkeypatch
 ):
     import json
@@ -730,8 +731,7 @@ def test_protected_reference_fills_only_after_approval_and_redacts_echo(
     assert payloads == []
     result = asyncio.run(service.decide(session.id, action.id, "approve"))
     assert result.status == "complete" and len(payloads) == 1
-    assert secret not in result.model_dump_json()
-    assert result.result["text"] == "[protected]"
+    assert result.result["text"] == secret
     with pytest.raises(ValueError):
         asyncio.run(
             service.request(

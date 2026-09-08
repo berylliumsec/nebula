@@ -21,7 +21,7 @@
 .model-section dt { font-weight: 600; }
 .model-section dd { margin: 4px 0 0; overflow-wrap: anywhere; }
 .model-section summary { cursor: pointer; min-height: 44px; padding: 12px 0; }
-.model-map-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 14px; align-items: start; min-width: 0; }
+.model-map-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 280px); gap: 14px; align-items: start; width: 100%; max-width: 100%; min-width: 0; }
 .model-map { min-width: 0; padding: 20px; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 16px; background: radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--model-observed) 7%, transparent), transparent 36%), var(--surface-raised); }
 .model-map-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
 .model-map-heading h2 { margin: 3px 0 0; font-size: 20px; }
@@ -49,13 +49,14 @@ button.model-node:hover { border-color: var(--model-observed); background: var(-
 .model-node strong { font-size: 13px; }
 .model-node small { color: var(--text-muted); font-size: 10px; }
 .model-map-empty { display: grid; place-items: center; gap: 8px; min-height: 260px; padding: 32px; text-align: center; border: 1px dashed var(--border); border-radius: 16px; color: var(--text-muted); }
-.model-inspector { position: sticky; top: 16px; min-width: 0; padding: 18px; }
+.model-inspector { position: sticky; top: 16px; width: 100%; max-width: 100%; min-width: 0; padding: 18px; overflow: hidden; }
 .model-inspector > svg { color: var(--model-observed); }
-.model-inspector h2 { margin: 5px 0; font-size: 17px; overflow-wrap: anywhere; }
-.model-inspector p { color: var(--text-muted); font-size: 12px; }
+.model-inspector h2 { max-width: 100%; margin: 5px 0; font-size: 17px; overflow-wrap: anywhere; word-break: break-word; }
+.model-inspector p { max-width: 100%; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; word-break: break-word; }
 .model-inspector dl > div { padding: 8px 0; }
 .model-inspector dt { color: var(--text-muted); font-size: 11px; }
-.model-inspector dd { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.model-inspector dd { display: flex; max-width: 100%; min-width: 0; align-items: flex-start; gap: 7px; font-size: 12px; }
+.model-inspector-value { max-width: 100%; min-width: 0; overflow-wrap: anywhere; word-break: break-word; white-space: normal; }
 @media (max-width: 430px) { .model-section { padding: 12px; } .model-actions > button { flex: 1 1 120px; } }
 @media (max-width: 900px) {
   .model-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }

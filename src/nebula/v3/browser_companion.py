@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
@@ -120,6 +121,15 @@ class BrowserCompanion:
     ) -> None:
         if request.operation == "tabs":
             return
+        # Shared Chromium is a first-class recorded source. Ensure it has a
+        # durable collection before storing the observation so the transactional
+        # outbox can route this interaction immediately. The first collection
+        # also imports any earlier durable companion observations.
+        from .application_model.service import ApplicationModelService
+
+        ApplicationModelService(self.store).ensure_browser_collection(
+            session.engagement_id, session.id
+        )
         url = self._safe_url(result.get("url") or request.url)
         metadata = {
             "browser_session_id": session.id,
@@ -134,6 +144,22 @@ class BrowserCompanion:
             "element_count": len(result.get("elements", [])),
             "assistant": assistant,
         }
+        if self.artifact_store is not None:
+            stored = self.artifact_store.put_bytes_with_status(
+                json.dumps(result, sort_keys=True).encode(),
+                engagement_id=session.engagement_id,
+                filename=f"shared-chromium-{request.operation}.json",
+                media_type="application/json",
+                source="browser_companion_capture",
+                metadata={
+                    "browser_session_id": session.id,
+                    "tab_id": request.tab_id or result.get("active_tab_id"),
+                    "operation": request.operation,
+                    "contains_unredacted_page_content": True,
+                },
+            )
+            artifact = self.store.create(stored.artifact)
+            metadata["artifact_id"] = artifact.id
         self.store.create(
             Observation(
                 engagement_id=session.engagement_id,
@@ -325,27 +351,6 @@ class BrowserCompanion:
                     entry["reference"]
                 ).get_secret_value()
         return values
-
-    @staticmethod
-    def redact_result(result: Any, values: list[str], key: str = "") -> Any:
-        if isinstance(result, dict):
-            return {
-                name: BrowserCompanion.redact_result(value, values, name)
-                for name, value in result.items()
-            }
-        if isinstance(result, list):
-            return [
-                BrowserCompanion.redact_result(value, values, key) for value in result
-            ]
-        if isinstance(result, str) and key not in {
-            "image",
-            "page_revision",
-            "id",
-            "reference",
-        }:
-            for value in sorted(values, key=len, reverse=True):
-                result = result.replace(value, "[protected]")
-        return result
 
     async def adapter(self) -> LocalBrowserdAdapter:
         adapter = await self.engines.adapter("managed-chromium")
@@ -550,7 +555,6 @@ class BrowserCompanion:
                         "Select an available credential attached to this browser; protected fills cannot contain plain text."
                     )
                 payload["text"] = protected[request.credential_ref]
-            payload["protected_values"] = list(protected.values())
             try:
                 response = await adapter._request(
                     "POST",
@@ -573,7 +577,7 @@ class BrowserCompanion:
                 raise ValueError(
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
                 )
-            result = self.redact_result(response.json(), list(protected.values()))
+            result = response.json()
             self._record_interaction(
                 session,
                 request,

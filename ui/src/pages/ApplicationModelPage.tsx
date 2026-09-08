@@ -126,7 +126,8 @@ export function ApplicationModelPage() {
       <section className="panel model-section"><h2>Collections</h2>
         <label>Collection<select value={collection} onChange={e => select("collection", e.target.value)}><option value="">Choose a collection</option>{sessions.map(s => <option key={s.id} value={s.id}>{browsers.find(b => b.id === s.browser_session_id)?.name ?? "Browser collection"} · {s.status} · {s.processed_count} records</option>)}</select></label>
         <form onSubmit={async e => { e.preventDefault(); const result = await mutate("/sessions", { browser_session_id: browser || browsers[0]?.id, import_history: history }); if (result?.id) select("collection", result.id); }}>
-          <label>Browser session<select value={browser || browsers[0]?.id || ""} onChange={e => setBrowser(e.target.value)}>{browsers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+          <label>Source browser for new model<select value={browser || browsers[0]?.id || ""} onChange={e => setBrowser(e.target.value)}>{browsers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
+          <p>Shared Chromium creates its collection automatically on the first recorded interaction. Use this form to create or import another browser collection.</p>
           <label className="model-checkbox"><input type="checkbox" checked={history} onChange={e => setHistory(e.target.checked)} />Include recorded history</label>
           <button className="button primary" disabled={busy || !browsers.length}>Create collection</button>
         </form>
@@ -156,7 +157,7 @@ export function ApplicationModelPage() {
             {selectedObject && selectedObjectVersion ? <>
               <span className="model-eyebrow">Selected object</span><h2>{selectedObject.label}</h2>
               <p>{selectedObjectVersion.id.slice(0, 18)} · {Object.keys(selectedObjectVersion.properties).length} properties</p>
-              <dl>{Object.entries(selectedObjectVersion.properties).slice(0, 12).map(([name, value]) => <div key={name}><dt>{name}</dt><dd><span className={`model-value-dot ${value.kind}`} />{value.kind === "concrete" ? String(value.value) : value.reason ?? value.kind}</dd></div>)}</dl>
+              <dl>{Object.entries(selectedObjectVersion.properties).slice(0, 12).map(([name, value]) => <div key={name}><dt>{name}</dt><dd><span className={`model-value-dot ${value.kind}`} /><span className="model-inspector-value">{value.kind === "concrete" ? String(value.value) : value.reason ?? value.kind}</span></dd></div>)}</dl>
               <button className="button" onClick={() => select("modelTab", "objects")}>Open full history</button>
             </> : <><Activity aria-hidden="true" /><h2>Inspect the model</h2><p>Select an object to see its typed properties, unknowns, source observations, and history.</p><dl><div><dt>Current state</dt><dd>{state.id.slice(0, 16)}</dd></div><div><dt>Branch</dt><dd>{state.branch_key}</dd></div><div><dt>Parent states</dt><dd>{state.parent_state_ids.length}</dd></div></dl></>}
           </aside>

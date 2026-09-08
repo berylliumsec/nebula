@@ -9,11 +9,18 @@ from nebula.v3.domain import (
     BrowserIdentity,
     BrowserTrafficExchange,
     CompanionRequest,
+    Artifact,
 )
 from nebula.v3.browser_companion import BrowserCompanion
 from nebula.v3.browser_engine import BrowserEngineRegistry
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.database import ApplicationModelOutboxRow
-from nebula.v3.application_model.domain import Value, Formula, KnowledgeState
+from nebula.v3.application_model.domain import (
+    Value,
+    Formula,
+    KnowledgeState,
+    ModelSession,
+)
 from nebula.v3.application_model.service import ApplicationModelService
 from nebula.v3.application_model.solver import solve, isolated_solve
 
@@ -98,6 +105,50 @@ def test_shared_chromium_interaction_projects_without_page_secrets(model):
     assert facts["route"].value == "https://example.test/account"
     assert facts["element_count"].value == 1
     assert "private page body" not in str(workspace)
+
+
+def test_shared_chromium_creates_one_collection_and_backfills_history(tmp_path):
+    store = NebulaStore(tmp_path / "core.db")
+    project = store.create(Engagement(name="Automatic model"))
+    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Shared"))
+    browser = store.create(
+        BrowserSession(
+            engagement_id=project.id,
+            identity_id=identity.id,
+            name="Assistant browser",
+            metadata={"browser_companion_version": 1},
+        )
+    )
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    companion = BrowserCompanion(
+        store, BrowserEngineRegistry([]), artifact_store=artifacts
+    )
+    request = CompanionRequest(operation="capture", tab_id="tab")
+    result = {
+        "url": "https://example.test/",
+        "page_revision": "one",
+        "text": "unredacted secret",
+        "html": '<input value="unredacted secret">',
+        "elements": [{"id": "0", "value": "unredacted secret"}],
+    }
+    companion._record_interaction(
+        browser, request, result, assistant=True, chat_turn_id="turn"
+    )
+    companion._record_interaction(
+        browser, request, result, assistant=True, chat_turn_id="turn"
+    )
+
+    collections = store.list_entities(ModelSession, engagement_id=project.id)
+    assert len(collections) == 1
+    service = ApplicationModelService(store)
+    service.process_batch()
+    workspace = service.workspace(project.id, collections[0].id)
+    assert len(workspace["observations"]) == 2
+    assert len(workspace["states"]) == 2
+    assert len(workspace["observations"][0].artifact_ids) == 1
+    artifact = store.get(Artifact, workspace["observations"][0].artifact_ids[0])
+    with artifacts.open(artifact) as captured:
+        assert b"unredacted secret" in captured.read()
 
 
 def test_pause_and_resume(model):
