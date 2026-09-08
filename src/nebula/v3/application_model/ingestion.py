@@ -14,6 +14,7 @@ SOURCE_KINDS = frozenset(
         "browser_actions",
         "browser_commands",
         "browser_repeater_results",
+        "observations",
         "evidence",
     }
 )
@@ -21,6 +22,27 @@ SOURCE_KINDS = frozenset(
 
 def envelope(kind, payload, connection=None):
     payload = dict(payload)
+    metadata = payload.get("metadata") or {}
+    if kind == "observations" and payload.get("source") == "browser_companion":
+        payload = {
+            **payload,
+            **{
+                key: metadata[key]
+                for key in (
+                    "operation",
+                    "status",
+                    "url",
+                    "page_revision",
+                    "element_count",
+                    "capture_kind",
+                    "tab_id",
+                    "identity_id",
+                    "browser_session_id",
+                    "chat_turn_id",
+                )
+                if key in metadata
+            },
+        }
     if connection is not None:
         # Resolve durable cross-record references instead of guessing causality
         # from timestamps. A Repeater tab is not a browser tab.
@@ -51,7 +73,7 @@ def envelope(kind, payload, connection=None):
                 payload["session_id"] = parent.get("session_id")
                 payload["identity_id"] = parent.get("identity_id")
                 payload["tab_id"] = "repeater:" + payload["tab_id"]
-    metadata = payload.get("metadata") or {}
+    metadata = payload.get("metadata") or metadata
     browser_session_id = payload.get("session_id") or metadata.get("browser_session_id")
     if not browser_session_id:
         return None
@@ -70,6 +92,10 @@ def envelope(kind, payload, connection=None):
         "opcode",
         "direction",
         "payload_bytes",
+        "operation",
+        "element_count",
+        "capture_kind",
+        "page_revision",
     ):
         value = payload.get(key)
         if type(value) in (str, bool, int):
@@ -120,7 +146,7 @@ def envelope(kind, payload, connection=None):
         "identity_id": payload.get("identity_id") or metadata.get("identity_id"),
         "command_id": payload.get("command_id") or metadata.get("browser_command_id"),
         "action_id": payload.get("action_id") or metadata.get("browser_action_id"),
-        "tool_call_id": payload.get("tool_call_id"),
+        "tool_call_id": payload.get("tool_call_id") or metadata.get("tool_call_id"),
         "exchange_id": payload.get("exchange_id"),
         "facts": facts,
         "response_body_artifact_id": payload.get("response_body_artifact_id"),

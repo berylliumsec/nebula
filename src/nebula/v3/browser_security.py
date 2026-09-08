@@ -29,6 +29,8 @@ from .domain import (
     BrowserHandoffStatus,
     BrowserIdentity,
     BrowserSession,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
     BrowserSessionStatus,
     BrowserTabState,
     BrowserTrafficExchange,
@@ -877,7 +879,22 @@ class BrowserSecurityService:
             expires_at=utc_now() + ACTION_LIFETIME,
             **request.model_dump(),
         )
-        return self._create(action, "browser_action.proposed", request.proposed_by)
+        created = self._create(action, "browser_action.proposed", request.proposed_by)
+        policies = self.store.list_entities(
+            AutomationProjectPolicy,
+            engagement_id=session.engagement_id,
+            limit=2,
+        )
+        if policies and policies[0].approval_policy == AutomationApprovalPolicy.NEVER:
+            return self.decide_action(
+                created.id,
+                BrowserActionDecisionRequest(
+                    decision="approve",
+                    expected_revision=created.revision,
+                    operator_id="project-policy",
+                ),
+            )
+        return created
 
     def decide_action(
         self, action_id: str, request: BrowserActionDecisionRequest

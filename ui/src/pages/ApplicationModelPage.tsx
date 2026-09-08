@@ -82,11 +82,11 @@ export function ApplicationModelPage() {
     const [s, list, bw] = await Promise.all([
       api.request<Status>(`${base}/status`, { signal }),
       api.request<Collection[]>(`${base}/sessions`, { signal }),
-      api.request<{ sessions: { id: string; name: string }[] }>(`engagements/${encodeURIComponent(engagement.id)}/browser-workspace`, { signal }),
+      api.request<{ id: string; name: string }[]>(`${base}/browser-sessions`, { signal }),
     ]);
     const next = collection ? await api.request<Workspace>(`${base}/sessions/${encodeURIComponent(collection)}/workspace`, { signal }) : undefined;
     if (signal?.aborted) return;
-    setStatus(s); setSessions(list); setBrowsers(bw.sessions); setWorkspace(next); setLoadError("");
+    setStatus(s); setSessions(list); setBrowsers(bw); setWorkspace(next); setLoadError("");
   }, [api, engagement, base, collection]);
   useEffect(() => {
     const controller = new AbortController();

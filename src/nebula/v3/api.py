@@ -9665,9 +9665,14 @@ def create_app(
         f"{API_PREFIX}/browser-companion/{{session_id}}/control",
         dependencies=[Depends(require_auth)],
     )
-    async def companion_control_status(session_id: str) -> dict[str, bool]:
+    async def companion_control_status(session_id: str) -> dict[str, Any]:
         session = browser_companion.session(session_id)
-        return {"paused": session.metadata.get("assistant_paused", True)}
+        return {
+            "paused": session.metadata.get("assistant_paused", True),
+            "approval_policy": browser_companion.approval_policy(
+                session.engagement_id
+            ).value,
+        }
 
     @app.put(
         f"{API_PREFIX}/browser-companion/{{session_id}}/control",

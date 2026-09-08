@@ -3,12 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ManagedAssistantBrowser } from "./ManagedAssistantBrowser";
 
-function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean }>) {
+function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean; approval_policy?: "always" | "on_boundary" | "never" }>) {
   let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
   let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
   let liveTab = { id: "tab-1", url: "https://example.test/", title: "Example" };
-  const connection = { close: vi.fn(), send: vi.fn(), readyState: 1 };
+  const connection: { close: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; readyState: number; onopen?: () => void } = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
     if (path.endsWith("/browser-companion")) return { session_id: "browser-1", conversation_id: "chat-1", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] };
@@ -156,6 +156,12 @@ describe("ManagedAssistantBrowser", () => {
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+  });
+  it("shows when the project policy allows browser changes without prompts", async () => {
+    const { connection } = fixture(true, false, false, false, Promise.resolve({ paused: false, approval_policy: "never" }));
+    await waitFor(() => expect(connection.onopen).toBeTypeOf("function"));
+    act(() => connection.onopen?.());
+    expect(await screen.findByText(/project allows without prompts/)).toBeVisible();
   });
   it("does not let an older control poll overwrite an explicit resume", async () => {
     let resolveControl!: (value: { paused: boolean }) => void;

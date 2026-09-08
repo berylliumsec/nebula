@@ -25,6 +25,9 @@ Availability: always on in this branch; no runtime feature flag.
   inspection, identifiable proposals, and recorded-state queries. Harness agents
   receive project-scoped versions through Nebula's authenticated MCP gateway;
   `model.get_updates` incrementally reads facts after a state checkpoint.
+- Shared Chromium sessions are available to collection creation. Navigation,
+  capture, and page actions create durable, redacted interaction observations
+  that use the same projection path as native browser records.
 - Project → Application model inspector: a primary black-box topology map,
   collection health metrics, interaction/object/state/inference lanes, typed
   selection inspector, state comparison, source links, object versions,

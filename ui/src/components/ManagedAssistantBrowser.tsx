@@ -40,6 +40,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [actions, setActions] = useState<Action[]>([]);
   const [mode, setMode] = useState<"browse" | "element" | "region">("browse");
   const [paused, setPaused] = useState(true);
+  const [approvalPolicy, setApprovalPolicy] = useState<"always" | "on_boundary" | "never">("on_boundary");
   const [controlBusy, setControlBusy] = useState(false);
   const controlRevision = useRef(0);
   const [text, setText] = useState("");
@@ -113,13 +114,14 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       try {
         const [next, control, protectedValues, attachedFiles, currentTabs] = await Promise.all([
           request<Action[]>(`browser-companion/${session.session_id}/actions`, undefined, "GET"),
-          request<{ paused?: boolean }>(`browser-companion/${session.session_id}/control`, undefined, "GET"),
+          request<{ paused?: boolean; approval_policy?: "always" | "on_boundary" | "never" }>(`browser-companion/${session.session_id}/control`, undefined, "GET"),
           request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials`, undefined, "GET"),
           request<BrowserFile[]>(`browser-companion/${session.session_id}/files`, undefined, "GET"),
           request<{ tabs: Tab[] }>(`browser-companion/${session.session_id}/operations`, { operation: "tabs" }),
         ]);
         if (!cancelled) {
           setActions(next); setCredentials(protectedValues); setFiles(attachedFiles); if (revision === controlRevision.current && typeof control.paused === "boolean") setPaused(control.paused);
+          if (control.approval_policy) setApprovalPolicy(control.approval_policy);
           setTabs(currentTabs.tabs);
           const selected = currentTabs.tabs.find(tab => tab.id === currentTabRef.current);
           if (selected && !addressEdited.current) setAddress(selected.url === "about:blank" ? "" : selected.url);
@@ -264,7 +266,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     </div>
     </div>
     </div>
-    <p role="status">{busy ? "Working…" : connected ? `${mode === "browse" ? "Shared Chromium" : `Select ${mode} on the page`} · ${paused ? "You have control" : "Assistant control enabled"}` : "Browser view disconnected"}</p>
+    <p role="status">{busy ? "Working…" : connected ? `${mode === "browse" ? "Shared Chromium" : `Select ${mode} on the page`} · ${paused ? "You have control" : approvalPolicy === "never" ? "Assistant control enabled · project allows without prompts" : "Assistant control enabled · changes require approval"}` : "Browser view disconnected"}</p>
     {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => void open()}>Reconnect view</button></div>}
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}

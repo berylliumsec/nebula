@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary, ref
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -24,6 +24,9 @@ from .domain import (
     Artifact,
     BrowserIdentity,
     BrowserSession,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
+    Observation,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -90,6 +93,68 @@ class BrowserCompanion:
         self.artifact_store = self._store_artifacts.get(store)
         if managed_host is not None:
             self._store_hosts[store] = ref(managed_host)
+
+    @staticmethod
+    def _safe_url(value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = urlsplit(value)
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            if parsed.port is not None:
+                host += f":{parsed.port}"
+            return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+        except ValueError:
+            return None
+
+    def _record_interaction(
+        self,
+        session: BrowserSession,
+        request: CompanionRequest,
+        result: dict[str, Any],
+        *,
+        assistant: bool,
+        chat_turn_id: str | None,
+    ) -> None:
+        if request.operation == "tabs":
+            return
+        url = self._safe_url(result.get("url") or request.url)
+        metadata = {
+            "browser_session_id": session.id,
+            "identity_id": session.identity_id,
+            "tab_id": request.tab_id or result.get("active_tab_id"),
+            "chat_turn_id": chat_turn_id,
+            "operation": request.operation,
+            "capture_kind": request.capture_kind,
+            "status": "complete",
+            "url": url,
+            "page_revision": result.get("page_revision"),
+            "element_count": len(result.get("elements", [])),
+            "assistant": assistant,
+        }
+        self.store.create(
+            Observation(
+                engagement_id=session.engagement_id,
+                observation_type="browser_companion_interaction",
+                title=f"Shared Chromium {request.operation}",
+                source="browser_companion",
+                metadata={
+                    key: value for key, value in metadata.items() if value is not None
+                },
+            )
+        )
+
+    def approval_policy(self, project_id: str) -> AutomationApprovalPolicy:
+        policies = self.store.list_entities(
+            AutomationProjectPolicy, engagement_id=project_id, limit=2
+        )
+        return (
+            policies[0].approval_policy
+            if policies
+            else AutomationApprovalPolicy.ON_BOUNDARY
+        )
 
     def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
         session = self.session(session_id)
@@ -509,6 +574,13 @@ class BrowserCompanion:
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
                 )
             result = self.redact_result(response.json(), list(protected.values()))
+            self._record_interaction(
+                session,
+                request,
+                result,
+                assistant=assistant,
+                chat_turn_id=chat_turn_id,
+            )
             result["credentials"] = self.credential_catalog(session_id)
             result["files"] = self.file_catalog(session_id)
             if "tabs" in result:

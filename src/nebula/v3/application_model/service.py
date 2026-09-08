@@ -87,6 +87,12 @@ class ApplicationModelService:
             self.import_history(project, item.id)
         return item
 
+    def browser_sessions(self, project):
+        self.store.get(Engagement, project)
+        return self.store.list_entities(
+            BrowserSession, engagement_id=project, limit=1000
+        )
+
     def import_history(self, project, collection):
         session = self.get(ModelSession, project, collection)
         if session.status != "active":

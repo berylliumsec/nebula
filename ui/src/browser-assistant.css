@@ -19,7 +19,7 @@
 .managed-browser-toolbar select { max-width: 100%; }
 .managed-assistant-browser button, .managed-assistant-browser input, .managed-assistant-browser select { min-height: 44px; }
 .managed-browser-screen { position: relative; min-height: 100px; overflow: auto; }
-.managed-browser-screen > img { display: block; width: 100%; height: auto; touch-action: none; }
+.managed-browser-screen > img { display: block; width: auto; max-width: 100%; height: auto; touch-action: none; }
 .managed-browser-capture { max-height: 40vh; overflow: auto; }
 .managed-browser-capture pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .managed-browser-capture img { max-width: 100%; }

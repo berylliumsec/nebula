@@ -34,7 +34,9 @@ extensions; V1 never dispatches a generated interaction.
 - The inspector is at **Project → Application model**. Collection, state,
   object, query, and view selections use URL parameters.
 - Existing browser chat context advertises bounded `model.*` discovery,
-  inspection, proposal, and consistency-query tools when the feature is enabled.
+  inspection, proposal, and consistency-query tools. Shared Chromium navigation,
+  capture, and page actions are persisted as redacted interaction observations;
+  page text, credentials, URL queries, and fragments are not copied into the model.
 - Harness agents receive the same project-scoped capabilities through Nebula's
   authenticated MCP gateway and frozen command-runtime snapshot. The incremental
   `model.get_updates` capability returns immutable states and observations after

@@ -375,6 +375,77 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
     asyncio.run(run())
 
 
+def test_project_never_policy_executes_scoped_companion_change_without_prompt(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.domain import (
+        AutomationProjectPolicy,
+        ChatTurn,
+        ScopePolicy,
+        ToolCallOrigin,
+    )
+    from nebula.v3.tools import ToolInvocation
+
+    store, project, _, session, service = setup(tmp_path)
+    store.create(
+        AutomationProjectPolicy(engagement_id=project.id, approval_policy="never")
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Browser",
+            model="fixture",
+            provider_profile_id="provider",
+        )
+    )
+    service.bind(session.id, chat.id)
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            model="fixture",
+            provider_profile_id="provider",
+            tools_enabled=True,
+        )
+    )
+    broker = CompanionBroker(store, session.id)
+    operations = []
+
+    async def request(session_id, request, **kwargs):
+        operations.append(request.operation)
+        return {
+            "page_revision": "page-1",
+            "elements": [{"id": "0", "sensitive": False}],
+            "text": "Saved",
+        }
+
+    monkeypatch.setattr(broker.service, "request", request)
+    invocation = ToolInvocation(
+        engagement_id=project.id,
+        run_id=turn.id,
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id=chat.id,
+        chat_turn_id=turn.id,
+        tool_name="browser.companion",
+        arguments={
+            "operation": "click",
+            "tab_id": "tab",
+            "page_revision": "page-1",
+            "element_id": "0",
+            "url": "https://example.test/",
+        },
+        workspace=tmp_path,
+    )
+
+    result = asyncio.run(
+        broker.execute(invocation, ScopePolicy(engagement_id=project.id))
+    )
+    assert result.output["status"] == "complete"
+    assert operations == ["capture", "click"]
+    assert service.actions(session.id)[0].status == "complete"
+
+
 def test_manual_action_revokes_approvals_without_clearing_control_grant(tmp_path):
     store, _, _, session, service = setup(tmp_path)
     pending = service.propose(

@@ -1027,7 +1027,7 @@ class BrowserActionProposalBroker:
                 "status": action.status.value,
                 "action_sha256": action.action_sha256,
                 "expires_at": action.expires_at.isoformat(),
-                "requires_operator_approval": True,
+                "requires_operator_approval": action.status.value == "proposed",
                 "browser_session_id": self.session.id,
             }
         except Exception as exc:

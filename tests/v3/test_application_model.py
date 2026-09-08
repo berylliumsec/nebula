@@ -8,7 +8,10 @@ from nebula.v3.domain import (
     BrowserSession,
     BrowserIdentity,
     BrowserTrafficExchange,
+    CompanionRequest,
 )
+from nebula.v3.browser_companion import BrowserCompanion
+from nebula.v3.browser_engine import BrowserEngineRegistry
 from nebula.v3.database import ApplicationModelOutboxRow
 from nebula.v3.application_model.domain import Value, Formula, KnowledgeState
 from nebula.v3.application_model.service import ApplicationModelService
@@ -66,6 +69,35 @@ def test_projection_deduplicates_history_and_retains_branches(model):
     assert service.store.get(KnowledgeState, before["id"]).model_dump() == before
     service.remove(project.id, collection.id)
     assert service.store.get(BrowserTrafficExchange, first.id).status_code == 200
+
+
+def test_shared_chromium_interaction_projects_without_page_secrets(model):
+    service, project, browser, collection = model
+    companion = BrowserCompanion(service.store, BrowserEngineRegistry([]))
+    companion._record_interaction(
+        browser,
+        CompanionRequest(
+            operation="capture",
+            tab_id="shared-tab",
+            url="https://example.test/account?token=private",
+        ),
+        {
+            "url": "https://example.test/account?token=private",
+            "page_revision": "revision-1",
+            "elements": [{"id": "secret-control"}],
+            "text": "private page body",
+        },
+        assistant=True,
+        chat_turn_id="turn-1",
+    )
+    service.process_batch()
+    workspace = service.workspace(project.id, collection.id)
+    assert len(workspace["observations"]) == 1
+    facts = workspace["observations"][0].facts
+    assert facts["operation"].value == "capture"
+    assert facts["route"].value == "https://example.test/account"
+    assert facts["element_count"].value == 1
+    assert "private page body" not in str(workspace)
 
 
 def test_pause_and_resume(model):

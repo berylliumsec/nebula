@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.storage import NebulaStore
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.domain import Engagement, ScopePolicy, BrowserSession
+from nebula.v3.domain import Engagement, ScopePolicy, BrowserIdentity, BrowserSession
 
 
 def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
@@ -64,6 +64,27 @@ def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
             expected_revision=current.revision,
         )
         base = f"/api/v1/engagements/{project['id']}/application-model"
+        shared_identity = store.create(
+            BrowserIdentity(
+                engagement_id=project["id"],
+                name="Shared Chromium identity",
+                metadata={"browser_companion_version": 1},
+            )
+        )
+        shared_session = store.create(
+            BrowserSession(
+                engagement_id=project["id"],
+                identity_id=shared_identity.id,
+                name="Assistant browser",
+                metadata={"browser_companion_version": 1},
+            )
+        )
+        eligible = client.get(base + "/browser-sessions", headers=auth)
+        assert eligible.status_code == 200
+        assert {item["id"] for item in eligible.json()} >= {
+            browser["id"],
+            shared_session.id,
+        }
         response = client.post(
             base + "/sessions", headers=auth, json={"browser_session_id": browser["id"]}
         )

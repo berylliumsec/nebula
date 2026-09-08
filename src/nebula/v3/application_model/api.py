@@ -57,6 +57,10 @@ def model_router(service):
     def sessions(project: str):
         return service.list(ModelSession, project)
 
+    @router.get("/browser-sessions")
+    def browser_sessions(project: str):
+        return service.browser_sessions(project)
+
     @router.post("/sessions", status_code=201)
     def create(project: str, request: CreateCollection):
         return service.create(
