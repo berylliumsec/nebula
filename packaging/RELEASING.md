@@ -85,6 +85,22 @@ baseline. If no valid successful baseline can be proved, the preparation runs
 the permanent full Playwright matrix. The same full matrix remains available
 manually by dispatching the workflow with `scope=full`.
 
+An agent or release manager may replace automatic impact selection with a
+reviewable catalog selection on manual dispatch. The `selection` input accepts
+comma-separated `area:NAME`, `project:NAME`, and `entry:AREA/PROJECT` tokens;
+for example, `area:assistant,entry:themes/mobile-webkit`. These selectors resolve
+only entries declared in `ui/playwright-impact.json`: arbitrary paths, projects,
+or grep expressions are rejected. An explicit selection is recorded in the
+receipt and takes precedence over `scope`; omit it to use automatic impact
+selection. Use `scope=full` when the release manager wants every permanent
+entry rather than a reviewed subset.
+
+List the accepted selectors before dispatching with:
+
+```console
+python scripts/playwright_impact.py catalog --manifest ui/playwright-impact.json
+```
+
 Record the successful preparation workflow run ID. Then manually run **Create
 Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
 

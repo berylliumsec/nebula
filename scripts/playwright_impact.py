@@ -41,15 +41,49 @@ def stable_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [unique[key] for key in sorted(unique)]
 
 
+def selected_entries(manifest: dict[str, Any], selection: list[str]) -> list[dict[str, Any]]:
+    """Resolve only catalogued area, project, or exact-entry selectors."""
+    entries: list[dict[str, Any]] = []
+    valid_projects = {entry["project"] for entry in manifest["full_include"]}
+    for token in selection:
+        kind, separator, value = token.partition(":")
+        if not separator or not value:
+            raise ValueError(f"invalid selection {token!r}; expected area:, project:, or entry:")
+        if kind == "area":
+            if value not in manifest["areas"]:
+                raise ValueError(f"unknown Playwright area: {value}")
+            entries.extend(manifest["areas"][value])
+        elif kind == "project":
+            if value not in valid_projects:
+                raise ValueError(f"unknown Playwright project: {value}")
+            entries.extend(entry for entry in manifest["full_include"] if entry["project"] == value)
+        elif kind == "entry":
+            area, slash, project = value.partition("/")
+            source = manifest["full_include"] if area == "full" else manifest["areas"].get(area)
+            if not slash or source is None:
+                raise ValueError(f"unknown Playwright entry: {value}")
+            matches = [entry for entry in source if entry["project"] == project]
+            if not matches:
+                raise ValueError(f"unknown Playwright entry: {value}")
+            entries.extend(matches)
+        else:
+            raise ValueError(f"unknown selection kind: {kind}")
+    return stable_entries(entries)
+
+
 def select_plan(
     manifest: dict[str, Any], baseline: str | None, candidate: str,
-    paths: list[str], scope: str = "impacted",
+    paths: list[str], scope: str = "impacted", selection: list[str] | None = None,
 ) -> dict[str, Any]:
+    selection = selection or []
     matched_rules: list[str] = []
     fallbacks: list[str] = []
     exclusions: list[str] = []
 
-    if scope == "full":
+    if selection:
+        include = selected_entries(manifest, selection)
+        reason = "explicit_selection"
+    elif scope == "full":
         include = stable_entries(manifest["full_include"])
         reason = "manual_full_scope"
     elif not baseline:
@@ -107,6 +141,7 @@ def select_plan(
         "matched_rules": sorted(set(matched_rules)),
         "fallbacks": fallbacks,
         "exclusions": exclusions,
+        "requested_selection": selection,
     }
 
 
@@ -128,6 +163,10 @@ def render_receipt(plan: dict[str, Any]) -> str:
 - Candidate: `{plan['candidate_sha']}`
 - Decision: `{plan['reason']}`
 - Matrix jobs: `{len(plan['include'])}`
+
+## Requested selection
+
+{bullets(plan.get('requested_selection', []), 'Automatic impact selection')}
 
 ## Changed files
 
@@ -165,6 +204,19 @@ def successful_release_baseline(runs: dict[str, Any], candidate: str) -> dict[st
     return None
 
 
+def selection_catalog(manifest: dict[str, Any]) -> dict[str, list[str]]:
+    projects = sorted({entry["project"] for entry in manifest["full_include"]})
+    entries = sorted(
+        [f"full/{entry['project']}" for entry in manifest["full_include"]]
+        + [
+            f"{area}/{entry['project']}"
+            for area, area_entries in manifest["areas"].items()
+            for entry in area_entries
+        ]
+    )
+    return {"areas": sorted(manifest["areas"]), "projects": projects, "entries": entries}
+
+
 def git_diff(baseline: str, candidate: str) -> list[str]:
     proc = subprocess.run(
         ["git", "diff", "--name-status", "-M", baseline, candidate],
@@ -182,6 +234,10 @@ def main(argv: list[str] | None = None) -> int:
     select.add_argument("--baseline")
     select.add_argument("--candidate", required=True)
     select.add_argument("--scope", choices=("impacted", "full"), default="impacted")
+    select.add_argument(
+        "--selection", action="append", default=[],
+        help="catalog selector: area:NAME, project:NAME, or entry:AREA/PROJECT",
+    )
     select.add_argument("--name-status", type=Path)
     select.add_argument("--output", type=Path, required=True)
     select.add_argument("--receipt", type=Path, required=True)
@@ -190,7 +246,13 @@ def main(argv: list[str] | None = None) -> int:
     baseline.add_argument("--runs-json", type=Path, required=True)
     baseline.add_argument("--candidate", required=True)
 
+    catalog = subparsers.add_parser("catalog")
+    catalog.add_argument("--manifest", type=Path, required=True)
+
     args = parser.parse_args(argv)
+    if args.command == "catalog":
+        print(json.dumps(selection_catalog(json.loads(args.manifest.read_text())), indent=2))
+        return 0
     if args.command == "release-baseline":
         result = successful_release_baseline(
             json.loads(args.runs_json.read_text()), args.candidate
@@ -211,7 +273,10 @@ def main(argv: list[str] | None = None) -> int:
             paths = []
     else:
         paths = []
-    plan = select_plan(manifest, baseline_sha, args.candidate, paths, args.scope)
+    selections = [item.strip() for value in args.selection for item in value.split(",") if item.strip()]
+    plan = select_plan(
+        manifest, baseline_sha, args.candidate, paths, args.scope, selections
+    )
     args.output.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     args.receipt.write_text(render_receipt(plan))
     print(json.dumps({"include": plan["include"]}, separators=(",", ":")))

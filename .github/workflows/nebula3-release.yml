@@ -18,6 +18,10 @@ on:
         options:
           - impacted
           - full
+      selection:
+        description: Optional catalog selectors (area:, project:, or entry:); overrides automatic impact selection
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -179,6 +183,7 @@ jobs:
       candidate_ref: ${{ needs.validate.outputs.tag }}
       scope: ${{ inputs.scope || 'impacted' }}
       receipt_name: release-playwright-impact-${{ needs.validate.outputs.tag }}
+      selection: ${{ inputs.selection || '' }}
 
   build:
     needs: [validate, impact-baseline, sandbox-integration, playwright]

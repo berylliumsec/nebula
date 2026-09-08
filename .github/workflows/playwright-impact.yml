@@ -10,6 +10,10 @@ on:
         default: impacted
         type: choice
         options: [impacted, full]
+      selection:
+        description: Optional catalog selectors, e.g. area:assistant,entry:themes/mobile-webkit
+        required: false
+        type: string
   workflow_call:
     inputs:
       baseline_sha: {type: string, required: false, default: ""}
@@ -17,6 +21,7 @@ on:
       candidate_ref: {type: string, required: true}
       scope: {type: string, required: false, default: impacted}
       receipt_name: {type: string, required: false, default: playwright-impact-receipt}
+      selection: {type: string, required: false, default: ""}
 
 permissions:
   contents: read
@@ -39,6 +44,7 @@ jobs:
           BASELINE_SHA: ${{ inputs.baseline_sha || github.event.pull_request.base.sha }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha || github.event.pull_request.head.sha || github.sha }}
           REQUESTED_SCOPE: ${{ inputs.scope || github.event.inputs.scope || 'impacted' }}
+          EXPLICIT_SELECTION: ${{ inputs.selection || github.event.inputs.selection }}
         run: |
           args=(
             --manifest ui/playwright-impact.json
@@ -49,6 +55,9 @@ jobs:
           )
           if test -n "$BASELINE_SHA" && git cat-file -e "$BASELINE_SHA^{commit}" 2>/dev/null; then
             args+=(--baseline "$BASELINE_SHA")
+          fi
+          if test -n "$EXPLICIT_SELECTION"; then
+            args+=(--selection "$EXPLICIT_SELECTION")
           fi
           python scripts/playwright_impact.py select "${args[@]}" > "$RUNNER_TEMP/matrix.json"
           matrix="$(cat "$RUNNER_TEMP/matrix.json")"

@@ -6,6 +6,8 @@ import pytest
 from scripts.playwright_impact import (
     changed_paths,
     select_plan,
+    selection_catalog,
+    selected_entries,
     stable_entries,
     successful_release_baseline,
 )
@@ -137,3 +139,40 @@ def test_full_manifest_covers_every_permanent_playwright_project():
         for entries in [MANIFEST["full_include"], *MANIFEST["areas"].values()]
         for entry in entries
     } <= {"mock", "real-core", "real-core-sandbox"}
+
+
+def test_explicit_area_selection_overrides_global_fallback():
+    result = select_plan(
+        MANIFEST, "base", "candidate", ["ui/src/App.tsx"],
+        selection=["area:themes"],
+    )
+    assert result["reason"] == "explicit_selection"
+    assert {entry["project"] for entry in result["include"]} == {
+        "desktop", "mobile-chromium", "mobile-webkit"
+    }
+    assert result["requested_selection"] == ["area:themes"]
+
+
+def test_project_and_exact_entry_selection_are_catalog_bounded():
+    entries = selected_entries(
+        MANIFEST, ["project:narrow", "entry:assistant/assistant-real-desktop"]
+    )
+    assert {(entry["area"], entry["project"]) for entry in entries} == {
+        ("full", "narrow"), ("assistant", "assistant-real-desktop")
+    }
+
+
+@pytest.mark.parametrize(
+    "selection",
+    ["themes", "area:no-such-area", "project:no-such-project", "entry:themes/narrow", "grep:theme"],
+)
+def test_invalid_or_arbitrary_explicit_selection_is_rejected(selection):
+    with pytest.raises(ValueError):
+        selected_entries(MANIFEST, [selection])
+
+
+def test_catalog_exposes_stable_choices_for_agents_and_humans():
+    catalog = selection_catalog(MANIFEST)
+    assert "assistant" in catalog["areas"]
+    assert "mobile-webkit" in catalog["projects"]
+    assert "themes/mobile-webkit" in catalog["entries"]
