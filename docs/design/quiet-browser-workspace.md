@@ -44,8 +44,9 @@ restrained neutral colors. Library background variables were not returned.
   Log: `/tmp/nebula-quiet-core-compact-fixed.log`.
 - Browser fixture checks include icon names, tooltips, 44px targets, search
   keyboard disclosure, collapsed default/reopening, file approval, image capability,
-  long context/transcript, no overflow and Axe. A final multi-engine run is recorded
-  below after completion. Physical phones were not used.
+  long context/transcript, no overflow and Axe. Final multi-engine counts and local
+  deployment evidence are retained in [PR #259](https://github.com/berylliumsec/nebula/pull/259).
+  Physical phones were not used.
 - `audit:css` still reports the pre-existing 9px IP metadata label in `base.css:142`,
   also present in origin/main. This change does not edit that rule.
 - Initial test-launch stalls occurred before page creation with the default cached
@@ -56,3 +57,10 @@ restrained neutral colors. Library background variables were not returned.
 - The first compact real-Core run exposed Send clipping beneath status banners.
   The final composer reserves its intrinsic height and uses an icon-only runtime
   selector in narrow browser panes; the repeated real-Core run passed.
+
+- The 24-screen WebKit capture journey reached 22 captures before its 150-second
+  total deadline on this software-rendering host. It now has a 300-second total
+  budget; individual interaction, accessibility and geometry assertions are unchanged.
+- The operator also authorized updating the local server. Publish the verified
+  production assets before atomically replacing its entry page; retain prior hashed
+  assets for open sessions. This presentation-only deployment needs no Core restart.
