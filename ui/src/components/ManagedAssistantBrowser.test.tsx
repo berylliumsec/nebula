@@ -40,6 +40,37 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("allows explicit stop while a manual navigation is still loading", async () => {
+    const { request, onControlChange } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    request.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    const stop = screen.getByRole("button", { name: "Stop assistant control" });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("control?paused=true"), expect.anything());
+  });
+  it("folds a capture without losing it, reopens fresh captures and closes without stopping the stream", async () => {
+    const { connection } = fixture();
+    const captureButton = screen.getByRole("button", { name: "Ask about page" });
+    await waitFor(() => expect(captureButton).toBeEnabled());
+    fireEvent.click(captureButton);
+    await screen.findByText("Selected page content");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse page context" }));
+    expect(screen.getByText("Selected page content")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Expand page context" }));
+    expect(screen.getByText("Selected page content")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse page context" }));
+    fireEvent.click(captureButton);
+    await waitFor(() => expect(screen.getByText("Selected page content")).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: "Close page context" }));
+    expect(screen.queryByRole("region", { name: "Browser context preview" })).not.toBeInTheDocument();
+    expect(captureButton).toHaveFocus();
+    expect(connection.close).not.toHaveBeenCalled();
+  });
   it("hides chrome without losing the address draft, captured context or browser stream", async () => {
     const { setControlsOpen, connection } = fixture();
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());
@@ -123,7 +154,7 @@ describe("ManagedAssistantBrowser", () => {
     expect(onControlChange).toHaveBeenLastCalledWith(false);
     fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
-    fireEvent.click(screen.getByRole("button", { name: "Take control" }));
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
   });
   it("does not let an older control poll overwrite an explicit resume", async () => {
@@ -136,14 +167,16 @@ describe("ManagedAssistantBrowser", () => {
     await act(async () => { resolveControl({ paused: true }); await controlRead; });
     expect(onControlChange).toHaveBeenLastCalledWith(true);
   });
-  it("shows manual navigation takeover immediately after assistant control was resumed", async () => {
+  it("keeps the explicit grant through manual navigation until stopped", async () => {
     const { onControlChange } = fixture();
     await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
     fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    await screen.findByRole("region", { name: "Browser context preview" });
+    expect(onControlChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Stop assistant control" }));
     await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
-    expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeInTheDocument();
   });
   it("does not start a browser when the operator is using another workspace view", () => {
     const { request } = fixture(false);

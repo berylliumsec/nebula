@@ -1,4 +1,4 @@
-import { ArrowRight, Plus, X, RefreshCw, MessageSquareText, TextSelect, MousePointer2, Scan, Hand, Play, Settings2, KeyRound, Paperclip } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, Plus, X, RefreshCw, MessageSquareText, TextSelect, MousePointer2, Scan, Hand, Play, Settings2, KeyRound, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BrowserPageSurface } from "./BrowserPageSurface";
@@ -35,11 +35,13 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState("");
   const [capture, setCapture] = useState<Capture>();
+  const [captureCollapsed, setCaptureCollapsed] = useState(false);
+  useEffect(() => { setCaptureCollapsed(false); }, [capture]);
   const [actions, setActions] = useState<Action[]>([]);
   const [mode, setMode] = useState<"browse" | "element" | "region">("browse");
   const [paused, setPaused] = useState(true);
+  const [controlBusy, setControlBusy] = useState(false);
   const controlRevision = useRef(0);
-  const recordTakeover = () => { controlRevision.current += 1; setPaused(true); };
   const [text, setText] = useState("");
   const [connected, setConnected] = useState(false);
   const [credentials, setCredentials] = useState<BrowserCredential[]>([]);
@@ -133,7 +135,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (!session || busy) return;
     setBusy(true); setError("");
     try {
-      if (operation !== "capture" && operation !== "tabs") recordTakeover();
       const next = await request<Capture>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId, page_revision: capture?.page_revision, ...extra });
       if (currentTabRef.current !== tabId) return;
       setCapture(next); if (operation === "navigate") addressEdited.current = false; if (!addressEdited.current) setAddress(next.url); return next;
@@ -144,7 +145,6 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     if (!session || busy) return;
     setBusy(true); setError("");
     try {
-      recordTakeover();
       const next = await request<Pick<Session, "tabs" | "active_tab_id">>(`browser-companion/${session.session_id}/operations`, { operation, tab_id: tabId });
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
       setSession({ ...session, ...next }); setTabs(next.tabs); setTabId(selected?.id ?? ""); addressEdited.current = false; setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? ""); setCapture(undefined);
@@ -169,9 +169,13 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     setBusy(true); setError("");
     try {
       const action = await request<Action>(`browser-companion/${session.session_id}/actions`, { operation: "upload", file_ref: fileRef, tab_id: tabId, page_revision: capture.page_revision, element_id: elementId, url: capture.url });
-      recordTakeover(); setActions(current => [...current.filter(item => item.status !== "pending"), action]);
+      setActions(current => [...current.filter(item => item.status !== "pending"), action]);
     } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { setBusy(false); }
+  };
+  const discardCapture = () => {
+    setCapture(undefined);
+    document.querySelector<HTMLButtonElement>(controlsOpen ? 'button[aria-label="Ask about page"]' : 'button[aria-label="Show browser controls"]')?.focus({ preventScroll: true });
   };
   const attach = () => {
     if (!capture || !session) return;
@@ -187,7 +191,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   };
   const send = (event: Record<string, unknown>) => {
     if (socket.current?.readyState !== WebSocket.OPEN) return;
-    recordTakeover(); socket.current.send(JSON.stringify(event));
+    socket.current.send(JSON.stringify(event));
   };
   const requiredActions = <>
     {actions.filter(action => action.status === "pending").map(action => <section className="managed-browser-approval" key={action.id} aria-label="Browser action approval">
@@ -219,14 +223,14 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture", { capture_kind: "selection" })} aria-label="Ask about selected text" title="Ask about selected text"><TextSelect size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" aria-pressed={mode === "element"} onClick={() => setMode(mode === "element" ? "browse" : "element")} aria-label="Pick element" title="Pick element"><MousePointer2 size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" disabled={!imageSupported} title={imageSupported ? "Select a visual region" : "Choose an image-capable Assistant model"} aria-pressed={mode === "region"} onClick={() => setMode(mode === "region" ? "browse" : "region")} aria-label="Select region"><Scan size={18} aria-hidden="true" /></button>
-      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Take control"} title={paused ? "Resume assistant control" : "Take control"} disabled={busy || !session} onClick={() => {
+      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={controlBusy || !session} onClick={() => {
         if (!session) return;
         const nextPaused = !paused;
         const revision = ++controlRevision.current;
-        setBusy(true);
+        setControlBusy(true);
         void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
           .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); } })
-          .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setBusy(false));
+          .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setControlBusy(false));
       }}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
     </div>
 
@@ -246,7 +250,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <label>Protected value to fill<select value={credentialRef} onChange={event => setCredentialRef(event.target.value)}><option value="">Choose a saved value</option>{credentials.map(item => <option key={item.reference} value={item.reference} disabled={!item.available}>{item.label}{item.available ? "" : " · expired; add again"}</option>)}</select></label>
       {credentials.map(item => <div key={item.reference}><span>{item.label}{item.available ? "" : " · expired"}</span><button className="button quiet" disabled={credentialBusy} onClick={() => { if (!session) return; setCredentialBusy(true);
         void request<BrowserCredential[]>(`browser-companion/${session.session_id}/credentials/${encodeURIComponent(item.reference)}`, undefined, "DELETE")
-          .then(next => { setCredentials(next); setCredentialRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setCredentialBusy(false)); }}>Remove {item.label}</button></div>)}
+          .then(next => { setCredentials(next); setCredentialRef(""); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setCredentialBusy(false)); }}>Remove {item.label}</button></div>)}
     </div></details>
     <details className="managed-browser-credentials"><summary title={`Files for this page (${files.length})`} aria-label={`Files for this page (${files.length})`}><Paperclip size={18} aria-hidden="true" /><span className="sr-only">Files for this page ({files.length})</span></summary><div className="managed-browser-utility-panel">
       <p>Choose a file from this device for a page upload. Files stay attached to this browser until removed. Up to eight files, 4 MiB each; the page receives bytes only after approval.</p>
@@ -255,7 +259,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <label>File to upload<select value={fileRef} onChange={event => setFileRef(event.target.value)}><option value="">Choose an attached file</option>{files.map(file => <option key={file.reference} value={file.reference}>{file.filename} · {file.size.toLocaleString()} bytes</option>)}</select></label>
       {files.map(file => <div key={file.reference}><span>{file.filename} · {file.size.toLocaleString()} bytes</span><button className="button quiet" disabled={fileBusy} onClick={() => { if (!session) return; setFileBusy(true);
         void request<BrowserFile[]>(`browser-companion/${session.session_id}/files/${encodeURIComponent(file.reference)}`, undefined, "DELETE")
-          .then(next => { setFiles(next); setFileRef(""); recordTakeover(); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setFileBusy(false)); }}>Remove {file.filename}</button></div>)}
+          .then(next => { setFiles(next); setFileRef(""); }).catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setFileBusy(false)); }}>Remove {file.filename}</button></div>)}
     </div></details>
     </div>
     </div>
@@ -264,9 +268,15 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => void open()}>Reconnect view</button></div>}
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}
-    {capture && <section className="managed-browser-capture" aria-label="Browser context preview"><strong>{capture.title || capture.url}</strong><small>{capture.captured_at}</small><pre>{capture.text}</pre>
+    {capture && <section className="managed-browser-capture" aria-label="Browser context preview">
+      <header role="presentation"><strong>{capture.title || capture.url}</strong>
+        <button className="button quiet managed-browser-icon" type="button" aria-label={captureCollapsed ? "Expand page context" : "Collapse page context"} title={captureCollapsed ? "Expand page context" : "Collapse page context"} aria-expanded={!captureCollapsed} aria-controls="browser-context-preview-content" onClick={() => setCaptureCollapsed(value => !value)}>{captureCollapsed ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronUp size={18} aria-hidden="true" />}</button>
+        <button className="button quiet managed-browser-icon" type="button" aria-label="Close page context" title="Discard page context" onClick={discardCapture}><X size={18} aria-hidden="true" /></button>
+      </header>
+      <div id="browser-context-preview-content" hidden={captureCollapsed}>
+      <small>{new Date(capture.captured_at).toLocaleString()}</small><pre>{capture.text}</pre>
       {capture.image && <img src={`data:image/png;base64,${capture.image}`} alt="Selected page region" />}
-      <button className="button primary" onClick={attach}>Attach to Assistant</button><button className="button quiet" onClick={() => setCapture(undefined)}>Discard</button>
+      <button className="button primary" onClick={attach}>Attach to Assistant</button><button className="button quiet" onClick={discardCapture}>Discard</button>
       <details><summary>Accessible page controls ({capture.elements.length})</summary><input aria-label="Text for selected page control" value={text} onChange={event => setText(event.target.value)} />
         {capture.elements.map(element => {
           const editable = element.tag === "textarea" || (element.tag === "input" && !["button", "submit", "reset", "checkbox", "radio", "file", "range", "color", "hidden"].includes(element.type));
@@ -283,6 +293,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
           </div>;
         })}
       </details>
+      </div>
     </section>}
     <BrowserPageSurface frame={frame} mode={mode} connected={connected} send={send} onCapture={(captureKind, area) => {
       void operate("capture", { capture_kind: captureKind, ...area }); setMode("browse");

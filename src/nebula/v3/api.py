@@ -9733,7 +9733,11 @@ def create_app(
                         if len(json.dumps(event)) > 8000:
                             await websocket.close(code=4400, reason="input too large")
                             return
-                        browser_companion.takeover(session_id, True)
+                        if not (
+                            event.get("kind") == "mouse"
+                            and event.get("type") == "mouseMoved"
+                        ):
+                            browser_companion.invalidate_pending_actions(session_id)
                         async with browser_companion._locks.setdefault(
                             session_id, asyncio.Lock()
                         ):

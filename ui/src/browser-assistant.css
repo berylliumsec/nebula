@@ -125,3 +125,8 @@
   .managed-browser-actions { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
   .managed-browser-utilities { flex: 0 0 auto; margin-left: 4px; border-left: 1px solid var(--border-soft); }
 }
+
+.managed-browser-capture > header { display: flex; align-items: center; gap: 4px; }
+.managed-browser-capture > header > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.managed-browser-capture:has([aria-expanded="false"]) { padding-block: 4px; }
+.managed-browser-capture > [hidden] { display: none; }

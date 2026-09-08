@@ -375,7 +375,7 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
     asyncio.run(run())
 
 
-def test_manual_action_pauses_assistant_before_waiting_for_control(tmp_path):
+def test_manual_action_revokes_approvals_without_clearing_control_grant(tmp_path):
     store, _, _, session, service = setup(tmp_path)
     pending = service.propose(
         session.id,
@@ -402,7 +402,7 @@ def test_manual_action_pauses_assistant_before_waiting_for_control(tmp_path):
             )
             await asyncio.sleep(0)
             assert not task.done()
-            assert service.session(session.id).metadata["assistant_paused"] is True
+            assert service.session(session.id).metadata["assistant_paused"] is False
             assert store.get(CompanionAction, pending.id).status == "revoked"
             task.cancel()
             with pytest.raises(asyncio.CancelledError):

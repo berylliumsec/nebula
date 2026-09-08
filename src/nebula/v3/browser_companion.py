@@ -146,7 +146,7 @@ class BrowserCompanion:
         return self.file_catalog(session_id)
 
     def remove_file(self, session_id: str, reference: str) -> list[dict[str, Any]]:
-        self.takeover(session_id, True)
+        self.invalidate_pending_actions(session_id)
         session = self.session(session_id)
         entries = dict(session.metadata.get("browser_files", {}))
         if entries.pop(reference, None) is None:
@@ -236,7 +236,7 @@ class BrowserCompanion:
     def remove_credential(
         self, session_id: str, reference: str
     ) -> list[dict[str, Any]]:
-        self.takeover(session_id, True)
+        self.invalidate_pending_actions(session_id)
         session = self.session(session_id)
         entries = dict(session.metadata.get("browser_credentials", {}))
         removed = entries.pop(reference, None)
@@ -419,9 +419,9 @@ class BrowserCompanion:
                 "File uploads require an inline approval. Propose an upload before execution."
             )
         if not assistant and request.operation not in {"tabs", "capture"}:
-            # Takeover must precede the control queue so waiting assistant actions
-            # see the pause before they can mutate the page.
-            self.takeover(session_id, True)
+            # Manual edits invalidate old approvals, but the explicit session
+            # grant remains enabled until the operator stops it.
+            self.invalidate_pending_actions(session_id)
         async with self._locks.setdefault(session_id, asyncio.Lock()):
             session = self.session(session_id)
             if not self.turn_active(chat_turn_id):
@@ -614,14 +614,18 @@ class BrowserCompanion:
                 expected_revision=session.revision,
             )
         if paused:
-            for action in self.actions(session_id):
-                if action.status == "pending":
-                    self.store.update(
-                        CompanionAction,
-                        action.id,
-                        {"status": "revoked"},
-                        expected_revision=action.revision,
-                    )
+            self.invalidate_pending_actions(session_id)
+
+    def invalidate_pending_actions(self, session_id: str) -> None:
+        """Invalidate approvals without changing the operator's control grant."""
+        for action in self.actions(session_id):
+            if action.status == "pending":
+                self.store.update(
+                    CompanionAction,
+                    action.id,
+                    {"status": "revoked"},
+                    expected_revision=action.revision,
+                )
 
     async def decide(
         self, session_id: str, action_id: str, decision: str
