@@ -40,6 +40,19 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("allows explicit stop while a manual navigation is still loading", async () => {
+    const { request, onControlChange } = fixture();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Resume assistant control" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(true));
+    request.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Go" }));
+    const stop = screen.getByRole("button", { name: "Stop assistant control" });
+    expect(stop).toBeEnabled();
+    fireEvent.click(stop);
+    await waitFor(() => expect(onControlChange).toHaveBeenLastCalledWith(false));
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("control?paused=true"), expect.anything());
+  });
   it("folds a capture without losing it, reopens fresh captures and closes without stopping the stream", async () => {
     const { connection } = fixture();
     const captureButton = screen.getByRole("button", { name: "Ask about page" });

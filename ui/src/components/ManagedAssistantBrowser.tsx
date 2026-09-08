@@ -40,6 +40,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [actions, setActions] = useState<Action[]>([]);
   const [mode, setMode] = useState<"browse" | "element" | "region">("browse");
   const [paused, setPaused] = useState(true);
+  const [controlBusy, setControlBusy] = useState(false);
   const controlRevision = useRef(0);
   const [text, setText] = useState("");
   const [connected, setConnected] = useState(false);
@@ -222,14 +223,14 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       <button className="button quiet managed-browser-icon" disabled={!session || busy} onClick={() => void operate("capture", { capture_kind: "selection" })} aria-label="Ask about selected text" title="Ask about selected text"><TextSelect size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" aria-pressed={mode === "element"} onClick={() => setMode(mode === "element" ? "browse" : "element")} aria-label="Pick element" title="Pick element"><MousePointer2 size={18} aria-hidden="true" /></button>
       <button className="button quiet managed-browser-icon" disabled={!imageSupported} title={imageSupported ? "Select a visual region" : "Choose an image-capable Assistant model"} aria-pressed={mode === "region"} onClick={() => setMode(mode === "region" ? "browse" : "region")} aria-label="Select region"><Scan size={18} aria-hidden="true" /></button>
-      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={busy || !session} onClick={() => {
+      <button className="button quiet managed-browser-icon managed-browser-control" aria-label={paused ? "Resume assistant control" : "Stop assistant control"} title={paused ? "Resume assistant control" : "Stop assistant control"} disabled={controlBusy || !session} onClick={() => {
         if (!session) return;
         const nextPaused = !paused;
         const revision = ++controlRevision.current;
-        setBusy(true);
+        setControlBusy(true);
         void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
           .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); } })
-          .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setBusy(false));
+          .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setControlBusy(false));
       }}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
     </div>
 
