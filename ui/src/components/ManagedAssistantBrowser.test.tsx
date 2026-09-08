@@ -40,6 +40,24 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("folds a capture without losing it, reopens fresh captures and closes without stopping the stream", async () => {
+    const { connection } = fixture();
+    const captureButton = screen.getByRole("button", { name: "Ask about page" });
+    await waitFor(() => expect(captureButton).toBeEnabled());
+    fireEvent.click(captureButton);
+    await screen.findByText("Selected page content");
+    fireEvent.click(screen.getByRole("button", { name: "Collapse page context" }));
+    expect(screen.getByText("Selected page content")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Expand page context" }));
+    expect(screen.getByText("Selected page content")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse page context" }));
+    fireEvent.click(captureButton);
+    await waitFor(() => expect(screen.getByText("Selected page content")).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: "Close page context" }));
+    expect(screen.queryByRole("region", { name: "Browser context preview" })).not.toBeInTheDocument();
+    expect(captureButton).toHaveFocus();
+    expect(connection.close).not.toHaveBeenCalled();
+  });
   it("hides chrome without losing the address draft, captured context or browser stream", async () => {
     const { setControlsOpen, connection } = fixture();
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());

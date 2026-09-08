@@ -1,4 +1,4 @@
-import { ArrowRight, Plus, X, RefreshCw, MessageSquareText, TextSelect, MousePointer2, Scan, Hand, Play, Settings2, KeyRound, Paperclip } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronUp, Plus, X, RefreshCw, MessageSquareText, TextSelect, MousePointer2, Scan, Hand, Play, Settings2, KeyRound, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BrowserPageSurface } from "./BrowserPageSurface";
@@ -35,6 +35,8 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const [busy, setBusy] = useState(false);
   const [frame, setFrame] = useState("");
   const [capture, setCapture] = useState<Capture>();
+  const [captureCollapsed, setCaptureCollapsed] = useState(false);
+  useEffect(() => { setCaptureCollapsed(false); }, [capture]);
   const [actions, setActions] = useState<Action[]>([]);
   const [mode, setMode] = useState<"browse" | "element" | "region">("browse");
   const [paused, setPaused] = useState(true);
@@ -173,6 +175,10 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     } catch (caught) { logCaughtDiagnosticFailure(caught); }
     finally { setBusy(false); }
   };
+  const discardCapture = () => {
+    setCapture(undefined);
+    document.querySelector<HTMLButtonElement>(controlsOpen ? 'button[aria-label="Ask about page"]' : 'button[aria-label="Show browser controls"]')?.focus({ preventScroll: true });
+  };
   const attach = () => {
     if (!capture || !session) return;
     const sourceUrl = new URL(capture.url);
@@ -264,9 +270,15 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
     {error && <div className="managed-browser-error" role="alert">{error}<button className="button quiet" disabled={busy} onClick={() => void open()}>Reconnect view</button></div>}
     {active && (actionContainer ? createPortal(requiredActions, actionContainer) : requiredActions)}
     {actions.filter(action => action.status === "complete" || action.status === "revoked").sort((a, b) => Date.parse(b.expires_at) - Date.parse(a.expires_at)).slice(0, 1).map(action => <p role="status" key={action.id}>{action.request.operation === "upload" ? "File upload" : "Browser action"} {action.status === "complete" ? "completed" : "cancelled"}.</p>)}
-    {capture && <section className="managed-browser-capture" aria-label="Browser context preview"><strong>{capture.title || capture.url}</strong><small>{capture.captured_at}</small><pre>{capture.text}</pre>
+    {capture && <section className="managed-browser-capture" aria-label="Browser context preview">
+      <header role="presentation"><strong>{capture.title || capture.url}</strong>
+        <button className="button quiet managed-browser-icon" type="button" aria-label={captureCollapsed ? "Expand page context" : "Collapse page context"} title={captureCollapsed ? "Expand page context" : "Collapse page context"} aria-expanded={!captureCollapsed} aria-controls="browser-context-preview-content" onClick={() => setCaptureCollapsed(value => !value)}>{captureCollapsed ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronUp size={18} aria-hidden="true" />}</button>
+        <button className="button quiet managed-browser-icon" type="button" aria-label="Close page context" title="Discard page context" onClick={discardCapture}><X size={18} aria-hidden="true" /></button>
+      </header>
+      <div id="browser-context-preview-content" hidden={captureCollapsed}>
+      <small>{new Date(capture.captured_at).toLocaleString()}</small><pre>{capture.text}</pre>
       {capture.image && <img src={`data:image/png;base64,${capture.image}`} alt="Selected page region" />}
-      <button className="button primary" onClick={attach}>Attach to Assistant</button><button className="button quiet" onClick={() => setCapture(undefined)}>Discard</button>
+      <button className="button primary" onClick={attach}>Attach to Assistant</button><button className="button quiet" onClick={discardCapture}>Discard</button>
       <details><summary>Accessible page controls ({capture.elements.length})</summary><input aria-label="Text for selected page control" value={text} onChange={event => setText(event.target.value)} />
         {capture.elements.map(element => {
           const editable = element.tag === "textarea" || (element.tag === "input" && !["button", "submit", "reset", "checkbox", "radio", "file", "range", "color", "hidden"].includes(element.type));
@@ -283,6 +295,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
           </div>;
         })}
       </details>
+      </div>
     </section>}
     <BrowserPageSurface frame={frame} mode={mode} connected={connected} send={send} onCapture={(captureKind, area) => {
       void operate("capture", { capture_kind: captureKind, ...area }); setMode("browse");
