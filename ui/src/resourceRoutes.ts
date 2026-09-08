@@ -1,7 +1,7 @@
 import type { ResourceKind } from "./api/types";
 import { logCaughtDiagnostic } from "./diagnostics";
 
-export type ProjectSurface = "workbench" | "assets" | "evidence" | "sources" | "findings" | "reports";
+export type ProjectSurface = "workbench" | "assets" | "evidence" | "sources" | "findings" | "reports" | "application-model";
 
 export const projectRoot = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`;
 

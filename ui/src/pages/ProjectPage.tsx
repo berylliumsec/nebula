@@ -5,14 +5,16 @@ import { AssetsPage } from "./AssetsPage";
 import { EvidencePage } from "./EvidencePage";
 import { KnowledgePage } from "./KnowledgePage";
 import { OverviewPage } from "./OverviewPage";
+import { ApplicationModelPage } from "./ApplicationModelPage";
 
-type ProjectView = "overview" | "assets" | "evidence" | "sources";
+type ProjectView = "overview" | "assets" | "evidence" | "sources" | "application-model";
 
 const projectViews = [
   { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
   { id: "assets" as const, label: "Assets", icon: Network },
   { id: "evidence" as const, label: "Evidence", icon: FileSearch },
   { id: "sources" as const, label: "Sources", icon: BookOpen },
+  { id: "application-model" as const, label: "Application model", icon: Network },
 ];
 
 function isProjectView(value: string | null): value is ProjectView {
@@ -40,7 +42,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
 
   return (
     <div className="project-workspace">
-      <nav className="project-tabs" aria-label="Project sections">
+      <nav className="project-tabs project-sections" aria-label="Project sections">
         {projectViews.map(({ id, label, icon: Icon }) => (
           <button
             className={view === id ? "active" : undefined}
@@ -58,6 +60,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
       {view === "assets" ? <AssetsPage /> : null}
       {view === "evidence" ? <EvidencePage /> : null}
       {view === "sources" ? <KnowledgePage /> : null}
+      {view === "application-model" ? <ApplicationModelPage /> : null}
     </div>
   );
 }

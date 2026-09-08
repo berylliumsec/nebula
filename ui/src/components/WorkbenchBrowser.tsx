@@ -166,7 +166,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchView, setResearchView] = useState<ResearchView>(() => normalizedResearchView(searchParams.get("tool") ?? searchParams.get("browserTool")));
-  const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>([]);
+  const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>(() => searchParams.get("browserExchange") ? [searchParams.get("browserExchange")!] : []);
   const [identityName, setIdentityName] = useState("");
   const [identityBusy, setIdentityBusy] = useState(false);
   const [replayExchange, setReplayExchange] = useState<SecurityBrowserExchange>();

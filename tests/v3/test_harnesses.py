@@ -1560,6 +1560,75 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
     asyncio.run(scenario())
 
 
+def test_harness_mcp_exposes_project_application_model(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        from nebula.v3.application_model.service import ApplicationModelService
+        from nebula.v3.domain import BrowserIdentity, BrowserSession
+
+        monkeypatch.setenv("NEBULA_APPLICATION_MODEL", "1")
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        scope = store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Model identity")
+        )
+        browser = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Model browser",
+            )
+        )
+        service = ApplicationModelService(store, runtime.artifact_store)
+        store.application_model_service = service
+        collection = service.create(engagement.id, browser.id)
+        _, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect the application model",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = runtime._gateway_catalog(session)["tools"]
+        selected = next(
+            item["name"]
+            for item in catalog
+            if item["name"].startswith("runtime_")
+            and item["name"].endswith("model.list_collections")
+        )
+        assert any(
+            item["name"].startswith("runtime_")
+            and item["name"].endswith("model.get_updates")
+            for item in catalog
+        )
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(session, selected, {})
+        receipt = response["structuredContent"]
+        assert receipt["schema"] == "nebula.tool-result/v2"
+        assert collection.id not in json.dumps(receipt)
+        result = ToolOutputService(store, runtime.artifact_store).search(
+            engagement_id=engagement.id,
+            owner_id=chat_turn.id,
+            tool_call_id=receipt["tool_call_id"],
+            query=collection.id,
+        )
+        assert result["matches"]
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
 def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)

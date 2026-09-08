@@ -1060,13 +1060,18 @@ class BrowserToolPlatform:
             raise ValueError("Project scope is required for AI browser proposals")
         broker = BrowserActionProposalBroker(self.store, session)
         workspace = Path(engagement.workspace_path or ".").resolve()
-        return RuntimeToolComponents(
+        result = RuntimeToolComponents(
             broker=broker,
             scope=scope,
             workspace=workspace,
             specs={broker.spec.name: broker.spec},
             runtime_digest="browser-native-v1",
         )
+        from .application_model.ingestion import enabled
+        if enabled():
+            from .application_model.tools import components
+            return combine_tool_components(result, components(self.store, session, scope, workspace))
+        return result
 
 
 def combine_tool_components(

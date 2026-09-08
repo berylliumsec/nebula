@@ -125,6 +125,7 @@ from .tools import (
     ApprovalRequired,
     PolicyDenied,
     StoreToolEvidenceRecorder,
+    StoreToolLedger,
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
@@ -5380,7 +5381,14 @@ class HarnessRuntimeService:
         include_browser = include_browser or bool(
             snapshot and snapshot.get("browser_runtime_enabled") is True
         )
-        if self.automation_tool_platform is None and not include_browser:
+        from .application_model.ingestion import enabled as application_model_enabled
+
+        include_application_model = application_model_enabled()
+        if (
+            self.automation_tool_platform is None
+            and not include_browser
+            and not include_application_model
+        ):
             return None, None
         if snapshot is not None:
             if snapshot.get("schema") != "nebula.harness-command-runtime/v1":
@@ -5414,6 +5422,29 @@ class HarnessRuntimeService:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
+            if include_application_model:
+                engagement = self.store.get(Engagement, engagement_id)
+                scope = (
+                    self.store.get(ScopePolicy, engagement.scope_policy_id)
+                    if engagement.scope_policy_id is not None
+                    else None
+                )
+                if scope is None or scope.engagement_id != engagement_id:
+                    raise HarnessConfigurationError(
+                        "Project scope is required for application-model MCP tools"
+                    )
+                from .application_model.tools import project_components
+
+                model_components = project_components(
+                    self.store,
+                    engagement_id,
+                    scope,
+                    self.workspace_resolver(engagement_id),
+                )
+                if components is None:
+                    components = model_components
+                else:
+                    components = combine_tool_components(components, model_components)
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
                 return None, None
@@ -5432,6 +5463,8 @@ class HarnessRuntimeService:
         resolved = self._oci_snapshot(components)
         if include_browser:
             resolved["browser_runtime_enabled"] = True
+        if include_application_model:
+            resolved["application_model_enabled"] = True
         if snapshot is not None and resolved != snapshot:
             raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"
@@ -8580,6 +8613,23 @@ class HarnessRuntimeService:
             ):  # diagnostic-expected: no provisional call exists before reservation
                 # Validation or budget reservation can fail before a call exists.
                 pass
+        if result.receipt is None:
+            # Trusted passive runtimes may return structured values directly.
+            # The MCP boundary still converts them into the same durable,
+            # bounded receipt contract as command output.
+            call = self.store.get(ToolCall, StoreToolLedger._call_id(invocation))
+            spec = components.specs[tool_name]
+            result = await self.evidence_recorder.record(call, invocation, spec, result)
+            latest = self.store.get(ToolCall, call.id)
+            self.store.update(
+                ToolCall,
+                latest.id,
+                {
+                    "result": result.receipt.as_model_result(),
+                    "result_artifact_id": result.result_artifact_id,
+                },
+                expected_revision=latest.revision,
+            )
         receipt = result.receipt
         if receipt is None:
             raise HarnessTransportError(

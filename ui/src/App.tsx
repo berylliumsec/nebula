@@ -81,6 +81,7 @@ export function App() {
       <Route path="assets/:resourceId?" element={route(<ProjectPage canonicalView="assets" />)} />
       <Route path="evidence/:resourceId?" element={route(<ProjectPage canonicalView="evidence" />)} />
       <Route path="sources/:resourceId?" element={route(<ProjectPage canonicalView="sources" />)} />
+      <Route path="application-model" element={route(<ProjectPage canonicalView="application-model" />)} />
       <Route path="findings/:resourceId?" element={route(<FindingsPage />)} />
       <Route path="reports/:resourceId?" element={route(<ReportsPage />)} />
     </Route>

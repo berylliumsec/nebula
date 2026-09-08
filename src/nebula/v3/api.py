@@ -1543,6 +1543,9 @@ def create_app(
     if scope_imports is not None and scope_imports.store is not store:
         raise ValueError("scope_import_service must use the API store")
     setup = SetupService(store, tool_platform)
+    from .application_model.service import ApplicationModelService
+    application_model = ApplicationModelService(store, artifact_store)
+    store.application_model_service = application_model
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -1692,6 +1695,12 @@ def create_app(
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
+            await start_component(
+                "capture",
+                "application-model-projector",
+                application_model.startup,
+                application_model.shutdown,
+            )
         except BaseException:
             await stop_components()
             raise
@@ -1711,6 +1720,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.store = store
+    app.state.application_model = application_model
     app.state.artifact_store = artifact_store
     app.state.knowledge_index = knowledge_index
     app.state.auth_token = token
@@ -7444,7 +7454,7 @@ def create_app(
         return {
             "schema_version": store.database.current_schema_version(),
             "dialect": store.database.engine.dialect.name,
-            "resources": sorted(ENTITY_MODEL_BY_KIND),
+            "resources": sorted(kind for kind in ENTITY_MODEL_BY_KIND if not kind.startswith("application_model_")),
         }
 
     @app.get(
@@ -8210,6 +8220,8 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    from .application_model.api import model_router
+    app.include_router(model_router(application_model), prefix=API_PREFIX, dependencies=[Depends(require_auth)])
     app.include_router(
         catchup_router(store, harness_runtime),
         prefix=API_PREFIX,
@@ -10011,7 +10023,7 @@ def create_app(
         return browser_security.finish_handoff(handoff_id, request)
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
-        if resource in CUSTOM_RESOURCES:
+        if resource in CUSTOM_RESOURCES or resource.startswith("application_model_"):
             continue
         _register_crud_routes(
             app,
