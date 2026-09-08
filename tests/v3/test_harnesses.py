@@ -467,6 +467,8 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         harness_reasoning_effort="high",
         harness_service_tier="fast",
     )
+    assert chat_turn.max_tool_calls is None
+    assert chat_turn.max_artifact_queries is None
     session = store.get(HarnessSession, harness_turn.harness_session_id)
     assert session.metadata["runtime_options"] == {
         "reasoning_effort": "high",

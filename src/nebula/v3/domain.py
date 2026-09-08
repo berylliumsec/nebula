@@ -3424,11 +3424,11 @@ class ChatTurn(Entity):
     model: str
     status: ChatTurnStatus = ChatTurnStatus.ROUTING
     tools_enabled: bool = False
-    max_tool_calls: int = Field(default=5, ge=0, le=5)
-    max_artifact_queries: int = Field(default=20, ge=0, le=200)
-    next_step: int = Field(default=0, ge=0, le=205)
-    execution_tool_calls: int = Field(default=0, ge=0, le=5)
-    artifact_queries: int = Field(default=0, ge=0, le=200)
+    max_tool_calls: int | None = Field(default=None, ge=0)
+    max_artifact_queries: int | None = Field(default=None, ge=0)
+    next_step: int = Field(default=0, ge=0)
+    execution_tool_calls: int = Field(default=0, ge=0)
+    artifact_queries: int = Field(default=0, ge=0)
     tool_call_ids: list[str] = Field(default_factory=list)
     tool_history: list[dict[str, Any]] = Field(default_factory=list)
     approval_id: str | None = None

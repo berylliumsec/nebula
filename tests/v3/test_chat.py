@@ -874,3 +874,13 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         1,
         2,
     ]
+
+
+def test_chat_request_defaults_to_unlimited_artifact_queries():
+    request = ChatCompletionRequest(
+        provider_id="fixture",
+        model="fixture",
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    assert request.max_artifact_queries is None
+    assert request.model_dump()["max_artifact_queries"] is None

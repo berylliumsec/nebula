@@ -3082,7 +3082,7 @@ export function chatRequestBody(
     include_knowledge: body.includeKnowledge ?? true,
     allow_cloud_knowledge: body.allowCloudKnowledge ?? false,
     tools_enabled: body.toolsEnabled ?? false,
-    max_artifact_queries: body.maxArtifactQueries ?? 20,
+    max_artifact_queries: body.maxArtifactQueries ?? null,
     allow_cloud_tool_results: body.allowCloudToolResults ?? false,
     harness_mode: body.harnessMode,
     harness_reasoning_effort: body.harnessReasoningEffort,

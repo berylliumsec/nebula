@@ -29,6 +29,7 @@ from nebula.v3.domain import (
     RunBudget,
     RunStatus,
     ToolCall,
+    ToolCallOrigin,
     utc_now,
 )
 from nebula.v3.storage import (
@@ -435,3 +436,64 @@ def test_overview_counts_entities_by_engagement(store):
     overview = store.overview(first.id)
     assert overview["counts"]["engagements"] == 1
     assert overview["counts"]["assets"] == 1
+
+
+@pytest.mark.parametrize("limit", [None, 2])
+def test_chat_budgets_persist_and_count_without_legacy_ceilings(store, limit):
+    engagement = store.create(Engagement(name="Chat budget regression"))
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id="chat-budget-session",
+            provider_profile_id="fixture-provider",
+            model="fixture",
+            max_tool_calls=limit,
+            max_artifact_queries=limit,
+        )
+    )
+    for budget_class in ("execution", "artifact_query"):
+        count = 210 if limit is None else limit
+        for index in range(count):
+            call = ToolCall(
+                id=f"{turn.id}-{budget_class}-{index}",
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                tool_name="fixture.read",
+                risk_class=RiskClass.LOCAL_READ,
+                metadata={"budget_class": budget_class},
+            )
+            store.reserve_tool_call(call)
+            store.reserve_tool_call(call)  # Retry cannot consume a second slot.
+        if limit is not None:
+            with pytest.raises(RunBudgetExceededError):
+                store.reserve_tool_call(
+                    call.model_copy(update={"id": f"{call.id}-extra"})
+                )
+    reloaded = store.get(ChatTurn, turn.id)
+    assert reloaded.max_tool_calls == limit
+    assert reloaded.max_artifact_queries == limit
+    with store.database.session() as session:
+        counter = session.get(RunBudgetCounterRow, turn.id)
+        assert counter.tool_calls == count
+        assert counter.artifact_queries == count
+    restored = ChatTurn.model_validate(
+        {
+            **reloaded.model_dump(),
+            "next_step": 420,
+            "execution_tool_calls": 210,
+            "artifact_queries": 210,
+        }
+    )
+    assert restored.next_step == 420
+
+
+def test_new_chat_turn_budgets_are_unlimited():
+    turn = ChatTurn(
+        engagement_id="project",
+        session_id="session",
+        model="fixture",
+        provider_profile_id="fixture-provider",
+    )
+    assert turn.max_tool_calls is None
+    assert turn.max_artifact_queries is None

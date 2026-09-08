@@ -1594,7 +1594,7 @@ export interface ChatCompletionRequest {
   includeKnowledge?: boolean;
   allowCloudKnowledge?: boolean;
   toolsEnabled?: boolean;
-  maxArtifactQueries?: number;
+  maxArtifactQueries?: number | null;
   allowCloudToolResults?: boolean;
   harnessMode?: string;
   harnessReasoningEffort?: string;

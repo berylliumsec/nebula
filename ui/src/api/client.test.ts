@@ -1164,6 +1164,7 @@ describe("ApiClient", () => {
       stream: true,
       include_knowledge: true,
       allow_cloud_knowledge: true,
+      max_artifact_queries: null,
     });
     expect(new Headers(fetchMock.mock.calls[0][1]?.headers).get("Authorization")).toBe("Bearer token");
   });
