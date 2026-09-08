@@ -350,8 +350,14 @@ class ApplicationModelService:
             if existing is None:
                 tx.add(obj)
             properties = dict(observation.facts)
-            properties["response_body"] = Value(
-                kind="unknown", type="string", reason="capture_unavailable"
+            properties["response_body"] = (
+                Value(
+                    kind="alias",
+                    type="string",
+                    reference=observation.artifact_ids[0],
+                )
+                if row.source_kind == "observations" and observation.artifact_ids
+                else Value(kind="unknown", type="string", reason="capture_unavailable")
             )
             version = ObjectVersion(
                 **shared,

@@ -149,6 +149,9 @@ def test_shared_chromium_creates_one_collection_and_backfills_history(tmp_path):
     artifact = store.get(Artifact, workspace["observations"][0].artifact_ids[0])
     with artifacts.open(artifact) as captured:
         assert b"unredacted secret" in captured.read()
+    capture_value = workspace["object_versions"][0].properties["response_body"]
+    assert capture_value.kind == "alias"
+    assert capture_value.reference == artifact.id
 
 
 def test_pause_and_resume(model):
