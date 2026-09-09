@@ -41,6 +41,9 @@ layers, and never defaults empty target arrays to whole suites. Failed selection
 validation blocks the PR rather than pretending that zero tests proves coverage.
 The plan is human/agent judgment, not cryptographic proof of adequate coverage.
 Normal code review must assess its rationale; an agent must not invent approval.
+Existing branch-protection Python check names remain present: unselected versions
+only report their omission without installing or executing tests. Invalid selection
+makes these checks fail, so skipped test layers cannot hide a missing review.
 
 Focused local examples:
 

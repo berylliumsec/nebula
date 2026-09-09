@@ -189,6 +189,9 @@ def test_workflows_never_implicitly_expand_test_targets():
     assert "pytest -q tests/v3\n" not in ci
     assert "npm test -- --testTimeout" not in ci
     assert "scripts/test_selection.py" in ci and "scripts/test_selection.py" in matrix
+    assert 'run: test "$SELECTION_RESULT" = success' in ci
+    assert "Record omitted runtime without running tests" in ci
+    assert "- name: Test\n        if: env.RUN_SELECTED == 'true'" in ci
     assert 'test "$EVENT_NAME" = workflow_dispatch' in matrix
     assert 'test "$FULL_APPROVAL" = RUN_FULL_SUITE' in matrix
     assert "args+=(--full-approved)" in matrix
