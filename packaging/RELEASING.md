@@ -95,6 +95,9 @@ cannot be combined. Full coverage should almost never run: only a fresh explicit
 user approval permits manual `scope=full`, `full_approval=RUN_FULL_SUITE`, and a
 reason identifying the approval and why focused tests are insufficient.
 PR/tag events cannot authorize full coverage. See [focused test policy](../docs/TEST_SELECTION.md).
+The packaging stage runs package/updater contract tests and native compile checks;
+it does not repeat the entire backend, frontend, or native test suites. Existing
+package smoke, clean-install, signature, and provenance checks remain mandatory.
 
 List the accepted selectors before dispatching with:
 

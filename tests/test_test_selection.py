@@ -182,6 +182,10 @@ def test_pytest_guard_requires_files_or_explicit_approval(monkeypatch):
 def test_workflows_never_implicitly_expand_test_targets():
     ci = (ROOT / ".github/workflows/ci.yml").read_text()
     matrix = (ROOT / ".github/workflows/playwright-impact.yml").read_text()
+    release = (ROOT / ".github/workflows/nebula3-release.yml").read_text()
+    assert "pytest -q tests/v3\n" not in release
+    assert "npm --prefix ui test -- --" not in release
+    assert "cargo test --locked --manifest-path" not in release
     assert "pytest -q tests/v3\n" not in ci
     assert "npm test -- --testTimeout" not in ci
     assert "scripts/test_selection.py" in ci and "scripts/test_selection.py" in matrix

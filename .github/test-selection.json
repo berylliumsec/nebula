@@ -1,7 +1,7 @@
 {
-  "change_digest": "c021b6d490a6ed3a018d7878bc2f58bb4ae15d338771974a93e6c47fbdad7864",
+  "change_digest": "da33f93d846ff46136428bf984b4c29d0589c6bc609e6af6a8e64c64ceaba3b4",
   "reviewed_by": "Codex, implementing the user's explicit focused-test policy",
-  "reason": "Test orchestration and policy only. Exercise impact selection, diff binding, local guards, exceptional full approval, and the release workflow dependency contract.",
+  "reason": "Test orchestration and policy only. Exercise impact selection, diff binding, local guards, exceptional full approval, and the release workflow dependency contract, including rejection of implicit product-suite reruns inside packaging.",
   "exclusions": "No application behavior changes. No frontend component, native shell, browser journey, container sandbox, or migration tests are needed. Workflow YAML was parsed and the guarded Playwright CLI listed one selected test without execution.",
   "expected_tests": {"python": 51, "frontend": 0, "native": 0, "playwright": 0},
   "python_versions": ["3.12"],
