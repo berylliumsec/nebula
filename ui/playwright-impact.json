@@ -1,0 +1,84 @@
+{
+  "watched_prefixes": ["ui/src/", "ui/src-tauri/", "src/nebula/v3/"],
+  "watched_exclusions": ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"],
+  "full_patterns": [
+    ".github/workflows/**", "pyproject.toml", "poetry.lock",
+    "ui/package.json", "ui/package-lock.json", "ui/playwright.config.ts",
+    "ui/tests/**", "ui/src/main.tsx", "ui/src/App.tsx", "ui/src/ui.css",
+    "ui/src/state/**", "ui/src/styles/**", "ui/vite.config.*"
+  ],
+  "rules": [
+    {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant"]},
+    {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py"], "areas": ["browser"]},
+    {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
+    {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
+    {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
+    {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
+    {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
+    {"name": "remaining-ui-components", "fallback": true, "patterns": ["ui/src/components/**", "ui/src/pages/**", "ui/src/hooks/**", "ui/src/lib/**"], "areas": ["desktop-interface", "mobile-layout"]},
+    {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
+  ],
+  "areas": {
+    "assistant": [
+      {"area":"assistant","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
+      {"area":"assistant","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
+      {"area":"assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
+      {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
+    "browser": [
+      {"area":"browser","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser","runtime":"mock","shard":"1/1"},
+      {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+      {"area":"browser","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+    ],
+    "mobile-layout": [
+      {"area":"mobile-layout","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+      {"area":"mobile-layout","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+      {"area":"mobile-layout","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+      {"area":"mobile-layout","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+    ],
+    "project-lifecycle": [
+      {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"project|workspace|host folder","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"project|workspace|host folder","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"project","runtime":"real-core","shard":"1/1"}
+    ],
+    "core-api": [
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
+    "themes": [
+      {"area":"themes","project":"desktop","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"},
+      {"area":"themes","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"},
+      {"area":"themes","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"}
+    ],
+    "desktop-shell": [
+      {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
+    "desktop-interface": [
+      {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+      {"area":"desktop-interface","project":"compact","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+    ]
+  },
+  "full_include": [
+    {"area":"full","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"},
+    {"area":"full","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"compact","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"narrow","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-chromium","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-webkit","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
+    {"area":"full","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"1/1"}
+  ]
+}

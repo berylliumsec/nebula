@@ -139,7 +139,7 @@ input, textarea { color: var(--text); background: transparent; caret-color: var(
 .top-bar-public-ip:hover:not(:disabled), .top-bar-public-ip:focus-visible { border-color: var(--border-strong); color: var(--text); }
 .top-bar-public-ip:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .top-bar-public-ip:disabled { cursor: default; opacity: 1; }
-.top-bar-public-ip > span { color: var(--muted); font-size: 9px; font-weight: var(--weight-bold); letter-spacing: .08em; }
+.top-bar-public-ip > span { color: var(--muted); font-size: 11px; font-weight: var(--weight-bold); letter-spacing: .08em; }
 .top-bar-public-ip code { max-width: 180px; overflow: hidden; color: inherit; font-size: 11px; text-overflow: ellipsis; }
 .top-bar-public-ip svg { color: var(--green); }
 .top-bar-public-ip.stale code { color: var(--orange); }

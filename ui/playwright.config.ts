@@ -4,6 +4,7 @@ const testPort = process.env.NEBULA_UI_TEST_PORT ?? "1420";
 const testHost = process.env.NEBULA_UI_TEST_HOST ?? "127.0.0.1";
 const testCommand = process.env.NEBULA_UI_TEST_COMMAND
   ?? `npm run dev -- --host ${testHost} --port ${testPort}`;
+const isolatedMatrixEntry = Boolean(process.env.NEBULA_PLAYWRIGHT_MATRIX);
 
 export default defineConfig({
   testDir: "./tests",
@@ -103,7 +104,7 @@ export default defineConfig({
     {
       name: "real-core",
       testMatch: "**/real-core.spec.ts",
-      dependencies: ["desktop", "compact", "narrow"],
+      dependencies: isolatedMatrixEntry ? [] : ["desktop", "compact", "narrow"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
   ],

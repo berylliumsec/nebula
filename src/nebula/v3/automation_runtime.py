@@ -487,15 +487,38 @@ class ContainerRuntimeSession(RuntimeBackendSession):
             )
             run_index = argv.index("run")
             argv.insert(run_index + 1, "--detach")
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=_runtime_environment(),
-                start_new_session=True,
-            )
-            stdout, stderr = await _communicate(process, timeout=30)
+            # A detached container monitor may inherit the Podman client's pipe
+            # descriptors. Capture output in files so startup waits for the
+            # client process, not EOF from the long-lived container.
+            with (
+                tempfile.TemporaryFile() as stdout_file,
+                tempfile.TemporaryFile() as stderr_file,
+            ):
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    env=_runtime_environment(),
+                    start_new_session=True,
+                )
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=60)
+                except asyncio.TimeoutError as exc:
+                    if process.returncode is None:
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            # diagnostic-expected: the runtime client exited between the check and signal.
+                            pass
+                    await process.wait()
+                    raise AutomationRuntimeUnavailable(
+                        "container runtime operation timed out"
+                    ) from exc
+                stdout_file.seek(0)
+                stderr_file.seek(0)
+                stdout = stdout_file.read(2_000_000)
+                stderr = stderr_file.read(2_000_000)
             if process.returncode != 0:
                 detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
                 raise AutomationRuntimeUnavailable(
@@ -1982,7 +2005,12 @@ async def _communicate(
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        process.kill()
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                # diagnostic-expected: the child exited between the returncode check and signal.
+                pass
         await process.wait()
         raise AutomationRuntimeUnavailable("container runtime operation timed out")
     return (stdout or b"")[:2_000_000], (stderr or b"")[:2_000_000]

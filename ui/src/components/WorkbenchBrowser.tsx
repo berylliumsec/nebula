@@ -271,11 +271,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   }, []);
 
   const updateTab = useCallback((id: string, change: Partial<BrowserTab>) => {
-    setTabs((current) => {
-      const next = current.map((tab) => tab.id === id ? { ...tab, ...change } : tab);
-      tabsRef.current = next;
-      return next;
-    });
+    const next = tabsRef.current.map((tab) => tab.id === id ? { ...tab, ...change } : tab);
+    tabsRef.current = next;
+    setTabs(next);
   }, []);
 
   const addPageToScope = useCallback(async (request: BrowserScopeRequestEvent) => {
@@ -1188,7 +1186,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   };
 
   const normalizedWebAddress = () => {
-    try { return normalizeBrowserInput(activeTab?.address ?? ""); }
+    try { return normalizeBrowserInput(tabsRef.current.find((tab) => tab.id === activeId)?.address ?? ""); }
     catch (caught) {
       // diagnostic-expected: local operator input validation is presented inline.
       setError(errorMessage(caught));

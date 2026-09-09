@@ -77,6 +77,7 @@ export function SelectionActionsProvider({
   const dismissSelection = useCallback(() => {
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     exitTimerRef.current = undefined;
+    document.getSelection()?.removeAllRanges();
     setIsExiting(false);
     setDraft(undefined);
   }, []);

@@ -280,6 +280,29 @@ def test_communicate_accepts_discarded_stderr():
     asyncio.run(scenario())
 
 
+def test_communicate_preserves_timeout_when_process_exits_during_kill():
+    class ExitedProcess:
+        returncode = None
+
+        async def communicate(self):
+            await asyncio.sleep(60)
+
+        def kill(self):
+            raise ProcessLookupError
+
+        async def wait(self):
+            return 0
+
+    async def scenario():
+        with pytest.raises(
+            automation_runtime.AutomationRuntimeUnavailable,
+            match="container runtime operation timed out",
+        ):
+            await automation_runtime._communicate(ExitedProcess(), timeout=0.001)
+
+    asyncio.run(scenario())
+
+
 def test_startup_removes_exact_orphan_runtime_and_gateway_names(tmp_path, monkeypatch):
     async def scenario():
         manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
@@ -1289,13 +1312,16 @@ def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
             request=request,
             approval=approval,
         )
-        await asyncio.sleep(1.2)
-        result = await manager.process_io(
-            result.process_id,
-            ProcessIORequest(),
-            engagement_id=engagement.id,
-            owner_id="host-timeout",
-        )
+        for _ in range(30):
+            result = await manager.process_io(
+                result.process_id,
+                ProcessIORequest(),
+                engagement_id=engagement.id,
+                owner_id="host-timeout",
+            )
+            if result.status == CommandExecutionStatus.TIMED_OUT:
+                break
+            await asyncio.sleep(0.1)
         assert result.status == CommandExecutionStatus.TIMED_OUT
         await manager.close_session(result.session_id)
 
