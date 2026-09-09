@@ -132,7 +132,7 @@ function FailureCard({
 
   const copyDetails = async () => {
     try {
-      await navigator.clipboard.writeText(diagnosticTechnicalDetails(record));
+      await copySelectionText(diagnosticTechnicalDetails(record));
       setCopyState("copied");
     } catch (error) {
       setCopyState("failed");
@@ -151,7 +151,7 @@ function FailureCard({
       const detail = await onSensitiveDetail(incident, action);
       if (!detail) return;
       if (action === "copy") {
-        await navigator.clipboard.writeText(detail);
+        await copySelectionText(detail);
         setCopyState("copied");
       } else {
         setSensitiveDetail(detail);
@@ -763,3 +763,4 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
     </section>
   );
 }
+import { copySelectionText } from "../components/selection/selectionActions";

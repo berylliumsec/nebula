@@ -196,19 +196,48 @@ export function readTextControlSelection(
 
 export async function copySelectionText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // diagnostic-expected: browser permissions may deny the modern API; try legacy copy.
+    }
   }
+  const active = document.activeElement;
+  const control = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement ? active : undefined;
+  const controlSelection = control && control.selectionStart !== null
+    ? [control.selectionStart, control.selectionEnd, control.selectionDirection ?? undefined] as const : undefined;
+  const selection = document.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : [];
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.readOnly = true;
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
   document.body.append(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
-  if (!copied) throw new Error("The selected text could not be copied.");
+  // Textareas normalize CRLF; supply the original bytes to the copy event.
+  const onCopy = (event: ClipboardEvent) => {
+    if (event.clipboardData) {
+      event.clipboardData.setData("text/plain", text);
+      event.preventDefault();
+    }
+  };
+  document.addEventListener("copy", onCopy);
+  try {
+    textarea.select();
+    if (!document.execCommand?.("copy")) throw new Error("Copy failed. Select the text and copy it manually, or try again.");
+  } catch (cause) {
+    throw new Error("Copy failed. Select the text and copy it manually, or try again.", { cause });
+  } finally {
+    document.removeEventListener("copy", onCopy);
+    textarea.remove();
+    if (active instanceof HTMLElement) active.focus({ preventScroll: true });
+    if (control && controlSelection) control.setSelectionRange(...controlSelection);
+    if (selection) {
+      selection.removeAllRanges();
+      for (const range of ranges) selection.addRange(range);
+    }
+  }
 }
 
 /** Hashes the exact bounded draft only when the user submits it. */

@@ -1,7 +1,7 @@
 import type { HarnessProfile, ProviderHealth } from "./types";
 
 type ProviderCandidate = Pick<ProviderHealth, "enabled" | "id" | "models" | "state">;
-type HarnessCandidate = Pick<HarnessProfile, "enabled" | "healthy" | "id" | "models">;
+type HarnessCandidate = Pick<HarnessProfile, "enabled" | "healthy" | "id" | "models" | "defaultModel">;
 
 export type DefaultModelRuntime =
   | { kind: "harness"; id: string; model: string }
@@ -13,14 +13,14 @@ function firstModel(models: readonly string[]): string | undefined {
 
 /**
  * Selects a usable runtime for a new chat or mission. Harnesses win when both
- * runtime kinds are ready, and model ordering is preserved from discovery.
+ * runtime kinds are ready. A configured harness default takes precedence over discovery.
  */
 export function defaultModelRuntime(
   providers: readonly ProviderCandidate[],
   harnesses: readonly HarnessCandidate[],
 ): DefaultModelRuntime | undefined {
   for (const harness of harnesses) {
-    const model = firstModel(harness.models);
+    const model = harness.defaultModel?.trim() || firstModel(harness.models);
     if (harness.enabled && harness.healthy && model) {
       return { kind: "harness", id: harness.id, model };
     }

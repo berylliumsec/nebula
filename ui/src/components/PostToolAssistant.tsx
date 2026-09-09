@@ -185,6 +185,15 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
   };
 
   const step = result?.content?.nextStep;
+  const copyCommand = async () => {
+    try {
+      await copySelectionText(command);
+      setFeedback({ kind: "success", title: "Command copied", message: "The exact command is on your clipboard." });
+    } catch (error) {
+      // diagnostic-expected: clipboard denial is recoverable by manual selection.
+      setFeedback({ kind: "error", title: "Could not copy command", message: error instanceof Error ? error.message : "Select the command and copy it manually." });
+    }
+  };
   const run = () => {
     if (!result || !step || !command.trim()) return;
     onRun({ source: command, language: step.language, declaredLanguage: step.language, origin: { kind: "rerun", executionId: result.executionId } });
@@ -221,7 +230,8 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     {config.suggestNextSteps && step && result && <aside className={`post-tool-suggestion${expanded ? " expanded" : ""}`} aria-label="Suggested next step">
       <header><Sparkles size={15} /><span><small>Suggested next step</small><strong>{step.title}</strong></span><button className="icon-button subtle" type="button" aria-label="Dismiss suggestion" onClick={() => void dismiss()}><X size={14} /></button></header>
       {expanded && <div className="post-tool-suggestion-body"><p>{step.rationale}</p><label>Exact command<textarea aria-label="Suggested command" rows={4} value={command} onChange={(event) => setCommand(event.target.value)} /></label>{step.networkTarget && <small>Network: {step.networkTarget}{step.networkPorts.length ? ` · ${step.networkPorts.join(", ")}` : ""}</small>}</div>}
-      <footer><button className="button quiet" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />} {expanded ? "Collapse" : "Expand"}</button>{expanded && <button className="button quiet" type="button" onClick={() => void navigator.clipboard.writeText(command)}><Clipboard size={13} /> Copy</button>}<button className="button primary" type="button" onClick={run}><Play size={13} /> Run</button></footer>
+<footer><button className="button quiet" type="button" onClick={() => setExpanded((value) => !value)}>{expanded ? <ChevronDown size={13} /> : <ChevronUp size={13} />} {expanded ? "Collapse" : "Expand"}</button>{expanded && <button className="button quiet" type="button" onClick={() => void copyCommand()}><Clipboard size={13} /> Copy</button>}<button className="button primary" type="button" onClick={run}><Play size={13} /> Run</button></footer>
     </aside>}
   </>;
 }
+import { copySelectionText } from "./selection/selectionActions";

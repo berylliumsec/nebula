@@ -233,9 +233,11 @@ def test_in_memory_mission_respects_dependencies_and_verifies_evidence(tmp_path)
         "task.started",
         "task.completed",
         "task.verified",
+        "run.progress",
         "task.started",
         "task.completed",
         "task.verified",
+        "run.progress",
         "run.completed",
     ]
 
@@ -288,6 +290,7 @@ def test_investigative_turns_continue_without_consuming_retry_budget(tmp_path):
         "task.started",
         "task.completed",
         "task.verified",
+        "run.progress",
         "run.completed",
     ]
 
@@ -416,7 +419,54 @@ def test_verification_rejection_requests_new_evidence_before_completion(tmp_path
     event_types = [event.event_type for event in store.replay_events(state["run_id"])]
     assert event_types.count("task.verification_failed") == 1
     assert "task.continuing" in event_types
+    progress = [
+        event
+        for event in store.replay_events(state["run_id"])
+        if event.event_type == "run.progress"
+    ]
+    assert [event.payload["completed_tasks"] for event in progress] == [1]
+    assert event_types.index("run.progress") > event_types.index("task.completed")
     assert event_types[-1] == "run.completed"
+
+
+def test_verified_progress_is_saved_before_synthesis_without_changing_status(tmp_path):
+    task = PlannedTask(
+        id="progress-task",
+        role=SpecialistRole.SCOPE_PLANNING,
+        title="Summarize supplied text",
+        instructions="Summarize the fixture text",
+    )
+
+    class SnapshotSupervisor(PlannedSupervisor):
+        async def synthesize(self, objective, plan, results):
+            run = store.list_entities(AgentRun)[0]
+            assert run.status == RunStatus.RUNNING
+            assert run.metadata["completed_tasks"] == 1
+            assert run.completed_at is None
+            events = store.replay_events(run.id)
+            assert events[-1].event_type == "run.progress"
+            assert events[-1].payload["completed_tasks"] == 1
+            return await super().synthesize(objective, plan, results)
+
+    supervisor = SnapshotSupervisor(
+        MissionPlan(summary="Summarize", rationale="Fixture", tasks=[task])
+    )
+    runtime, store = _runtime(
+        tmp_path,
+        supervisor,
+        {
+            SpecialistRole.SCOPE_PLANNING: RecordingSpecialist(
+                SpecialistRole.SCOPE_PLANNING,
+                SpecialistResult(summary="Fixture summary"),
+            )
+        },
+    )
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="progress-project", objective="Summarize", budget=RunBudget()
+        )
+    )
+    assert store.get(AgentRun, state["run_id"]).status == RunStatus.COMPLETE
 
 
 def test_unchanged_evidence_is_not_reverified(tmp_path):
@@ -711,6 +761,7 @@ def test_approval_checkpoint_resumes_same_attempt_with_zero_retries(tmp_path):
         "approval.resolved",
         "task.completed",
         "task.verified",
+        "run.progress",
         "run.completed",
     ]
 

@@ -8,6 +8,7 @@ export interface EventStreamOptions {
   token?: string;
   cursor?: Partial<EventCursor>;
   onEvent: (event: RunEvent) => void;
+  onReplayComplete?: () => void;
   onStateChange?: (state: StreamState) => void;
   maxReconnectDelayMs?: number;
 }
@@ -127,7 +128,12 @@ export class NebulaEventStream {
 
     socket.addEventListener("message", (message) => {
       try {
-        const event = parseEventFrame(JSON.parse(String(message.data)));
+        const frame = JSON.parse(String(message.data));
+        if (frame?.kind === "replay_complete") {
+          this.options.onReplayComplete?.();
+          return;
+        }
+        const event = parseEventFrame(frame);
         if (!event || event.sequence <= this.cursor.after) return;
         this.cursor.after = event.sequence;
         this.options.onEvent(event);

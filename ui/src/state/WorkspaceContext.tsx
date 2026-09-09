@@ -57,13 +57,13 @@ import { logCaughtDiagnostic } from "../diagnostics";
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
 export type ResourceLoadState = "loading" | "ready" | "empty" | "failed";
-export type WorkspaceResource = "projects" | "providers" | "providerCatalog" | "operators" | "setup" | "activity" | "approvals" | "assets" | "findings" | "evidence" | "notes" | "sources" | "library" | "reports";
+export type WorkspaceResource = "projects" | "providers" | "harnesses" | "providerCatalog" | "operators" | "setup" | "activity" | "approvals" | "assets" | "findings" | "evidence" | "notes" | "sources" | "library" | "reports";
 export interface ResourceStatus {
   state: ResourceLoadState;
   error?: unknown;
 }
 
-const workspaceResources: WorkspaceResource[] = ["projects", "providers", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "library", "reports"];
+const workspaceResources: WorkspaceResource[] = ["projects", "providers", "harnesses", "providerCatalog", "operators", "setup", "activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "library", "reports"];
 const initialResourceStatus = Object.fromEntries(workspaceResources.map((key) => [key, { state: "loading" }])) as Record<WorkspaceResource, ResourceStatus>;
 
 function missionIdFromUrl(): string {
@@ -77,50 +77,6 @@ function writeMissionIdToUrl(id: string, mode: "push" | "replace" = "replace") {
   if (id) url.searchParams.set("mission", id);
   else url.searchParams.delete("mission");
   window.history[mode === "push" ? "pushState" : "replaceState"]({}, "", `${url.pathname}${url.search}${url.hash}`);
-}
-
-export function evolveRunFromEvent(current: AgentRunSummary, event: RunEvent): AgentRunSummary {
-  if (event.runId && event.runId !== current.id) return current;
-  const base = { ...current, updatedAt: event.occurredAt };
-  if (event.kind === "run.queued") return { ...base, status: "queued" };
-  if (event.kind === "run.started") return { ...base, status: "planning", startedAt: current.startedAt ?? event.occurredAt };
-  if (event.kind === "run.planned") {
-    const tasks = Array.isArray(event.payload.tasks) ? event.payload.tasks.length : current.totalTasks;
-    return { ...base, status: "running", totalTasks: tasks };
-  }
-  if (event.kind === "run.waiting_approval") return { ...base, status: "waiting_approval" };
-  if (event.kind === "run.stop_requested") return { ...base, status: "cancelling" };
-  if (event.kind === "harness.usage") {
-    return {
-      ...base,
-      spentUsd: typeof event.payload.run_cost_usd === "number"
-        ? event.payload.run_cost_usd
-        : current.spentUsd,
-    };
-  }
-  if (event.kind === "run.completed") {
-    return {
-      ...base,
-      status: "complete",
-      completedTasks: Math.max(current.completedTasks, current.totalTasks),
-      spentUsd: typeof event.payload.cost_usd === "number" ? event.payload.cost_usd : current.spentUsd,
-    };
-  }
-  if (event.kind === "run.failed") return { ...base, status: "failed" };
-  if (event.kind === "run.cancelled") return { ...base, status: "cancelled" };
-  if (event.kind === "task.completed") {
-    return { ...base, completedTasks: Math.min(current.totalTasks || Number.MAX_SAFE_INTEGER, current.completedTasks + 1) };
-  }
-  if (event.kind === "stage.completed") {
-    return {
-      ...base,
-      status: "running",
-      completedTasks: typeof event.payload.stage_index === "number"
-        ? event.payload.stage_index + 1
-        : current.completedTasks + 1,
-    };
-  }
-  return current;
 }
 
 interface WorkspaceContextValue {
@@ -230,6 +186,14 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
 
+  useEffect(() => {
+    if (workspaceState !== "ready" && workspaceState !== "degraded") return;
+    const degraded = health?.status === "degraded"
+      || setupStatus?.core.status !== "ready"
+      || Object.values(resourceStatus).some((status) => status.state === "failed");
+    setWorkspaceState(degraded ? "degraded" : "ready");
+  }, [health, resourceStatus, setupStatus, workspaceState]);
+
   const reconnect = useCallback(() => {
     setWorkspaceState("starting");
     setCoreError(undefined);
@@ -299,6 +263,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           loadErrors.push("model providers");
         }
         setHarnesses(harnessResult.status === "fulfilled" ? harnessResult.value : []);
+        if (harnessResult.status === "rejected") loadErrors.push("harnesses");
         if (catalogResult.status === "fulfilled") setProviderCatalog(catalogResult.value);
         else {
           setProviderCatalog([]);
@@ -325,6 +290,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
           ...current,
           projects: engagementResult.status === "fulfilled" ? { state: engagementItems.length ? "ready" : "empty" } : { state: "failed", error: engagementResult.reason },
           providers: providerResult.status === "fulfilled" ? { state: providerResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: providerResult.reason },
+          harnesses: harnessResult.status === "fulfilled" ? { state: harnessResult.value.length ? "ready" : "empty" } : { state: "failed", error: harnessResult.reason },
           providerCatalog: catalogResult.status === "fulfilled" ? { state: catalogResult.value.length ? "ready" : "empty" } : { state: "failed", error: catalogResult.reason },
           operators: operatorResult.status === "fulfilled" ? { state: operatorResult.value.length ? "ready" : "empty" } : { state: "failed", error: operatorResult.reason },
           setup: setupResult.status === "fulfilled" ? { state: "ready" } : { state: "failed", error: setupResult.reason },
@@ -389,6 +355,34 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         setEvents([]);
 
         if (nextRun) {
+          // Events populate the timeline, never increment a snapshot that may
+          // already include them. Refresh authoritative state after replay and
+          // coalesce subsequent event bursts, including events arriving in-flight.
+          let refreshing = false;
+          let refreshPending = false;
+          let replaying = true;
+          const refreshMissions = async () => {
+            refreshPending = true;
+            if (refreshing) return;
+            refreshing = true;
+            try {
+              while (active && refreshPending) {
+                refreshPending = false;
+                const page = await nextApi.listRuns(nextEngagement!.id, controller.signal);
+                if (!active) return;
+                setRuns(page.items);
+                setRun(page.items.find((item) => item.id === nextRun!.id));
+                setResourceStatus((current) => ({ ...current, activity: { state: page.items.length ? "ready" : "empty" } }));
+              }
+            } catch (error) {
+              if (active) {
+                void logCaughtDiagnostic("interface.workspace.mission_refresh_failed", "Mission state could not be refreshed from Core.", error, "workspace_context");
+                setResourceStatus((current) => ({ ...current, activity: { state: "failed", error } }));
+              }
+            } finally {
+              refreshing = false;
+            }
+          };
           eventStream = new NebulaEventStream({
             apiBaseUrl: nextApi.baseUrl,
             token: nextApi.getToken(),
@@ -397,11 +391,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
               engagementId: nextEngagement?.id,
               runId: nextRun.id,
             },
-            onStateChange: setStreamState,
+            onStateChange: (state) => {
+              if (state === "connecting" || state === "reconnecting") replaying = true;
+              setStreamState(state);
+            },
+            onReplayComplete: () => {
+              replaying = false;
+              void refreshMissions();
+            },
             onEvent: (event) => {
               setEvents((current) => [event, ...current].slice(0, 100));
-              setRun((current) => current ? evolveRunFromEvent(current, event) : current);
-              setRuns((current) => current.map((item) => item.id === event.runId ? evolveRunFromEvent(item, event) : item));
+              if (!replaying && /^(run|task|stage|approval)\.|^harness\.usage$/.test(event.kind)) void refreshMissions();
               if (!nextEngagement) return;
               if (event.kind === "approval.requested" || event.kind === "approval.resolved") {
                 void nextApi.listApprovals(nextEngagement.id, controller.signal)
@@ -500,12 +500,21 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       let count = 1;
       if (resource === "projects") { const value = await api.listEngagements(); setEngagements(value.items); count = value.items.length; }
       else if (resource === "providers") { const value = await api.listProviders(); setProviders(value.items); count = value.items.length; }
+      else if (resource === "harnesses") { const value = await api.listHarnesses(); setHarnesses(value); count = value.length; }
+      else if (resource === "library") { const value = await api.listLibraryItems(); setLibraryItems(value.items); count = value.items.length; }
       else if (resource === "providerCatalog") { const value = await api.listProviderCatalog(); setProviderCatalog(value); count = value.length; }
       else if (resource === "operators") { const value = await api.listOperatorProfiles(); setOperatorProfiles(value); count = value.length; }
       else if (resource === "setup") setSetupStatus(await api.setupStatus());
       else {
         if (!engagement) throw new Error("Select a Project before retrying this resource.");
-        if (resource === "activity") { const value = await api.listRuns(engagement.id); setRun(value.items[value.items.length - 1]); count = value.items.length; }
+        if (resource === "activity") {
+          const value = await api.listRuns(engagement.id);
+          setRuns(value.items);
+          setRun(value.items.find((item) => item.id === selectedMissionId) ?? value.items[value.items.length - 1]);
+          count = value.items.length;
+          // Reconnect with the selected identity and fresh replay cursor.
+          setAttempt((value) => value + 1);
+        }
         else if (resource === "approvals") { const value = await api.listApprovals(engagement.id); setApprovals(value.items); count = value.items.length; }
         else if (resource === "assets") { const value = await api.listAssets(engagement.id); setAssets(value.items); count = value.items.length; }
         else if (resource === "findings") { const value = await api.listFindings(engagement.id); setFindings(value.items); count = value.items.length; }
@@ -520,7 +529,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       setResourceStatus((current) => ({ ...current, [resource]: { state: "failed", error } }));
       throw error;
     }
-  }, [api, engagement]);
+  }, [api, engagement, selectedMissionId]);
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;

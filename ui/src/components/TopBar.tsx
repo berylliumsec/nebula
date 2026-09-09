@@ -43,6 +43,7 @@ export function TopBar({
   const { api, coreError, engagement, reconnect, workspaceState } = useWorkspace();
   const [publicIp, setPublicIp] = useState<ContainerTerminalPublicIpStatus>();
   const [publicIpCopied, setPublicIpCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
   const canRetry = workspaceState === "failed" || workspaceState === "degraded";
 
   useEffect(() => {
@@ -79,9 +80,15 @@ export function TopBar({
 
   const copyPublicIp = async () => {
     if (!publicIp) return;
-    await copySelectionText(publicIp.address);
-    setPublicIpCopied(true);
-    globalThis.setTimeout(() => setPublicIpCopied(false), 1_500);
+    try {
+      await copySelectionText(publicIp.address);
+      setCopyError("");
+      setPublicIpCopied(true);
+      globalThis.setTimeout(() => setPublicIpCopied(false), 1_500);
+    } catch (error) {
+      // diagnostic-expected: copy denial is surfaced with manual recovery guidance.
+      setCopyError(error instanceof Error ? error.message : "Select the address and copy it manually.");
+    }
   };
 
   return (
@@ -125,6 +132,7 @@ export function TopBar({
         <button className={`top-bar-public-ip${publicIp?.stale ? " stale" : ""}`} type="button" disabled={!publicIp} onClick={() => void copyPublicIp()} title={publicIp ? `Terminal container public IP · observed ${new Date(publicIp.observedAt).toLocaleString()}` : "Start a terminal to observe its container public IP"} aria-label={publicIp ? `Terminal container public IP ${publicIp.address}. Copy address` : "Terminal container public IP unavailable"}>
           <span>IP</span><code>{publicIp?.address ?? "—"}</code>{publicIp && (publicIpCopied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />)}
         </button>
+        {copyError && <span role="alert">{copyError}</span>}
         <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />
           <span>Search</span>

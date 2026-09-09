@@ -20,7 +20,7 @@ import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
 
 const resourceLabels: Record<string, string> = {
-  projects: "Projects", providers: "Model providers", providerCatalog: "Provider setup",
+  projects: "Projects", providers: "Model providers", harnesses: "Harnesses", library: "Library", providerCatalog: "Provider setup",
   operators: "Operator profiles", setup: "Terminal setup", activity: "Activity",
   approvals: "Approvals", assets: "Assets", findings: "Findings", evidence: "Evidence",
   notes: "Notes", sources: "Knowledge sources", reports: "Reports",

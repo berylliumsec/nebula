@@ -237,7 +237,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
 
   const copyPath = async (entry: WorkspaceEntry) => {
     try {
-      await navigator.clipboard.writeText(`/workspace/${entry.path}`);
+      await copySelectionText(`/workspace/${entry.path}`);
       setNotice(`Copied /workspace/${entry.path}.`);
     } catch (copyError) {
       void logCaughtDiagnostic("interface.workspace_panel.copy_path_failed", "A workspace path could not be copied.", copyError, "workspace_panel");
@@ -252,7 +252,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       if (text.includes("\0")) throw new Error("Binary file contents cannot be copied as text.");
-      await navigator.clipboard.writeText(text);
+      await copySelectionText(text);
       setNotice(`Copied the contents of ${entry.name}.`);
     } catch (copyError) {
       void logCaughtDiagnostic("interface.workspace_panel.copy_contents_failed", "Workspace file contents could not be copied.", copyError, "workspace_panel");
@@ -336,3 +336,4 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
     </div>
   );
 }
+import { copySelectionText } from "./selection/selectionActions";

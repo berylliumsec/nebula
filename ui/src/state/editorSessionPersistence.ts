@@ -27,8 +27,6 @@ interface EditorSessionEnvelope {
 
 const STORE = createStore("nebula-editor-state", "hot-exit");
 const STORAGE_KEY = "sessions/v1";
-const MAX_PROJECTS = 50;
-const MAX_BUFFERS_PER_PROJECT = 20;
 const MAX_BUFFER_BYTES = 1024 * 1024;
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -70,18 +68,14 @@ export function normalizeEditorSessions(value: unknown): PersistedEditorSessions
   const envelope = value as Partial<EditorSessionEnvelope>;
   if (envelope.schema !== "nebula.editor-sessions/v1" || !envelope.sessions || typeof envelope.sessions !== "object") return {};
   const sessions: PersistedEditorSessions = {};
-  let totalBytes = 0;
-  for (const [engagementId, rawSession] of Object.entries(envelope.sessions).slice(0, MAX_PROJECTS)) {
+  for (const [engagementId, rawSession] of Object.entries(envelope.sessions)) {
     if (!validString(engagementId, 200) || !rawSession || typeof rawSession !== "object") continue;
     const candidate = rawSession as Partial<PersistedEditorSession>;
     if (!Array.isArray(candidate.buffers)) continue;
     const buffers: PersistedEditorBuffer[] = [];
-    for (const rawBuffer of candidate.buffers.slice(0, MAX_BUFFERS_PER_PROJECT)) {
+    for (const rawBuffer of candidate.buffers) {
       const buffer = normalizeBuffer(rawBuffer);
       if (!buffer) continue;
-      const bytes = encodedBytes(buffer.content) + encodedBytes(buffer.savedContent);
-      if (totalBytes + bytes > MAX_TOTAL_BYTES) break;
-      totalBytes += bytes;
       buffers.push(buffer);
     }
     const ids = new Set(buffers.map((buffer) => buffer.id));
@@ -103,9 +97,9 @@ export function normalizeEditorSessions(value: unknown): PersistedEditorSessions
 }
 
 function compactSessions(sessions: PersistedEditorSessions): PersistedEditorSessions {
-  return Object.fromEntries(Object.entries(sessions).slice(0, MAX_PROJECTS).map(([engagementId, session]) => [engagementId, {
+  return Object.fromEntries(Object.entries(sessions).map(([engagementId, session]) => [engagementId, {
     ...session,
-    buffers: session.buffers.slice(0, MAX_BUFFERS_PER_PROJECT).map((buffer) => {
+    buffers: session.buffers.map((buffer) => {
       const dirty = !buffer.existing || buffer.content !== buffer.savedContent;
       return buffer.existing && !dirty
         ? { ...buffer, content: "", savedContent: "", restoreFromCore: true }
@@ -125,6 +119,16 @@ export async function saveEditorSessions(sessions: PersistedEditorSessions): Pro
     sessions: compactSessions(sessions),
   };
   const normalized = normalizeEditorSessions(envelope);
+  // Validate before opening a write transaction: recovery must never report
+  // success after dropping a draft, or replace the last complete snapshot.
+  for (const [project, session] of Object.entries(envelope.sessions)) {
+    if (session.buffers.length !== (normalized[project]?.buffers.length ?? 0)) {
+      throw new Error("A draft exceeds the recovery limits or contains invalid metadata. Save or download your drafts before closing this browser. The previous recovery snapshot is unchanged.");
+    }
+  }
+  if (encodedBytes(JSON.stringify(envelope)) > MAX_TOTAL_BYTES) {
+    throw new Error("Editor recovery exceeds the 8 MiB device budget. Save workspace files or download and close drafts, then retry. The previous recovery snapshot is unchanged.");
+  }
   await set(STORAGE_KEY, { ...envelope, sessions: normalized }, STORE);
 }
 

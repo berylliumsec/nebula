@@ -1,6 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+// Service-worker-owned requests bypass Playwright routes after reload. These
+// tests exercise mocked Core state, so preserve that authority on navigation.
+const reloadTest = test.extend({ serviceWorkers: "block" });
+
 async function installCoreQueueFixture(page: Page) {
   const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
   const actions: string[] = [];
@@ -668,6 +672,98 @@ async function findPathologicalText(page: Page) {
     return issues;
   });
 }
+
+reloadTest("assistant upgrade uses the configured harness default for new chats", async ({ page }) => {
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, async route => route.fulfill({ json: [{
+    ...entity, id: "configured-harness", name: "Configured harness", kind: "codex_app_server",
+    connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
+    enabled: true, default_model: "configured-model", privacy: { local_only: true, permits_sensitive_data: true },
+    capabilities: { models: ["first-discovered", "configured-model"], checked_at: entity.updated_at },
+  }] }));
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.locator(".chat-composer footer")).toContainText("configured-model");
+  await page.reload();
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await expect(page.locator(".chat-composer footer")).toContainText("configured-model");
+});
+
+test("assistant upgrade copies saved code with the HTTP clipboard fallback", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    // Observe after the document copy handler, before the browser clears event data.
+    window.addEventListener("copy", event => {
+      (globalThis as typeof globalThis & { __copiedCode?: string }).__copiedCode = event.clipboardData?.getData("text/plain");
+    });
+  });
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "copy-chat", engagement_id: "scratch-project", title: "Copy regression", backend: "provider", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/copy-chat/messages")) {
+      await route.fulfill({ json: [{ ...entity, id: "copy-message", engagement_id: "scratch-project", session_id: "copy-chat", sequence: 1, role: "assistant", content: "```python\nprint('λ')\n```", citations: [], metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/copy-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=copy-chat", "Workbench");
+  const copy = page.getByRole("button", { name: "Copy exact code" });
+  await copy.click();
+  await expect(page.getByRole("status").filter({ hasText: "Copied exact source" })).toHaveText("Copied exact source");
+  await expect.poll(() => page.evaluate(() => (globalThis as typeof globalThis & { __copiedCode?: string }).__copiedCode)).toBe("print('λ')\n");
+  await expect(page.locator("textarea[readonly]")).toHaveCount(0);
+});
+
+reloadTest("assistant upgrade recovers failed workspace catalogs and mission replay without double counting", async ({ page }) => {
+  const requests = { library: 0, harnesses: 0, runs: 0 };
+  const blocked = { library: true, harnesses: true, runs: true };
+  await page.addInitScript(() => {
+    class ReplaySocket extends EventTarget {
+      constructor(url: string | URL) {
+        super();
+        if (!String(url).includes("/runs/")) return;
+        setTimeout(() => {
+          this.dispatchEvent(new Event("open"));
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "event", event: {
+            id: "prior-completion", run_id: "recovered-run", sequence: 1, event_type: "task.completed",
+            occurred_at: "2026-07-12T10:00:00Z", payload: { summary: "Earlier completed work" },
+          } }) }));
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "replay_complete", after_sequence: 1 }) }));
+        }, 10);
+      }
+      close() { this.dispatchEvent(new CloseEvent("close", { code: 1000 })); }
+    }
+    Object.defineProperty(globalThis, "WebSocket", { configurable: true, value: ReplaySocket });
+  });
+  await page.route("**/api/v1/**", async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    const endpoint = pathname.endsWith("/library/items") ? "library" : pathname.split("/").at(-1);
+    if (endpoint === "library" || endpoint === "harnesses" || endpoint === "runs") {
+      requests[endpoint]++;
+      if (blocked[endpoint]) return route.fulfill({ status: 503, json: { detail: "Temporary catalog failure" } });
+      if (endpoint === "runs") return route.fulfill({ json: [{ ...entity, id: "recovered-run", engagement_id: "scratch-project", objective: "Saved progress", status: "running", metadata: { name: "Recovered mission", completed_tasks: 2, total_tasks: 5 } }] });
+    }
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=missions&mission=recovered-run", "Workbench");
+  const libraryAttempts = requests.library;
+  blocked.library = false;
+  await page.getByRole("button", { name: "Retry Library", exact: true }).click();
+  await expect.poll(() => requests.library).toBeGreaterThan(libraryAttempts);
+  await expect(page.getByRole("button", { name: "Retry Library", exact: true })).toHaveCount(0);
+  const harnessAttempts = requests.harnesses;
+  blocked.harnesses = false;
+  await page.getByRole("button", { name: "Retry Harnesses", exact: true }).click();
+  await expect.poll(() => requests.harnesses).toBeGreaterThan(harnessAttempts);
+  blocked.runs = false;
+  await page.getByRole("button", { name: "Retry Activity", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Recovered mission")).toBeVisible();
+  await expect(page.locator(".mission-hero-progress")).toContainText("2complete");
+  await expect(page.getByText("Earlier completed work", { exact: true }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.locator(".mission-hero-progress")).toContainText("2complete");
+  await expect(page.getByText("Earlier completed work", { exact: true }).first()).toBeVisible();
+});
 
 test.beforeEach(async ({ page }, testInfo) => {
   await installTruthfulCore(page);
