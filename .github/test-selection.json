@@ -1,11 +1,11 @@
 {
-  "change_digest": "918d49ef3f10988956f77979ea60f96838f1faedb424e3a09f910d8560e09ee5",
+  "change_digest": "f3b5f5f7bda4ecae6bf6ac169d7550d1f5175f1ed3e9941a309722f64ff9f16b",
   "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Rebase changes shared workspace CSS and incorporates current Core/harness changes. Select graph persistence, migration, schema and exact assistant/harness dispatch boundaries plus the three graph/workspace component files. Dedicated production browser coverage is run locally with its existing disposable-Core configuration. One WebKit run was still visibly bootstrapping at the five-second assertion; readiness now has a bounded twenty-second wait, with an exact affected-profile retry.",
-  "exclusions": "No unrelated backend/frontend suites or native-shell changes. No container or live-provider execution. The dedicated application-model Playwright configuration is not in the main CI impact catalog; CI playwright is explicitly omitted, with local selection and evidence recorded below rather than pretending a main-config entry runs it.",
+  "reason": "Operator deliberately removed browser-result redaction. Remove the stale browserd caller and preserve page contents unchanged. Verify successful tab discovery and timeout handling; diagnose live production LAN stream and reconnect.",
+  "exclusions": "No UI source changed; existing production bundle retained. No unrelated graph, frontend, native, provider or assistant-action tests repeated. Physical Mac and full responsive/accessibility matrices not exercised in this focused backend recovery.",
   "expected_tests": {
-    "python": 35,
-    "frontend": 17,
+    "python": 2,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
@@ -15,47 +15,16 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_application_model_registry.py",
-    "tests/v3/test_chat.py::test_model_question_uses_graph_without_command_or_browser_runtime",
-    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model",
-    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities"
+    "tests/v3/test_browserd.py::test_companion_tabs_success_preserves_identity_and_page_contents",
+    "tests/v3/test_browserd.py::test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500"
   ],
-  "frontend": [
-    "ui/src/pages/ApplicationModelPage.test.tsx",
-    "ui/src/components/ApplicationModelGraph.test.tsx",
-    "ui/src/components/WorkspacePanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
-  "local_playwright": {
-    "config": "ui/playwright.application-model.config.ts",
-    "files": [
-      "application-model.spec.ts",
-      "application-model-responsive.spec.ts"
-    ],
-    "projects": [
-      "model-desktop",
-      "model-compact",
-      "model-chromium-320",
-      "model-webkit-320",
-      "model-chromium-390",
-      "model-webkit-390",
-      "model-chromium-430",
-      "model-webkit-430"
-    ],
-    "expected_tests": 16,
-    "boundary": "Production bundle, disposable SQLite/Core/workspace, Chromium/WebKit emulation; no live provider or native capture engine",
-    "retry": {
-      "files": [
-        "application-model.spec.ts",
-        "application-model-responsive.spec.ts"
-      ],
-      "projects": [
-        "model-webkit-320"
-      ],
-      "expected_tests": 2
-    }
+  "previous_verification": {
+    "commit": "41f5917",
+    "python": 35,
+    "frontend": 17,
+    "dedicated_playwright": 16
   }
 }

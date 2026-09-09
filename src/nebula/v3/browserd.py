@@ -28,7 +28,7 @@ from playwright.async_api import async_playwright, TimeoutError as BrowserTimeou
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 import uvicorn
 
-from .browser_companion import CompanionRequest, BrowserCompanion
+from .browser_companion import CompanionRequest
 from .browser_companion_runtime import operate as companion_operate
 
 from .browser_engine import (
@@ -749,7 +749,7 @@ def create_browserd_app(
                     identity_id,
                     request.model_copy(update={"protected_values": list(known)}),
                 )
-            return BrowserCompanion.redact_result(result, list(values))
+            return result
         except (TimeoutError, BrowserTimeoutError) as exc:
             raise HTTPException(
                 status_code=504,

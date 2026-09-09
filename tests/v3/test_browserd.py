@@ -257,3 +257,48 @@ def test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500(
         client.post("/v1/companion/identity", json={"operation": "tabs"}).status_code
         == 401
     )
+
+
+def test_companion_tabs_success_preserves_identity_and_page_contents(
+    tmp_path, monkeypatch
+):
+    configured = settings(tmp_path)
+    manager = BrowserdManager(configured)
+
+    class Page:
+        url = "https://example.test/"
+
+        async def title(self):
+            return "Account protected-secret"
+
+    async def ensure_identity(identity_id):
+        return BrowserdIdentityReceipt(identity_id=identity_id, tab_ids=["tab-1"])
+
+    async def page_for_screencast(identity_id, tab_id):
+        assert identity_id == "identity"
+        assert tab_id == "tab-1"
+        return Page()
+
+    monkeypatch.setattr(manager, "ensure_identity", ensure_identity)
+    monkeypatch.setattr(manager, "page_for_screencast", page_for_screencast)
+    client = TestClient(create_browserd_app(configured, manager=manager))
+    for payload in [
+        {"operation": "tabs", "protected_values": ["protected-secret"]},
+        {"operation": "tabs"},
+    ]:
+        response = client.post(
+            "/v1/companion/identity",
+            headers={"Authorization": "Bearer opaque-browserd-token"},
+            json=payload,
+        )
+        assert response.status_code == 200
+        assert response.json() == {
+            "tabs": [
+                {
+                    "id": "tab-1",
+                    "url": "https://example.test/",
+                    "title": "Account protected-secret",
+                }
+            ]
+        }
+        assert "protected-secret" in response.text

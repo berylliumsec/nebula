@@ -291,3 +291,7 @@ reduced motion, long content, refresh, cancellation, reconnect, and safe retries
 Run production non-loopback LAN acceptance and verify build identity. Record exact
 commands/results and whether devices were emulated or physical. Any missing
 required gate means the workflow remains incomplete or partially verified.
+
+## Managed browser recovery regression (2026-09-09)
+
+Journey: open the project browser from a paired LAN device, receive the host page, reconnect and refresh. Core owns durable browser identity and conversations; browserd owns live tabs and page contents; React owns the transient stream. Tab discovery and reconnect must return usable tabs without losing saved identity or altering page contents. Operator explicitly requested no redaction: this repair removes the dangling browserd helper call and returns browser results unchanged; it changes no UI, navigation, authorization, or mutation behavior. Validate the real browserd success endpoint and unchanged page contents, then existing-session tab discovery and streamed frames through the production LAN UI. New object creation, deletion, and assistant action execution are outside this focused repair. Physical Mac testing requires the operator's device; emulated browser checks cannot substitute for that evidence.
