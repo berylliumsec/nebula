@@ -5701,17 +5701,23 @@ class HarnessRuntimeService:
             expected_revision=chat.revision,
         )
 
+    def _chat_messages(self, engagement_id: str, session_id: str) -> list[ChatMessage]:
+        """Read the complete conversation, not just the first project page."""
+        messages: list[ChatMessage] = []
+        offset = 0
+        while True:
+            page = self.store.list_entities(
+                ChatMessage, engagement_id=engagement_id, offset=offset, limit=1_000
+            )
+            messages.extend(item for item in page if item.session_id == session_id)
+            if len(page) < 1_000:
+                return sorted(messages, key=lambda item: item.sequence)
+            offset += len(page)
+
     def _chat_handoff_context(
         self, chat: ChatSession, *, reason: str = "parallel harness session"
     ) -> str:
-        messages = [
-            item
-            for item in self.store.list_entities(
-                ChatMessage, engagement_id=chat.engagement_id, limit=1_000
-            )
-            if item.session_id == chat.id
-        ]
-        messages.sort(key=lambda item: item.sequence)
+        messages = self._chat_messages(chat.engagement_id, chat.id)
         lines = [
             f"{item.role.value}: {item.content}"
             for item in messages[-40:]
@@ -6180,13 +6186,7 @@ class HarnessRuntimeService:
             },
         )
         chat_turn = chat_turn.model_copy(update={"harness_turn_id": harness_turn.id})
-        prior_messages = [
-            item
-            for item in self.store.list_entities(
-                ChatMessage, engagement_id=engagement_id, limit=1_000
-            )
-            if item.session_id == chat.id
-        ]
+        prior_messages = self._chat_messages(engagement_id, chat.id)
         with self.store.transaction() as transaction:
             transaction.add(chat_turn)
             transaction.add(harness_turn)
@@ -10402,13 +10402,7 @@ class HarnessRuntimeService:
             and turn.chat_session_id
         ):
             chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
-            existing = [
-                item
-                for item in self.store.list_entities(
-                    ChatMessage, engagement_id=turn.engagement_id, limit=1_000
-                )
-                if item.session_id == turn.chat_session_id
-            ]
+            existing = self._chat_messages(turn.engagement_id, turn.chat_session_id)
             message = ChatMessage(
                 id=str(uuid4()),
                 engagement_id=turn.engagement_id,
@@ -10629,13 +10623,7 @@ class HarnessRuntimeService:
         run_id: str,
         usage: ChatTokenUsage | None,
     ) -> ChatMessage:
-        messages = [
-            message
-            for message in self.store.list_entities(
-                ChatMessage, engagement_id=chat.engagement_id, limit=1_000
-            )
-            if message.session_id == chat.id
-        ]
+        messages = self._chat_messages(chat.engagement_id, chat.id)
         return self.store.create(
             ChatMessage(
                 id=str(uuid4()),

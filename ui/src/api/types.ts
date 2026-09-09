@@ -2664,6 +2664,7 @@ export type RunEventKind =
   | "run.queued"
   | "run.started"
   | "run.planned"
+  | "run.progress"
   | "run.waiting_approval"
   | "run.stop_requested"
   | "run.completed"

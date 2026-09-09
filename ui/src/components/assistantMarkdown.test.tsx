@@ -5,6 +5,20 @@ import { AssistantMarkdown } from "./AssistantMarkdown";
 import { parseExactFences } from "./assistantCode";
 
 describe("exact assistant Markdown", () => {
+  it("shows failed copying beside the control and permits a successful retry on LAN", async () => {
+    const user = userEvent.setup();
+    const originalClipboard = navigator.clipboard;
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    const copy = vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+    Object.defineProperty(document, "execCommand", { configurable: true, value: copy });
+    render(<AssistantMarkdown content={"```python\nprint('ok')\n```"} durable messageId="copy-retry" runnableLanguages={new Set()} onRun={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Copy exact code" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Copy failed. Select the text and copy it manually, or try again.");
+    expect(screen.getByRole("status")).not.toHaveClass("sr-only");
+    await user.click(screen.getByRole("button", { name: "Copy exact code" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Copied exact source");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+  });
   it("retains exact closed fence offsets and makes an unclosed fence inert", () => {
     const exact = "before\r\n```python meta\r\n\tprint('λ')\r\n```\r\nafter";
     const parsed = parseExactFences(exact);

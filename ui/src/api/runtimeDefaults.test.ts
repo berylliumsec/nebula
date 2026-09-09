@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { defaultModelRuntime } from "./runtimeDefaults";
 
 describe("defaultModelRuntime", () => {
+  it.each([["second", ["first", "second"]], ["configured", []], ["configured", ["stale"]]])("honors configured harness default %s even when discovery is incomplete", (defaultModel, models) => {
+    expect(defaultModelRuntime([], [{ id: "harness", enabled: true, healthy: true, defaultModel, models }]))
+      .toEqual({ kind: "harness", id: "harness", model: defaultModel });
+  });
+
+  it("ignores blank defaults and unhealthy configured harnesses", () => {
+    expect(defaultModelRuntime([], [
+      { id: "offline", enabled: true, healthy: false, defaultModel: "configured", models: [] },
+      { id: "ready", enabled: true, healthy: true, defaultModel: "  ", models: ["discovered"] },
+    ])).toEqual({ kind: "harness", id: "ready", model: "discovered" });
+  });
   it("prefers the first working harness and its first discovered model", () => {
     expect(defaultModelRuntime(
       [{ id: "provider-1", enabled: true, state: "healthy", models: ["provider-model"] }],

@@ -102,4 +102,16 @@ describe("NebulaEventStream", () => {
     expect(onStateChange).toHaveBeenLastCalledWith("unsupported");
     expect(MockWebSocket.instance).toBeUndefined();
   });
+
+  it("notifies consumers when replay finishes, including an empty replay", () => {
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const onEvent = vi.fn();
+    const onReplayComplete = vi.fn();
+    const stream = new NebulaEventStream({ apiBaseUrl: "http://core/api/v1", cursor: { runId: "run" }, onEvent, onReplayComplete });
+    stream.connect();
+    MockWebSocket.instance!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ kind: "replay_complete", after_sequence: 0 }) }));
+    expect(onReplayComplete).toHaveBeenCalledTimes(1);
+    expect(onEvent).not.toHaveBeenCalled();
+    stream.disconnect();
+  });
 });

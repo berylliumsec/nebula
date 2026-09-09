@@ -530,7 +530,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
 
   const copyPath = async (entry: WorkspaceEntry) => {
     try {
-      await navigator.clipboard.writeText(`/workspace/${entry.path}`);
+      await copySelectionText(`/workspace/${entry.path}`);
       setNotice(`Copied /workspace/${entry.path}.`);
     } catch (copyError) {
       void logCaughtDiagnostic("interface.code_editor.copy_path_failed", "A workspace path could not be copied.", copyError, "code_editor");
@@ -541,7 +541,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
   const copyContents = async (entry: WorkspaceEntry) => {
     try {
       const decoded = await decodeWorkspaceFile(await api.downloadWorkspaceFile(engagementId, entry.path));
-      await navigator.clipboard.writeText(decoded.content);
+      await copySelectionText(decoded.content);
       setNotice(`Copied the contents of ${entry.name}.`);
     } catch (copyError) {
       void logCaughtDiagnostic("interface.code_editor.copy_contents_failed", "Workspace file contents could not be copied.", copyError, "code_editor");
@@ -805,3 +805,4 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
   </div>;
 }
+import { copySelectionText } from "./selection/selectionActions";

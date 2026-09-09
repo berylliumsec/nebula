@@ -1996,6 +1996,25 @@ class MissionRuntime:
                 },
                 idempotency_key=f"{verification_key}:blocked",
             )
+        # Task events are durable before the run summary is refreshed. Publish
+        # the refreshed snapshot too so viewers never have to increment replayed
+        # events or wait until synthesis finishes to see verified progress.
+        completed_tasks = sum(
+            self.store.get(Task, task.id).status == TaskStatus.COMPLETE
+            for task in plan.tasks
+        )
+        run = self.store.get(AgentRun, state["run_id"])
+        if run.metadata.get("completed_tasks") != completed_tasks:
+            self.store.update_with_event(
+                AgentRun,
+                run.id,
+                {"metadata": {**run.metadata, "completed_tasks": completed_tasks}},
+                expected_revision=run.revision,
+                run_id=run.id,
+                event_type="run.progress",
+                event_payload={"completed_tasks": completed_tasks},
+                idempotency_key=f"run:progress:revision:{run.revision}",
+            )
         return {
             "verification": verification,
             "verification_tool_calls": verification_tool_calls,

@@ -11,6 +11,7 @@ import {
   type ExactFence,
 } from "./assistantCode";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { copySelectionText } from "./selection/selectionActions";
 
 export interface FencedRunCandidate {
   source: string;
@@ -103,9 +104,14 @@ function FencedCode({
 
   const copy = async () => {
     const selected = slice();
-    await navigator.clipboard.writeText(selected.source);
-    setFeedback("Copied exact source");
-    globalThis.setTimeout(() => setFeedback(""), 1800);
+    try {
+      await copySelectionText(selected.source);
+      setFeedback("Copied exact source");
+      globalThis.setTimeout(() => setFeedback(""), 1800);
+    } catch (error) {
+      // diagnostic-expected: clipboard denial is shown beside the retryable copy control.
+      setFeedback(error instanceof Error ? error.message : "Copy failed. Select the code and copy it manually.");
+    }
   };
 
   const run = async () => {
@@ -133,7 +139,7 @@ function FencedCode({
         <span>{block.declaredLanguage || "code"}</span>
         <div>
           <button type="button" onMouseDown={captureSelection} onClick={() => void copy()} aria-label="Copy exact code">
-            {feedback ? <Check size={13} /> : <Copy size={13} />} Copy
+            {feedback === "Copied exact source" ? <Check size={13} /> : <Copy size={13} />} Copy
           </button>
           {canRun && (
             <button className="run-code" type="button" onMouseDown={captureSelection} onClick={() => void run()} aria-label={`Review and run ${block.canonicalLanguage} code`}>
@@ -158,7 +164,7 @@ function FencedCode({
           </pre>
         )}
       </Highlight>
-      <span className="sr-only" aria-live="polite">{feedback}</span>
+      <span className={feedback === "Copied exact source" ? "sr-only" : "inline-error"} role="status" aria-live="polite">{feedback}</span>
     </div>
   );
 }

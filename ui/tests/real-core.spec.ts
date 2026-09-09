@@ -1056,12 +1056,44 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await page.getByRole("textbox", { name: "File path" }).fill("hot-exit-notes.txt");
     await page.getByRole("textbox", { name: "Code editor" }).fill("exact unsaved λ research draft\n");
     await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
+
+    // Keep the last draft beyond the former 20-buffer recovery cutoff active.
+    for (let index = 4; index <= 21; index++) {
+      await page.getByRole("button", { name: "New editor file" }).click();
+      await page.getByRole("textbox", { name: "File path" }).fill(`recovery-${index}.txt`);
+      await page.getByRole("textbox", { name: "Code editor" }).fill(`unsaved draft ${index} λ`);
+    }
+    // Observe the actual IndexedDB transaction, not just the previous ready UI.
+    await expect.poll(() => page.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open("nebula-editor-state");
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        const envelope = await new Promise<{ sessions: Record<string, { buffers: Array<{ filePath: string; content: string }> }> }>((resolve, reject) => {
+          const request = database.transaction("hot-exit").objectStore("hot-exit").get("sessions/v1");
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        });
+        return Object.values(envelope.sessions).some((session) => session.buffers.length === 21 && session.buffers.some((buffer) => buffer.filePath === "recovery-21.txt" && buffer.content === "unsaved draft 21 λ"));
+      } finally {
+        database.close();
+      }
+    })).toBe(true);
+    page.once("dialog", (dialog) => void dialog.accept());
+    await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("recovery-21.txt");
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("unsaved draft 21 λ");
+    await expect(page.getByText(/^21 open · 19 unsaved · recovery on$/)).toHaveText("21 open · 19 unsaved · recovery on");
+    await page.getByRole("tab", { name: /hot-exit-notes\.txt/ }).click();
+    await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("exact unsaved λ research draft");
     await page.waitForTimeout(350);
     page.once("dialog", (dialog) => void dialog.accept());
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("hot-exit-notes.txt");
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("exact unsaved λ research draft");
-    await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
+    await expect(page.getByText(/^21 open · 19 unsaved · recovery on$/)).toHaveText("21 open · 19 unsaved · recovery on");
   } finally {
     await api.dispose();
     await stopRealCore(core);

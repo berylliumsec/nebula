@@ -142,7 +142,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
 
   const copySource = async (execution: OperatorExecution) => {
     try {
-      await navigator.clipboard.writeText(await source(execution));
+      await copySelectionText(await source(execution));
     } catch (copyError) {
       void logCaughtDiagnostic("interface.execution_history.caught_failure_02", "A handled interface operation failed.", copyError, "execution_history");
       setError(copyError instanceof Error ? copyError.message : "Could not copy source.");
@@ -229,3 +229,4 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     </div>
   );
 }
+import { copySelectionText } from "./selection/selectionActions";

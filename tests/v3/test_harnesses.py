@@ -275,6 +275,95 @@ def _runtime(tmp_path: Path, *, fail: bool = False):
     return store, engagement, profile, mcp, adapter, runtime
 
 
+@pytest.mark.parametrize(
+    "other_message_count,chat_message_count", [(1_001, 45), (0, 1_001)]
+)
+def test_long_project_history_preserves_harness_chat_sequence_and_handoff(
+    tmp_path, other_message_count, chat_message_count
+):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    harness_session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        mcp_server_ids=[],
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Long conversation",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness_session.id,
+            model="test-model",
+        )
+    )
+    other_chat = store.create(
+        chat.model_copy(update={"id": "other-chat", "title": "Other conversation"})
+    )
+    with store.transaction() as transaction:
+        for index in range(other_message_count):
+            transaction.add(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=other_chat.id,
+                    sequence=index + 10_000,
+                    role="user",
+                    content="Unrelated conversation",
+                )
+            )
+        for sequence in range(1, chat_message_count + 1):
+            transaction.add(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=chat.id,
+                    sequence=sequence,
+                    role="user",
+                    content=f"Saved message [{sequence}]",
+                )
+            )
+
+    context = runtime._chat_handoff_context(chat)
+    assert f"Saved message [{chat_message_count}]" in context
+    assert f"Saved message [{chat_message_count - 39}]" in context
+    assert f"Saved message [{chat_message_count - 40}]" not in context
+    assert "Unrelated conversation" not in context
+
+    chat, chat_turn, harness_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Continue the conversation",
+        chat_session_id=chat.id,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    runtime._complete_owner(harness_turn, "Completed response", ChatTokenUsage())
+    completed_turn = store.get(ChatTurn, chat_turn.id)
+    assert store.get(ChatMessage, completed_turn.final_message_id).sequence == (
+        chat_message_count + 2
+    )
+    handoff = runtime._append_chat_handoff(
+        chat, role="assistant", content="Mission summary", run_id="run-test", usage=None
+    )
+    assert handoff.sequence == chat_message_count + 3
+
+    # Reopen the durable store, independently of the runtime helper under test.
+    reopened = NebulaStore(tmp_path / "nebula.db")
+    saved = []
+    for offset in range(0, other_message_count + chat_message_count + 3, 1_000):
+        saved.extend(
+            message
+            for message in reopened.list_entities(
+                ChatMessage, engagement_id=engagement.id, offset=offset, limit=1_000
+            )
+            if message.session_id == chat.id
+        )
+    assert sorted(message.sequence for message in saved) == list(
+        range(1, chat_message_count + 4)
+    )
+
+
 def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
     store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
     harness_session = runtime.create_session(

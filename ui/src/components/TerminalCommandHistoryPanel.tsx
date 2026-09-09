@@ -172,7 +172,7 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
 
   const copyText = async (value: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(value);
+      await copySelectionText(value);
     } catch (caughtError) {
       void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_04", "A handled interface operation failed.", caughtError, "terminal_command_history_panel");
       setError(`Could not copy ${label}.`);
@@ -263,3 +263,4 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
     {status && <footer className="history-retention">{status.recordCount.toLocaleString()} commands · {status.recordedOutputCount.toLocaleString()} selected results · {status.metadataOnlyCount.toLocaleString()} metadata only · {sizeLabel(status.capturedOutputBytes)} retained · included in sensitive engagement exports.</footer>}
   </section>;
 }
+import { copySelectionText } from "./selection/selectionActions";
