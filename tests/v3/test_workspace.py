@@ -685,10 +685,15 @@ def test_reset_status_reports_active_execution_and_stable_recovery_code(tmp_path
     assert ready.json()["reason_code"] is None
 
 
-def test_workspace_upload_is_atomic_bounded_and_requires_overwrite(tmp_path):
+def test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite(tmp_path, monkeypatch):
     _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)
     (root / "notes").mkdir()
+    with (root / "large-existing.bin").open("wb") as stream:
+        stream.truncate(6 * 1024**3)
+    def no_walk(*args, **kwargs):
+        raise AssertionError("upload must not walk the project")
+    monkeypatch.setattr("os.walk", no_walk)
 
     async def chunks(*values: bytes):
         for value in values:

@@ -251,10 +251,10 @@ Keywords: workspace full, quota exceeded, file too large, too many files, upload
 
 Sources: docs/NEBULA3.md#workbench-terminal-reviewed-execution-and-workspace-limits, src/nebula/v3/workspace.py
 
-The persistent scratch workspace permits at most 5 GiB total allocated data, 50,000
-entries, and 1 GiB per file. Core rejects an already-over-limit workspace before
-launch and terminates an execution that crosses a limit. These are application
-limits around portable bind mounts, not a universal filesystem quota.
+Project workspaces have no Nebula-imposed total-size, file-count, or per-file
+storage quota. Terminal readiness and uploads do not recursively scan the
+workspace to count files or enforce storage quotas. Filesystem permissions and
+available disk space still determine whether a write succeeds.
 
 Use the workspace controls to inspect scratch content, preserve important material
 by promoting exact bytes into immutable artifacts, and remove or reset only
@@ -262,10 +262,6 @@ unneeded scratch files. Reset does not follow symlinks and does not remove promo
 evidence. Browser uploads use atomic streamed writes and reject traversal and
 symlink escapes.
 
-Do not advise increasing an undocumented setting, writing outside `/workspace`,
-mounting another host directory, or deleting the artifact store. If a small-looking
-workspace is reported over quota, preserve the exact quota detail and inspect entry
-count, allocated size, per-file size, and symlink-safe workspace state.
 
 ## context-compaction | Chat or mission context compaction fails
 

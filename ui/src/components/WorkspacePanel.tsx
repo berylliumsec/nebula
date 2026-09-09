@@ -329,7 +329,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       {resetStatus?.reasonCode === "linked_workspace" ? <p className="workspace-reset-summary">Linked folder · bulk reset is unavailable.</p> : <details className="workspace-reset-disclosure" key={engagementId}>
         <summary>Reset scratch workspace…</summary>
         <section className="workspace-reset panel">
-        <div><Trash2 size={18} /><span><strong>Reset scratch workspace</strong><small>Application-enforced limits: 5 GiB allocated data, 50,000 entries, 1 GiB per file. Promoted artifacts survive reset.</small></span></div>
+        <div><Trash2 size={18} /><span><strong>Reset scratch workspace</strong><small>Promoted artifacts survive reset.</small></span></div>
         <label>Type <strong>{engagementName}</strong><input value={resetName} onChange={(event) => setResetName(event.target.value)} /></label>
         {resetStatus && !resetStatus.canReset && <div className="callout workspace-reset-blocker" role="status"><AlertTriangle size={18} /><div><strong>Workspace is in use</strong><p>{resetStatus.detail}</p></div>{resetStatus.activeTerminalCount > 0 && <button className="button secondary" type="button" onClick={onOpenTerminal}><SquareTerminal size={14} /> Open Terminal</button>}{resetStatus.activeExecutionCount > 0 && <button className="button secondary" type="button" onClick={onOpenActivity}><Activity size={14} /> View Activity</button>}</div>}
         <button className="button danger" type="button" disabled={resetName !== engagementName || resetStatusLoading || resetStatus?.canReset !== true} onClick={() => void reset()}>{resetStatusLoading ? "Checking…" : "Reset workspace"}</button>

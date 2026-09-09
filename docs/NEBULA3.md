@@ -288,10 +288,8 @@ that is cleared when Nebula closes because that operating-system WebKit version
 does not provide named persistent stores. **Clear Project browser data** closes
 the Project's browser tabs and removes only that profile.
 
-Website downloads are staged in Nebula's private cache, capped at the existing
-1 GiB workspace-file limit, and streamed through the authenticated workspace
-upload endpoint. Core therefore applies the same atomic write, total quota,
-entry limit, traversal, symlink, and overwrite-confirmation rules as an
+Website downloads are staged in Nebula's private cache, subject to the native download staging limit, and streamed through the authenticated workspace
+upload endpoint. Core therefore applies the same atomic write, traversal, symlink, and overwrite-confirmation rules as an
 operator upload. A downloaded file enters Project Files only; it is never
 promoted to evidence or sent to a model without another explicit action.
 
@@ -427,11 +425,10 @@ is no bridge/host network mode, host shell fallback, or runtime socket exposed
 to the webview. The human terminal exception above does not widen either
 execution API and cannot be requested by an agent or assistant code block.
 
-The persistent scratch workspace is limited to 5 GiB total allocated data,
-50,000 entries, and 1 GiB per file. Core rejects an already-over-limit
-workspace before launch and terminates an execution that crosses a limit.
-These are application-enforced limits: portable bind mounts do not provide a
-universal filesystem hard quota. Browser uploads use streamed atomic writes
+Project workspaces have no application-imposed total-size, entry-count or
+individual-file quota. Terminal readiness and uploads do not recursively scan
+folders for quota accounting, and execution has no periodic quota monitor.
+Browser uploads use streamed atomic writes
 with traversal and symlink protection. Promotion copies and verifies exact
 bytes into immutable artifacts, while reset never follows symlinks and never
 removes promoted evidence.

@@ -47,6 +47,13 @@ if __name__ == "__main__":
                 workspace_path=str(linked),
             )
         )
+        if os.environ.get("NEBULA_TEST_LARGE_WORKSPACE") == "1":
+            with (linked / "large-existing.bin").open("wb") as stream:
+                stream.truncate(6 * 1024**3)
+            entries = linked / "many-files"
+            entries.mkdir()
+            for index in range(50_001):
+                (entries / f"entry-{index}").touch()
         app = create_app(
             store,
             artifact_store=artifacts,

@@ -164,23 +164,21 @@ describe("ContainerTerminalPanel", () => {
     expect(screen.queryByText(/Bridge networking is permitted/)).not.toBeInTheDocument();
   });
 
-  it("explains a workspace limit before attempting a terminal start", async () => {
+  it("explains unavailable runtimes without suggesting a smaller workspace", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
       getToken: () => "test-token",
       containerTerminalCapabilities: vi.fn().mockResolvedValue({
         ready: false,
-        errorCode: "workspace_limit",
-        detail: "workspace exceeds 50000 entries",
-        workspaceEntries: 50001,
-        workspaceMaxEntries: 50000,
+        errorCode: "runner_unavailable",
+        detail: "Configured runner is unavailable",
       }),
       recoverContainerTerminals: vi.fn(),
     } as unknown as ApiClient;
 
     renderPanel(api);
-    expect(await screen.findByText("Choose a smaller Project workspace")).toBeVisible();
-    expect(screen.getByText(/Docker runner and verified Kali image/)).toBeVisible();
+    expect(await screen.findByText("Configured runner is unavailable")).toBeVisible();
+    expect(screen.queryByText(/smaller Project workspace/)).not.toBeInTheDocument();
     expect(api.recoverContainerTerminals).not.toHaveBeenCalled();
   });
 

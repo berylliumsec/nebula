@@ -35,12 +35,8 @@ from .domain import (
     OperatorExecution,
     OperatorExecutionStatus,
 )
-from .executions import (
-    WORKSPACE_MAX_BYTES,
-    WORKSPACE_MAX_ENTRIES,
-    WORKSPACE_MAX_FILE_BYTES,
-    ExecutionServiceError,
-)
+from .executions import ExecutionServiceError
+
 from .storage import NebulaStore
 from .runtime_platform import RuntimePlatform
 
@@ -1394,12 +1390,6 @@ class WorkspaceService:
                 if not chunk:
                     continue
                 size += len(chunk)
-                if size > WORKSPACE_MAX_FILE_BYTES:
-                    raise ExecutionServiceError(
-                        "workspace_file_limit",
-                        f"workspace uploads may not exceed {WORKSPACE_MAX_FILE_BYTES} bytes",
-                        status_code=413,
-                    )
                 digest.update(chunk)
                 view = memoryview(chunk)
                 while view:
@@ -1459,28 +1449,6 @@ class WorkspaceService:
                     "workspace_file_changed",
                     "workspace file no longer exists",
                     status_code=412,
-                )
-
-            root = self._workspace_root(engagement_id)
-            temporary_path = PurePosixPath(*relative[:-1], temporary_name).as_posix()
-            allocated, entries = _workspace_usage(
-                root,
-                exclude={PurePosixPath(*relative).as_posix(), temporary_path},
-            )
-            uploaded = os.stat(temporary_name, dir_fd=parent, follow_symlinks=False)
-            allocated += uploaded.st_blocks * 512
-            entries += 1
-            if entries > WORKSPACE_MAX_ENTRIES:
-                raise ExecutionServiceError(
-                    "workspace_entry_limit",
-                    f"workspace may not contain more than {WORKSPACE_MAX_ENTRIES} entries",
-                    status_code=413,
-                )
-            if allocated > WORKSPACE_MAX_BYTES:
-                raise ExecutionServiceError(
-                    "workspace_size_limit",
-                    f"workspace may not exceed {WORKSPACE_MAX_BYTES} allocated bytes",
-                    status_code=413,
                 )
 
             if replaced:
@@ -2021,25 +1989,6 @@ def _remove_directory_contents(descriptor: int) -> int:
             os.unlink(name, dir_fd=descriptor)
         removed += 1
     return removed
-
-
-def _workspace_usage(root: Path, *, exclude: set[str]) -> tuple[int, int]:
-    allocated = 0
-    entries = 0
-    for current, directories, files in os.walk(root, followlinks=False):
-        current_path = Path(current)
-        for name in [*directories, *files]:
-            path = current_path / name
-            relative = path.relative_to(root).as_posix()
-            if relative in exclude:
-                continue
-            metadata = path.lstat()
-            entries += 1
-            allocated += metadata.st_blocks * 512
-        directories[:] = [
-            name for name in directories if not (current_path / name).is_symlink()
-        ]
-    return allocated, entries
 
 
 __all__ = [

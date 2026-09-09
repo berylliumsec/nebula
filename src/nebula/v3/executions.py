@@ -20,7 +20,6 @@ import os
 import shutil
 import socket
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -72,9 +71,6 @@ from .runtime_platform import (
 MAX_SOURCE_BYTES = 200_000
 OUTPUT_CHUNK_BYTES = 32_768
 PREVIEW_TTL_SECONDS = 300
-WORKSPACE_MAX_BYTES = 5 * 1024 * 1024 * 1024
-WORKSPACE_MAX_ENTRIES = 50_000
-WORKSPACE_MAX_FILE_BYTES = 1024 * 1024 * 1024
 TERMINAL_EXECUTION_STATUSES = {
     OperatorExecutionStatus.COMPLETED,
     OperatorExecutionStatus.DENIED,
@@ -186,25 +182,6 @@ class ExecutionPreflightResponse(NebulaModel):
 class ExecutionEventList(NebulaModel):
     events: list[Any]
     next_sequence: int
-
-
-class _WorkspaceLimitError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class WorkspaceLimitReport:
-    """Bounded, operator-safe workspace readiness result.
-
-    Counts intentionally stop at the first violated limit so readiness checks
-    cannot turn a project-open action into an unbounded filesystem scan.
-    """
-
-    allowed: bool
-    entries: int
-    allocated_bytes: int
-    error_code: str | None = None
-    detail: str | None = None
 
 
 class ExecutionService:
@@ -390,7 +367,6 @@ class ExecutionService:
     ) -> ExecutionPreflightResponse:
         try:
             source, canonical = self._validated_source(request)
-            self._assert_workspace_limits(request.engagement_id)
             resolution = self._resolve(
                 request.engagement_id,
                 canonical,
@@ -1112,7 +1088,7 @@ class ExecutionService:
         )
         source_artifact = self.store.get(Artifact, execution.source_artifact_id)
         source = self.artifact_store.read(source_artifact)
-        # diagnostic-expected: both child tasks are awaited and classified below.
+        # diagnostic-expected: the runner task is awaited and cancellation is drained below.
         runner_task = asyncio.create_task(
             resolution.runner.run_stream(
                 sandbox_request,
@@ -1121,29 +1097,10 @@ class ExecutionService:
                 container_name=f"nebula-exec-{execution.id.replace('-', '')}",
             )
         )
-        # diagnostic-expected: the paired monitor is awaited and classified below.
-        monitor_task = asyncio.create_task(
-            self._monitor_workspace(resolution.workspace, runner_task)
-        )
         result = None
         failure: Exception | None = None
         cancelled = False
         try:
-            done, _ = await asyncio.wait(
-                {runner_task, monitor_task}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if monitor_task in done:
-                monitor_error = monitor_task.exception()
-                if monitor_error is not None:
-                    runner_task.cancel()
-                    await gather_diagnostic(
-                        runner_task,
-                        feature="executions",
-                        event_code="executions.runner.cancellation_failed",
-                        failure_message="An execution runner did not cancel cleanly.",
-                        stage="cancellation",
-                    )
-                    raise monitor_error
             result = await runner_task
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
@@ -1172,14 +1129,6 @@ class ExecutionService:
             )
             failure = exc
         finally:
-            monitor_task.cancel()
-            await gather_diagnostic(
-                monitor_task,
-                feature="workspace",
-                event_code="workspace.execution_monitor.cleanup_failed",
-                failure_message="Execution workspace monitoring did not stop cleanly.",
-                stage="cleanup",
-            )
             async with event_lock:
                 for stream in ("stdout", "stderr"):
                     tail = decoders[stream].decode(b"", final=True)
@@ -1204,12 +1153,6 @@ class ExecutionService:
             )
             error_code = "interrupted" if self._shutting_down else "cancelled"
             error_detail = f"execution {error_code}"
-            exit_code = None
-            truncated = False
-        elif isinstance(failure, _WorkspaceLimitError):
-            terminal = OperatorExecutionStatus.FAILED
-            error_code = "workspace_limit"
-            error_detail = str(failure)
             exit_code = None
             truncated = False
         elif failure is not None:
@@ -1463,40 +1406,6 @@ class ExecutionService:
         )
         return updated
 
-    async def _monitor_workspace(
-        self, workspace: Path, runner_task: asyncio.Task[Any]
-    ) -> None:
-        while not runner_task.done():
-            await asyncio.sleep(1)
-            try:
-                await asyncio.to_thread(_assert_workspace_limits, workspace)
-            except _WorkspaceLimitError as caught_error:
-                record_caught_exception(
-                    "executions",
-                    "executions.executions.caught_failure_016",
-                    "A handled executions operation raised an exception.",
-                    caught_error,
-                    stage="executions",
-                )
-                raise
-
-    def _assert_workspace_limits(self, engagement_id: str) -> None:
-        if self.tool_platform is None:
-            raise ExecutionServiceError(
-                "runner_unavailable", "Kali runtime execution is not configured"
-            )
-        try:
-            _assert_workspace_limits(self.tool_platform.workspace_for(engagement_id))
-        except _WorkspaceLimitError as exc:
-            record_caught_exception(
-                "executions",
-                "executions.executions.caught_failure_017",
-                "A handled executions operation raised an exception.",
-                exc,
-                stage="executions",
-            )
-            raise ExecutionServiceError("workspace_limit", str(exc)) from exc
-
     def _event(
         self,
         execution: OperatorExecution,
@@ -1724,55 +1633,6 @@ def _workspace_changes(
                 WorkspaceChange(path=path, change="modified", size=after[path][1])
             )
     return changes[:1000]
-
-
-def inspect_workspace_limits(workspace: Path) -> WorkspaceLimitReport:
-    entries = 0
-    allocated = 0
-    for root, directories, files in os.walk(workspace, followlinks=False):
-        directories[:] = [
-            name for name in directories if not (Path(root) / name).is_symlink()
-        ]
-        for name in [*directories, *files]:
-            path = Path(root) / name
-            metadata = path.lstat()
-            entries += 1
-            if entries > WORKSPACE_MAX_ENTRIES:
-                return WorkspaceLimitReport(
-                    allowed=False,
-                    entries=entries,
-                    allocated_bytes=allocated,
-                    error_code="workspace_limit",
-                    detail=f"workspace exceeds {WORKSPACE_MAX_ENTRIES} entries",
-                )
-            if path.is_file() and not path.is_symlink():
-                if metadata.st_size > WORKSPACE_MAX_FILE_BYTES:
-                    return WorkspaceLimitReport(
-                        allowed=False,
-                        entries=entries,
-                        allocated_bytes=allocated,
-                        error_code="workspace_limit",
-                        detail="workspace contains a file larger than 1 GiB",
-                    )
-                blocks = getattr(metadata, "st_blocks", 0)
-                allocated += blocks * 512 if blocks else metadata.st_size
-                if allocated > WORKSPACE_MAX_BYTES:
-                    return WorkspaceLimitReport(
-                        allowed=False,
-                        entries=entries,
-                        allocated_bytes=allocated,
-                        error_code="workspace_limit",
-                        detail="workspace exceeds the 5 GiB limit",
-                    )
-    return WorkspaceLimitReport(True, entries, allocated)
-
-
-def _assert_workspace_limits(workspace: Path) -> None:
-    report = inspect_workspace_limits(workspace)
-    if not report.allowed:
-        raise _WorkspaceLimitError(
-            report.detail or "workspace exceeds execution limits"
-        )
 
 
 def _artifact_descriptor(artifact: Artifact) -> dict[str, Any]:

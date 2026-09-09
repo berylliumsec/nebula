@@ -28,7 +28,6 @@ from nebula.v3.executions import (
     ExecutionService,
     ExecutionServiceError,
     ExecutionStartRequest,
-    inspect_workspace_limits,
 )
 from nebula.v3.sandbox import SandboxNetwork, SandboxResult
 from nebula.v3.storage import NebulaStore
@@ -47,16 +46,17 @@ def async_test(function):
     return run
 
 
-def test_workspace_limit_report_stops_at_the_entry_limit(tmp_path):
-    for index in range(50_001):
-        (tmp_path / f"entry-{index}").touch()
-
-    report = inspect_workspace_limits(tmp_path)
-
-    assert report.allowed is False
-    assert report.error_code == "workspace_limit"
-    assert report.entries == 50_001
-    assert report.detail == "workspace exceeds 50000 entries"
+@async_test
+async def test_large_workspace_preflight_does_not_walk_tree(tmp_path, monkeypatch):
+    _, _, engagement, _, _, service, request = _fixture(tmp_path)
+    workspace = service.tool_platform.workspace_for(engagement.id)
+    with (workspace / "large.bin").open("wb") as stream:
+        stream.truncate(6 * 1024**3)
+    def no_walk(*args, **kwargs):
+        raise AssertionError("preflight must not scan the project")
+    monkeypatch.setattr("os.walk", no_walk)
+    preview = await service.preflight(request)
+    assert preview.allowed
 
 
 class RecordingRunner:
