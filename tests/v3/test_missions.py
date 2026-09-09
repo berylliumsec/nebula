@@ -509,11 +509,13 @@ def test_api_starts_explicit_analysis_mission_and_persists_events(tmp_path):
             "task.started",
             "task.completed",
             "task.verified",
+            "run.progress",
             "run.completed",
         ]
         assert events[0].payload["provider_id"] == profile.id
         assert events[0].payload["model"] == "security-model"
         assert events[0].payload["analysis_only"] is True
+        assert events[-2].payload["completed_tasks"] == 1
         assert provider.requests[0].model == "security-model"
         assert provider.requests[0].tools == []
 
