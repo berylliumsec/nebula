@@ -10,6 +10,7 @@ from jsonschema import Draft202012Validator
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .browser_companion import BrowserCompanion, CompanionRequest
 from .artifacts import ArtifactStore
 from .browser_engine import BrowserEngineRegistry
@@ -68,7 +69,8 @@ def companion_spec(
     return ToolSpec(
         name="browser.companion",
         version="1",
-        description="Use the operator-attached visible browser. List tabs; navigate within project scope; capture bounded page or element text; highlight or scroll. "
+        description=BROWSER_MODEL_WORKFLOW
+        + "Use the operator-attached visible browser. List tabs; navigate within project scope; capture bounded page or element text; highlight or scroll. "
         + (
             "The project policy allows scoped changes without an additional inline prompt. "
             if approval_policy == "never"

@@ -930,3 +930,85 @@ def test_attached_browser_has_project_graph_capabilities(tmp_path):
     runtime = companion_components(store, project.id, session.id)
     assert set(runtime.specs) == {"browser.companion", *INPUTS}
     assert "application-model-v2" in runtime.runtime_digest
+
+
+@pytest.mark.parametrize(
+    "operation,assistant,expected",
+    [
+        ("navigate", True, True),
+        ("capture", True, True),
+        ("click", True, True),
+        ("tabs", True, False),
+        ("navigate", False, False),
+    ],
+)
+def test_agent_browser_result_carries_durable_model_evidence(
+    tmp_path, operation, assistant, expected
+):
+    from nebula.v3.domain import Observation
+    from nebula.v3.application_model.service import ApplicationModelService
+    from nebula.v3.application_model.graph import GraphTransaction
+
+    store, project, identity, session, service = setup(tmp_path)
+    result = {
+        "url": "https://example.test/",
+        "title": "Example page",
+        "page_revision": "page-1",
+    }
+    service._record_interaction(
+        session,
+        CompanionRequest(operation=operation),
+        result,
+        assistant=assistant,
+        chat_turn_id=None,
+    )
+    assert ("model_evidence" in result) is expected
+    if not expected:
+        return
+    reference = result["model_evidence"]
+    assert result["model_authentication_context"] == identity.id
+    reopened = NebulaStore(tmp_path / "nebula.db")
+    observation = reopened.get(Observation, reference["id"])
+    assert observation.engagement_id == project.id
+    assert observation.revision == reference["revision"]
+    model = ApplicationModelService(reopened)
+    transaction = GraphTransaction.model_validate(
+        {
+            "expected_revision": 0,
+            "idempotency_key": "browser-observation-1",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "page-example",
+                    "label": "Example page",
+                    "authentication_context": result["model_authentication_context"],
+                    "classification": {
+                        "value": "Page",
+                        "status": "observed",
+                        "evidence": [reference],
+                    },
+                    "properties": {},
+                }
+            ],
+        }
+    )
+    model.transact(project.id, transaction, producer="assistant")
+    model.transact(project.id, transaction, producer="assistant")
+    assert len(model.search(project.id)["objects"]) == 1
+
+
+def test_automatic_browser_model_workflow_reaches_provider_and_harness():
+    from types import SimpleNamespace
+    from nebula.v3.application_model.workflow import BROWSER_MODEL_WORKFLOW
+    from nebula.v3.chat import _CHAT_TOOL_INSTRUCTIONS
+    from nebula.v3.harnesses import _harness_developer_instructions
+    from nebula.v3.domain import HarnessNativeCapabilities
+
+    assert BROWSER_MODEL_WORKFLOW in _CHAT_TOOL_INSTRUCTIONS
+    assert BROWSER_MODEL_WORKFLOW in companion_spec().description
+    instructions = _harness_developer_instructions(
+        SimpleNamespace(metadata={}, mcp_snapshot=[]),
+        HarnessNativeCapabilities(),
+        vendor="test",
+    )
+    assert BROWSER_MODEL_WORKFLOW in instructions

@@ -152,7 +152,7 @@ class BrowserCompanion:
             )
             artifact = self.store.create(stored.artifact)
             metadata["artifact_id"] = artifact.id
-        self.store.create(
+        observation = self.store.create(
             Observation(
                 engagement_id=session.engagement_id,
                 observation_type="browser_companion_interaction",
@@ -163,6 +163,15 @@ class BrowserCompanion:
                 },
             )
         )
+
+        if assistant:
+            result["model_evidence"] = {
+                "kind": "observations",
+                "id": observation.id,
+                "revision": observation.revision,
+                "role": "supporting",
+            }
+            result["model_authentication_context"] = session.identity_id
 
     def approval_policy(self, project_id: str) -> AutomationApprovalPolicy:
         policies = self.store.list_entities(

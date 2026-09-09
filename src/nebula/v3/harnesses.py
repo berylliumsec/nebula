@@ -6,6 +6,7 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .diagnostics import (
     create_diagnostic_task,
     current_operation_id,
@@ -475,6 +476,7 @@ def _harness_developer_instructions(
         "BEGIN TRUSTED ASSIGNED NEBULA CAPABILITIES (JSON)\n"
         + trusted_inventory
         + "\nEND TRUSTED ASSIGNED NEBULA CAPABILITIES"
+        + BROWSER_MODEL_WORKFLOW
     )
 
 

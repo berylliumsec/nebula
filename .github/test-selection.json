@@ -1,10 +1,10 @@
 {
-  "change_digest": "f3b5f5f7bda4ecae6bf6ac169d7550d1f5175f1ed3e9941a309722f64ff9f16b",
+  "change_digest": "8d9c4adbb7cccecbf3768a9109a10f12190e0796179be39ba716cab0c42880c6",
   "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Operator deliberately removed browser-result redaction. Remove the stale browserd caller and preserve page contents unchanged. Verify successful tab discovery and timeout handling; diagnose live production LAN stream and reconnect.",
-  "exclusions": "No UI source changed; existing production bundle retained. No unrelated graph, frontend, native, provider or assistant-action tests repeated. Physical Mac and full responsive/accessibility matrices not exercised in this focused backend recovery.",
+  "reason": "Automatic agent model maintenance: shared trusted provider/harness workflow, exact durable observation references on successful assistant browser results, evidence-backed transactional persistence and idempotency.",
+  "exclusions": "No UI source changes or unrelated suites. Seven focused backend tests cover integration contracts, not live provider reasoning or full real-Core browser/device acceptance; those remain unverified.",
   "expected_tests": {
-    "python": 2,
+    "python": 7,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,8 +15,9 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_browserd.py::test_companion_tabs_success_preserves_identity_and_page_contents",
-    "tests/v3/test_browserd.py::test_companion_page_timeout_is_sanitized_and_not_an_unhandled_500"
+    "tests/v3/test_browser_companion.py::test_agent_browser_result_carries_durable_model_evidence",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
+    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities"
   ],
   "frontend": [],
   "native": [],
