@@ -3,17 +3,24 @@
 import pytest
 
 from nebula.v3.application_model.registry import (
-    CategoryDefinition, PropertyDefinition, RelationshipDefinition,
-    SchemaRegistry, TypeDefinition,
+    CategoryDefinition,
+    PropertyDefinition,
+    RelationshipDefinition,
+    SchemaRegistry,
+    TypeDefinition,
 )
-from nebula.v3.application_model.catalog import builtin_registry
+from nebula.v3.application_model.catalog import builtin_registry, legacy_registry
 
 
 def object_type(name="Asset", **kwargs):
     return TypeDefinition(
-        name=name, label=name, category="Structure", description="A resource.",
+        name=name,
+        label=name,
+        category="Structure",
+        description="A resource.",
         properties=(PropertyDefinition(name="url", description="Resource URL"),),
-        identity_hints=("url",), evidence_examples=("Recorded resource URL",),
+        identity_hints=("url",),
+        evidence_examples=("Recorded resource URL",),
         **kwargs,
     )
 
@@ -22,18 +29,27 @@ def registry(*types):
     return SchemaRegistry(
         (CategoryDefinition(name="Structure", purpose="Resources"),),
         types or (object_type(),),
-        (RelationshipDefinition(
-            name="loads", label="Loads", description="Loads a resource",
-            source_types=("Asset",), target_types=("Asset",),
-            evidence_examples=("Recorded initiator",),
-        ),),
+        (
+            RelationshipDefinition(
+                name="loads",
+                label="Loads",
+                description="Loads a resource",
+                source_types=("Asset",),
+                target_types=("Asset",),
+                evidence_examples=("Recorded initiator",),
+            ),
+        ),
     )
 
 
 def test_inheritance_discovery_and_compatibility():
-    child = object_type().model_copy(update={
-        "name": "JavaScriptAsset", "extends": "Asset", "properties": (),
-    })
+    child = object_type().model_copy(
+        update={
+            "name": "JavaScriptAsset",
+            "extends": "Asset",
+            "properties": (),
+        }
+    )
     schema = registry(object_type(), child)
     assert schema.lineage("JavaScriptAsset") == ("JavaScriptAsset", "Asset")
     assert schema.compatible("loads", "JavaScriptAsset", "Asset")
@@ -44,11 +60,16 @@ def test_inheritance_discovery_and_compatibility():
     schema.validate_properties("JavaScriptAsset", {})
 
 
-@pytest.mark.parametrize("update", [
-    {"extends": "Missing"}, {"extends": "Asset"},
-    {"identity_hints": ("missing",)}, {"identity_hints": ("url", "url")},
-    {"category": "Missing"},
-])
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"extends": "Missing"},
+        {"extends": "Asset"},
+        {"identity_hints": ("missing",)},
+        {"identity_hints": ("url", "url")},
+        {"category": "Missing"},
+    ],
+)
 def test_invalid_definitions_rejected(update):
     with pytest.raises(ValueError):
         registry(object_type().model_copy(update=update))
@@ -56,9 +77,13 @@ def test_invalid_definitions_rejected(update):
 
 def test_project_extensions_are_isolated():
     base = registry()
-    custom = object_type().model_copy(update={
-        "name": "custom.Document", "extends": "Asset", "properties": (),
-    })
+    custom = object_type().model_copy(
+        update={
+            "name": "custom.Document",
+            "extends": "Asset",
+            "properties": (),
+        }
+    )
     project = base.extend("project-a", types=(custom,))
     assert "custom.Document" not in base.types
     assert project.compatible("loads", "Asset", "custom.Document")
@@ -70,15 +95,26 @@ def test_project_extensions_are_isolated():
         base.types["Other"] = custom
 
 
-@pytest.mark.parametrize("kind,value", [
-    ("integer", True), ("number", False), ("number", float("nan")),
-    ("number", float("inf")), ("boolean", 1), ("string", 3),
-    ("string", "x" * 4001),
-])
+@pytest.mark.parametrize(
+    "kind,value",
+    [
+        ("integer", True),
+        ("number", False),
+        ("number", float("nan")),
+        ("number", float("inf")),
+        ("boolean", 1),
+        ("string", 3),
+        ("string", "x" * 4001),
+    ],
+)
 def test_property_validation_does_not_coerce(kind, value):
-    definition = object_type().model_copy(update={"properties": (
-        PropertyDefinition(name="url", kind=kind, description="Test value"),
-    )})
+    definition = object_type().model_copy(
+        update={
+            "properties": (
+                PropertyDefinition(name="url", kind=kind, description="Test value"),
+            )
+        }
+    )
     with pytest.raises(ValueError):
         registry(definition).validate_properties("Asset", {"url": value})
 
@@ -96,29 +132,42 @@ def test_builtin_catalog_is_complete_and_discoverable_by_category():
         "Structure": "Application",
         "APIs": "Endpoint",
         "Identity": "AuthenticationFlow",
-        "Security": "WAF",
-        "Infrastructure": "ReverseProxy",
-        "Dependencies": "Database",
+        "Security": "AccessControl",
+        "Infrastructure": "Service",
+        "Dependencies": "Storage",
         "Client execution": "JavaScriptAsset",
         "Browser storage": "Cookie",
         "Backend processing": "BackgroundJob",
-        "Data": "QueryOperation",
+        "Data": "DataResource",
     }
     assert list(schema.categories) == list(expected)
     for category, representative in expected.items():
         result = schema.discover(category=category)
         assert representative in {item["name"] for item in result["types"]}
-    assert len(schema.types) == 77
+    assert len(schema.types) == 33
     assert set(schema.relationships) == {
-        "contains", "links_to", "submits_to", "accepts_input", "loads", "executes",
-        "calls", "authenticates_via", "requires_permission", "uses_cookie",
-        "governed_by", "stores_in", "reads_from", "writes_to", "queries",
-        "served_by", "depends_on", "protected_by",
+        "contains",
+        "loads",
+        "executes",
+        "calls",
+        "authenticates_via",
+        "requires_permission",
+        "uses_cookie",
+        "governed_by",
+        "stores_in",
+        "reads_from",
+        "writes_to",
+        "depends_on",
+        "triggers",
+        "establishes_session",
+        "requires_session",
+        "changes",
+        "uses_schema",
     }
 
 
 def test_canonical_specializations_inherit_identity_and_compatibility():
-    schema = builtin_registry()
+    schema = legacy_registry()
     assert schema.lineage("JavaScriptAsset") == ("JavaScriptAsset", "Asset")
     assert schema.lineage("Database") == ("Database", "Storage")
     assert schema.lineage("QueryOperation") == ("QueryOperation", "Operation")
@@ -130,8 +179,38 @@ def test_canonical_specializations_inherit_identity_and_compatibility():
 
 def test_secret_bearing_types_have_metadata_not_secret_values():
     schema = builtin_registry()
-    for name in ("Cookie", "Token", "CSRFToken", "LocalStorage", "SessionStorage"):
+    for name in ("Cookie", "Token", "LocalStorage", "SessionStorage"):
         properties = schema.properties(name)
         assert "value" not in properties
         assert "secret" not in properties
     assert schema.properties("Cookie")["same_site"].choices == ("strict", "lax", "none")
+
+
+def test_mechanisms_have_explanatory_fields_and_no_inventory_types():
+    schema = builtin_registry()
+    assert (
+        not {
+            "Asset",
+            "SiteLink",
+            "Button",
+            "Request",
+            "Response",
+            "Firewall",
+            "Table",
+            "Library",
+        }
+        & schema.types.keys()
+    )
+    assert all("purpose" in schema.properties(name) for name in schema.types)
+    assert {
+        "url",
+        "method",
+        "input_shape",
+        "output_shape",
+        "failure_behavior",
+    } <= schema.properties("Endpoint").keys()
+    assert schema.compatible("calls", "EventHandler", "Endpoint")
+    assert schema.compatible("loads", "Page", "JavaScriptAsset")
+    assert schema.compatible("establishes_session", "AuthenticationFlow", "Session")
+    assert schema.compatible("changes", "StateTransition", "DataResource")
+    assert schema.compatible("reads_from", "ScriptModule", "LocalStorage")

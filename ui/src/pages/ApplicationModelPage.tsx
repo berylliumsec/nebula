@@ -572,6 +572,7 @@ function ProjectModel() {
                 className={`am-desktop-map ${params.get("map") === "show" ? "am-show-map" : ""}`}
               >
                 <ApplicationModelGraph
+                  expanded={expanded === "relationships"}
                   objects={
                     graph.map_objects ?? (graphFocus ? graph.objects : filtered)
                   }
@@ -585,7 +586,7 @@ function ProjectModel() {
               </div>
               <button
                 hidden={!graphFocus}
-                className="button am-map-toggle"
+                className="button secondary am-map-toggle"
                 onClick={() =>
                   select("map", params.get("map") === "show" ? "" : "show")
                 }

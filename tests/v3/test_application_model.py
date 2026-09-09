@@ -140,13 +140,13 @@ def test_relationship_inheritance_and_tombstones(fixture):
     relation = dict(
         op="put_relationship",
         id="query-edge",
-        type="queries",
+        type="reads_from",
         source="query",
         target="db",
         claim={"value": True},
     )
     service.transact(
-        project, tx(0, obj("query", "QueryOperation"), obj("db", "Database"), relation)
+        project, tx(0, obj("query", "Operation"), obj("db", "Storage"), relation)
     )
     assert len(service.neighborhood(project, "query")["objects"]) == 2
     service.transact(
@@ -158,7 +158,7 @@ def test_relationship_inheritance_and_tombstones(fixture):
     assert not service.snapshot(project)["relationships"]
     assert store.list_entities(Observation, engagement_id=project)
     with pytest.raises(HTTPException):
-        service.transact(project, tx(2, obj("db", "Database")))
+        service.transact(project, tx(2, obj("db", "Storage")))
 
 
 def test_context_identity_and_property_dismissal(fixture):
@@ -242,8 +242,132 @@ def test_custom_schema_transaction_and_isolation(fixture):
         t["name"] == "custom.TenantBoundary" for t in service.schema(project)["types"]
     )
     other = store.create(Engagement(name="Other"))
-    assert len(service.schema(other.id)["types"]) == 77
+    assert len(service.schema(other.id)["types"]) == 33
     assert service.search(project, type="SecurityPolicy")["total"] == 1
+
+
+def test_legacy_records_survive_but_cannot_seed_new_inventory(fixture):
+    from nebula.v3.application_model.persistence import graphs
+    from nebula.v3.application_model.service import empty
+
+    store, project, _ = fixture
+    graph = empty(project)
+    graph["revision"] = 1
+    old = obj(
+        "old-asset", "Asset", properties={"url": {"value": "http://site-a.test/logo"}}
+    )
+    old.pop("op")
+    graph["objects"]["old-asset"] = old
+    graph["types"] = [
+        dict(
+            name="custom.LegacyDatabase",
+            label="Legacy database",
+            category="Dependencies",
+            description="Pre-v2 specialization",
+            extends="Database",
+            properties=[],
+            identity_hints=["name"],
+            evidence_examples=["Historical record"],
+        )
+    ]
+    with store.database.engine.begin() as connection:
+        connection.execute(
+            insert(graphs).values(project_id=project, revision=1, payload=graph)
+        )
+    service = ApplicationModelService(store)
+    assert "Asset" not in {t["name"] for t in service.schema(project)["types"]}
+    assert "custom.LegacyDatabase" not in {
+        t["name"] for t in service.schema(project)["types"]
+    }
+    displayed = service.view(project, object_id="old-asset")
+    assert displayed["objects"][0]["id"] == "old-asset"
+    assert next(t for t in displayed["schema"]["types"] if t["name"] == "Asset")[
+        "legacy"
+    ]
+    with pytest.raises(ValueError, match="legacy-only"):
+        service.transact(project, tx(1, obj("new-asset", "Asset")))
+    service.transact(
+        project, tx(1, {"op": "put_object", **old, "label": "Retained legacy asset"})
+    )
+    assert (
+        ApplicationModelService(NebulaStore(store.database)).search(project)["objects"][
+            0
+        ]["label"]
+        == "Retained legacy asset"
+    )
+    assert (
+        service.relationship_options(project, "old-asset", "old-asset")["options"] == []
+    )
+
+
+def test_custom_types_cannot_reopen_inventory(fixture):
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    with pytest.raises(ValueError, match="specialize an active mechanism"):
+        service.transact(
+            project,
+            tx(
+                0,
+                dict(
+                    op="define_type",
+                    definition=dict(
+                        name="custom.Link",
+                        label="Link",
+                        category="Structure",
+                        description="Inventory link",
+                        extends="Asset",
+                        properties=[],
+                        identity_hints=["url"],
+                        evidence_examples=["Page link"],
+                    ),
+                ),
+            ),
+        )
+    assert service.snapshot(project)["revision"] == 0
+
+
+def test_mechanism_chain_persists_without_per_observation_edits(fixture):
+    store, project, evidence = fixture
+    service = ApplicationModelService(store)
+    endpoint = obj(
+        "endpoint",
+        "Endpoint",
+        properties={
+            "url": {"value": "http://site-a.test/session"},
+            "method": {"value": "POST"},
+            "purpose": {"value": "Establishes login context"},
+        },
+    )
+    edge = dict(
+        op="put_relationship",
+        id="session-edge",
+        type="establishes_session",
+        source="login",
+        target="session",
+        claim={"value": True},
+    )
+    service.transact(
+        project,
+        tx(
+            0,
+            obj("login", "AuthenticationFlow"),
+            obj("session", "Session"),
+            endpoint,
+            edge,
+        ),
+    )
+    restarted = ApplicationModelService(NebulaStore(store.database))
+    assert restarted.workspace(project)["revision"] == 1
+    assert (
+        restarted.snapshot(project)["objects"]["endpoint"]["properties"]["method"][
+            "value"
+        ]
+        == "POST"
+    )
+    assert any(
+        o["type"] == "establishes_session"
+        for o in restarted.relationship_options(project, "login", "session")["options"]
+    )
 
 
 def test_versioned_reset_preserves_original_and_unrelated_entities(tmp_path):

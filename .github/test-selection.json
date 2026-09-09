@@ -1,28 +1,35 @@
 {
-  "reviewed_by": "Codex, shared browser manual input acceptance",
-  "reason": "Dedicated production LAN regression exercises manual click/touch and typing through the real shared-Chromium stream, then reconnect and click again.",
-  "exclusions": "Test-only increment against 3b773eb; existing production bundle used. No provider calls or external target traffic; local fixture scope only. General Playwright catalog omitted in favor of the dedicated configuration below. Physical devices unavailable.",
-  "baseline": "3b773eb",
+  "reviewed_by": "Codex, mechanism schema and fullscreen graph layout",
+  "reason": "Preserves preceding schema selection; adds graph-layout unit tests and dense Model browser geometry checks for fullscreen width/height, ultrawide resize and restore. Current layout-only increment runs 20 frontend tests and 8 dense-browser cases; preceding Python and migration checks remain valid.",
+  "exclusions": "No unrelated suites, external targets, provider calls, native changes or physical devices. Dedicated local Model Playwright config covers production real-Core desktop/mobile/LAN instead of general browser catalog. Local Python is 3.11; CI default is 3.12.",
+  "baseline": "dc8ddd1",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 40,
+    "frontend": 20,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_application_model.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model_views.py",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
+    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model"
+  ],
+  "frontend": [
+    "ui/src/pages/ApplicationModelPage.test.tsx",
+    "ui/src/components/ApplicationModelGraph.test.tsx"
+  ],
   "native": [],
   "playwright": [],
-  "previous_verification": {
-    "commit": "3b773eb",
-    "python": 17
-  },
   "local_playwright": {
     "config": "ui/playwright.application-model.config.ts",
     "files": [
-      "shared-browser-input.spec.ts"
+      "application-model.spec.ts",
+      "application-model-responsive.spec.ts"
     ],
-    "expected_tests": 8,
+    "expected_tests": 16,
     "projects": [
       "model-desktop",
       "model-compact",
@@ -34,5 +41,5 @@
       "model-webkit-430"
     ]
   },
-  "change_digest": "f837a14a936c3e8e14979782576c0e9cc9f9c125512961c77a7881097d1f1366"
+  "change_digest": "7e76e3cb1f1b3f87fa0231a1f06e786d130590badce9ff587df3bd2ec0c3fcdd"
 }

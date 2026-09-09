@@ -47,6 +47,7 @@ export type TypeDefinition = {
   category: string;
   description: string;
   extends?: string;
+  legacy?: boolean;
   properties: Property[];
   identity_hints: string[];
   outgoing_relationships: string[];
@@ -57,6 +58,7 @@ export type Schema = {
   types: TypeDefinition[];
   relationships: {
     name: string;
+    legacy?: boolean;
     label: string;
     description: string;
     source_types: string[];

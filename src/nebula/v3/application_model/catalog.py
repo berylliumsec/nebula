@@ -494,7 +494,7 @@ _RELATIONSHIPS = (
 )
 
 
-def builtin_registry() -> SchemaRegistry:
+def legacy_registry() -> SchemaRegistry:
     """Return a fresh immutable snapshot of Nebula's built-in web schema."""
 
     categories = tuple(
@@ -505,3 +505,256 @@ def builtin_registry() -> SchemaRegistry:
         _type(name, category) for category, names in _TYPES.items() for name in names
     )
     return SchemaRegistry(categories, types, _RELATIONSHIPS)
+
+
+# Retain the original catalog solely for reading existing project records.
+# Discovery and all new built-in records use this closed mechanism vocabulary.
+_FOCUS = {
+    "Structure": ("Application", "Page", "Workflow", "StateTransition"),
+    "APIs": (
+        "Endpoint",
+        "Operation",
+        "Schema",
+        "GraphQLOperation",
+        "WebSocketChannel",
+        "EventStream",
+        "Webhook",
+    ),
+    "Identity": (
+        "AuthenticationFlow",
+        "Session",
+        "IdentityProvider",
+        "Role",
+        "Permission",
+        "Token",
+    ),
+    "Security": ("AccessControl", "SecurityPolicy"),
+    "Infrastructure": ("Service",),
+    "Dependencies": ("ExternalService", "Storage"),
+    "Client execution": (
+        "JavaScriptAsset",
+        "ScriptModule",
+        "EventHandler",
+        "ServiceWorker",
+        "WebWorker",
+    ),
+    "Browser storage": ("Cookie", "LocalStorage", "SessionStorage", "IndexedDB"),
+    "Backend processing": ("BackgroundJob",),
+    "Data": ("DataResource",),
+}
+
+_MECHANISM_FIELDS = {
+    "Workflow": ("trigger", "outcome"),
+    "StateTransition": ("trigger", "from_state", "to_state"),
+    "Endpoint": (
+        "method",
+        "input_shape",
+        "output_shape",
+        "validation",
+        "failure_behavior",
+    ),
+    "Operation": (
+        "trigger",
+        "input_shape",
+        "output_shape",
+        "outcome",
+        "failure_behavior",
+    ),
+    "AuthenticationFlow": ("mechanism", "session_establishment", "logout_behavior"),
+    "Session": ("establishment", "expiry", "invalidation"),
+    "AccessControl": ("scope", "rule", "enforcement"),
+    "Schema": ("shape", "validation"),
+    "JavaScriptAsset": ("entry_point", "responsibility"),
+    "ScriptModule": ("responsibility",),
+    "EventHandler": ("trigger", "outcome"),
+    "DataResource": ("shape", "ownership", "lifecycle"),
+    "Storage": ("mechanism", "lifecycle"),
+    "BackgroundJob": ("trigger", "outcome"),
+}
+
+
+def builtin_registry() -> SchemaRegistry:
+    """Vocabulary for explaining application behavior, not inventorying content."""
+    legacy = legacy_registry()
+    types = []
+    for category, names in _FOCUS.items():
+        for name in names:
+            if name in legacy.types:
+                original = legacy.types[name]
+                item = original.model_copy(
+                    update={
+                        "extends": None,
+                        "properties": tuple(legacy.properties(name).values()),
+                    }
+                )
+            else:
+                item = TypeDefinition(
+                    name=name,
+                    label=name,
+                    category=category,
+                    description={
+                        "Workflow": "A user goal and the evidenced sequence that achieves it.",
+                        "StateTransition": "An evidenced change in application state caused by a trigger.",
+                        "DataResource": "A logical application data resource, without assuming internal storage topology.",
+                    }[name],
+                    properties=(
+                        PropertyDefinition(
+                            name="name", description="Logical identifying name."
+                        ),
+                    ),
+                    identity_hints=("name",),
+                    evidence_examples=(
+                        "Recorded behavior or source establishing the mechanism.",
+                    ),
+                )
+            fields = ("purpose", *_MECHANISM_FIELDS.get(name, ()))
+            item = item.model_copy(
+                update={
+                    "properties": (
+                        *item.properties,
+                        *(
+                            PropertyDefinition(
+                                name=field,
+                                description=(
+                                    "What this explains about application behavior; not a page-content summary."
+                                    if field == "purpose"
+                                    else f"Evidenced {field.replace('_', ' ')}; omit unknowns and secret values."
+                                ),
+                            )
+                            for field in fields
+                        ),
+                    ),
+                }
+            )
+            types.append(item)
+    names = {item.name for item in types}
+    relations = []
+    for relation in _RELATIONSHIPS:
+        if relation.name in {
+            "links_to",
+            "served_by",
+            "queries",
+            "protected_by",
+            "submits_to",
+            "accepts_input",
+        }:
+            continue
+
+        # Executable scripts replace the generic Asset target, not static files.
+        def endpoints(values):
+            return tuple(
+                dict.fromkeys(
+                    "JavaScriptAsset" if value == "Asset" else value
+                    for value in values
+                    if value in names or value in {"*", "Asset"}
+                )
+            )
+
+        sources, targets = (
+            endpoints(relation.source_types),
+            endpoints(relation.target_types),
+        )
+        if sources and targets:
+            relations.append(
+                relation.model_copy(
+                    update={"source_types": sources, "target_types": targets}
+                )
+            )
+    relations.extend(
+        (
+            _relation(
+                "triggers",
+                "Triggers",
+                "The source causes an evidenced operation or transition.",
+                ("Workflow", "Page", "EventHandler", "Operation", "BackgroundJob"),
+                ("Operation", "StateTransition", "BackgroundJob", "AuthenticationFlow"),
+            ),
+            _relation(
+                "establishes_session",
+                "Establishes session",
+                "Authentication establishes this session context.",
+                ("AuthenticationFlow", "IdentityProvider"),
+                ("Session",),
+            ),
+            _relation(
+                "requires_session",
+                "Requires session",
+                "The operation requires an evidenced login context.",
+                ("Endpoint", "Operation", "Workflow", "WebSocketChannel"),
+                ("Session",),
+            ),
+            _relation(
+                "changes",
+                "Changes",
+                "The source changes the logical data resource.",
+                ("StateTransition", "Operation", "BackgroundJob"),
+                ("DataResource",),
+            ),
+            _relation(
+                "uses_schema",
+                "Uses schema",
+                "The interface exchanges data with this shape.",
+                (
+                    "Endpoint",
+                    "Operation",
+                    "GraphQLOperation",
+                    "WebSocketChannel",
+                    "EventStream",
+                    "Webhook",
+                ),
+                ("Schema",),
+            ),
+        )
+    )
+    # Data and client storage are meaningful read/write targets, not invented tables.
+    for index, relation in enumerate(relations):
+        if relation.name in {"reads_from", "writes_to"}:
+            relations[index] = relation.model_copy(
+                update={
+                    "source_types": (
+                        "Operation",
+                        "JavaScriptAsset",
+                        "ScriptModule",
+                        "EventHandler",
+                        "ServiceWorker",
+                        "WebWorker",
+                        "BackgroundJob",
+                    ),
+                    "target_types": (
+                        "DataResource",
+                        "Storage",
+                        "Cookie",
+                        "LocalStorage",
+                        "SessionStorage",
+                        "IndexedDB",
+                    ),
+                }
+            )
+        if relation.name == "contains":
+            relations[index] = relation.model_copy(
+                update={
+                    "source_types": (*relation.source_types, "Workflow"),
+                }
+            )
+        if relation.name == "authenticates_via":
+            relations[index] = relation.model_copy(
+                update={
+                    "source_types": (*relation.source_types, "AuthenticationFlow"),
+                }
+            )
+        if relation.name == "stores_in":
+            relations[index] = relation.model_copy(
+                update={
+                    "source_types": (
+                        *relation.source_types,
+                        "DataResource",
+                        "ScriptModule",
+                        "EventHandler",
+                    ),
+                }
+            )
+    return SchemaRegistry(
+        tuple(legacy.categories[category] for category in _FOCUS),
+        tuple(types),
+        tuple(relations),
+    )

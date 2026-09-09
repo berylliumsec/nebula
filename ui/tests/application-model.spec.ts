@@ -14,6 +14,25 @@ test("project graph edits, evidence, custom schema and recovery persist through 
     })
   ).json();
   const base = `/api/v1/engagements/${project.id}/application-model`;
+  const schema = await (
+    await request.get(base + "/schema", { headers })
+  ).json();
+  expect(schema.types).toHaveLength(33);
+  expect(schema.types.map((t: { name: string }) => t.name)).not.toContain(
+    "Asset",
+  );
+  expect(
+    schema.types
+      .find((t: { name: string }) => t.name === "Endpoint")
+      .properties.map((p: { name: string }) => p.name),
+  ).toEqual(
+    expect.arrayContaining([
+      "method",
+      "input_shape",
+      "output_shape",
+      "purpose",
+    ]),
+  );
   const browser = (
     await (
       await request.get(`/api/v1/engagements/${project.id}/browser-workspace`, {
@@ -86,6 +105,49 @@ test("project graph edits, evidence, custom schema and recovery persist through 
     page.getByRole("button", { name: /Nebula Core (ready|degraded)/ }),
   ).toBeVisible({ timeout: 20_000 });
   await page.goto(
+    "/projects/legacy-model-regression/application-model?object=legacy-asset",
+  );
+  await expect(
+    page.getByText("Historical resource", { exact: true }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Add object", exact: true }).click();
+  await expect(
+    page
+      .getByRole("combobox", { name: "Object type", exact: true })
+      .locator('option[value="Asset"]'),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("combobox", { name: "Object type", exact: true })
+      .locator('option[value="Workflow"]'),
+  ).toHaveCount(1);
+  await page.goto(
+    "/projects/legacy-model-regression/application-model?relationship=legacy-link",
+  );
+  await page
+    .getByRole("button", { name: "Edit relationship", exact: true })
+    .click();
+  await expect(
+    page.getByRole("combobox", { name: "Relationship", exact: true }),
+  ).toHaveValue("links_to");
+  await page
+    .getByRole("button", { name: "Save relationship", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Save relationship", exact: true }),
+  ).not.toBeVisible();
+  const legacySaved = await (
+    await request.get(
+      "/api/v1/engagements/legacy-model-regression/application-model/graph",
+      { headers },
+    )
+  ).json();
+  expect(
+    legacySaved.relationships.find(
+      (r: { id: string }) => r.id === "legacy-link",
+    ).type,
+  ).toBe("links_to");
+  await page.goto(
     `/projects/${project.id}/application-model?collection=old&state=retired`,
   );
   await expect(page.getByText(/older link/)).toBeVisible();
@@ -106,10 +168,10 @@ test("project graph edits, evidence, custom schema and recovery persist through 
   await page.getByRole("button", { name: "Add object", exact: true }).click();
   await page
     .getByRole("combobox", { name: "Object type", exact: true })
-    .selectOption("Firewall");
+    .selectOption("AccessControl");
   await page
     .getByLabel("Object label", { exact: true })
-    .fill("Possible firewall");
+    .fill("Possible access rule");
   await page
     .getByText("Supporting / conflicting evidence (0)", { exact: true })
     .click();
@@ -134,7 +196,7 @@ test("project graph edits, evidence, custom schema and recovery persist through 
     .selectOption(firewallId!);
   await page
     .getByRole("combobox", { name: "Relationship", exact: true })
-    .selectOption("protected_by");
+    .selectOption("governed_by");
   await page
     .getByLabel("Reason", { exact: true })
     .fill("Hypothesis; status code alone is not proof.");
@@ -146,7 +208,7 @@ test("project graph edits, evidence, custom schema and recovery persist through 
   await expect(
     page
       .getByLabel("Model inspector")
-      .getByRole("heading", { name: "protected_by", exact: true }),
+      .getByRole("heading", { name: "governed_by", exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Edit relationship", exact: true })

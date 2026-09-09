@@ -4,6 +4,7 @@ import {
   ApplicationModelGraph,
   neighborhood,
   connectionEndpoints,
+  graphLayout,
 } from "./ApplicationModelGraph";
 import { blankClaim, type GraphObject } from "../pages/applicationModelTypes";
 const objects: GraphObject[] = ["Page", "Form", "Input"].map((type, i) => ({
@@ -30,6 +31,42 @@ const relationships = [
     claim: blankClaim(true),
   },
 ];
+const wideObjects = Array.from({ length: 11 }, (_, i) => ({
+  ...objects[0],
+  id: `wide-${i}`,
+}));
+it("uses the full width of a wide fullscreen graph rather than three fixed columns", () => {
+  const { positions } = graphLayout(wideObjects, {}, 2800, 1000);
+  const boxes = [...positions.values()];
+  expect(new Set(boxes.map((b) => b.x)).size).toBeGreaterThan(3);
+  expect(
+    Math.max(...boxes.map((b) => b.x + b.width)) -
+      Math.min(...boxes.map((b) => b.x)),
+  ).toBeGreaterThan(2500);
+  expect(Math.max(...boxes.map((b) => b.y + b.height))).toBeGreaterThan(800);
+});
+it("reflows between narrow and wide containers without resizing or clipping cards", () => {
+  for (const width of [260, 320, 840, 1440, 2800]) {
+    const { positions, height } = graphLayout(wideObjects, {}, width);
+    for (const b of positions.values()) {
+      expect(b.x).toBeGreaterThanOrEqual(0);
+      expect(b.x + b.width).toBeLessThanOrEqual(width);
+      expect(b.y + b.height).toBeLessThan(height);
+      expect(b.width).toBe(220);
+    }
+  }
+});
+it("retains room for long cards and releases fullscreen height on restore", () => {
+  const sizes = { "wide-0": { width: 220, height: 240 } };
+  const expanded = graphLayout(wideObjects, sizes, 1440, 1200);
+  expect(expanded.height).toBe(1200);
+  expect(expanded.positions.get("wide-5")!.y).toBeGreaterThan(
+    expanded.positions.get("wide-0")!.y + 240,
+  );
+  expect(graphLayout(wideObjects, sizes, 1440).height).toBeLessThan(
+    expanded.height,
+  );
+});
 describe("project graph", () => {
   it("keeps object positions when the outline is filtered", () => {
     const props = {

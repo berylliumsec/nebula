@@ -22,7 +22,7 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
         base = f"/api/v1/engagements/{project['id']}/application-model"
         assert client.get(base + "/graph").status_code == 401
         assert client.get(base + "/graph", headers=auth).json()["objects"] == []
-        assert len(client.get(base + "/schema", headers=auth).json()["types"]) == 77
+        assert len(client.get(base + "/schema", headers=auth).json()["types"]) == 33
         browser = client.get(
             f"/api/v1/engagements/{project['id']}/browser-workspace", headers=auth
         ).json()["sessions"][0]
@@ -69,7 +69,7 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
                     "label": "Possible firewall",
                     "authentication_context": "anonymous",
                     "classification": {
-                        "value": "Firewall",
+                        "value": "AccessControl",
                         "status": "hypothesized",
                         "evidence": [
                             {
@@ -174,7 +174,7 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
 
     async def journey():
         discovered = await invoke(browser, "model.discover_schema", {})
-        assert len(discovered.output["types"]) == 77
+        assert len(discovered.output["types"]) == 33
         tx = {
             "expected_revision": 0,
             "idempotency_key": "browser-edit",
@@ -184,7 +184,7 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
                     "id": "site",
                     "label": "Site",
                     "authentication_context": "anonymous",
-                    "classification": {"value": "Site"},
+                    "classification": {"value": "Application"},
                 }
             ],
         }

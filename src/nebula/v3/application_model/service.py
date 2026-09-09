@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from ..database import EntityRow
 from ..domain import Engagement, utc_now
 from ..storage import NotFoundError
-from .catalog import builtin_registry
+from .catalog import builtin_registry, legacy_registry
 from .graph import GraphTransaction, Claim
 from .registry import TypeDefinition, RelationshipDefinition
 from .persistence import graphs, edits
@@ -77,7 +77,63 @@ class ApplicationModelService:
             return self._read(connection, project)
 
     def registry(self, graph):
-        return builtin_registry().extend(
+        active = builtin_registry()
+        old = legacy_registry()
+        # Load only legacy definitions required to interpret durable records.
+        needed = {o["classification"]["value"] for o in graph["objects"].values()}
+        needed.update(t.get("extends") for t in graph["types"])
+        for relation in graph["relationship_types"]:
+            needed.update((*relation["source_types"], *relation["target_types"]))
+        for name in tuple(needed):
+            if name in old.types:
+                needed.update(old.lineage(name))
+        types = dict(active.types)
+        types.update(
+            {
+                name: old.types[name].model_copy(update={"legacy": True})
+                for name in needed
+                if name in old.types and name not in types
+            }
+        )
+        relations = dict(active.relationships)
+        for edge in graph["relationships"].values():
+            name = edge["type"]
+            if name in old.relationships:
+                previous = old.relationships[name]
+                # Old relationship endpoints must remain interpretable without
+                # advertising the entire old catalog to new projects.
+                for endpoint in (*previous.source_types, *previous.target_types):
+                    if endpoint in old.types and endpoint not in types:
+                        for ancestor in old.lineage(endpoint):
+                            if ancestor not in types:
+                                types[ancestor] = old.types[ancestor].model_copy(
+                                    update={"legacy": True}
+                                )
+                current = relations.get(name)
+                relations[name] = (
+                    previous
+                    if current is None
+                    else current.model_copy(
+                        update={
+                            "source_types": tuple(
+                                dict.fromkeys(
+                                    (*current.source_types, *previous.source_types)
+                                )
+                            ),
+                            "target_types": tuple(
+                                dict.fromkeys(
+                                    (*current.target_types, *previous.target_types)
+                                )
+                            ),
+                        }
+                    )
+                )
+        base = type(active)(
+            tuple(old.categories.values()),
+            tuple(types.values()),
+            tuple(relations.values()),
+        )
+        result = base.extend(
             graph["project_id"],
             types=tuple(TypeDefinition.model_validate(t) for t in graph["types"]),
             relationships=tuple(
@@ -85,11 +141,60 @@ class ApplicationModelService:
                 for t in graph["relationship_types"]
             ),
         )
+        # Old project extensions without an active mechanism ancestor are also
+        # compatibility-only, even if their stored definition predates this flag.
+        definitions = tuple(
+            t.model_copy(update={"legacy": True})
+            if t.name.startswith("custom.")
+            and (
+                not any(n in active.types for n in result.lineage(t.name))
+                or any(result.types[n].legacy for n in result.lineage(t.name))
+            )
+            else t
+            for t in result.types.values()
+        )
+        return type(active)(
+            tuple(result.categories.values()),
+            definitions,
+            tuple(result.relationships.values()),
+            project_id=graph["project_id"],
+        )
+
+    def active_registry(self, graph):
+        compatible = self.registry(graph)
+        active = builtin_registry()
+        names = {n for n, t in compatible.types.items() if not t.legacy}
+        return active.extend(
+            graph["project_id"],
+            types=tuple(
+                t
+                for n, t in compatible.types.items()
+                if n.startswith("custom.") and n in names
+            ),
+            relationships=tuple(
+                r
+                for n, r in compatible.relationships.items()
+                if n.startswith("custom.")
+                and all(t in names for t in (*r.source_types, *r.target_types))
+            ),
+        )
 
     def schema(self, project, category=None, query=""):
-        return self.registry(self.snapshot(project)).discover(
+        return self.active_registry(self.snapshot(project)).discover(
             category=category, query=query
         )
+
+    def display_schema(self, graph):
+        current = self.active_registry(graph).discover()
+        compatible = self.registry(graph).discover()
+        current["types"].extend(t for t in compatible["types"] if t["legacy"])
+        names = {r["name"] for r in current["relationships"]}
+        current["relationships"].extend(
+            {**r, "legacy": True}
+            for r in compatible["relationships"]
+            if r["name"] not in names
+        )
+        return current
 
     def workspace(self, project):
         graph = self.snapshot(project)
@@ -97,7 +202,7 @@ class ApplicationModelService:
             **graph,
             "objects": list(graph["objects"].values()),
             "relationships": list(graph["relationships"].values()),
-            "schema": self.registry(graph).discover(),
+            "schema": self.display_schema(graph),
         }
 
     def view(
@@ -175,7 +280,7 @@ class ApplicationModelService:
         return {
             "project_id": project,
             "revision": graph["revision"],
-            "schema": registry.discover(),
+            "schema": self.display_schema(graph),
             "objects": list(included.values()),
             "relationships": list(edges.values()),
             "listed_relationships": listed,
@@ -256,7 +361,7 @@ class ApplicationModelService:
         graph = self.snapshot(project)
         if source_id not in graph["objects"] or target_id not in graph["objects"]:
             raise ValueError("Choose two objects in this project")
-        registry = self.registry(graph)
+        registry = self.active_registry(graph)
         source = graph["objects"][source_id]["classification"]["value"]
         target = graph["objects"][target_id]["classification"]["value"]
         return {
@@ -275,9 +380,11 @@ class ApplicationModelService:
                     (source_id, target_id, source, target),
                     (target_id, source_id, target, source),
                 ]
-                if registry.compatible(name, at, bt)
+                if at in registry.types
+                and bt in registry.types
+                and registry.compatible(name, at, bt)
             ],
-            "guidance": "Choose a direction and meaning supported by evidence. If none fits, define a meaningful custom. relationship with model.transact; never invent a built-in name or infer hosting from branding.",
+            "guidance": "Connect only mechanisms whose interaction is supported by evidence. A missing connection is preferable to a decorative or guessed link. Do not infer hosting from branding.",
         }
 
     def _evidence(self, connection, project, kind, identifier, revision=None):
@@ -421,6 +528,34 @@ class ApplicationModelService:
                     registry = self.registry(graph)
                     if kind in ("define_type", "define_relationship"):
                         definition = op["definition"]
+                        if kind == "define_type":
+                            parent = definition.get("extends")
+                            if (
+                                not parent
+                                or parent not in registry.types
+                                or registry.types[parent].legacy
+                            ):
+                                raise ValueError(
+                                    "Project types must specialize an active mechanism type; discover the focused schema"
+                                )
+                            if definition.get("legacy"):
+                                raise ValueError(
+                                    "Legacy is reserved for existing records"
+                                )
+                        else:
+                            endpoints = (
+                                *definition["source_types"],
+                                *definition["target_types"],
+                            )
+                            if any(
+                                t == "*"
+                                or t not in registry.types
+                                or registry.types[t].legacy
+                                for t in endpoints
+                            ):
+                                raise ValueError(
+                                    "Project relationships must name active mechanism types, without wildcard or legacy endpoints"
+                                )
                         for value in (definition["description"], definition["label"]):
                             nonsecret(value)
                         collection = (
@@ -520,11 +655,17 @@ class ApplicationModelService:
                             not isinstance(typename, str)
                             or typename not in registry.types
                         ):
-                            raise ValueError("Choose a registered object type")
+                            raise ValueError(
+                                "Choose an active mechanism type from model.discover_schema; inventory types are no longer available for new records"
+                            )
                         registry.validate_properties(
                             typename,
                             {k: v["value"] for k, v in op["properties"].items()},
                         )
+                        if not before and registry.types[typename].legacy:
+                            raise ValueError(
+                                "This inventory type is legacy-only. Choose a mechanism type from the current schema; existing records remain readable"
+                            )
                         if before and (
                             before["classification"]["value"] != typename
                             or before["authentication_context"]
@@ -603,6 +744,29 @@ class ApplicationModelService:
                             raise ValueError(
                                 "Relationship is incompatible with the endpoint types"
                             )
+                        if not before:
+                            focused = self.active_registry(graph)
+                            source_type = graph["objects"][source]["classification"][
+                                "value"
+                            ]
+                            target_type = graph["objects"][target]["classification"][
+                                "value"
+                            ]
+                            if (
+                                registry.types[source_type].legacy
+                                or registry.types[target_type].legacy
+                            ):
+                                raise ValueError(
+                                    "New relationships must connect active mechanism objects; legacy records are retained for inspection"
+                                )
+                            if op[
+                                "type"
+                            ] not in focused.relationships or not focused.compatible(
+                                op["type"], source_type, target_type
+                            ):
+                                raise ValueError(
+                                    "Choose a mechanism relationship from the current schema"
+                                )
                         if (
                             "edge:" + digest([op["type"], source, target])
                             in graph["tombstones"]

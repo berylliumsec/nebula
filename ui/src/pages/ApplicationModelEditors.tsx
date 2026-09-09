@@ -211,6 +211,7 @@ export function ObjectEditor({
               {graph.schema.types
                 .filter(
                   (t) =>
+                    (!t.legacy || (!!item && t.name === type)) &&
                     t.category === c.name &&
                     (t.name === type ||
                       `${t.name} ${t.description}`
@@ -220,6 +221,7 @@ export function ObjectEditor({
                 .map((t) => (
                   <option key={t.name} value={t.name}>
                     {t.label}
+                    {t.legacy ? " (legacy)" : ""}
                   </option>
                 ))}
             </optgroup>
@@ -418,8 +420,15 @@ export function RelationshipEditor({
     );
   const compatible = graph.schema.relationships.filter(
     (r) =>
-      sourceDef?.outgoing_relationships.includes(r.name) &&
-      targetDef?.incoming_relationships.includes(r.name),
+      (item &&
+        r.name === item.type &&
+        source === item.source &&
+        target === item.target) ||
+      (!r.legacy &&
+        !sourceDef?.legacy &&
+        !targetDef?.legacy &&
+        sourceDef?.outgoing_relationships.includes(r.name) &&
+        targetDef?.incoming_relationships.includes(r.name)),
   );
   const effective = compatible.some((r) => r.name === type)
     ? type
@@ -541,7 +550,7 @@ export function SchemaEditor({
     [description, setDescription] = useState("");
   const [category, setCategory] = useState("Security"),
     [parent, setParent] = useState("SecurityPolicy");
-  const [source, setSource] = useState("*"),
+  const [source, setSource] = useState("Operation"),
     [target, setTarget] = useState("SecurityPolicy");
   const [example, setExample] = useState("");
   const [props, setProps] = useState<
@@ -616,9 +625,11 @@ export function SchemaEditor({
           <label>
             Specializes
             <select value={parent} onChange={(e) => setParent(e.target.value)}>
-              {graph.schema.types.map((t) => (
-                <option key={t.name}>{t.name}</option>
-              ))}
+              {graph.schema.types
+                .filter((t) => !t.legacy)
+                .map((t) => (
+                  <option key={t.name}>{t.name}</option>
+                ))}
             </select>
           </label>
           {props.map((p, i) => (
@@ -703,10 +714,11 @@ export function SchemaEditor({
             <label key={label}>
               {label}
               <select value={value} onChange={(e) => set(e.target.value)}>
-                <option value="*">Any object type</option>
-                {graph.schema.types.map((t) => (
-                  <option key={t.name}>{t.name}</option>
-                ))}
+                {graph.schema.types
+                  .filter((t) => !t.legacy)
+                  .map((t) => (
+                    <option key={t.name}>{t.name}</option>
+                  ))}
               </select>
             </label>
           ))}

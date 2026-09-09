@@ -43,6 +43,7 @@ class TypeDefinition(Definition):
     category: str = Field(min_length=1, max_length=80)
     description: str = Field(min_length=1, max_length=1000)
     extends: str | None = None
+    legacy: bool = False
     properties: tuple[PropertyDefinition, ...] = ()
     identity_hints: tuple[str, ...] = Field(min_length=1)
     evidence_examples: tuple[str, ...] = Field(min_length=1)
@@ -64,7 +65,7 @@ class SchemaRegistry:
     is required merely because it exists in the catalog: unknowns stay absent.
     """
 
-    version = 1
+    version = 2
 
     def __init__(
         self,

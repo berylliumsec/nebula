@@ -1612,7 +1612,7 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
                             "id": "site-model",
                             "label": "Model site",
                             "authentication_context": "anonymous",
-                            "classification": {"value": "Site"},
+                            "classification": {"value": "Application"},
                         }
                     ],
                 }

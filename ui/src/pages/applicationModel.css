@@ -450,4 +450,7 @@
 }
 .am-fullscreen .am-desktop-map:not([hidden]) { display: block; }
 .am-fullscreen .am-map-toggle { display: none; }
-.am-fullscreen .am-graph-scroll { max-height: none; }
+.am-fullscreen .am-graph-scroll {
+  max-height: none;
+  height: max(320px, calc(100dvh - 240px));
+}

@@ -1006,6 +1006,8 @@ def test_automatic_browser_model_workflow_reaches_provider_and_harness():
 
     assert BROWSER_MODEL_WORKFLOW in _CHAT_TOOL_INSTRUCTIONS
     assert BROWSER_MODEL_WORKFLOW in companion_spec().description
+    assert "No model edit is required after routine navigation" in BROWSER_MODEL_WORKFLOW
+    assert "Never collect credential values" in BROWSER_MODEL_WORKFLOW
     instructions = _harness_developer_instructions(
         SimpleNamespace(metadata={}, mcp_snapshot=[]),
         HarnessNativeCapabilities(),

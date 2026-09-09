@@ -19,6 +19,62 @@ export function neighborhood(
 }
 
 type Box = { x: number; y: number; width: number; height: number };
+export function graphLayout(
+  objects: GraphObject[],
+  sizes: Record<string, { width: number; height: number }>,
+  width: number,
+  minimumHeight = 400,
+) {
+  const columns = Math.max(
+    1,
+    Math.min(
+      objects.length || 1,
+      Math.floor(width / 280),
+      Math.ceil(
+        Math.sqrt((objects.length * width) / Math.max(400, minimumHeight)),
+      ),
+    ),
+  );
+  const cellWidth = (width - 40) / columns;
+  const rowY = [40];
+  for (let i = 0; i < objects.length; i += columns) {
+    rowY.push(
+      rowY[rowY.length - 1] +
+        Math.max(
+          64,
+          ...objects
+            .slice(i, i + columns)
+            .map((o) => sizes[o.id]?.height ?? 64),
+        ) +
+        86,
+    );
+  }
+  const rows = Math.ceil(objects.length / columns);
+  const naturalHeight = Math.max(400, rowY[rows] ?? 400);
+  const height = Math.max(naturalHeight, minimumHeight);
+  const extra = height - naturalHeight;
+  return {
+    height,
+    positions: new Map(
+      objects.map((o, i) => {
+        const size = sizes[o.id] ?? { width: 220, height: 64 };
+        const row = Math.floor(i / columns);
+        return [
+          o.id,
+          {
+            ...size,
+            x:
+              20 +
+              (i % columns) * cellWidth +
+              Math.max(0, (cellWidth - size.width) / 2),
+            y: rowY[row] + (rows > 1 ? (extra * row) / (rows - 1) : extra / 2),
+          },
+        ];
+      }),
+    ),
+  };
+}
+
 export function connectionEndpoints(a: Box, b: Box) {
   const ax = a.x + a.width / 2,
     ay = a.y + a.height / 2;
@@ -53,6 +109,7 @@ export function ApplicationModelGraph({
   depth,
   onSelect,
   onRelationship,
+  expanded = false,
 }: {
   objects: GraphObject[];
   layoutObjects?: GraphObject[];
@@ -61,10 +118,12 @@ export function ApplicationModelGraph({
   depth: number;
   onSelect: (id: string) => void;
   onRelationship: (id: string) => void;
+  expanded?: boolean;
 }) {
   const canvas = useRef<HTMLDivElement>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const [canvasWidth, setCanvasWidth] = useState(840);
+  const [canvasHeight, setCanvasHeight] = useState(400);
   const markerId = useId().replace(/:/g, "");
   const [sizes, setSizes] = useState<
     Record<string, { width: number; height: number }>
@@ -75,6 +134,15 @@ export function ApplicationModelGraph({
     const measure = () => {
       if (scroll.current?.clientWidth)
         setCanvasWidth(Math.max(260, scroll.current.clientWidth));
+      if (expanded && scroll.current && canvas.current) {
+        const contentTop =
+          canvas.current.getBoundingClientRect().top -
+          scroll.current.getBoundingClientRect().top +
+          scroll.current.scrollTop;
+        setCanvasHeight(
+          Math.max(0, Math.floor(scroll.current.clientHeight - contentTop)),
+        );
+      }
       setSizes((previous) => {
         const next = { ...previous };
         let changed = false;
@@ -98,45 +166,20 @@ export function ApplicationModelGraph({
     nodes?.forEach((node) => observer.observe(node));
     if (scroll.current) observer.observe(scroll.current);
     return () => observer.disconnect();
-  }, [objects, selected, depth]);
+  }, [objects, selected, depth, expanded]);
   const visible = neighborhood(objects, relationships, selected, depth);
   // Selected neighborhoods use local insertion order and fit the available width.
   const ordered = selected ? visible : (layoutObjects ?? objects);
-  const columns = Math.max(1, Math.min(3, Math.floor(canvasWidth / 280)));
-  const rowY: number[] = [40];
-  for (let i = 0; i < ordered.length; i += columns) {
-    rowY.push(
-      rowY[rowY.length - 1] +
-        Math.max(
-          64,
-          ...ordered
-            .slice(i, i + columns)
-            .map((o) => sizes[o.id]?.height ?? 64),
-        ) +
-        86,
-    );
-  }
-  const positions = new Map(
-    ordered.map((o, i) => [
-      o.id,
-      {
-        x: (i % columns) * 280 + 20,
-        y: rowY[Math.floor(i / columns)],
-        width: sizes[o.id]?.width ?? 220,
-        height: sizes[o.id]?.height ?? 64,
-      },
-    ]),
+  const { positions, height } = graphLayout(
+    ordered,
+    sizes,
+    canvasWidth,
+    expanded ? canvasHeight : 400,
   );
   const ids = new Set(visible.map((o) => o.id));
   const edges = relationships
     .filter((e) => ids.has(e.source) && ids.has(e.target))
     .slice(0, 100);
-  const height = Math.max(
-    400,
-    ...visible.map(
-      (o) => (positions.get(o.id)?.y ?? 0) + (sizes[o.id]?.height ?? 64) + 70,
-    ),
-  );
   return (
     <div
       ref={scroll}

@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApplicationModelPage } from "./ApplicationModelPage";
+import { RelationshipEditor } from "./ApplicationModelEditors";
 import { blankClaim, parseProperty, type Graph } from "./applicationModelTypes";
 const request = vi.hoisted(() => vi.fn());
 const draft = vi.hoisted(() => vi.fn());
@@ -39,6 +40,18 @@ const graph: Graph = {
 };
 beforeEach(() => {
   request.mockReset();
+});
+it("preserves a legacy relationship meaning when editing its claim", () => {
+  const objects = ["a", "b"].map(id => ({id, label: id,
+    authentication_context: "anonymous", classification: blankClaim("Page"), properties: {}, revision: 1}));
+  const edge = {id: "old-link", type: "links_to", source: "a", target: "b", claim: blankClaim(true)};
+  const saved = vi.fn();
+  const legacy: Graph = {...graph, objects, relationships: [edge], schema: {...graph.schema,
+    relationships: [{name: "links_to", label: "Links to (legacy)", description: "Historic navigation", source_types: ["Page"], target_types: ["Page"], legacy: true}]}};
+  render(<RelationshipEditor graph={legacy} item={edge} evidence={[]} save={saved} cancel={() => {}} busy={false} />);
+  expect(screen.getByRole("combobox", {name: "Relationship"})).toHaveValue("links_to");
+  fireEvent.click(screen.getByRole("button", {name: "Save relationship"}));
+  expect(saved.mock.calls[0][0][0].type).toBe("links_to");
 });
 describe("application graph workflow", () => {
   it("expands empty relationships and retains an editor draft across restore", async () => {
