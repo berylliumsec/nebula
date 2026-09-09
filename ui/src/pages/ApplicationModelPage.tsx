@@ -5,6 +5,7 @@ import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { PageHeader } from "../components/PageHeader";
 import { ApplicationModelCategory } from "../components/ApplicationModelOutline";
 import { ApplicationModelGraph } from "../components/ApplicationModelGraph";
+import { ExpandableModelPanel } from "../components/ExpandableModelPanel";
 import {
   ObjectEditor,
   RelationshipEditor,
@@ -67,6 +68,8 @@ function ProjectModel() {
   const draftRevision = useRef<number | undefined>(undefined);
   const [question, setQuestion] = useState("");
   const [relationshipPage, setRelationshipPage] = useState(0);
+  const [expanded, setExpanded] = useState<"objects" | "relationships" | "inspector" | null>(null);
+  useEffect(() => { if (error) setExpanded(null); }, [error]);
   const [legacy] = useState(() =>
     ["collection", "state", "query", "modelTab"].some((k) => params.has(k)),
   );
@@ -83,7 +86,8 @@ function ProjectModel() {
   const object = graph?.objects.find((o) => o.id === objectId),
     edge = graph?.relationships.find((r) => r.id === edgeId);
   const graphFocus = objectId || edge?.source || "";
-  const select = (key: string, value: string) =>
+  const select = (key: string, value: string) => {
+    if (expanded && value && ["object", "relationship"].includes(key)) setExpanded("inspector");
     setParams((current) => {
       const next = new URLSearchParams(current);
       value ? next.set(key, value) : next.delete(key);
@@ -92,6 +96,7 @@ function ProjectModel() {
       if (key === "relationship") next.delete("object");
       return next;
     });
+  };
   const searchObjects = useCallback(
     async (query: string) => {
       const result = await api!.request<{ objects: Graph["objects"] }>(
@@ -443,10 +448,9 @@ function ProjectModel() {
           <div
             className={`am-workspace ${!objectId && !edgeId && !editor ? "am-overview-workspace" : ""}`}
           >
-            <aside className="panel am-outline" aria-label="Object outline">
-              <h2>
-                Objects <small>{objectTotal.toLocaleString()}</small>
-              </h2>
+            <ExpandableModelPanel as="aside" className="panel am-outline" title="Objects" label="Object outline"
+              expanded={expanded === "objects"} onExpand={() => setExpanded("objects")} onRestore={() => setExpanded(null)}>
+              <p className="am-hint">{objectTotal.toLocaleString()} objects</p>
               <label>
                 Search objects
                 <input
@@ -515,9 +519,9 @@ function ProjectModel() {
                   </button>
                 </p>
               )}
-            </aside>
-            <section className="am-map" aria-label="Project relationships">
-              <h2>Relationships</h2>
+            </ExpandableModelPanel>
+            <ExpandableModelPanel className="am-map" title="Relationships" label="Project relationships"
+              expanded={expanded === "relationships"} onExpand={() => setExpanded("relationships")} onRestore={() => setExpanded(null)}>
               <p className="am-legend">
                 ━━ Observed · ┄┄ Hypothesized · ··· Disputed
               </p>
@@ -654,8 +658,9 @@ function ProjectModel() {
                   </nav>
                 )}
               </details>
-            </section>
-            <aside className="panel am-inspector" aria-label="Model inspector">
+            </ExpandableModelPanel>
+            <ExpandableModelPanel as="aside" className="panel am-inspector" title="Model inspector"
+              expanded={expanded === "inspector"} onExpand={() => setExpanded("inspector")} onRestore={() => setExpanded(null)}>
               {editor ? (
                 <fieldset
                   disabled={busy || !!pending}
@@ -796,7 +801,7 @@ function ProjectModel() {
                   Load more evidence
                 </button>
               )}
-            </aside>
+            </ExpandableModelPanel>
           </div>
           <section className="panel am-questions">
             <h2>Ask about this model</h2>

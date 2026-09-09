@@ -104,6 +104,32 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   }
   const edges = page.locator(".am-edges line");
   await expect(page.locator(".am-edges")).toBeVisible();
+  const expand = page.getByRole("button", { name: "Expand relationships", exact: true });
+  await expand.click();
+  const fullscreen = page.getByRole("dialog", { name: "Project relationships" });
+  await expect(fullscreen).toBeVisible();
+  const restore = page.getByRole("button", { name: "Restore relationships", exact: true });
+  await expect(restore).toBeFocused();
+  const fullscreenBox = await fullscreen.boundingBox();
+  expect(fullscreenBox!.x).toBe(0);
+  expect(fullscreenBox!.y).toBe(0);
+  expect(fullscreenBox!.width).toBe(page.viewportSize()!.width);
+  expect(Math.abs(fullscreenBox!.height - page.viewportSize()!.height)).toBeLessThan(1);
+  const restoreBox = await restore.boundingBox();
+  expect(restoreBox!.width).toBeGreaterThanOrEqual(44);
+  expect(restoreBox!.height).toBeGreaterThanOrEqual(44);
+  expect((await new AxeBuilder({ page }).include(".am-fullscreen").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath("relationships-fullscreen.png") });
+  await restore.press("Shift+Tab");
+  expect(await fullscreen.evaluate(el => el.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(fullscreen).toHaveCount(0);
+  await expect(expand).toBeFocused();
+  await page.getByRole("button", { name: "Expand objects", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Object outline" })).toBeVisible();
+  await page.locator(".am-outline .am-object.selected").click();
+  await expect(page.getByRole("dialog", { name: "Model inspector" })).toBeVisible();
+  await page.getByRole("button", { name: "Restore model inspector", exact: true }).click();
   await expect(edges.first()).toBeAttached();
   await expect(edges.first()).toHaveCSS("stroke-width", "1.5px");
   await expect
@@ -134,7 +160,7 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   const search = page.getByRole("textbox", { name: "Search objects" });
   await search.fill("Page 1");
   await expect(page).toHaveURL(/q=Page\+1/);
-  await expect(outline.getByRole("button")).toHaveCount(11);
+  await expect(outline.locator(".am-object")).toHaveCount(11);
   await page.reload();
   await expect(search).toHaveValue("Page 1");
   await page.getByRole("button", { name: "Edit object", exact: true }).click();
@@ -145,6 +171,12 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   await expect(label).toBeFocused();
   await label.press("End");
   await expect(label).toHaveValue(objects[1].label);
+  await label.fill("Draft retained across full screen");
+  await page.getByRole("button", { name: "Expand model inspector", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Model inspector" })).toBeVisible();
+  await expect(label).toHaveValue("Draft retained across full screen");
+  await page.getByRole("button", { name: "Restore model inspector", exact: true }).click();
+  await expect(label).toHaveValue("Draft retained across full screen");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(
     page.getByRole("complementary", { name: "Model inspector" }),

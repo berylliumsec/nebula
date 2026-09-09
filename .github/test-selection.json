@@ -1,26 +1,36 @@
 {
-  "reviewed_by": "Codex, Grok qualified gateway name fix",
-  "reason": "Reserve nebula__ within the 64-character tool-name bound. Cover reported schema/relationship names, boundary lengths, stable aliases, real gateway schema discovery/call, unknown-name rejection and adapter create/resume.",
-  "exclusions": "Incremental fix against c68b3a7. Python-only aliases; no frontend, native, layout, origin or persistence-format changes. Fixture provider and disposable Core/gateway. Live Grok chat, production/browser/device and deployment verification outstanding. Earlier branch evidence remains in design docs and preceding selection.",
-  "baseline": "c68b3a7",
+  "reviewed_by": "Codex, Model fullscreen panels",
+  "reason": "Expand objects, relationships and inspector without remounting contents; preserve URL selection and drafts, focus and Escape, background inertness and mobile viewport geometry.",
+  "exclusions": "Incremental UI-only diff against e541a28. No backend/native changes. Dedicated existing application-model Playwright configuration used below instead of the general impact catalog. Disposable real Core and production LAN, no model calls or research commands. Physical devices unavailable.",
+  "baseline": "e541a28",
   "expected_tests": {
-    "python": 10,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 8,
     "native": 0,
     "playwright": 0
   },
-  "python_versions": [
-    "3.11"
+  "python": [],
+  "frontend": [
+    "ui/src/pages/ApplicationModelPage.test.tsx"
   ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_harnesses.py::test_grok_gateway_alias_fits_qualified_name",
-    "tests/v3/test_harnesses.py::test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown",
-    "tests/v3/test_harness_adapters.py::test_grok_receives_project_gateway_on_create_and_resume"
-  ],
-  "frontend": [],
   "native": [],
   "playwright": [],
-  "change_digest": "b57726353b4aba2f7d116f497e474b5d12cc08f34d1aa65b5918e085cf0f45e6"
+  "local_playwright": {
+    "config": "ui/playwright.application-model.config.ts",
+    "files": [
+      "application-model-responsive.spec.ts"
+    ],
+    "expected_tests": 8,
+    "projects": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-webkit-320",
+      "model-chromium-390",
+      "model-webkit-390",
+      "model-chromium-430",
+      "model-webkit-430"
+    ]
+  },
+  "change_digest": "b8fd706b6b01368f035868ba1be88f801a06e3d9d6561616d6fd2d09efb57a9f"
 }

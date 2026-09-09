@@ -41,6 +41,26 @@ beforeEach(() => {
   request.mockReset();
 });
 describe("application graph workflow", () => {
+  it("expands empty relationships and retains an editor draft across restore", async () => {
+    request.mockImplementation(async (url: string) => url.includes("/evidence")
+      ? { evidence: [], next_offset: null } : graph);
+    render(<MemoryRouter><ApplicationModelPage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole("button", { name: "Expand relationships" }));
+    expect(screen.getByRole("dialog", { name: "Project relationships" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore relationships" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand relationships" })).toHaveFocus();
+    fireEvent.click(screen.getByRole("button", { name: "Add object" }));
+    const label = await screen.findByLabelText("Object label");
+    fireEvent.change(label, { target: { value: "Unsent draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Expand model inspector" }));
+    expect(screen.getByLabelText("Object label")).toBe(label);
+    fireEvent.click(screen.getByRole("button", { name: "Restore model inspector" }));
+    expect(screen.getByLabelText("Object label")).toBe(label);
+    expect(label).toHaveValue("Unsent draft");
+    expect(document.body.style.overflow).toBe("");
+  });
   it("keeps the draft revision when a background refresh sees another writer", async () => {
     let revision = 0;
     request.mockImplementation(
