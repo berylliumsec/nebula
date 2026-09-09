@@ -2177,3 +2177,43 @@ def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
         await connection.close()
 
     asyncio.run(scenario())
+
+
+def test_grok_tool_identity_failure_and_nested_command_receipt():
+    from nebula.v3.harnesses import _grok_tool_details
+    start = _grok_tool_details({"title": "use_tool", "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff0011"}})
+    failed = _grok_tool_details({"status": "failed", "rawOutput": {"message": "Mcp error: -32603: search deadline exceeded"}}, start)
+    assert failed["tool_name"] == start["tool_name"]
+    assert failed["summary"] == "Workspace search failed — search deadline exceeded"
+    cancelled = _grok_tool_details({"status": "cancelled"}, start)
+    assert cancelled["summary"] == "Workspace search cancelled"
+    assert _grok_tool_details({"title": "use_tool"}, failed)["item_status"] == "failed"
+    nested = _grok_tool_details({"status": "failed", "rawOutput": {"tool_name": "runtime_aabbccdd_run_command", "server_name": "nebula", "output": {"Error": '{"exit_code":2,"summary":"Some files were unreadable; partial output retained"}'}}})
+    assert nested["server_id"] == "nebula"
+    assert "unreadable" in nested["summary"]
+    assert nested["item_status"] == "failed"
+
+    class RecoveryRpc(FixtureGrokRpc):
+        async def request(self, method, params):
+            if method != "session/prompt":
+                return await super().request(method, params)
+            for update in [
+                {"sessionUpdate": "tool_call", "toolCallId": "same-call", "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff"}},
+                {"sessionUpdate": "tool_call_update", "toolCallId": "same-call", "status": "failed", "rawOutput": {"message": "search deadline exceeded"}},
+            ]:
+                await self.events.put({"method": "session/update", "params": {"update": update}})
+            await asyncio.sleep(0.02)
+            return {"stopReason": "end_turn"}
+
+    async def scenario():
+        async def denied(_):
+            raise AssertionError("No commands or approvals expected")
+        connection = GrokAcpConnection(RecoveryRpc(), external_session_id="saved-fixture", permission_handler=denied)
+        events = [event async for event in connection.run_turn("synthetic normalization", model="fixture")]
+        tools = [event for event in events if event.item_kind == "tool"]
+        assert len(tools) == 2
+        assert tools[0].item_id == tools[1].item_id == "same-call"
+        assert tools[0].tool_name == tools[1].tool_name
+        assert tools[1].item_status == "failed"
+        assert "search deadline exceeded" in tools[1].summary
+    asyncio.run(scenario())

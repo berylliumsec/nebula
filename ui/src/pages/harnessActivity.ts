@@ -229,22 +229,59 @@ function isCodexReasoningItem(
     || item.summary === LEGACY_CODEX_REASONING_SUMMARY;
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function grokToolPresentation(event: HarnessActivityEvent, previous?: HarnessActivityItem) {
+  const payload = event.payload;
+  const raw = record(payload.rawOutput), input = record(payload.rawInput);
+  const prior = record(previous?.payload);
+  const priorRaw = record(prior.rawOutput), priorInput = record(prior.rawInput);
+  const content = Array.isArray(payload.content) ? payload.content.map(value => {
+    const item = record(value); return record(item.content).text ?? item.text ?? "";
+  }).join(" ") : "";
+  const name = raw.tool_name ?? input.tool_name ?? content.match(/Tool `([^`]+)`/)?.[1]
+    ?? priorRaw.tool_name ?? priorInput.tool_name ?? prior.tool_name
+    ?? event.toolName ?? payload.tool ?? previous?.title ?? event.title ?? "tool";
+  const label = String(name).replace(/^nebula__/, "").replace(/_[0-9a-f]{10,}$/, "")
+    .replace(/^runtime_[0-9a-f]+_/, "").replaceAll(/[_.]/g, " ")
+    .replace(/^./, value => value.toUpperCase());
+  let status = event.itemStatus ?? String(payload.status ?? "running");
+  if (["completed", "failed", "cancelled"].includes(previous?.status ?? "")
+      && !["completed", "failed", "cancelled"].includes(status)) status = previous!.status!;
+  const output = record(raw.output);
+  let error = raw.message ?? output.Error ?? raw.error;
+  if (typeof error === "string") {
+    try { const receipt = record(JSON.parse(error)); error = receipt.summary ?? receipt.error ?? error; } catch { /* Plain ACP error. */ }
+  }
+  if (!error && status === "failed") error = content;
+  const outcome = ({ completed: "succeeded", failed: "failed", cancelled: "cancelled" } as Record<string, string>)[status] ?? "running";
+  return {
+    title: label, status,
+    summary: `${label} ${outcome}${status === "failed" && error ? ` — ${String(error).replace(/^Mcp error: -32603: /, "").slice(0, 500)}` : ""}`,
+    tool_name: name, server_id: raw.server_name ?? priorRaw.server_name ?? event.serverId ?? "grok",
+  };
+}
+
 export function reduceHarnessActivity(
   items: HarnessActivityItem[],
   event: HarnessActivityEvent,
   assistantId: string,
 ): HarnessActivityItem[] {
   const sequence = event.sequence ?? 0;
-  const key = event.itemId
-    ? `${event.harnessTurnId ?? "turn"}:${event.itemId}`
+  const callId = event.itemId ?? (typeof event.payload.toolCallId === "string" ? event.payload.toolCallId : undefined);
+  const key = callId
+    ? `${event.harnessTurnId ?? "turn"}:${callId}`
     : `${event.harnessTurnId ?? "turn"}:${event.type}:${event.id ?? sequence}`;
   const existingIndex = items.findIndex((item) => item.key === key);
   const existing = existingIndex >= 0 ? items[existingIndex] : undefined;
-  if (existing && sequence > 0 && existing.sequence >= sequence) return items;
+  const stale = !!existing && sequence > 0 && existing.sequence >= sequence;
+  if (stale && !(event.vendor === "grok_acp" && event.itemKind === "tool")) return items;
 
   const stream = event.stream ?? (event.type === "message_delta" ? "message" : "output");
   const streams = { ...(existing?.streams ?? {}) };
-  const payload = { ...(existing?.payload ?? {}), ...event.payload };
+  const payload = stale ? { ...event.payload, ...(existing?.payload ?? {}) } : { ...(existing?.payload ?? {}), ...event.payload };
   const authoritativeReasoningSummary = typeof event.payload.reasoning_summary_text === "string"
     ? event.payload.reasoning_summary_text.slice(0, 65_536)
     : undefined;
@@ -259,7 +296,7 @@ export function reduceHarnessActivity(
     key,
     turnId: event.harnessTurnId ?? existing?.turnId,
     sessionId: event.harnessSessionId ?? existing?.sessionId,
-    itemId: event.itemId ?? existing?.itemId,
+    itemId: callId ?? existing?.itemId,
     parentItemId: event.parentItemId ?? existing?.parentItemId,
     kind: event.itemKind ?? existing?.kind,
     type: event.type,
@@ -277,6 +314,18 @@ export function reduceHarnessActivity(
     plan: event.plan ?? existing?.plan,
     goal: event.goal ?? existing?.goal,
   };
+
+  if (event.vendor === "grok_acp" && next.kind === "tool") {
+    // Old saved ACP envelopes retain enough identity to repair anonymous labels.
+    const presentation = grokToolPresentation({ ...event, payload, itemStatus: stale ? existing?.status as HarnessActivityEvent["itemStatus"] : event.itemStatus }, existing);
+    Object.assign(next, { title: presentation.title, summary: presentation.summary, status: presentation.status });
+    Object.assign(payload, { tool_name: presentation.tool_name, server_id: presentation.server_id });
+    if (stale && existing) {
+      next.status = existing.status;
+      next.type = existing.type;
+
+    }
+  }
 
   if (isCodexReasoningItem(next)) {
     next.title = "Reasoning";

@@ -458,3 +458,24 @@ describe("harness activity presentation", () => {
     expect(harnessCostLabel({ ...base, usage: { ...usage, costUsd: 0 } })).toBeUndefined();
   });
 });
+
+it("recovers saved Grok names, failure details and stable identity across replay", () => {
+  const complete = { ...activity("tool_completed", {
+    toolCallId: "call-a", status: "failed",
+    rawOutput: { message: "Mcp error: -32603: search deadline exceeded" },
+    content: [{ type: "content", content: { type: "text", text: "Tool `nebula__workspace_search_aabbccddeeff` failed via `use_tool`" } }],
+  }), vendor: "grok_acp" as const, itemKind: "tool" as const, itemStatus: "failed" as const,
+    title: "tool", sequence: 2, harnessTurnId: "turn-a" };
+  let items = reduceHarnessActivity([], complete, "assistant");
+  expect(items[0].title).toBe("Workspace search");
+  expect(items[0].summary).toBe("Workspace search failed — search deadline exceeded");
+  const start = { ...activity("tool_started", { toolCallId: "call-a", rawInput: { tool_name: "nebula__workspace_search_aabbccddeeff" } }),
+    vendor: "grok_acp" as const, itemKind: "tool" as const, itemStatus: "running" as const, sequence: 1, harnessTurnId: "turn-a" };
+  items = reduceHarnessActivity(items, start, "assistant");
+  items = reduceHarnessActivity(items, complete, "assistant");
+  expect(items).toHaveLength(1);
+  expect(items[0].status).toBe("failed");
+  expect(items[0].summary).toContain("search deadline exceeded");
+  const cancelled = reduceHarnessActivity([], { ...complete, itemStatus: "cancelled", payload: { ...complete.payload, status: "cancelled" } }, "assistant");
+  expect(cancelled[0].summary).toBe("Workspace search cancelled");
+});

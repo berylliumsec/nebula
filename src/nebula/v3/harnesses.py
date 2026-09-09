@@ -255,7 +255,7 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "minLength": 1, "maxLength": 512},
-            "path": {"type": "string"},
+            "path": {"description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.", "type": "string"},
             "mode": {"type": "string", "enum": ["literal", "regex"]},
             "case_sensitive": {"type": "boolean"},
             "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -3723,6 +3723,52 @@ class _AcpRpc(_CodexRpc):
         await super()._write({"jsonrpc": "2.0", **value})
 
 
+def _grok_tool_details(update: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Normalize ACP metadata without treating tool output as instructions."""
+    previous = previous or {}
+    raw = update.get("rawOutput")
+    raw = raw if isinstance(raw, dict) else {}
+    raw_input = update.get("rawInput")
+    raw_input = raw_input if isinstance(raw_input, dict) else {}
+    tool = raw.get("tool_name") or raw_input.get("tool_name") or update.get("tool") or previous.get("tool_name") or update.get("title") or "tool"
+    server = raw.get("server_name") or previous.get("server_id") or "grok"
+    status = str(update.get("status") or "running").lower()
+    if status not in {"completed", "failed", "cancelled"}:
+        status = "running"
+    if previous.get("item_status") in {"completed", "failed", "cancelled"} and status not in {"completed", "failed", "cancelled"}:
+        status = previous["item_status"]
+    output = raw.get("output")
+    output = output if isinstance(output, dict) else {}
+    detail = raw.get("message") or raw.get("error") or output.get("Error")
+    if isinstance(detail, str):
+        try:
+            receipt = json.loads(detail)
+        except (ValueError, TypeError):
+            receipt = None
+        if isinstance(receipt, dict):
+            detail = receipt.get("summary") or receipt.get("error")
+    content = update.get("content")
+    if not detail and status == "failed" and isinstance(content, list):
+        detail = " ".join(_acp_text(x.get("content") or x) for x in content if isinstance(x, dict))
+    # Errors sometimes omit metadata entirely; recover the canonical advertised
+    # tool name from the bounded ACP error envelope, never from page content.
+    if tool in {"tool", "use_tool"} and isinstance(content, list):
+        text = " ".join(_acp_text(x.get("content") or x) for x in content if isinstance(x, dict))
+        match = re.search(r"Tool `([^`]+)`", text)
+        if match:
+            tool = match.group(1)
+    tool = str(tool)[:1_000]
+    label = re.sub(r"_[0-9a-f]{10,}$", "", tool.removeprefix("nebula__"))
+    label = re.sub(r"^runtime_[0-9a-f]+_", "", label).replace("_", " ").replace(".", " ")
+    label = label[:1].upper() + label[1:]
+    outcome = {"completed": "succeeded", "failed": "failed", "cancelled": "cancelled"}.get(status, "running")
+    summary = previous.get("summary", f"{label} {outcome}") if not detail and previous.get("item_status") == status and status in {"failed", "cancelled"} else f"{label} {outcome}"
+    if status == "failed" and detail:
+        summary += " — " + str(detail).removeprefix("Mcp error: -32603: ")[:500]
+    return {"tool_name": tool, "server_id": str(server), "item_status": status,
+            "title": label[:1_000], "summary": summary[:4_000]}
+
+
 def _acp_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -3892,6 +3938,7 @@ class GrokAcpConnection(HarnessConnection):
         message_parts: list[str] = []
         pending_agent_parts: list[str] = []
         commentary_sequence = 0
+        tool_calls: dict[str, dict[str, Any]] = {}
         yield HarnessEvent(
             type="started",
             vendor=HarnessKind.GROK_ACP,
@@ -4022,40 +4069,16 @@ class GrokAcpConnection(HarnessConnection):
                             goal=goal,
                             payload={"goal": goal.model_dump(mode="json")},
                         )
-                elif kind == "tool_call":
-                    tool_name = str(
-                        update.get("tool") or update.get("title") or "tool"
-                    )[:1_000]
+                elif kind in {"tool_call", "tool_call_update"}:
+                    details = _grok_tool_details(update, tool_calls.get(item_id))
+                    tool_calls[item_id] = details
+                    terminal = details["item_status"] in {"completed", "failed", "cancelled"}
                     yield HarnessEvent(
-                        type="tool_started",
+                        type="tool_completed" if terminal else "tool_started" if kind == "tool_call" else "item_upsert",
                         vendor=HarnessKind.GROK_ACP,
                         item_id=item_id,
                         item_kind="tool",
-                        item_status="running",
-                        title=tool_name,
-                        server_id="grok",
-                        tool_name=tool_name,
-                        payload=_bounded(update, limit=MAX_TOOL_RESULT_TEXT),
-                    )
-                elif kind == "tool_call_update":
-                    raw_status = str(update.get("status") or "running").lower()
-                    terminal = raw_status in {"completed", "failed", "cancelled"}
-                    item_status = cast(
-                        Literal["running", "completed", "failed", "cancelled"],
-                        raw_status if terminal else "running",
-                    )
-                    tool_name = str(
-                        update.get("tool") or update.get("title") or "tool"
-                    )[:1_000]
-                    yield HarnessEvent(
-                        type="tool_completed" if terminal else "item_upsert",
-                        vendor=HarnessKind.GROK_ACP,
-                        item_id=item_id,
-                        item_kind="tool",
-                        item_status=item_status,
-                        title=tool_name,
-                        server_id="grok",
-                        tool_name=tool_name,
+                        **details,
                         payload=_bounded(update, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 else:
@@ -10338,6 +10361,8 @@ class HarnessRuntimeService:
                 values["summary"] = values["summary"][:4_000]
             if isinstance(values.get("tool_name"), str):
                 values["tool_name"] = values["tool_name"][:1_000]
+            if values.get("vendor") == "grok_acp" and values.get("item_kind") == "tool":
+                values.update(_grok_tool_details(values.get("payload") or {}, values))
             events.append(HarnessEvent.model_validate(values))
             if len(events) >= limit:
                 break

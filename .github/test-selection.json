@@ -1,11 +1,11 @@
 {
-  "change_digest": "7f26a642d68d33fb60d3b1652d4092e2257d134e4900cfbdeae590285916cc87",
+  "change_digest": "69e6bfce42cdb1a569556e24d52afdf15900263c2712b3664aad08bea73e0aae",
   "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Bounded server model views and remote outline/link search; 2,000-object paging, selected neighborhood/edge bounds, auth and project isolation; actionable relationship-option discovery and failed-write correction across browser/harness brokers. UI component paging and dense real-Core LAN journey must not request full graph snapshots. Real-Core browser coverage now creates a relationship using remote endpoint search outside the loaded category page.",
+  "reason": "Focused workspace budget/path recovery, Grok event normalization, saved event replay and compact composer queue. Prior graph checks recorded separately; no research commands replayed.",
   "exclusions": "No unrelated backend/frontend/native suites. Dedicated production browser journey runs locally; WebKit host startup was previously blocked and will be rechecked. Physical devices unavailable. Copy-of-live graph repair is a bounded migration rehearsal, not a substitute for selected tests.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 17,
+    "python": 7,
+    "frontend": 27,
     "native": 0,
     "playwright": 0
   },
@@ -15,14 +15,16 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_application_model_views.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness"
+    "tests/v3/test_workspace_tool_search.py",
+    "tests/v3/test_harness_adapters.py::test_grok_tool_identity_failure_and_nested_command_receipt",
+    "tests/v3/test_harness_adapters.py::test_grok_connection_bounds_verbose_tool_titles_before_activity_ingestion",
+    "tests/v3/test_automation_runtime.py::test_workspace_retrieval_is_bounded_and_rejects_symlink_escape",
+    "tests/v3/test_automation_runtime.py::test_unreadable_command_receipt_preserves_exit_and_partial_artifacts"
   ],
   "frontend": [
-    "ui/src/components/ApplicationModelGraph.test.tsx",
-    "ui/src/components/ApplicationModelOutline.test.tsx",
-    "ui/src/pages/ApplicationModelPage.test.tsx"
+    "ui/src/pages/harnessActivity.test.ts",
+    "ui/src/components/activityLedgerModel.test.ts",
+    "ui/src/components/ChatQueuePanel.test.tsx"
   ],
   "native": [],
   "playwright": [],
@@ -33,9 +35,9 @@
     "dedicated_playwright": 16
   },
   "local_playwright": {
-    "config": "ui/playwright.application-model.config.ts",
+    "config": "ui/playwright.workspace-recovery.config.ts",
     "files": [
-      "application-model-responsive.spec.ts"
+      "workspace-recovery.spec.ts"
     ],
     "projects": [
       "model-desktop",
@@ -48,6 +50,6 @@
       "model-webkit-430"
     ],
     "expected_tests": 8,
-    "boundary": "Disposable real Core, production UI, LAN origin, emulated mobile; no live provider execution"
+    "boundary": "Disposable real Core with saved synthetic events and paused queue, production UI on LAN; no tools or provider execution"
   }
 }

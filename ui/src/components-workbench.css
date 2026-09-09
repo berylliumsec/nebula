@@ -2439,3 +2439,13 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .workspace-reset-disclosure > summary { min-height: var(--touch-target); display: list-item; align-content: center; padding: 8px 12px; cursor: pointer; color: var(--muted); font-size: var(--type-control); }
 .workspace-reset-disclosure > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .workspace-reset-disclosure > .workspace-reset { max-height: 35vh; overflow-y: auto; margin: 0 12px 12px; }
+
+/* The durable follow-up queue belongs to the composer, behind one compact row. */
+.chat-composer .chat-follow-up-queue { margin: 0; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: .8125rem; }
+.chat-composer .chat-follow-up-queue > details > summary { display: list-item; min-height: 44px; align-content: center; padding: 0 12px; color: var(--muted); cursor: pointer; }
+.chat-composer .chat-follow-up-queue > details[open] { max-height: min(300px, 40vh); overflow-y: auto; }
+.chat-composer .chat-follow-up-queue header { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 8px; }
+.chat-composer .chat-follow-up-queue header strong { flex: 1 1 160px; }
+.chat-composer .chat-follow-up-queue p { margin: 4px 8px; overflow-wrap: anywhere; }
+.chat-composer .chat-follow-up-queue ol { margin: 0; padding: 0 8px 8px; }
+.chat-composer .chat-follow-up-queue li { padding: 6px 0; }

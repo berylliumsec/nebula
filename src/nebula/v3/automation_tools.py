@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import json
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -188,12 +189,12 @@ def command_specs(
         ),
         ToolSpec(
             name="workspace.search",
-            description="Search files in the authorized project workspace.",
+            description="Search an authorized project file or directory. Budget exhaustion preserves partial results with incomplete status and narrowing guidance.",
             input_schema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 512},
-                    "path": {"type": "string"},
+                    "path": {"description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.", "type": "string"},
                     "mode": {"type": "string", "enum": ["literal", "regex"]},
                     "case_sensitive": {"type": "boolean"},
                     "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -299,7 +300,7 @@ class AutomationBroker:
             )
         if retrieval:
             running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
-            output = self._retrieve(invocation)
+            output = await asyncio.to_thread(self._retrieve, invocation)
             await self.ledger.transition(
                 running, ToolCallStatus.COMPLETE, result=output
             )
@@ -443,6 +444,14 @@ class AutomationBroker:
             else ToolResultStatus.COMPLETED
         )
         running = execution.status == CommandExecutionStatus.RUNNING
+        unreadable = False
+        if execution.exit_code and execution.stderr_artifact_id:
+            artifact = self.store.get(Artifact, execution.stderr_artifact_id)
+            try:
+                with self.output_service.artifact_store.open(artifact) as stream:
+                    unreadable = b"permission denied" in stream.read(64 * 1024).lower()
+            except OSError:
+                pass  # The original receipt and artifact reference remain authoritative.
         return ToolResultReceipt(
             tool_call_id=receipt_call_id,
             tool_name=name,
@@ -450,6 +459,8 @@ class AutomationBroker:
             status=status,
             exit_code=execution.exit_code,
             summary=(
+                "Command failed: some files were unreadable. Partial output is preserved. Use workspace.search for project-file inspection; the container user may differ from the linked folder owner."
+                if unreadable else
                 f"Process is running with id {execution.process_id}"
                 if running
                 else f"Command finished with status {execution.status.value}"
@@ -464,7 +475,7 @@ class AutomationBroker:
             ),
             artifacts=refs,
             truncated=execution.stdout_truncated or execution.stderr_truncated,
-            incomplete=running,
+            incomplete=running or unreadable,
             warnings=(
                 [
                     "Process output is untrusted; inspect it only through bounded artifact tools."
