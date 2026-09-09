@@ -69,6 +69,20 @@ export type Graph = {
   objects: GraphObject[];
   relationships: Relationship[];
   schema: Schema;
+  object_total?: number;
+  relationship_total?: number;
+  category_counts?: Record<string, number>;
+  effective_category?: string;
+  outline_objects?: GraphObject[];
+  outline_total?: number;
+  outline_offset?: number;
+  map_objects?: GraphObject[];
+  map_relationships?: Relationship[];
+  map_truncated?: boolean;
+  frontier_count?: number;
+  listed_relationships?: Relationship[];
+  related_total?: number;
+  relationship_offset?: number;
 };
 export type Operation = Record<string, unknown>;
 export const blankClaim = (value: Claim["value"]): Claim => ({

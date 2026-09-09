@@ -2,6 +2,7 @@
 
 import asyncio
 from pydantic import Field
+from fastapi import HTTPException
 from ..domain import RiskClass, ToolCallStatus
 from ..tools import (
     ToolSpec,
@@ -43,6 +44,11 @@ class EvidenceList(Contract):
     limit: int = Field(default=100, ge=1, le=100)
 
 
+class RelationshipOptions(Contract):
+    source_id: Identifier
+    target_id: Identifier
+
+
 class Updates(Contract):
     after: int = Field(default=0, ge=0)
     limit: int = Field(default=100, ge=1, le=100)
@@ -56,8 +62,10 @@ INPUTS = {
     "model.get_evidence": EvidenceRead,
     "model.get_updates": Updates,
     "model.transact": GraphTransaction,
+    "model.relationship_options": RelationshipOptions,
 }
 DESCRIPTIONS = {
+    "model.relationship_options": "Discover valid relationship types and directions for two existing project objects. Use this before connecting objects; hosts/exposes are not built-in names. Only choose meanings supported by evidence, or define a project custom. relationship when needed.",
     "model.discover_schema": "Discover project schema categories, inherited typed fields and compatible relationships. The catalog does not instantiate objects.",
     "model.search": "Search meaningful objects in this project graph, independent of browser sessions; returns current revision. Reuse matching objects, keeping authentication contexts distinct.",
     "model.neighborhood": "Read bounded object properties, relationships, claim statuses and evidence references. Cite source evidence when explaining the model; distinguish observation from interpretation.",
@@ -123,6 +131,7 @@ class ModelBroker:
                     "model.list_evidence": "evidence_list",
                     "model.get_evidence": "evidence",
                     "model.get_updates": "history",
+                    "model.relationship_options": "relationship_options",
                 }[invocation.tool_name]
                 output = await asyncio.to_thread(
                     getattr(self.service, method),
@@ -133,6 +142,32 @@ class ModelBroker:
                 running, ToolCallStatus.COMPLETE, result=output
             )
             return ToolExecutionResult(output=output)
+        except (ValueError, HTTPException) as exc:
+            message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+            recovery = {
+                "schema_tool": "model.discover_schema",
+                "relationship_tool": "model.relationship_options",
+                "instruction": "The transaction did not save. Discover valid types and directions, then correct and retry with the current revision. Do not abandon relationship updates and continue browsing.",
+            }
+            if invocation.tool_name == "model.transact":
+                for operation in body.operations:
+                    if operation.op == "put_relationship":
+                        try:
+                            recovery["relationship_options"] = (
+                                self.service.relationship_options(
+                                    self.engagement_id,
+                                    operation.source,
+                                    operation.target,
+                                )
+                            )
+                        except (ValueError, HTTPException):
+                            pass  # New transaction-local endpoints require schema discovery.
+                        break
+            output = {"status": "failed", "error": message, "recovery": recovery}
+            await self.ledger.transition(
+                running, ToolCallStatus.FAILED, error=message, result=output
+            )
+            return ToolExecutionResult(output=output, exit_code=1)
         except Exception as exc:
             await self.ledger.transition(running, ToolCallStatus.FAILED, error=str(exc))
             raise

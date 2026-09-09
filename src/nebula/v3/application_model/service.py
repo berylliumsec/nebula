@@ -100,6 +100,100 @@ class ApplicationModelService:
             "schema": self.registry(graph).discover(),
         }
 
+    def view(
+        self,
+        project,
+        query="",
+        category=None,
+        offset=None,
+        object_id="",
+        relationship_id="",
+        depth=1,
+        relationship_offset=0,
+    ):
+        """Bound the operator read path independently of total project size."""
+        graph = self.snapshot(project)
+        registry = self.registry(graph)
+        objects = graph["objects"]
+        counts = {name: 0 for name in registry.categories}
+        matches = []
+        for obj in objects.values():
+            if query.casefold() not in obj["label"].casefold():
+                continue
+            counts[registry.types[obj["classification"]["value"]].category] += 1
+            matches.append(obj)
+        edge = graph["relationships"].get(relationship_id)
+        focus = object_id or (edge["source"] if edge else "")
+        selected = objects.get(focus)
+        effective = category
+        if not effective and selected:
+            effective = registry.types[selected["classification"]["value"]].category
+        if not effective and query:
+            effective = next((name for name, count in counts.items() if count), None)
+        if effective and effective not in counts:
+            raise ValueError("Choose a project schema category")
+        matched = (
+            [
+                obj
+                for obj in matches
+                if registry.types[obj["classification"]["value"]].category == effective
+            ]
+            if effective
+            else []
+        )
+        if offset is None:
+            index = next((i for i, obj in enumerate(matched) if obj["id"] == focus), 0)
+            offset = index // 20 * 20
+        offset = min(offset, max(0, (len(matched) - 1) // 20 * 20))
+        outline = matched[offset : offset + 20]
+        neighborhood = (
+            self._neighborhood(graph, focus, depth, 100)
+            if selected
+            else {
+                "objects": [],
+                "relationships": [],
+                "frontier_count": 0,
+                "truncated": False,
+            }
+        )
+        related = [
+            r
+            for r in graph["relationships"].values()
+            if (not focus or r["source"] == focus or r["target"] == focus)
+        ]
+        relationship_offset = min(
+            relationship_offset, max(0, (len(related) - 1) // 25 * 25)
+        )
+        listed = related[relationship_offset : relationship_offset + 25]
+        edges = {r["id"]: r for r in listed}
+        if edge:
+            edges[edge["id"]] = edge
+        included = {obj["id"]: obj for obj in [*outline, *neighborhood["objects"]]}
+        for relation in edges.values():
+            for endpoint in (relation["source"], relation["target"]):
+                included[endpoint] = objects[endpoint]
+        return {
+            "project_id": project,
+            "revision": graph["revision"],
+            "schema": registry.discover(),
+            "objects": list(included.values()),
+            "relationships": list(edges.values()),
+            "listed_relationships": listed,
+            "map_objects": neighborhood["objects"],
+            "map_relationships": neighborhood["relationships"],
+            "map_truncated": neighborhood["truncated"],
+            "frontier_count": neighborhood["frontier_count"],
+            "outline_objects": outline,
+            "outline_total": len(matched),
+            "outline_offset": offset,
+            "effective_category": effective or "",
+            "category_counts": counts,
+            "object_total": len(objects),
+            "relationship_total": len(graph["relationships"]),
+            "related_total": len(related),
+            "relationship_offset": relationship_offset,
+        }
+
     def search(self, project, query="", category=None, type=None, offset=0, limit=100):
         graph = self.snapshot(project)
         registry = self.registry(graph)
@@ -125,6 +219,9 @@ class ApplicationModelService:
         graph = self.snapshot(project)
         if object_id not in graph["objects"]:
             raise HTTPException(404, "Object unavailable; return to the project model")
+        return self._neighborhood(graph, object_id, depth, limit)
+
+    def _neighborhood(self, graph, object_id, depth, limit):
         selected = {object_id}
         for _ in range(min(max(depth, 0), 3)):
             neighbors = {
@@ -153,6 +250,34 @@ class ApplicationModelService:
             "relationships": relationships[:limit],
             "frontier_count": len(frontier),
             "truncated": bool(frontier) or len(relationships) > limit,
+        }
+
+    def relationship_options(self, project, source_id, target_id):
+        graph = self.snapshot(project)
+        if source_id not in graph["objects"] or target_id not in graph["objects"]:
+            raise ValueError("Choose two objects in this project")
+        registry = self.registry(graph)
+        source = graph["objects"][source_id]["classification"]["value"]
+        target = graph["objects"][target_id]["classification"]["value"]
+        return {
+            "revision": graph["revision"],
+            "source_type": source,
+            "target_type": target,
+            "options": [
+                {
+                    "type": name,
+                    "source": a,
+                    "target": b,
+                    "description": relation.description,
+                }
+                for name, relation in registry.relationships.items()
+                for a, b, at, bt in [
+                    (source_id, target_id, source, target),
+                    (target_id, source_id, target, source),
+                ]
+                if registry.compatible(name, at, bt)
+            ],
+            "guidance": "Choose a direction and meaning supported by evidence. If none fits, define a meaningful custom. relationship with model.transact; never invent a built-in name or infer hosting from branding.",
         }
 
     def _evidence(self, connection, project, kind, identifier, revision=None):

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   blankClaim,
   inputClaim,
@@ -351,6 +351,7 @@ export function cryptoId() {
 
 export function RelationshipEditor({
   graph,
+  searchObjects,
   item,
   evidence,
   save,
@@ -358,6 +359,7 @@ export function RelationshipEditor({
   busy,
 }: {
   graph: Graph;
+  searchObjects?: (query: string) => Promise<Graph["objects"]>;
   item?: Relationship;
   evidence: Evidence[];
   save: (ops: Operation[]) => Promise<void>;
@@ -372,11 +374,42 @@ export function RelationshipEditor({
   );
   const [type, setType] = useState(item?.type ?? "contains");
   const [query, setQuery] = useState("");
+  const [matches, setMatches] = useState(graph.objects);
+  const [searchError, setSearchError] = useState("");
+  useEffect(() => {
+    if (!searchObjects) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void searchObjects(query)
+        .then((result) => {
+          if (cancelled) return;
+          setMatches((previous) => [
+            ...new Map(
+              [
+                ...result,
+                ...previous.filter((o) => o.id === source || o.id === target),
+              ].map((o) => [o.id, o]),
+            ).values(),
+          ]);
+          setSearchError("");
+        })
+        .catch(() => {
+          if (!cancelled)
+            setSearchError(
+              "Could not search project objects. Change the search to retry; your selections are retained.",
+            );
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, searchObjects, source, target]);
   const [claim, setClaim] = useState(
     item ? inputClaim(item.claim) : blankClaim(true),
   );
-  const sourceObject = graph.objects.find((o) => o.id === source),
-    targetObject = graph.objects.find((o) => o.id === target);
+  const sourceObject = matches.find((o) => o.id === source),
+    targetObject = matches.find((o) => o.id === target);
   const sourceDef = graph.schema.types.find(
       (t) => t.name === sourceObject?.classification.value,
     ),
@@ -410,6 +443,7 @@ export function RelationshipEditor({
       }}
     >
       <h2>{item ? "Edit relationship" : "Link objects"}</h2>
+      {searchError && <p role="alert">{searchError}</p>}
       <label>
         Search objects to link
         <input value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -425,7 +459,7 @@ export function RelationshipEditor({
           <select required value={value} onChange={(e) => set(e.target.value)}>
             <option value="">Choose an object</option>
             {graph.schema.categories.map((category) => {
-              const matches = graph.objects.filter(
+              const choicesInCategory = matches.filter(
                 (o) =>
                   graph.schema.types.find(
                     (t) => t.name === o.classification.value,
@@ -434,13 +468,13 @@ export function RelationshipEditor({
                     o.label.toLowerCase().includes(query.toLowerCase())),
               );
               const choices = [
-                ...matches.filter((o) => o.id === value),
-                ...matches.filter((o) => o.id !== value).slice(0, 20),
+                ...choicesInCategory.filter((o) => o.id === value),
+                ...choicesInCategory.filter((o) => o.id !== value).slice(0, 20),
               ];
               return choices.length ? (
                 <optgroup
                   key={category.name}
-                  label={`${category.name} (${matches.length})`}
+                  label={`${category.name} (${choicesInCategory.length})`}
                 >
                   {choices.map((o) => (
                     <option key={o.id} value={o.id}>

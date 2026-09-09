@@ -195,6 +195,57 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
         assert (await invoke(harness, "model.transact", tx)).output["revision"] == 1
         history = (await invoke(harness, "model.get_updates", {})).output["edits"]
         assert len(history) == 1 and history[0]["producer"] == "assistant"
+        await invoke(
+            browser,
+            "model.transact",
+            {
+                "expected_revision": 1,
+                "idempotency_key": "add-page",
+                "operations": [
+                    {
+                        "op": "put_object",
+                        "id": "page",
+                        "label": "Page",
+                        "authentication_context": "anonymous",
+                        "classification": {"value": "Page"},
+                    }
+                ],
+            },
+        )
+        bad_link = {
+            "expected_revision": 2,
+            "idempotency_key": "link-page",
+            "operations": [
+                {
+                    "op": "put_relationship",
+                    "id": "site-page",
+                    "type": "exposes",
+                    "source": "site",
+                    "target": "page",
+                    "claim": {"value": True},
+                },
+            ],
+        }
+        rejected = await invoke(browser, "model.transact", bad_link)
+        assert rejected.exit_code == 1
+        options = rejected.output["recovery"]["relationship_options"]["options"]
+        assert any(
+            o["type"] == "contains" and o["source"] == "site" and o["target"] == "page"
+            for o in options
+        )
+        found = await invoke(
+            harness,
+            "model.relationship_options",
+            {"source_id": "site", "target_id": "page"},
+        )
+        assert found.output["revision"] == 2
+        bad_link["operations"][0]["type"] = "contains"
+        corrected = await invoke(harness, "model.transact", bad_link)
+        assert corrected.output["revision"] == 3
+        neighborhood = await invoke(
+            browser, "model.neighborhood", {"object_id": "site"}
+        )
+        assert len(neighborhood.output["relationships"]) == 1
         with pytest.raises(InvalidToolArguments):
             await harness.broker.execute(
                 ToolInvocation(

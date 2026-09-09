@@ -20,6 +20,31 @@ def model_router(service):
     def graph(project: str):
         return service.workspace(project)
 
+    @router.get("/view")
+    def view(
+        project: str,
+        query: str = Query("", max_length=200),
+        category: str | None = None,
+        offset: int | None = Query(None, ge=0),
+        object_id: str = "",
+        relationship_id: str = "",
+        depth: int = Query(1, ge=1, le=3),
+        relationship_offset: int = Query(0, ge=0),
+    ):
+        try:
+            return service.view(
+                project,
+                query,
+                category,
+                offset,
+                object_id,
+                relationship_id,
+                depth,
+                relationship_offset,
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @router.get("/search")
     def search(
         project: str,

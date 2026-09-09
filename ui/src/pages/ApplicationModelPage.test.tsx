@@ -171,3 +171,68 @@ describe("application graph workflow", () => {
     expect(parseProperty({ ...prop, kind: "boolean" }, "false")).toBe(false);
   });
 });
+
+it("loads category pages from Core instead of transferring the full graph", async () => {
+  request.mockImplementation(async (url: string) => {
+    const params = new URLSearchParams(url.split("?")[1] ?? "");
+    const offset = Number(params.get("offset") ?? 0);
+    const active = params.get("category") === "Structure";
+    const objects = active
+      ? Array.from({ length: 20 }, (_, i) => ({
+          id: `page-${offset + i}`,
+          label: `Page ${offset + i}`,
+          classification: {
+            value: "Page",
+            status: "hypothesized",
+            evidence: [],
+          },
+          authentication_context: "anonymous",
+          properties: {},
+          revision: 1,
+        }))
+      : [];
+    return {
+      ...graph,
+      object_total: 2000,
+      category_counts: { Structure: 2000 },
+      effective_category: active ? "Structure" : "",
+      outline_objects: objects,
+      outline_offset: offset,
+      outline_total: active ? 2000 : 0,
+      objects,
+      map_objects: [],
+      map_relationships: [],
+      related_total: 0,
+      listed_relationships: [],
+    };
+  });
+  const { container } = render(
+    <MemoryRouter>
+      <ApplicationModelPage />
+    </MemoryRouter>,
+  );
+  await screen.findByRole("heading", { name: "Explore the model" });
+  expect(
+    screen.queryByText("Build a model from evidence"),
+  ).not.toBeInTheDocument();
+  const details = container.querySelector(".am-category") as HTMLDetailsElement;
+  details.open = true;
+  fireEvent(details, new Event("toggle"));
+  await waitFor(() =>
+    expect(container.querySelectorAll(".am-outline .am-object")).toHaveLength(
+      20,
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Next Structure objects" }),
+  );
+  await screen.findByRole("button", { name: /Page 20.*Page/ });
+  expect(
+    request.mock.calls.some(
+      ([url]) => url.includes("/view?") && url.includes("offset=20"),
+    ),
+  ).toBe(true);
+  expect(request.mock.calls.some(([url]) => url.endsWith("/graph"))).toBe(
+    false,
+  );
+});

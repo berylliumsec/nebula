@@ -1,11 +1,11 @@
 {
-  "change_digest": "abcfd48864524b14fbe39def43cbf0afea9229bfb4c3f64f2d212d32a688ccbf",
+  "change_digest": "7f26a642d68d33fb60d3b1652d4092e2257d134e4900cfbdeae590285916cc87",
   "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Expanded operator-requested model navigation cleanup: collapsible paginated categories, compact rows, bounded grouped link selectors, category overview and selected-neighborhood map, paginated relationships, and measured arrow endpoints. Sixteen selected component checks include a 2,000-object outline and existing page workflows. Rerun dense real-Core production browser journey for final UI. Map columns adapt to the measured available width rather than a fixed 840px canvas.",
-  "exclusions": "No backend changes or unrelated suites. Dedicated application-model Playwright config runs locally; no main CI Playwright selector registered for it. Physical devices unavailable.",
+  "reason": "Bounded server model views and remote outline/link search; 2,000-object paging, selected neighborhood/edge bounds, auth and project isolation; actionable relationship-option discovery and failed-write correction across browser/harness brokers. UI component paging and dense real-Core LAN journey must not request full graph snapshots. Real-Core browser coverage now creates a relationship using remote endpoint search outside the loaded category page.",
+  "exclusions": "No unrelated backend/frontend/native suites. Dedicated production browser journey runs locally; WebKit host startup was previously blocked and will be rechecked. Physical devices unavailable. Copy-of-live graph repair is a bounded migration rehearsal, not a substitute for selected tests.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 16,
+    "python": 5,
+    "frontend": 17,
     "native": 0,
     "playwright": 0
   },
@@ -14,7 +14,11 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_application_model_views.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness"
+  ],
   "frontend": [
     "ui/src/components/ApplicationModelGraph.test.tsx",
     "ui/src/components/ApplicationModelOutline.test.tsx",
@@ -44,11 +48,6 @@
       "model-webkit-430"
     ],
     "expected_tests": 8,
-    "boundary": "Disposable real Core, production UI, LAN origin, emulated mobile; no live provider execution",
-    "result": {
-      "chromium": "5/5 passed on final build",
-      "webkit": "incomplete: repeated browser/context/page startup timeouts",
-      "physical": "not available"
-    }
+    "boundary": "Disposable real Core, production UI, LAN origin, emulated mobile; no live provider execution"
   }
 }

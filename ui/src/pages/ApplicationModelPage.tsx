@@ -78,6 +78,7 @@ function ProjectModel() {
     edgeId = params.get("relationship") ?? "";
   const query = params.get("q") ?? "",
     category = params.get("category") ?? "";
+  const outlineOffset = params.get("offset");
   const depth = Math.min(3, Math.max(1, Number(params.get("depth")) || 1));
   const object = graph?.objects.find((o) => o.id === objectId),
     edge = graph?.relationships.find((r) => r.id === edgeId);
@@ -86,15 +87,36 @@ function ProjectModel() {
     setParams((current) => {
       const next = new URLSearchParams(current);
       value ? next.set(key, value) : next.delete(key);
+      if (["object", "q", "category"].includes(key)) next.delete("offset");
       if (key === "object") next.delete("relationship");
       if (key === "relationship") next.delete("object");
       return next;
     });
+  const searchObjects = useCallback(
+    async (query: string) => {
+      const result = await api!.request<{ objects: Graph["objects"] }>(
+        `${base}/search?query=${encodeURIComponent(query)}&limit=100`,
+      );
+      return result.objects;
+    },
+    [api, base],
+  );
   const load = useCallback(
     async (signal?: AbortSignal) => {
       if (!api) return;
       const seq = ++requestSequence.current;
-      const next = await api.request<Graph>(`${base}/graph`, { signal });
+      const search = new URLSearchParams({
+        query,
+        object_id: objectId,
+        relationship_id: edgeId,
+        depth: String(depth),
+        relationship_offset: String(relationshipPage * 25),
+      });
+      if (category) search.set("category", category);
+      if (outlineOffset !== null) search.set("offset", outlineOffset);
+      const next = await api.request<Graph>(`${base}/view?${search}`, {
+        signal,
+      });
       if (signal?.aborted || !alive.current || seq !== requestSequence.current)
         return;
       if (next.revision >= revision.current) {
@@ -102,7 +124,17 @@ function ProjectModel() {
         setGraph(next);
       }
     },
-    [api, base],
+    [
+      api,
+      base,
+      query,
+      category,
+      objectId,
+      edgeId,
+      depth,
+      outlineOffset,
+      relationshipPage,
+    ],
   );
   useEffect(() => {
     alive.current = true;
@@ -218,7 +250,7 @@ function ProjectModel() {
     void loadEvidence();
   };
   const filtered =
-    graph?.objects.filter(
+    (graph?.outline_objects ?? graph?.objects)?.filter(
       (o) =>
         o.label.toLowerCase().includes(query.toLowerCase()) &&
         (!category ||
@@ -227,15 +259,22 @@ function ProjectModel() {
     ) ?? [];
   const visibleIds = new Set(filtered.map((o) => o.id));
   const related =
+    graph?.listed_relationships ??
     graph?.relationships.filter(
       (r) =>
         (!objectId || r.source === objectId || r.target === objectId) &&
         (visibleIds.has(r.source) || visibleIds.has(r.target)),
-    ) ?? [];
-  const currentRelationshipPage = Math.min(
-    relationshipPage,
-    Math.max(0, Math.ceil(related.length / 25) - 1),
-  );
+    ) ??
+    [];
+  const objectTotal = graph?.object_total ?? graph?.objects.length ?? 0;
+  const relatedTotal = graph?.related_total ?? related.length;
+  const currentRelationshipPage =
+    graph?.relationship_offset !== undefined
+      ? Math.floor(graph.relationship_offset / 25)
+      : Math.min(
+          relationshipPage,
+          Math.max(0, Math.ceil(related.length / 25) - 1),
+        );
   useEffect(() => setRelationshipPage(0), [objectId, query, category]);
   const showClaim = (claim: Claim, title: string) => (
     <article className={`am-claim ${claim.status}`} key={title}>
@@ -366,7 +405,7 @@ function ProjectModel() {
             </button>
             <button
               className="button secondary"
-              disabled={!graph.objects.length}
+              disabled={!objectTotal}
               onClick={() => open("relationship")}
             >
               Link objects
@@ -388,7 +427,7 @@ function ProjectModel() {
             </button>
             <span className="am-hint">Revision {graph.revision}</span>
           </div>
-          {!graph.objects.length && (
+          {!objectTotal && (
             <section className="panel am-empty">
               <h2>Build a model from evidence</h2>
               <p>
@@ -406,7 +445,7 @@ function ProjectModel() {
           >
             <aside className="panel am-outline" aria-label="Object outline">
               <h2>
-                Objects <small>{graph.objects.length}</small>
+                Objects <small>{objectTotal.toLocaleString()}</small>
               </h2>
               <label>
                 Search objects
@@ -434,10 +473,27 @@ function ProjectModel() {
                       (t) => t.name === o.classification.value,
                     )?.category === c.name,
                 );
-                return items.length ? (
+                return (graph.category_counts?.[c.name] ?? items.length) ? (
                   <ApplicationModelCategory
                     key={c.name}
                     name={c.name}
+                    total={graph.category_counts?.[c.name]}
+                    offset={graph.outline_offset}
+                    expanded={
+                      graph.effective_category !== undefined
+                        ? graph.effective_category === c.name
+                        : undefined
+                    }
+                    onOpen={
+                      graph.category_counts
+                        ? () => select("category", c.name)
+                        : undefined
+                    }
+                    onPage={
+                      graph.category_counts
+                        ? (offset) => select("offset", String(offset))
+                        : undefined
+                    }
                     objects={items}
                     selected={objectId}
                     query={query || category}
@@ -445,7 +501,7 @@ function ProjectModel() {
                   />
                 ) : null;
               })}
-              {!filtered.length && graph.objects.length > 0 && (
+              {!filtered.length && objectTotal > 0 && (query || category) && (
                 <p>
                   No objects match.{" "}
                   <button
@@ -487,12 +543,14 @@ function ProjectModel() {
                     than every object at once.
                   </p>
                   {graph.schema.categories.map((c) => {
-                    const count = graph.objects.filter(
-                      (o) =>
-                        graph.schema.types.find(
-                          (t) => t.name === o.classification.value,
-                        )?.category === c.name,
-                    ).length;
+                    const count =
+                      graph.category_counts?.[c.name] ??
+                      graph.objects.filter(
+                        (o) =>
+                          graph.schema.types.find(
+                            (t) => t.name === o.classification.value,
+                          )?.category === c.name,
+                      ).length;
                     return count ? (
                       <button
                         key={c.name}
@@ -510,9 +568,11 @@ function ProjectModel() {
                 className={`am-desktop-map ${params.get("map") === "show" ? "am-show-map" : ""}`}
               >
                 <ApplicationModelGraph
-                  objects={graphFocus ? graph.objects : filtered}
+                  objects={
+                    graph.map_objects ?? (graphFocus ? graph.objects : filtered)
+                  }
                   layoutObjects={graph.objects}
-                  relationships={graph.relationships}
+                  relationships={graph.map_relationships ?? graph.relationships}
                   selected={graphFocus}
                   depth={depth}
                   onSelect={(id) => select("object", id)}
@@ -531,12 +591,16 @@ function ProjectModel() {
               <details className="am-relationship-list" open={!!objectId}>
                 <summary>
                   {objectId ? "Connected relationships" : "All relationships"} ·{" "}
-                  {related.length.toLocaleString()}
+                  {relatedTotal.toLocaleString()}
                 </summary>
                 {related
                   .slice(
-                    currentRelationshipPage * 25,
-                    currentRelationshipPage * 25 + 25,
+                    graph.listed_relationships
+                      ? 0
+                      : currentRelationshipPage * 25,
+                    graph.listed_relationships
+                      ? 25
+                      : currentRelationshipPage * 25 + 25,
                   )
                   .map((r) => (
                     <button
@@ -556,7 +620,7 @@ function ProjectModel() {
                     is supported by evidence or an explicit hypothesis.
                   </p>
                 )}
-                {related.length > 25 && (
+                {relatedTotal > 25 && (
                   <nav
                     className="am-pagination"
                     aria-label="Relationship pages"
@@ -572,14 +636,14 @@ function ProjectModel() {
                     <span>
                       {currentRelationshipPage * 25 + 1}–
                       {Math.min(
-                        related.length,
+                        relatedTotal,
                         currentRelationshipPage * 25 + 25,
                       )}{" "}
-                      of {related.length.toLocaleString()}
+                      of {relatedTotal.toLocaleString()}
                     </span>
                     <button
                       disabled={
-                        (currentRelationshipPage + 1) * 25 >= related.length
+                        (currentRelationshipPage + 1) * 25 >= relatedTotal
                       }
                       onClick={() =>
                         setRelationshipPage(currentRelationshipPage + 1)
@@ -611,6 +675,7 @@ function ProjectModel() {
                     <RelationshipEditor
                       key={editing ? edgeId : "new"}
                       graph={graph}
+                      searchObjects={searchObjects}
                       item={editing ? edge : undefined}
                       evidence={evidence}
                       save={save}
