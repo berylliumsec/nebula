@@ -1,25 +1,38 @@
 {
-  "reviewed_by": "Codex, shared browser/Core keyring freeze",
-  "reason": "Live main-thread stack shows SecretService unlock prompt inside VPN delete, then VPN create after restart. Prevent interactive Linux vault mutations, offload credential API mutations and preserve failed VPN deletions for retry.",
-  "exclusions": "Incremental backend fix against 305d8bb. No UI layout, native browser input protocol or security policy changes. Seventeen focused credential/VPN tests; synthetic vault and real Core API responsiveness. Prior Model browser evidence retained in docs/quality/model-fullscreen.md. Live manual-browser verification follows rollout; physical devices unavailable.",
-  "baseline": "305d8bb",
+  "reviewed_by": "Codex, shared browser manual input acceptance",
+  "reason": "Dedicated production LAN regression exercises manual click/touch and typing through the real shared-Chromium stream, then reconnect and click again.",
+  "exclusions": "Test-only increment against 3b773eb; existing production bundle used. No provider calls or external target traffic; local fixture scope only. General Playwright catalog omitted in favor of the dedicated configuration below. Physical devices unavailable.",
+  "baseline": "3b773eb",
   "expected_tests": {
-    "python": 17,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python_versions": [
-    "3.11"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_automation_runtime.py::test_api_saves_vpn_secret_outside_public_profile_and_selects_it"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],
-  "change_digest": "96e7150439a4428bf80a92814a3c0a25d08f044cd83ec011a5f5aa5014be6b12"
+  "previous_verification": {
+    "commit": "3b773eb",
+    "python": 17
+  },
+  "local_playwright": {
+    "config": "ui/playwright.application-model.config.ts",
+    "files": [
+      "shared-browser-input.spec.ts"
+    ],
+    "expected_tests": 8,
+    "projects": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-webkit-320",
+      "model-chromium-390",
+      "model-webkit-390",
+      "model-chromium-430",
+      "model-webkit-430"
+    ]
+  },
+  "change_digest": "f837a14a936c3e8e14979782576c0e9cc9f9c125512961c77a7881097d1f1366"
 }

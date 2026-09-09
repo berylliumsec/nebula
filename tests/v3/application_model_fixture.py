@@ -31,6 +31,8 @@ class FixtureWorkspacePaths:
 
 
 if __name__ == "__main__":
+    if os.environ.get("NEBULA_TEST_BROWSER_RUNTIME"):
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["NEBULA_TEST_BROWSER_RUNTIME"]
     with tempfile.TemporaryDirectory(prefix="nebula-model-acceptance-") as directory:
         root = Path(directory)
         store = NebulaStore(root / "core.db")
@@ -89,6 +91,18 @@ if __name__ == "__main__":
                 "<html><head><title>Site A</title></head><body><h1>Site A</h1><p>Access denied. Data query unavailable.</p></body></html>",
                 status_code=403,
             )
+
+        app.router.routes.insert(0, app.router.routes.pop())
+        @app.get("/fixture-site/manual-input")
+        def manual_input_fixture():
+            return HTMLResponse('''<!doctype html><html><head><title>Manual input fixture</title></head>
+<body style="margin:0;background:white;color:black;font:20px sans-serif">
+<button style="position:absolute;left:40px;top:50px;width:240px;height:70px"
+onclick="this.textContent='Clicked '+(++window.clicks)">Click fixture</button>
+<input aria-label="Fixture text" style="position:absolute;left:40px;top:160px;width:240px;height:50px"
+oninput="document.querySelector('output').textContent=this.value">
+<output style="position:absolute;left:40px;top:240px"></output>
+<script>window.clicks=0</script></body></html>''')
 
         app.router.routes.insert(0, app.router.routes.pop())
         uvicorn.run(

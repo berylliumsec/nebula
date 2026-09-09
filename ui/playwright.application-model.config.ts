@@ -2,7 +2,7 @@ import { defineConfig, devices } from "@playwright/test";
 const host = process.env.NEBULA_MODEL_TEST_HOST ?? "127.0.0.1";
 const port = process.env.NEBULA_MODEL_TEST_PORT ?? "19420";
 export default defineConfig({
-  testDir: "./tests", testMatch: ["application-model.spec.ts", "application-model-responsive.spec.ts"], workers: 1, timeout: 60000,
+  testDir: "./tests", testMatch: ["application-model.spec.ts", "application-model-responsive.spec.ts", "shared-browser-input.spec.ts"], workers: 1, timeout: 60000,
   use: { baseURL: `http://${host}:${port}`, reducedMotion: "reduce", trace: "retain-on-failure" },
   projects: [
     { name: "model-desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },

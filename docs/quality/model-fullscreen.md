@@ -32,4 +32,7 @@ available screen without losing the operator's context or drafts.
   model selection/filter reload and mobile landscape.
 - Screenshots/traces: `/tmp/nebula-model-fullscreen-verified`.
 - Physical devices/software keyboards: unavailable, not verified.
-- No live deployment or live provider calls are part of this change.
+- Live rollout authorized subsequently: pushed `305d8bb` and published its production
+  bundle on the local LAN server, retaining old hashed assets. Served index SHA-256:
+  `662c1a27496f6b81917ad8ac7b0a2b44d90e15d67b8360ca7a4fffeb16828df1`.
+  Core subsequently recovered on `3b773eb` with this same bundle. No live provider calls.
