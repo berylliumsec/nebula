@@ -9,6 +9,8 @@ test("archived project deletion confirms, persists and preserves its linked fold
   const created = await request.post(`${api}/engagements`, { headers, data: { name, status: "archived", workspace_path: linked.workspace_path } });
   expect(created.ok(), await created.text()).toBe(true);
   const project = await created.json();
+  const unusedSession = await request.post(`${api.replace("/api/v1", "")}/fixture-site/unused-harness-session/${project.id}`);
+  expect(unusedSession.ok(), await unusedSession.text()).toBe(true);
   const child = await request.post(`${api}/assets`, { headers, data: { engagement_id: project.id, name: "Fixture asset" } });
   expect(child.ok(), await child.text()).toBe(true);
   const pair = await (await request.post(`${api}/auth/pairings`, { headers, data: { name: "Archived deletion test" } })).json();

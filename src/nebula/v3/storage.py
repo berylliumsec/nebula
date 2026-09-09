@@ -1156,6 +1156,8 @@ class NebulaStore:
                 raise ConflictError(
                     "Archive the project before permanently deleting it."
                 )
+            # Session envelopes can remain starting before their first turn or
+            # after restart. Only turn records establish unfinished harness work.
             terminal_states = {
                 "runs": {"complete", "failed", "cancelled", "interrupted"},
                 "chat_turns": {"complete", "failed", "cancelled", "interrupted"},
@@ -1176,7 +1178,6 @@ class NebulaStore:
                     "interrupted",
                 },
                 "browser_commands": {"complete", "failed", "cancelled", "expired"},
-                "harness_sessions": {"idle", "closed", "failed", "interrupted"},
                 "automation_sessions": {"closed", "failed", "interrupted"},
             }
             for kind, allowed in terminal_states.items():

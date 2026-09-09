@@ -67,6 +67,22 @@ if __name__ == "__main__":
             static_dir=Path(__file__).resolve().parents[2] / "ui" / "dist",
         )
 
+        @app.post("/fixture-site/unused-harness-session/{project_id}")
+        def unused_harness_session(project_id: str):
+            from nebula.v3.domain import HarnessSession
+
+            store.get(Engagement, project_id)
+            return store.create(
+                HarnessSession(
+                    engagement_id=project_id,
+                    harness_profile_id="fixture-only",
+                    model="fixture-only",
+                    status="starting",
+                )
+            )
+
+        app.router.routes.insert(0, app.router.routes.pop())
+
         @app.get("/fixture-site/protected")
         def protected_fixture():
             return HTMLResponse(

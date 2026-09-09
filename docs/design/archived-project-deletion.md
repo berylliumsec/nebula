@@ -40,3 +40,23 @@ Physical devices are unavailable. No live user project will be deleted.
   `/tmp/nebula-project-deletion-build.log`. Physical devices were not available.
 - An initial contrast check sampled the opening animation; the committed test waits
   for full opacity and zero blur before accessibility analysis.
+
+## Follow-up: unused or stale harness sessions
+
+Observed September 9: an archive with only terminal harness turns was blocked by
+session envelopes left in `starting` since August 23. Sessions can be created before
+any turn exists; their status is not the execution authority. Deletion must use
+harness turn status (queued/running/waiting approval still block), not session status.
+The existing archive/revision, chat, mission, execution and queue guards remain.
+Verify unused starting sessions and stale running/waiting session envelopes delete;
+an actual queued/running/approval turn must continue to block without partial cleanup.
+Use disposable fixture sessions in the existing real-Core browser deletion journey.
+No live user archive is deleted as part of verification; retry remains user-controlled.
+
+Follow-up evidence: 14 focused backend tests passed, including three stale-session
+states and three genuine unfinished-turn states. All 8 production LAN browser
+profiles passed with an unused starting session seeded before deletion (52.2 s,
+`/tmp/nebula-stale-session-browser-final`). Production build and Ruff passed.
+An isolated SQLite copy of the affected archived project's actual records was
+successfully deleted with the corrected guard. Its live records and folder were
+not changed by that rehearsal. Physical devices remain unavailable.

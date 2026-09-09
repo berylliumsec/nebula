@@ -132,3 +132,53 @@ def test_archive_deletion_rejects_stale_or_busy_requests_without_partial_cleanup
     assert response.status_code == 409
     assert store.get(Asset, asset.id).name == "Keep until safe"
     assert (folder / "keep.txt").read_text() == "host data"
+
+
+@pytest.mark.parametrize("status", ["starting", "running", "waiting_approval"])
+def test_session_envelope_without_live_turn_does_not_block_archive_deletion(
+    tmp_path, status
+):
+    from nebula.v3.domain import HarnessSession
+
+    store, project, client, folder = setup(tmp_path)
+    session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id="fixture",
+            model="fixture",
+            status=status,
+        )
+    )
+    assert remove(client, project).status_code == 204
+    with pytest.raises(NotFoundError):
+        store.get(HarnessSession, session.id)
+    assert (folder / "keep.txt").read_text() == "host data"
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "waiting_approval"])
+def test_actual_harness_turn_still_blocks_archive_deletion(tmp_path, status):
+    from nebula.v3.domain import HarnessSession, HarnessTurn
+
+    store, project, client, folder = setup(tmp_path)
+    session = store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id="fixture",
+            model="fixture",
+            status="idle",
+        )
+    )
+    turn = store.create(
+        HarnessTurn(
+            engagement_id=project.id,
+            harness_session_id=session.id,
+            origin="analysis",
+            prompt="Fixture only; never execute",
+            status=status,
+        )
+    )
+    response = remove(client, project)
+    assert response.status_code == 409
+    assert "unfinished harness turns" in response.json()["detail"]
+    assert store.get(HarnessTurn, turn.id).status == status
+    assert (folder / "keep.txt").read_text() == "host data"

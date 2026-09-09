@@ -1,11 +1,11 @@
 {
-  "change_digest": "09be2933b97380ba8e214fe0e361b9287f3b1a90a023b75317a75c90ae8d3e40",
+  "change_digest": "2f611a48a253fc2d49042e1c258ef0169edac1d42c73fe53a6062ec7ad449b2d",
   "reviewed_by": "Codex, user-approved archived project deletion",
-  "reason": "Archived project delete workflow: atomic owned-record cleanup, preservation of linked folder and unrelated projects, stale/busy rejection, confirmation and durable list refresh.",
-  "exclusions": "No unrelated suites or native code. Dedicated real-Core production browser journey runs locally in eight permanent profiles. Physical devices unavailable.",
+  "reason": "Correct archived deletion authority: session envelopes may remain starting or stale with no active work. Harness turns, not session labels, determine unfinished execution. Preserve real queued/running/approval guards and folder safety.",
+  "exclusions": "No UI implementation changes: prior six client checks remain applicable. No unrelated suites. Existing production browser journey now includes an unused starting harness session; physical devices unavailable.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 6,
+    "python": 14,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
@@ -19,9 +19,7 @@
     "tests/v3/test_guarded_delete.py::test_engagement_delete_rejects_orphaning_owned_entities",
     "tests/v3/test_guarded_delete.py::test_empty_engagement_can_still_be_deleted"
   ],
-  "frontend": [
-    "ui/src/api/projectRemoval.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "previous_verification": {
