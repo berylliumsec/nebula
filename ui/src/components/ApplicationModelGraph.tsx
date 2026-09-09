@@ -1,3 +1,4 @@
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import type { GraphObject, Relationship } from "../pages/applicationModelTypes";
 
 export function neighborhood(
@@ -17,6 +18,33 @@ export function neighborhood(
   return objects.filter((o) => ids.has(o.id)).slice(0, 100);
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+export function connectionEndpoints(a: Box, b: Box) {
+  const ax = a.x + a.width / 2,
+    ay = a.y + a.height / 2;
+  const bx = b.x + b.width / 2,
+    by = b.y + b.height / 2;
+  const dx = bx - ax,
+    dy = by - ay;
+  if (!dx && !dy)
+    return { x1: a.x + a.width + 10, y1: ay, x2: ax, y2: a.y - 10 };
+  const length = Math.hypot(dx, dy);
+  const boundary = (box: Box) =>
+    Math.min(
+      dx ? box.width / 2 / Math.abs(dx) : Infinity,
+      dy ? box.height / 2 / Math.abs(dy) : Infinity,
+    ) +
+    10 / length;
+  const start = boundary(a),
+    end = boundary(b);
+  return {
+    x1: ax + dx * start,
+    y1: ay + dy * start,
+    x2: bx - dx * end,
+    y2: by - dy * end,
+  };
+}
+
 export function ApplicationModelGraph({
   objects,
   layoutObjects,
@@ -34,12 +62,69 @@ export function ApplicationModelGraph({
   onSelect: (id: string) => void;
   onRelationship: (id: string) => void;
 }) {
+  const canvas = useRef<HTMLDivElement>(null);
+  const scroll = useRef<HTMLDivElement>(null);
+  const [canvasWidth, setCanvasWidth] = useState(840);
+  const markerId = useId().replace(/:/g, "");
+  const [sizes, setSizes] = useState<
+    Record<string, { width: number; height: number }>
+  >({});
+  useLayoutEffect(() => {
+    const nodes =
+      canvas.current?.querySelectorAll<HTMLElement>("[data-node-id]");
+    const measure = () => {
+      if (scroll.current?.clientWidth)
+        setCanvasWidth(Math.max(260, scroll.current.clientWidth));
+      setSizes((previous) => {
+        const next = { ...previous };
+        let changed = false;
+        nodes?.forEach((node) => {
+          const id = node.dataset.nodeId!;
+          const { width, height } = node.getBoundingClientRect();
+          if (
+            width &&
+            height &&
+            (next[id]?.width !== width || next[id]?.height !== height)
+          ) {
+            next[id] = { width, height };
+            changed = true;
+          }
+        });
+        return changed ? next : previous;
+      });
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    nodes?.forEach((node) => observer.observe(node));
+    if (scroll.current) observer.observe(scroll.current);
+    return () => observer.disconnect();
+  }, [objects, selected, depth]);
   const visible = neighborhood(objects, relationships, selected, depth);
-  // Durable insertion order owns positions. Selection/expansion never reorders nodes.
+  // Selected neighborhoods use local insertion order and fit the available width.
+  const ordered = selected ? visible : (layoutObjects ?? objects);
+  const columns = Math.max(1, Math.min(3, Math.floor(canvasWidth / 280)));
+  const rowY: number[] = [40];
+  for (let i = 0; i < ordered.length; i += columns) {
+    rowY.push(
+      rowY[rowY.length - 1] +
+        Math.max(
+          64,
+          ...ordered
+            .slice(i, i + columns)
+            .map((o) => sizes[o.id]?.height ?? 64),
+        ) +
+        86,
+    );
+  }
   const positions = new Map(
-    (layoutObjects ?? objects).map((o, i) => [
+    ordered.map((o, i) => [
       o.id,
-      { x: (i % 3) * 280 + 20, y: Math.floor(i / 3) * 150 + 40 },
+      {
+        x: (i % columns) * 280 + 20,
+        y: rowY[Math.floor(i / columns)],
+        width: sizes[o.id]?.width ?? 220,
+        height: sizes[o.id]?.height ?? 64,
+      },
     ]),
   );
   const ids = new Set(visible.map((o) => o.id));
@@ -48,27 +133,38 @@ export function ApplicationModelGraph({
     .slice(0, 100);
   const height = Math.max(
     400,
-    ...visible.map((o) => (positions.get(o.id)?.y ?? 0) + 130),
+    ...visible.map(
+      (o) => (positions.get(o.id)?.y ?? 0) + (sizes[o.id]?.height ?? 64) + 70,
+    ),
   );
   return (
     <div
+      ref={scroll}
       className="am-graph-scroll"
       tabIndex={0}
       aria-label="Relationship map; scroll to explore"
     >
-      <div className="am-graph-canvas" style={{ height, width: 840 }}>
+      <p className="am-hint">
+        Showing {visible.length} of {objects.length.toLocaleString()} objects ·{" "}
+        {edges.length} connections
+      </p>
+      <div
+        ref={canvas}
+        className="am-graph-canvas"
+        style={{ height, width: canvasWidth }}
+      >
         <svg
-          width={840}
+          width={canvasWidth}
           height={height}
           aria-hidden="true"
           className="am-edges"
         >
           <defs>
             <marker
-              id="am-arrow"
+              id={markerId}
               markerWidth="8"
               markerHeight="8"
-              refX="7"
+              refX="8"
               refY="4"
               orient="auto"
             >
@@ -78,15 +174,24 @@ export function ApplicationModelGraph({
           {edges.map((e) => {
             const a = positions.get(e.source)!,
               b = positions.get(e.target)!;
+            if (e.source === e.target)
+              return (
+                <path
+                  key={e.id}
+                  d={`M ${a.x + a.width + 10} ${a.y + a.height / 2} C ${a.x + a.width + 60} ${a.y + a.height / 2}, ${a.x + a.width + 60} ${a.y - 25}, ${a.x + a.width / 2} ${a.y - 10}`}
+                  fill="none"
+                  className={`am-edge ${e.claim.status}`}
+                  markerEnd={`url(#${markerId})`}
+                />
+              );
             return (
               <line
                 key={e.id}
-                x1={a.x + 110}
-                y1={a.y + 50}
-                x2={b.x + 110}
-                y2={b.y + 10}
+                {...connectionEndpoints(a, b)}
+                data-source={e.source}
+                data-target={e.target}
                 className={`am-edge ${e.claim.status}`}
-                markerEnd="url(#am-arrow)"
+                markerEnd={`url(#${markerId})`}
               />
             );
           })}
@@ -112,6 +217,7 @@ export function ApplicationModelGraph({
         {visible.map((o) => (
           <button
             key={o.id}
+            data-node-id={o.id}
             className={`am-node ${o.id === selected ? "selected" : ""}`}
             style={{
               left: positions.get(o.id)!.x,

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { ApplicationModelGraph, neighborhood } from "./ApplicationModelGraph";
+import {
+  ApplicationModelGraph,
+  neighborhood,
+  connectionEndpoints,
+} from "./ApplicationModelGraph";
 import { blankClaim, type GraphObject } from "../pages/applicationModelTypes";
 const objects: GraphObject[] = ["Page", "Form", "Input"].map((type, i) => ({
   id: String(i),
@@ -79,3 +83,26 @@ describe("project graph", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+it.each([
+  [280, 0, 64],
+  [-280, 0, 64],
+  [0, 250, 64],
+  [0, -250, 64],
+  [280, 250, 180],
+])(
+  "keeps arrow endpoints outside cards at %s,%s with height %s",
+  (x, y, height) => {
+    const a = { x: 0, y: 0, width: 220, height: 64 },
+      b = { x, y, width: 220, height };
+    const edge = connectionEndpoints(a, b);
+    const inside = (px: number, py: number, box: typeof a) =>
+      px >= box.x &&
+      px <= box.x + box.width &&
+      py >= box.y &&
+      py <= box.y + box.height;
+    expect(inside(edge.x1, edge.y1, a)).toBe(false);
+    expect(inside(edge.x2, edge.y2, b)).toBe(false);
+    expect(Object.values(edge).every(Number.isFinite)).toBe(true);
+  },
+);

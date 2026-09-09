@@ -1,11 +1,11 @@
 {
-  "change_digest": "8d9c4adbb7cccecbf3768a9109a10f12190e0796179be39ba716cab0c42880c6",
+  "change_digest": "abcfd48864524b14fbe39def43cbf0afea9229bfb4c3f64f2d212d32a688ccbf",
   "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Automatic agent model maintenance: shared trusted provider/harness workflow, exact durable observation references on successful assistant browser results, evidence-backed transactional persistence and idempotency.",
-  "exclusions": "No UI source changes or unrelated suites. Seven focused backend tests cover integration contracts, not live provider reasoning or full real-Core browser/device acceptance; those remain unverified.",
+  "reason": "Expanded operator-requested model navigation cleanup: collapsible paginated categories, compact rows, bounded grouped link selectors, category overview and selected-neighborhood map, paginated relationships, and measured arrow endpoints. Sixteen selected component checks include a 2,000-object outline and existing page workflows. Rerun dense real-Core production browser journey for final UI. Map columns adapt to the measured available width rather than a fixed 840px canvas.",
+  "exclusions": "No backend changes or unrelated suites. Dedicated application-model Playwright config runs locally; no main CI Playwright selector registered for it. Physical devices unavailable.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 16,
     "native": 0,
     "playwright": 0
   },
@@ -14,12 +14,12 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_browser_companion.py::test_agent_browser_result_carries_durable_model_evidence",
-    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
-    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ApplicationModelGraph.test.tsx",
+    "ui/src/components/ApplicationModelOutline.test.tsx",
+    "ui/src/pages/ApplicationModelPage.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [],
   "previous_verification": {
@@ -27,5 +27,28 @@
     "python": 35,
     "frontend": 17,
     "dedicated_playwright": 16
+  },
+  "local_playwright": {
+    "config": "ui/playwright.application-model.config.ts",
+    "files": [
+      "application-model-responsive.spec.ts"
+    ],
+    "projects": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-webkit-320",
+      "model-chromium-390",
+      "model-webkit-390",
+      "model-chromium-430",
+      "model-webkit-430"
+    ],
+    "expected_tests": 8,
+    "boundary": "Disposable real Core, production UI, LAN origin, emulated mobile; no live provider execution",
+    "result": {
+      "chromium": "5/5 passed on final build",
+      "webkit": "incomplete: repeated browser/context/page startup timeouts",
+      "physical": "not available"
+    }
   }
 }

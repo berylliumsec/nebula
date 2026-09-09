@@ -60,9 +60,50 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   await expect(
     page.getByRole("button", { name: /Nebula Core (ready|degraded)/ }),
   ).toBeVisible({ timeout: 20_000 });
+  await page.goto(`/projects/${project.id}/application-model`);
+  await expect(page.getByRole("heading", { name: "Explore the model" })).toBeVisible();
+  await expect(page.locator(".am-outline .am-object")).toHaveCount(0);
+  await page.locator(".am-category summary").click();
+  await expect(page.locator(".am-outline .am-object")).toHaveCount(20);
+  await page.getByRole("button", { name: "Next Structure objects" }).click();
+  await expect(page.locator(".am-outline .am-object")).toHaveCount(10);
   await page.goto(
     `/projects/${project.id}/application-model?object=page-1&depth=2`,
   );
+  const toggle = page.getByRole("button", { name: "Show map", exact: true });
+  await expect(page.locator(".am-map")).toBeVisible();
+  if (page.viewportSize()!.width <= 700) {
+    await expect(toggle).toBeVisible();
+    await toggle.click();
+  }
+  const edges = page.locator(".am-edges line");
+  await expect(page.locator(".am-edges")).toBeVisible();
+  await expect(edges.first()).toBeAttached();
+  await expect(edges.first()).toHaveCSS("stroke-width", "1.5px");
+  await expect
+    .poll(async () =>
+      page.locator(".am-graph-canvas").evaluate((canvas) => {
+        const root = canvas.getBoundingClientRect();
+        return [...canvas.querySelectorAll("line[data-target]")].every(
+          (line) => {
+            const node = canvas.querySelector(
+              `[data-node-id="${line.getAttribute("data-target")}"]`,
+            )!;
+            const box = node.getBoundingClientRect();
+            const x = root.left + Number(line.getAttribute("x2")),
+              y = root.top + Number(line.getAttribute("y2"));
+            return (
+              x < box.left || x > box.right || y < box.top || y > box.bottom
+            );
+          },
+        );
+      }),
+    )
+    .toBe(true);
+  await page.screenshot({
+    path: info.outputPath("visible-arrows.png"),
+    fullPage: true,
+  });
   const outline = page.getByRole("complementary", { name: "Object outline" });
   const search = page.getByRole("textbox", { name: "Search objects" });
   await search.fill("Page 1");

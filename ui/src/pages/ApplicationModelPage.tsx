@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { PageHeader } from "../components/PageHeader";
+import { ApplicationModelCategory } from "../components/ApplicationModelOutline";
 import { ApplicationModelGraph } from "../components/ApplicationModelGraph";
 import {
   ObjectEditor,
@@ -65,6 +66,7 @@ function ProjectModel() {
     [pending, setPending] = useState<Transaction>();
   const draftRevision = useRef<number | undefined>(undefined);
   const [question, setQuestion] = useState("");
+  const [relationshipPage, setRelationshipPage] = useState(0);
   const [legacy] = useState(() =>
     ["collection", "state", "query", "modelTab"].some((k) => params.has(k)),
   );
@@ -79,6 +81,7 @@ function ProjectModel() {
   const depth = Math.min(3, Math.max(1, Number(params.get("depth")) || 1));
   const object = graph?.objects.find((o) => o.id === objectId),
     edge = graph?.relationships.find((r) => r.id === edgeId);
+  const graphFocus = objectId || edge?.source || "";
   const select = (key: string, value: string) =>
     setParams((current) => {
       const next = new URLSearchParams(current);
@@ -222,6 +225,18 @@ function ProjectModel() {
           graph.schema.types.find((t) => t.name === o.classification.value)
             ?.category === category),
     ) ?? [];
+  const visibleIds = new Set(filtered.map((o) => o.id));
+  const related =
+    graph?.relationships.filter(
+      (r) =>
+        (!objectId || r.source === objectId || r.target === objectId) &&
+        (visibleIds.has(r.source) || visibleIds.has(r.target)),
+    ) ?? [];
+  const currentRelationshipPage = Math.min(
+    relationshipPage,
+    Math.max(0, Math.ceil(related.length / 25) - 1),
+  );
+  useEffect(() => setRelationshipPage(0), [objectId, query, category]);
   const showClaim = (claim: Claim, title: string) => (
     <article className={`am-claim ${claim.status}`} key={title}>
       <h3>{title}</h3>
@@ -386,7 +401,9 @@ function ProjectModel() {
               </Link>
             </section>
           )}
-          <div className="am-workspace">
+          <div
+            className={`am-workspace ${!objectId && !edgeId && !editor ? "am-overview-workspace" : ""}`}
+          >
             <aside className="panel am-outline" aria-label="Object outline">
               <h2>
                 Objects <small>{graph.objects.length}</small>
@@ -418,22 +435,14 @@ function ProjectModel() {
                     )?.category === c.name,
                 );
                 return items.length ? (
-                  <section key={c.name}>
-                    <h3>{c.name}</h3>
-                    {items.map((o) => (
-                      <button
-                        className={`button secondary am-object ${o.id === objectId ? "selected" : ""}`}
-                        key={o.id}
-                        onClick={() => select("object", o.id)}
-                      >
-                        {o.label}
-                        <small>
-                          {String(o.classification.value)} ·{" "}
-                          {o.classification.status}
-                        </small>
-                      </button>
-                    ))}
-                  </section>
+                  <ApplicationModelCategory
+                    key={c.name}
+                    name={c.name}
+                    objects={items}
+                    selected={objectId}
+                    query={query || category}
+                    onSelect={(id) => select("object", id)}
+                  />
                 ) : null;
               })}
               {!filtered.length && graph.objects.length > 0 && (
@@ -456,7 +465,7 @@ function ProjectModel() {
               <p className="am-legend">
                 ━━ Observed · ┄┄ Hypothesized · ··· Disputed
               </p>
-              <label>
+              <label hidden={!graphFocus}>
                 Neighborhood depth
                 <select
                   value={depth}
@@ -469,20 +478,49 @@ function ProjectModel() {
                   ))}
                 </select>
               </label>
+              {!graphFocus && (
+                <div className="am-category-overview">
+                  <h3>Explore the model</h3>
+                  <p>
+                    Choose a category, then an object to explore its
+                    connections. The map shows a bounded neighborhood rather
+                    than every object at once.
+                  </p>
+                  {graph.schema.categories.map((c) => {
+                    const count = graph.objects.filter(
+                      (o) =>
+                        graph.schema.types.find(
+                          (t) => t.name === o.classification.value,
+                        )?.category === c.name,
+                    ).length;
+                    return count ? (
+                      <button
+                        key={c.name}
+                        onClick={() => select("category", c.name)}
+                      >
+                        {c.name}
+                        <strong>{count.toLocaleString()}</strong>
+                      </button>
+                    ) : null;
+                  })}
+                </div>
+              )}
               <div
+                hidden={!graphFocus}
                 className={`am-desktop-map ${params.get("map") === "show" ? "am-show-map" : ""}`}
               >
                 <ApplicationModelGraph
-                  objects={filtered}
+                  objects={graphFocus ? graph.objects : filtered}
                   layoutObjects={graph.objects}
                   relationships={graph.relationships}
-                  selected={objectId}
+                  selected={graphFocus}
                   depth={depth}
                   onSelect={(id) => select("object", id)}
                   onRelationship={(id) => select("relationship", id)}
                 />
               </div>
               <button
+                hidden={!graphFocus}
                 className="button am-map-toggle"
                 onClick={() =>
                   select("map", params.get("map") === "show" ? "" : "show")
@@ -490,16 +528,15 @@ function ProjectModel() {
               >
                 {params.get("map") === "show" ? "Hide map" : "Show map"}
               </button>
-              <div className="am-relationship-list">
-                {graph.relationships
-                  .filter(
-                    (r) =>
-                      (!objectId ||
-                        r.source === objectId ||
-                        r.target === objectId) &&
-                      filtered.some(
-                        (o) => o.id === r.source || o.id === r.target,
-                      ),
+              <details className="am-relationship-list" open={!!objectId}>
+                <summary>
+                  {objectId ? "Connected relationships" : "All relationships"} ·{" "}
+                  {related.length.toLocaleString()}
+                </summary>
+                {related
+                  .slice(
+                    currentRelationshipPage * 25,
+                    currentRelationshipPage * 25 + 25,
                   )
                   .map((r) => (
                     <button
@@ -519,7 +556,40 @@ function ProjectModel() {
                     is supported by evidence or an explicit hypothesis.
                   </p>
                 )}
-              </div>
+                {related.length > 25 && (
+                  <nav
+                    className="am-pagination"
+                    aria-label="Relationship pages"
+                  >
+                    <button
+                      disabled={!currentRelationshipPage}
+                      onClick={() =>
+                        setRelationshipPage(currentRelationshipPage - 1)
+                      }
+                    >
+                      Previous relationships
+                    </button>
+                    <span>
+                      {currentRelationshipPage * 25 + 1}–
+                      {Math.min(
+                        related.length,
+                        currentRelationshipPage * 25 + 25,
+                      )}{" "}
+                      of {related.length.toLocaleString()}
+                    </span>
+                    <button
+                      disabled={
+                        (currentRelationshipPage + 1) * 25 >= related.length
+                      }
+                      onClick={() =>
+                        setRelationshipPage(currentRelationshipPage + 1)
+                      }
+                    >
+                      Next relationships
+                    </button>
+                  </nav>
+                )}
+              </details>
             </section>
             <aside className="panel am-inspector" aria-label="Model inspector">
               {editor ? (

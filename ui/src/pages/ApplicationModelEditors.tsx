@@ -97,8 +97,7 @@ export function ClaimFields({
                               id: item.id,
                               revision: item.revision,
                               role: e.target.value as
-                                | "supporting"
-                                | "conflicting",
+                                "supporting" | "conflicting",
                             },
                           ]
                         : []),
@@ -193,6 +192,9 @@ export function ObjectEditor({
       <label>
         Search types
         <input value={query} onChange={(e) => setQuery(e.target.value)} />
+        <small className="am-hint">
+          Up to 20 matches per category. Search to find a specific object.
+        </small>
       </label>
       <label>
         Object type
@@ -409,7 +411,7 @@ export function RelationshipEditor({
     >
       <h2>{item ? "Edit relationship" : "Link objects"}</h2>
       <label>
-        Search endpoints
+        Search objects to link
         <input value={query} onChange={(e) => setQuery(e.target.value)} />
       </label>
       {(
@@ -422,17 +424,32 @@ export function RelationshipEditor({
           {name}
           <select required value={value} onChange={(e) => set(e.target.value)}>
             <option value="">Choose an object</option>
-            {graph.objects
-              .filter(
+            {graph.schema.categories.map((category) => {
+              const matches = graph.objects.filter(
                 (o) =>
-                  o.id === value ||
-                  o.label.toLowerCase().includes(query.toLowerCase()),
-              )
-              .map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label} · {String(o.classification.value)}
-                </option>
-              ))}
+                  graph.schema.types.find(
+                    (t) => t.name === o.classification.value,
+                  )?.category === category.name &&
+                  (o.id === value ||
+                    o.label.toLowerCase().includes(query.toLowerCase())),
+              );
+              const choices = [
+                ...matches.filter((o) => o.id === value),
+                ...matches.filter((o) => o.id !== value).slice(0, 20),
+              ];
+              return choices.length ? (
+                <optgroup
+                  key={category.name}
+                  label={`${category.name} (${matches.length})`}
+                >
+                  {choices.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label} · {String(o.classification.value)}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null;
+            })}
           </select>
         </label>
       ))}

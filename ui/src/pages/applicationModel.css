@@ -289,3 +289,131 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Keep large models navigable without rendering thousands of object cards. */
+.application-model-page .panel {
+  background: var(--canvas);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.am-workspace {
+  grid-template-columns: 250px minmax(0, 1fr) 300px;
+  gap: 16px;
+}
+.am-overview-workspace {
+  grid-template-columns: 250px minmax(0, 1fr);
+}
+.am-overview-workspace > .am-inspector {
+  display: none;
+}
+.am-category {
+  border-top: 1px solid var(--border-soft);
+}
+.am-category summary {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 0;
+}
+.am-category summary span {
+  float: right;
+  color: var(--muted);
+  font-weight: 400;
+}
+.am-outline .am-object {
+  display: block;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  padding: 7px 10px;
+  margin: 2px 0;
+  min-height: 48px;
+}
+.am-outline .am-object:hover {
+  background: var(--surface-raised);
+}
+.am-outline .am-object.selected {
+  border-left-color: var(--blue);
+  background: var(--surface-raised);
+}
+.am-object strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+.am-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.am-pagination button {
+  min-width: 44px;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  color: var(--text);
+  border-radius: 6px;
+}
+.am-category-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  padding: 20px 0;
+}
+.am-category-overview h3,
+.am-category-overview p {
+  grid-column: 1/-1;
+  margin: 0;
+}
+.am-category-overview p {
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 65ch;
+  margin-bottom: 12px;
+}
+.am-category-overview button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+}
+.am-relationship-list {
+  margin-top: 16px;
+  font-size: 13px;
+}
+.am-relationship-list summary {
+  color: var(--muted);
+}
+.am-inspector .am-editor h2 {
+  font-size: 17px;
+}
+.am-inspector .am-editor {
+  gap: 8px;
+}
+@media (max-width: 1100px) {
+  .am-workspace,
+  .am-overview-workspace {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+@media (max-width: 700px) {
+  .am-category-overview {
+    width: 100%;
+  }
+  .am-outline {
+    max-height: 360px;
+  }
+}
+.am-desktop-map[hidden], .am-map-toggle[hidden], .am-map label[hidden] { display: none; }
