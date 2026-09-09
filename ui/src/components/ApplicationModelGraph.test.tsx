@@ -1,29 +1,81 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
-import { ApplicationModelGraph } from "./ApplicationModelGraph";
-
-const data = {
-  states: [{ id: "state-1", branch_key: "tab-a", parent_state_ids: [], object_version_ids: ["version-1"], observation_ids: ["observation-1"] }],
-  observations: [{ id: "observation-1", source_kind: "browser_traffic", source_id: "exchange-1", facts: { route: { kind: "concrete", type: "string", value: "https://example.test/account" }, status_code: { kind: "concrete", type: "integer", value: 200 } } }],
-  objects: [{ id: "object-1", label: "/account · id 42" }],
-  object_versions: [{ id: "version-1", object_id: "object-1", properties: { status: { kind: "concrete", type: "string", value: "active" }, token: { kind: "unknown", type: "string", reason: "redacted" } } }],
-  assertions: [{ id: "assertion-1", subject: "object-1", predicate: "session issuer exists", support: "inferred", lifecycle: "proposed" }],
-};
-
-describe("ApplicationModelGraph", () => {
-  it("renders the observed-to-inferred topology and exposes keyboard buttons", () => {
-    const onSelectObject = vi.fn();
-    render(<ApplicationModelGraph data={data} selectedStateId="state-1" onSelectState={vi.fn()} onSelectObject={onSelectObject} />);
-    expect(screen.getByLabelText("Application model graph")).toBeVisible();
-    expect(screen.getByText("/account · 200")).toBeVisible();
-    expect(screen.getByText("session issuer exists")).toBeVisible();
-    const object = screen.getByRole("button", { name: /account · id 42/i });
-    fireEvent.click(object);
-    expect(onSelectObject).toHaveBeenCalledWith("object-1");
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { ApplicationModelGraph, neighborhood } from "./ApplicationModelGraph";
+import { blankClaim, type GraphObject } from "../pages/applicationModelTypes";
+const objects: GraphObject[] = ["Page", "Form", "Input"].map((type, i) => ({
+  id: String(i),
+  label: type,
+  classification: blankClaim(type),
+  authentication_context: "anonymous",
+  properties: {},
+  revision: 1,
+}));
+const relationships = [
+  {
+    id: "edge",
+    type: "contains",
+    source: "0",
+    target: "1",
+    claim: blankClaim(true),
+  },
+  {
+    id: "input",
+    type: "accepts_input",
+    source: "1",
+    target: "2",
+    claim: blankClaim(true),
+  },
+];
+describe("project graph", () => {
+  it("keeps object positions when the outline is filtered", () => {
+    const props = {
+      relationships,
+      selected: "",
+      depth: 1,
+      onSelect: vi.fn(),
+      onRelationship: vi.fn(),
+      layoutObjects: objects,
+    };
+    const { rerender } = render(
+      <ApplicationModelGraph {...props} objects={objects} />,
+    );
+    const position = screen
+      .getByRole("button", { name: /Form\s*Form/ })
+      .getAttribute("style");
+    rerender(<ApplicationModelGraph {...props} objects={[objects[1]]} />);
+    expect(
+      screen.getByRole("button", { name: /Form\s*Form/ }).getAttribute("style"),
+    ).toBe(position);
   });
 
-  it("explains the empty state without inventing nodes", () => {
-    render(<ApplicationModelGraph data={{ states: [], observations: [], objects: [], object_versions: [], assertions: [] }} onSelectState={vi.fn()} onSelectObject={vi.fn()} />);
-    expect(screen.getByText("No model map yet")).toBeVisible();
+  it("expands one neighborhood at a time and preserves node order", () => {
+    expect(
+      neighborhood(objects, relationships, "0", 1).map((o) => o.id),
+    ).toEqual(["0", "1"]);
+    expect(
+      neighborhood(objects, relationships, "0", 2).map((o) => o.id),
+    ).toEqual(["0", "1", "2"]);
+  });
+  it("labels directional relationships and exposes inspection by keyboard-accessible buttons", () => {
+    const select = vi.fn();
+    render(
+      <ApplicationModelGraph
+        objects={objects}
+        relationships={relationships}
+        selected="0"
+        depth={1}
+        onSelect={vi.fn()}
+        onRelationship={select}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Inspect contains relationship" }),
+    );
+    expect(select).toHaveBeenCalledWith("edge");
+    expect(
+      screen.queryByRole("button", {
+        name: "Inspect accepts_input relationship",
+      }),
+    ).not.toBeInTheDocument();
   });
 });

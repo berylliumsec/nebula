@@ -34,23 +34,12 @@ from .domain import (
     utc_now,
 )
 
-from .application_model.domain import MODEL_TYPES
-from .application_model.ingestion import enqueue_source
-
 EntityT = TypeVar("EntityT", bound=Entity)
-
-# Application-model records reuse the authoritative entity repository, but are
-# exposed only through their project-scoped service rather than generic CRUD.
-ENTITY_MODEL_BY_KIND.update({model.entity_kind: model for model in MODEL_TYPES})
 
 
 def _check_model_update(model):
-    if model.entity_kind.startswith("application_model_") and model.entity_kind not in {
-        "application_model_sessions", "application_model_queries"
-    }:
-        raise ValueError(
-            "Application knowledge records are immutable; create a successor record"
-        )
+    if model.entity_kind.startswith("application_model_"):
+        raise ValueError("Experimental application-model records are retired")
 
 
 class StorageError(RuntimeError):
@@ -153,7 +142,6 @@ class StoreTransaction:
         from .search import upsert_search_document
 
         upsert_search_document(self.session, row)
-        enqueue_source(self.session, entity)
         self.session.flush()
         return entity
 
@@ -216,7 +204,6 @@ class StoreTransaction:
             from .search import upsert_search_document
 
             upsert_search_document(self.session, refreshed)
-        enqueue_source(self.session, updated)
         return updated
 
     def delete(
@@ -392,7 +379,6 @@ class NebulaStore:
                     updated_at=entity.updated_at,
                 )
             )
-            enqueue_source(connection, entity)
             event = self._next_event(
                 connection,
                 run_id=run_id,
@@ -465,7 +451,6 @@ class NebulaStore:
                     updated_at=entity.updated_at,
                 )
             )
-            enqueue_source(connection, entity)
             event = self._next_operation_event(
                 connection,
                 operation_id=operation_id,
@@ -830,7 +815,6 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("entity transition lost an optimistic lock race")
-            enqueue_source(connection, updated_entity)
             event = self._next_event(
                 connection,
                 run_id=run_id,
@@ -933,7 +917,6 @@ class NebulaStore:
             if result.rowcount != 1:
                 raise ConflictError("entity transition lost an optimistic lock race")
 
-            enqueue_source(connection, updated_entity)
             event = self._next_operation_event(
                 connection,
                 operation_id=operation_id,

@@ -1,11 +1,8 @@
 """Transaction-local, allowlisted observation envelopes from existing records."""
 
 from urllib.parse import urlsplit, urlunsplit
-from sqlalchemy import insert, select
-from sqlalchemy.exc import IntegrityError
-from ..database import ApplicationModelOutboxRow, EntityRow
-from ..domain import utc_now
-from .domain import ModelSession, semantic_hash
+from sqlalchemy import select
+from ..database import EntityRow
 
 SOURCE_KINDS = frozenset(
     {
@@ -163,64 +160,3 @@ def envelope(kind, payload, connection=None):
         "source_id": payload["id"],
         "source_revision": payload["revision"],
     }
-
-
-def enqueue_source(connection, entity):
-    if entity.entity_kind not in SOURCE_KINDS:
-        return
-    payload = entity.model_dump(mode="json")
-    data = envelope(entity.entity_kind, payload, connection)
-    if data is None:
-        return
-    sessions = connection.execute(
-        select(EntityRow.payload).where(
-            EntityRow.kind == ModelSession.entity_kind,
-            EntityRow.engagement_id == payload.get("engagement_id"),
-            EntityRow.payload["browser_session_id"].as_string()
-            == data["browser_session_id"],
-            EntityRow.payload["status"].as_string() == "active",
-        )
-    ).scalars()
-    for session in sessions:
-        enqueue_envelope(connection, session, data)
-
-
-def enqueue_envelope(connection, session, data):
-    key = semantic_hash(
-        [
-            session["id"],
-            data["source_kind"],
-            data["source_id"],
-            data["source_revision"],
-            "1",
-        ]
-    )
-    if connection.execute(
-        select(ApplicationModelOutboxRow.id).where(ApplicationModelOutboxRow.id == key)
-    ).first():
-        return
-    statement = insert(ApplicationModelOutboxRow).values(
-        id=key,
-        engagement_id=session["engagement_id"],
-        model_session_id=session["id"],
-        source_kind=data["source_kind"],
-        source_id=data["source_id"],
-        source_revision=data["source_revision"],
-        adapter_version="1",
-        payload=data,
-        status="pending",
-        attempts=0,
-        created_at=utc_now(),
-    )
-    # Concurrent live/history insertion must not abort the source transaction.
-    # The unique source key is authoritative; use a savepoint for its race.
-    try:
-        with connection.begin_nested():
-            connection.execute(statement)
-    except IntegrityError:
-        if not connection.execute(
-            select(ApplicationModelOutboxRow.id).where(
-                ApplicationModelOutboxRow.id == key
-            )
-        ).first():
-            raise

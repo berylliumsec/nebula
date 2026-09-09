@@ -353,10 +353,17 @@ def companion_components(
     if session.engagement_id != project_id:
         raise InvalidToolArguments("Browser session belongs to another project.")
     scope = broker.service.security._scope(project_id)
-    return RuntimeToolComponents(
+    result = RuntimeToolComponents(
         broker=broker,
         scope=scope,
         workspace=Path(engagement.workspace_path or ".").resolve(),
         specs={broker.spec.name: broker.spec},
         runtime_digest="browser-companion-v1",
+    )
+
+    from .application_model.tools import components
+    from .browser_tools import combine_tool_components
+
+    return combine_tool_components(
+        result, components(store, session, scope, result.workspace)
     )

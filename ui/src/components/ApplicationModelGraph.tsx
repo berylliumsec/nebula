@@ -1,85 +1,132 @@
-import { CircleDot, Database, GitBranch, Lightbulb, Network } from "lucide-react";
+import type { GraphObject, Relationship } from "../pages/applicationModelTypes";
 
-type Value = { kind: string; type: string; value?: string | number | boolean; reason?: string };
-type GraphState = { id: string; branch_key: string; parent_state_ids: string[]; object_version_ids: string[]; observation_ids: string[] };
-type GraphObservation = { id: string; source_kind: string; source_id: string; facts: Record<string, Value> };
-type GraphVersion = { id: string; object_id: string; properties: Record<string, Value> };
-type GraphObject = { id: string; label: string };
-type GraphAssertion = { id: string; subject: string; predicate: string; support: string; lifecycle: string };
-
-export type ApplicationGraphData = {
-  states: GraphState[];
-  observations: GraphObservation[];
-  objects: GraphObject[];
-  object_versions: GraphVersion[];
-  assertions: GraphAssertion[];
-};
-
-function factSummary(facts: Record<string, Value>) {
-  const route = facts.route?.value;
-  const status = facts.status_code?.value ?? facts.status?.value;
-  if (route) {
-    try {
-      const parsed = new URL(String(route));
-      return `${parsed.pathname || "/"}${status === undefined ? "" : ` · ${status}`}`;
-    } catch { return String(route); }
+export function neighborhood(
+  objects: GraphObject[],
+  edges: Relationship[],
+  selected: string,
+  depth: number,
+) {
+  if (!selected) return objects.slice(0, 24);
+  const ids = new Set([selected]);
+  for (let i = 0; i < depth; i++) {
+    const next = edges
+      .filter((e) => ids.has(e.source) || ids.has(e.target))
+      .flatMap((e) => [e.source, e.target]);
+    next.slice(0, 200).forEach((id) => ids.add(id));
   }
-  return status === undefined ? `${Object.keys(facts).length} facts` : `status ${status}`;
+  return objects.filter((o) => ids.has(o.id)).slice(0, 100);
 }
 
-export function ApplicationModelGraph({ data, selectedStateId, selectedObjectId, onSelectState, onSelectObject }: {
-  data: ApplicationGraphData;
-  selectedStateId?: string;
-  selectedObjectId?: string;
-  onSelectState: (id: string) => void;
-  onSelectObject: (id: string) => void;
+export function ApplicationModelGraph({
+  objects,
+  layoutObjects,
+  relationships,
+  selected,
+  depth,
+  onSelect,
+  onRelationship,
+}: {
+  objects: GraphObject[];
+  layoutObjects?: GraphObject[];
+  relationships: Relationship[];
+  selected: string;
+  depth: number;
+  onSelect: (id: string) => void;
+  onRelationship: (id: string) => void;
 }) {
-  const selected = data.states.find(item => item.id === selectedStateId) ?? data.states.at(-1);
-  const observations = data.observations.filter(item => selected?.observation_ids.includes(item.id)).slice(-8);
-  const versions = data.object_versions.filter(item => selected?.object_version_ids.includes(item.id)).slice(-8);
-  const objectIds = new Set(versions.map(item => item.object_id));
-  const assertions = data.assertions.filter(item => objectIds.has(item.subject) && (item.support === "inferred" || item.lifecycle === "proposed")).slice(-8);
-  const branchStates = data.states.filter(item => item.branch_key === selected?.branch_key).slice(-8);
-
-  if (!selected) return <div className="model-map-empty"><Network aria-hidden="true" /><strong>No model map yet</strong><span>Import recorded history or browse through this collection to create its first knowledge state.</span></div>;
-
-  return <div className="model-map" aria-label="Application model graph">
-    <header className="model-map-heading">
-      <div><span className="model-eyebrow">Black-box representation</span><h2>Application topology</h2></div>
-      <div className="model-map-legend" aria-label="Graph legend"><span><i className="observed" />Observed</span><span><i className="unknown" />Unknown</span><span><i className="inferred" />Inferred</span></div>
-    </header>
-    <p className="model-map-description">Evidence flows from recorded interactions into stable representations and immutable knowledge states. Dashed nodes are interpretations, not observed backend facts.</p>
-    <div className="model-map-canvas">
-      <section className="model-map-lane" aria-labelledby="model-lane-sources">
-        <h3 id="model-lane-sources"><CircleDot aria-hidden="true" />Interactions <span>{observations.length}</span></h3>
-        <div className="model-map-stack">{observations.map(item => <article className="model-node observed" key={item.id}>
-          <span className="model-node-kind">{item.source_kind.replaceAll("_", " ")}</span>
-          <strong>{factSummary(item.facts)}</strong>
-          <small>{item.id.slice(0, 12)}</small>
-        </article>)}</div>
-      </section>
-      <section className="model-map-lane" aria-labelledby="model-lane-objects">
-        <h3 id="model-lane-objects"><Database aria-hidden="true" />Objects <span>{versions.length}</span></h3>
-        <div className="model-map-stack">{versions.map(version => {
-          const item = data.objects.find(object => object.id === version.object_id);
-          const unknowns = Object.values(version.properties).filter(value => value.kind !== "concrete").length;
-          return <button type="button" className={`model-node object ${selectedObjectId === version.object_id ? "selected" : ""}`} key={version.id} onClick={() => onSelectObject(version.object_id)} aria-pressed={selectedObjectId === version.object_id}>
-            <span className="model-node-kind">representation</span><strong>{item?.label ?? "Recorded object"}</strong><small>{Object.keys(version.properties).length} properties · {unknowns} unknown</small>
-          </button>;
-        })}</div>
-      </section>
-      <section className="model-map-lane" aria-labelledby="model-lane-states">
-        <h3 id="model-lane-states"><GitBranch aria-hidden="true" />States <span>{branchStates.length}</span></h3>
-        <div className="model-map-stack">{branchStates.map((item, index) => <button type="button" className={`model-node state ${item.id === selected.id ? "selected" : ""}`} key={item.id} onClick={() => onSelectState(item.id)} aria-pressed={item.id === selected.id}>
-          <span className="model-node-kind">state {data.states.indexOf(item) + 1}</span><strong>Context {item.branch_key}</strong><small>{item.object_version_ids.length} objects · {item.parent_state_ids.length ? "successor" : "root"}{index === branchStates.length - 1 ? " · latest" : ""}</small>
-        </button>)}</div>
-      </section>
-      <section className="model-map-lane hypotheses" aria-labelledby="model-lane-hypotheses">
-        <h3 id="model-lane-hypotheses"><Lightbulb aria-hidden="true" />Hypotheses <span>{assertions.length}</span></h3>
-        <div className="model-map-stack">{assertions.length ? assertions.map(item => <article className={`model-node inferred ${item.support === "unknown" ? "unknown" : ""}`} key={item.id}>
-          <span className="model-node-kind">{item.support} · {item.lifecycle}</span><strong>{item.predicate}</strong><small>{data.objects.find(object => object.id === item.subject)?.label ?? item.subject.slice(0, 12)}</small>
-        </article>) : <div className="model-node inferred empty"><strong>No assertions selected</strong><small>Agent and operator proposals appear here with their evidence status.</small></div>}</div>
-      </section>
+  const visible = neighborhood(objects, relationships, selected, depth);
+  // Durable insertion order owns positions. Selection/expansion never reorders nodes.
+  const positions = new Map(
+    (layoutObjects ?? objects).map((o, i) => [
+      o.id,
+      { x: (i % 3) * 280 + 20, y: Math.floor(i / 3) * 150 + 40 },
+    ]),
+  );
+  const ids = new Set(visible.map((o) => o.id));
+  const edges = relationships
+    .filter((e) => ids.has(e.source) && ids.has(e.target))
+    .slice(0, 100);
+  const height = Math.max(
+    400,
+    ...visible.map((o) => (positions.get(o.id)?.y ?? 0) + 130),
+  );
+  return (
+    <div
+      className="am-graph-scroll"
+      tabIndex={0}
+      aria-label="Relationship map; scroll to explore"
+    >
+      <div className="am-graph-canvas" style={{ height, width: 840 }}>
+        <svg
+          width={840}
+          height={height}
+          aria-hidden="true"
+          className="am-edges"
+        >
+          <defs>
+            <marker
+              id="am-arrow"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto"
+            >
+              <path d="M0,0 L8,4 L0,8" fill="currentColor" />
+            </marker>
+          </defs>
+          {edges.map((e) => {
+            const a = positions.get(e.source)!,
+              b = positions.get(e.target)!;
+            return (
+              <line
+                key={e.id}
+                x1={a.x + 110}
+                y1={a.y + 50}
+                x2={b.x + 110}
+                y2={b.y + 10}
+                className={`am-edge ${e.claim.status}`}
+                markerEnd="url(#am-arrow)"
+              />
+            );
+          })}
+        </svg>
+        {edges.map((e, i) => {
+          const a = positions.get(e.source)!,
+            b = positions.get(e.target)!;
+          return (
+            <button
+              key={e.id}
+              className={`am-edge-label ${e.claim.status}`}
+              style={{
+                left: (a.x + b.x) / 2 + 5,
+                top: (a.y + b.y) / 2 + 70 + (i % 2) * 20,
+              }}
+              onClick={() => onRelationship(e.id)}
+              aria-label={`Inspect ${e.type} relationship`}
+            >
+              {e.type} → <small>{e.claim.status}</small>
+            </button>
+          );
+        })}
+        {visible.map((o) => (
+          <button
+            key={o.id}
+            className={`am-node ${o.id === selected ? "selected" : ""}`}
+            style={{
+              left: positions.get(o.id)!.x,
+              top: positions.get(o.id)!.y,
+            }}
+            onClick={() => onSelect(o.id)}
+          >
+            <strong>{o.label}</strong>
+            <small>
+              {String(o.classification.value)} · {o.classification.status}
+            </small>
+          </button>
+        ))}
+      </div>
+      {!visible.length && <p>No objects match these filters.</p>}
     </div>
-  </div>;
+  );
 }

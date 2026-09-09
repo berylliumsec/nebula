@@ -913,3 +913,20 @@ def test_host_failure_explains_recovery_without_replaying(
         asyncio.run(service.request(session.id, CompanionRequest(operation="tabs")))
     assert len(calls) == 1
     assert "private" not in str(error.value)
+
+
+def test_attached_browser_has_project_graph_capabilities(tmp_path):
+    from nebula.v3.domain import ScopePolicy
+    from nebula.v3.application_model.tools import INPUTS
+
+    store, project, _, session, _ = setup(tmp_path)
+    scope = store.create(ScopePolicy(engagement_id=project.id))
+    store.update(
+        Engagement,
+        project.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=project.revision,
+    )
+    runtime = companion_components(store, project.id, session.id)
+    assert set(runtime.specs) == {"browser.companion", *INPUTS}
+    assert "application-model-v2" in runtime.runtime_digest

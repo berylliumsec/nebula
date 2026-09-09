@@ -1,453 +1,317 @@
-import asyncio
+"""Project graph durability, provenance, concurrency and migration boundaries."""
+
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+import importlib
+from pathlib import Path
+
 import pytest
-from pydantic import ValidationError
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import insert, select, inspect
+
 from nebula.v3.storage import NebulaStore
-from nebula.v3.domain import (
-    Engagement,
-    BrowserSession,
-    BrowserIdentity,
-    BrowserTrafficExchange,
-    CompanionRequest,
-    Artifact,
-)
-from nebula.v3.browser_companion import BrowserCompanion
-from nebula.v3.browser_engine import BrowserEngineRegistry
-from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.database import ApplicationModelOutboxRow
-from nebula.v3.application_model.domain import (
-    Value,
-    Formula,
-    KnowledgeState,
-    ModelSession,
-)
+from nebula.v3.domain import Engagement, Observation
+from nebula.v3.database import EntityRow
 from nebula.v3.application_model.service import ApplicationModelService
-from nebula.v3.application_model.solver import solve, isolated_solve
+from nebula.v3.application_model.graph import GraphTransaction
 
 
 @pytest.fixture
-def model(tmp_path):
+def fixture(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Recorded model"))
-    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Reader"))
-    browser = store.create(
-        BrowserSession(
-            engagement_id=project.id, identity_id=identity.id, name="Fixture"
-        )
-    )
-    service = ApplicationModelService(store)
-    collection = service.create(project.id, browser.id)
-    return service, project, browser, collection
-
-
-def exchange(service, project, browser, tab="a", **kwargs):
-    return service.store.create(
-        BrowserTrafficExchange(
+    project = store.create(Engagement(name="Site A"))
+    evidence = store.create(
+        Observation(
             engagement_id=project.id,
-            session_id=browser.id,
-            identity_id=browser.identity_id,
-            tab_id=tab,
-            method="GET",
-            url="https://example.test/records/1?token=secret",
-            scope_state="in_scope",
-            scope_policy_id="fixture",
-            scope_policy_revision=1,
-            **kwargs,
+            title="Recorded response",
+            observation_type="browser_capture",
+            source="browser_companion",
+            metadata={
+                "browser_session_id": "browser-a",
+                "status": "complete",
+                "url": "http://site-a.test/login?secret=x",
+            },
         )
     )
+    return store, project.id, evidence
 
 
-def test_projection_deduplicates_history_and_retains_branches(model):
-    service, project, browser, collection = model
-    first = exchange(service, project, browser, status_code=200)
-    exchange(service, project, browser, tab="b", status_code=204)
-    service.import_history(project.id, collection.id)
-    service.process_batch()
-    service.import_history(project.id, collection.id)
-    service.process_batch()
-    workspace = service.workspace(project.id, collection.id)
-    assert len(workspace["observations"]) == 2
-    assert len(workspace["states"]) == 2
-    assert all(not state.parent_state_ids for state in workspace["states"])
-    assert "secret" not in str(workspace)
-    before = workspace["states"][0].model_dump()
-    exchange(service, project, browser, status_code=201)
-    service.process_batch()
-    assert service.store.get(KnowledgeState, before["id"]).model_dump() == before
-    service.remove(project.id, collection.id)
-    assert service.store.get(BrowserTrafficExchange, first.id).status_code == 200
-
-
-def test_shared_chromium_interaction_projects_without_page_secrets(model):
-    service, project, browser, collection = model
-    companion = BrowserCompanion(service.store, BrowserEngineRegistry([]))
-    companion._record_interaction(
-        browser,
-        CompanionRequest(
-            operation="capture",
-            tab_id="shared-tab",
-            url="https://example.test/account?token=private",
-        ),
-        {
-            "url": "https://example.test/account?token=private",
-            "page_revision": "revision-1",
-            "elements": [{"id": "secret-control"}],
-            "text": "private page body",
-        },
-        assistant=True,
-        chat_turn_id="turn-1",
-    )
-    service.process_batch()
-    workspace = service.workspace(project.id, collection.id)
-    assert len(workspace["observations"]) == 1
-    facts = workspace["observations"][0].facts
-    assert facts["operation"].value == "capture"
-    assert facts["route"].value == "https://example.test/account"
-    assert facts["element_count"].value == 1
-    assert "private page body" not in str(workspace)
-
-
-def test_shared_chromium_creates_one_collection_and_backfills_history(tmp_path):
-    store = NebulaStore(tmp_path / "core.db")
-    project = store.create(Engagement(name="Automatic model"))
-    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Shared"))
-    browser = store.create(
-        BrowserSession(
-            engagement_id=project.id,
-            identity_id=identity.id,
-            name="Assistant browser",
-            metadata={"browser_companion_version": 1},
-        )
-    )
-    artifacts = ArtifactStore(tmp_path / "artifacts")
-    companion = BrowserCompanion(
-        store, BrowserEngineRegistry([]), artifact_store=artifacts
-    )
-    request = CompanionRequest(operation="capture", tab_id="tab")
-    result = {
-        "url": "https://example.test/",
-        "page_revision": "one",
-        "text": "unredacted secret",
-        "html": '<input value="unredacted secret">',
-        "elements": [{"id": "0", "value": "unredacted secret"}],
-    }
-    companion._record_interaction(
-        browser, request, result, assistant=True, chat_turn_id="turn"
-    )
-    companion._record_interaction(
-        browser, request, result, assistant=True, chat_turn_id="turn"
+def obj(identifier="page", type="Page", **kwargs):
+    return dict(
+        op="put_object",
+        id=identifier,
+        label=identifier,
+        classification={"value": type},
+        authentication_context="anonymous",
+        **kwargs,
     )
 
-    collections = store.list_entities(ModelSession, engagement_id=project.id)
-    assert len(collections) == 1
+
+def tx(revision, *operations, key=None):
+    return GraphTransaction(
+        expected_revision=revision,
+        idempotency_key=key or f"edit-{revision}",
+        operations=list(operations),
+    )
+
+
+def ref(evidence, role="supporting"):
+    return dict(
+        kind="observations", id=evidence.id, revision=evidence.revision, role=role
+    )
+
+
+def test_transaction_persistence_claim_history_and_acceptance(fixture):
+    store, project, evidence = fixture
     service = ApplicationModelService(store)
-    service.process_batch()
-    workspace = service.workspace(project.id, collections[0].id)
-    assert len(workspace["observations"]) == 2
-    assert len(workspace["states"]) == 2
-    assert len(workspace["observations"][0].artifact_ids) == 1
-    artifact = store.get(Artifact, workspace["observations"][0].artifact_ids[0])
-    with artifacts.open(artifact) as captured:
-        assert b"unredacted secret" in captured.read()
-    capture_value = workspace["object_versions"][0].properties["response_body"]
-    assert capture_value.kind == "alias"
-    assert capture_value.reference == artifact.id
-
-
-def test_pause_and_resume(model):
-    service, project, browser, collection = model
-    service.transition(project.id, collection.id, "paused")
-    exchange(service, project, browser, status_code=200)
-    service.process_batch()
-    assert not service.workspace(project.id, collection.id)["states"]
-    service.transition(project.id, collection.id, "active")
-    service.import_history(project.id, collection.id)
-    service.process_batch()
-    assert len(service.workspace(project.id, collection.id)["states"]) == 1
-
-
-def test_cross_project_reference_rejected(model):
-    service, project, browser, collection = model
-    other = service.store.create(Engagement(name="Other"))
-    with pytest.raises(Exception, match="does not belong"):
-        service.create(other.id, browser.id)
-    with pytest.raises(Exception, match="does not belong"):
-        service.workspace(other.id, collection.id)
-
-
-def test_outbox_rollback_is_atomic(model):
-    service, project, browser, collection = model
-    with pytest.raises(RuntimeError):
-        with service.store.transaction() as tx:
-            tx.add(
-                BrowserTrafficExchange(
-                    engagement_id=project.id,
-                    session_id=browser.id,
-                    identity_id=browser.identity_id,
-                    tab_id="x",
-                    method="GET",
-                    url="https://example.test",
-                    scope_state="in_scope",
-                    scope_policy_id="fixture",
-                    scope_policy_revision=1,
-                )
+    op = obj(
+        properties={
+            "url": dict(
+                value="http://site-a.test/login",
+                status="observed",
+                evidence=[ref(evidence)],
             )
-            raise RuntimeError("rollback")
-    with service.store.database.session() as db:
-        assert not db.scalars(select(ApplicationModelOutboxRow)).all()
-
-
-def condition(op="eq", value=7):
-    return {
-        "op": op,
-        "args": [{"op": "field", "field": "count"}, {"op": "literal", "value": value}],
-    }
-
-
-def test_solver_consistency_unknowns_and_types():
-    fields = {"count": Value(kind="concrete", type="integer", value=7).model_dump()}
-    assert solve({"fields": fields, "formula": condition()})["result"] == "SAT"
-    result = solve({"fields": fields, "formula": condition(value=8)})
-    assert result["result"] == "UNSAT" and result["base_result"] == "SAT"
-    result = solve(
-        {
-            "fields": fields,
-            "formula": condition(),
-            "assumptions": [{"id": "contradiction", "formula": condition(value=8)}],
         }
     )
-    assert result["base_result"] == "UNSAT"
-    assert "contradiction" in result["unsat_core"]
-    fields["count"] = Value(
-        kind="unknown", type="integer", reason="unobserved"
-    ).model_dump()
+    first = service.transact(project, tx(0, op))
+    assert service.transact(project, tx(0, op)) == first
+    updated = deepcopy(op)
+    updated["classification"].update(
+        review="accepted", evidence=[ref(evidence, "conflicting")]
+    )
+    service.transact(project, tx(1, updated))
+    graph = ApplicationModelService(NebulaStore(store.database)).workspace(project)
+    assert len(graph["objects"]) == 1
+    assert graph["objects"][0]["classification"]["status"] == "hypothesized"
+    assert graph["objects"][0]["properties"]["url"]["status"] == "observed"
+    history = service.history(project)["edits"]
+    assert len(history) == 2
     assert (
-        solve({"fields": fields, "formula": condition(value=8)})["assignments"]["count"]
-        == 8
+        history[1]["changes"][0]["before"]["classification"]["review"] == "unreviewed"
     )
-    with pytest.raises(ValueError, match="same type"):
-        solve({"fields": fields, "formula": condition(value="eight")})
-
-
-def test_isolated_worker():
-    result = asyncio.run(
-        isolated_solve({"fields": {}, "formula": {"op": "literal", "value": True}})
+    assert (
+        graph["objects"][0]["classification"]["sources"][0]["context"][
+            "browser_session_id"
+        ]
+        == "browser-a"
     )
-    assert result["result"] == "SAT"
+    assert "secret=x" not in str(service.evidence(project, "observations", evidence.id))
 
 
-def test_value_and_formula_validation():
-    with pytest.raises(ValidationError):
-        Value(kind="concrete", type="integer", value=True)
-    with pytest.raises(ValidationError):
-        Value(kind="unknown", type="string")
-    with pytest.raises(ValidationError):
-        Formula(op="eval", value="anything")
-    with pytest.raises(ValidationError):
-        Formula(op="eq", args=[])
-    original = Value(kind="unknown", type="integer", reason="redacted")
-    assert Value.model_validate_json(original.model_dump_json()) == original
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"classification": {"value": "Page", "status": "observed"}},
+        {"properties": {"missing": {"value": "x"}}},
+        {"properties": {"url": {"value": "http://site-a.test/?token=secret"}}},
+        {"properties": {"url": {"value": "Bearer sensitive"}}},
+    ],
+)
+def test_invalid_claims_roll_back(fixture, change):
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    bad = {**obj(), **change}
+    with pytest.raises((ValueError, HTTPException)):
+        service.transact(project, tx(0, obj("valid"), bad))
+    assert service.snapshot(project)["revision"] == 0
+    assert not service.history(project)["edits"]
 
 
-def test_aliases_domains_and_typed_assignments():
-    fields = {
-        "count": Value(kind="concrete", type="integer", value=7).model_dump(),
-        "copy": Value(kind="alias", type="integer", reference="count").model_dump(),
-        "mode": Value(
-            kind="unknown", type="enum", reason="unobserved", domain=["draft", "saved"]
-        ).model_dump(),
-    }
-    result = solve({"fields": fields, "formula": condition()})
-    assert result["assignments"]["copy"] == 7
-    assert result["assignment_types"]["copy"] == "integer"
-    assert result["assignments"]["mode"] in {"draft", "saved"}
-    fields["copy"]["reference"] = "missing"
-    with pytest.raises(ValueError, match="existing field"):
-        solve({"fields": fields, "formula": condition()})
-    with pytest.raises(ValidationError):
-        Value(kind="unknown", type="integer", reason="unobserved", domain=["7"])
+def test_project_and_evidence_revision_isolation(fixture):
+    store, project, evidence = fixture
+    other = store.create(Engagement(name="Other"))
+    service = ApplicationModelService(store)
+    operation = obj()
+    operation["classification"]["evidence"] = [ref(evidence)]
+    with pytest.raises(HTTPException) as failure:
+        service.transact(other.id, tx(0, operation))
+    assert failure.value.status_code == 404
+    with pytest.raises(HTTPException):
+        service.evidence(other.id, "observations", evidence.id)
+    operation["classification"]["evidence"][0]["revision"] += 1
+    with pytest.raises(HTTPException) as failure:
+        service.transact(project, tx(0, operation))
+    assert failure.value.status_code == 409
 
 
-def test_projection_retry_rolls_back_checkpoint(model, monkeypatch):
-    from nebula.v3.storage import StoreTransaction
-
-    service, project, browser, collection = model
-    exchange(service, project, browser, status_code=200)
-    original = StoreTransaction.add_all
-
-    def fail(*args, **kwargs):
-        raise RuntimeError("fixture projector interruption")
-
-    monkeypatch.setattr(StoreTransaction, "add_all", fail)
-    for _ in range(4):
-        service.process_batch()
-    workspace = service.workspace(project.id, collection.id)
-    assert not workspace["states"]
-    assert workspace["session"].processed_count == 0
-    assert workspace["projection_errors"]
-    monkeypatch.setattr(StoreTransaction, "add_all", original)
-    service.retry_projection(project.id, collection.id)
-    service.process_batch()
-    workspace = service.workspace(project.id, collection.id)
-    assert len(workspace["states"]) == 1
-    assert workspace["session"].processed_count == 1
-    assert not workspace["projection_errors"]
-
-
-def test_late_revision_preserves_earlier_state(model):
-    service, project, browser, collection = model
-    record = exchange(service, project, browser, status_code=200)
-    service.process_batch()
-    first = service.workspace(project.id, collection.id)["states"][0]
-    service.store.update(
-        BrowserTrafficExchange,
-        record.id,
-        {"status_code": 201},
-        expected_revision=record.revision,
+def test_relationship_inheritance_and_tombstones(fixture):
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    relation = dict(
+        op="put_relationship",
+        id="query-edge",
+        type="queries",
+        source="query",
+        target="db",
+        claim={"value": True},
     )
-    service.process_batch()
-    states = service.workspace(project.id, collection.id)["states"]
-    assert len(states) == 2
-    assert states[1].parent_state_ids == [first.id]
-    assert service.get(KnowledgeState, project.id, first.id) == first
-    with pytest.raises(ValueError, match="immutable"):
-        service.store.update(
-            KnowledgeState,
-            first.id,
-            {"branch_key": "mutated"},
-            expected_revision=first.revision,
-        )
-
-
-def test_cancel_before_worker_start_is_durable(model):
-    from nebula.v3.application_model.api import QueryRequest
-    from nebula.v3.application_model.domain import SolverQuery
-
-    service, project, browser, collection = model
-    exchange(service, project, browser, status_code=200)
-    service.process_batch()
-    state = service.workspace(project.id, collection.id)["states"][0]
-
-    async def run():
-        query = await service.submit(
-            project.id,
-            collection.id,
-            QueryRequest(state_id=state.id, formula=Formula(op="literal", value=True)),
-        )
-        result = service.cancel_query(project.id, collection.id, query.id)
-        assert result.status == "cancelled"
-        await asyncio.sleep(0)
-        assert query.id not in service.queries
-        assert service.get(SolverQuery, project.id, query.id).status == "cancelled"
-
-    asyncio.run(run())
-
-
-def test_metadata_adapters_and_project_scoped_parents(model):
-    from nebula.v3.application_model.ingestion import envelope
-
-    service, project, browser, collection = model
-    record = exchange(service, project, browser, status_code=200)
-    raw = {
-        "id": "ws-fixture",
-        "engagement_id": project.id,
-        "session_id": browser.id,
-        "exchange_id": record.id,
-        "revision": 1,
-        "created_at": record.created_at.isoformat(),
-        "opcode": "text",
-        "payload_preview": "private",
-        "payload_bytes": 7,
-    }
-    with service.store.database.session() as db:
-        normalized = envelope("browser_websocket_frames", raw, db)
-        assert normalized["tab_id"] == "a"
-        assert normalized["exchange_id"] == record.id
-        assert "private" not in str(normalized)
-        raw["engagement_id"] = "other-project"
-        assert envelope("browser_websocket_frames", raw, db)["tab_id"] is None
-    evidence = {
-        "id": "evidence-fixture",
-        "revision": 1,
-        "captured_at": record.created_at.isoformat(),
-        "tool_call_id": "tool-1",
-        "metadata": {
-            "browser_session_id": browser.id,
-            "tab_id": "a",
-            "browser_command_id": "command-1",
-        },
-    }
-    normalized = envelope("evidence", evidence)
-    assert normalized["command_id"] == "command-1"
-    assert normalized["tool_call_id"] == "tool-1"
-    assert normalized["evidence_ids"] == ["evidence-fixture"]
-
-
-def test_agent_tools_are_offline_and_idempotent(model, tmp_path):
-    from nebula.v3.domain import ScopePolicy, AgentRun
-    from nebula.v3.tools import ToolInvocation, InvalidToolArguments
-    from nebula.v3.application_model.tools import ModelBroker
-
-    service, project, browser, collection = model
-    exchange(service, project, browser, status_code=200)
-    service.process_batch()
-    broker = ModelBroker(service.store, browser)
-    scope = ScopePolicy(engagement_id=project.id)
-    service.store.create(
-        AgentRun(
-            id="fixture-run",
-            engagement_id=project.id,
-            objective="Inspect recorded state",
-        )
+    service.transact(
+        project, tx(0, obj("query", "QueryOperation"), obj("db", "Database"), relation)
     )
-    assert all(
-        not spec.network_access and spec.filesystem_access == "none"
-        for spec in broker.specs.values()
+    assert len(service.neighborhood(project, "query")["objects"]) == 2
+    service.transact(
+        project,
+        tx(
+            1, dict(op="dismiss", kind="object", id="db", reason="Unsupported topology")
+        ),
     )
-    invocation = ToolInvocation(
-        engagement_id=project.id,
-        run_id="fixture-run",
-        tool_name="model.list_collections",
-        arguments={},
-        workspace=tmp_path,
-        idempotency_key="model-read-1",
-    )
+    assert not service.snapshot(project)["relationships"]
+    assert store.list_entities(Observation, engagement_id=project)
+    with pytest.raises(HTTPException):
+        service.transact(project, tx(2, obj("db", "Database")))
 
-    async def run():
-        first = await broker.execute(invocation, scope)
-        second = await broker.execute(invocation, scope)
-        assert first.output == second.output
-        assert first.output["collections"][0]["id"] == collection.id
-        updates = await broker.execute(
-            invocation.model_copy(
-                update={
-                    "tool_name": "model.get_updates",
-                    "arguments": {"collection_id": collection.id},
-                    "idempotency_key": "model-updates-1",
-                }
+
+def test_context_identity_and_property_dismissal(fixture):
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    one = obj(
+        properties={
+            "url": {"value": "http://site-a.test/account"},
+            "display_name": {"value": "Account"},
+        }
+    )
+    service.transact(project, tx(0, one))
+    duplicate = {**one, "id": "other"}
+    with pytest.raises(HTTPException):
+        service.transact(project, tx(1, duplicate))
+    duplicate["authentication_context"] = "signed-in"
+    service.transact(project, tx(1, duplicate))
+    service.transact(
+        project,
+        tx(
+            2,
+            dict(
+                op="dismiss",
+                kind="property",
+                id="page",
+                property="display_name",
+                reason="Unsubstantiated",
             ),
-            scope,
-        )
-        assert len(updates.output["states"]) == 1
-        assert len(updates.output["observations"]) == 1
-        checkpoint = updates.output["checkpoint_state_id"]
-        empty = await broker.execute(
-            invocation.model_copy(
-                update={
-                    "tool_name": "model.get_updates",
-                    "arguments": {
-                        "collection_id": collection.id,
-                        "after_state_id": checkpoint,
-                    },
-                    "idempotency_key": "model-updates-2",
-                }
-            ),
-            scope,
-        )
-        assert empty.output["states"] == []
-        assert empty.output["checkpoint_state_id"] == checkpoint
-        foreign = invocation.model_copy(update={"engagement_id": "other-project"})
-        with pytest.raises(InvalidToolArguments, match="another project"):
-            await broker.execute(foreign, scope)
+        ),
+    )
+    with pytest.raises(HTTPException):
+        service.transact(project, tx(3, one))
 
-    asyncio.run(run())
+
+def test_concurrent_writers_and_idempotent_retries(fixture):
+    store, project, _ = fixture
+
+    def write(i):
+        try:
+            return ApplicationModelService(NebulaStore(store.database)).transact(
+                project, tx(0, obj(str(i)), key=f"writer-{i}")
+            )
+        except HTTPException as exc:
+            return exc.status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(write, [1, 2]))
+    assert sum(r == 409 for r in results) == 1
+    assert len(ApplicationModelService(store).workspace(project)["objects"]) == 1
+    with pytest.raises(HTTPException):
+        ApplicationModelService(store).transact(
+            project,
+            tx(
+                0, obj("different"), key="writer-" + ("1" if results[0] != 409 else "2")
+            ),
+        )
+
+
+def test_custom_schema_transaction_and_isolation(fixture):
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    definition = dict(
+        name="custom.TenantBoundary",
+        label="Tenant boundary",
+        category="Security",
+        description="Declared tenant boundary",
+        extends="SecurityPolicy",
+        properties=[],
+        identity_hints=["name"],
+        evidence_examples=["Recorded policy"],
+    )
+    service.transact(
+        project,
+        tx(
+            0,
+            dict(op="define_type", definition=definition),
+            obj("boundary", "custom.TenantBoundary"),
+        ),
+    )
+    assert any(
+        t["name"] == "custom.TenantBoundary" for t in service.schema(project)["types"]
+    )
+    other = store.create(Engagement(name="Other"))
+    assert len(service.schema(other.id)["types"]) == 77
+    assert service.search(project, type="SecurityPolicy")["total"] == 1
+
+
+def test_versioned_reset_preserves_original_and_unrelated_entities(tmp_path):
+    # Run the actual migration against a database at the previous revision.
+    from sqlalchemy import create_engine, text
+    from alembic import command
+    from alembic.config import Config
+
+    engine = create_engine("sqlite:///" + str(tmp_path / "migration.db"))
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(__file__).parents[2] / "src/nebula/v3/migrations")
+    )
+    config.set_main_option("sqlalchemy.url", str(engine.url))
+    command.upgrade(config, "0013_application_model_outbox")
+    migration = importlib.import_module(
+        "nebula.v3.migrations.versions.0014_application_graph"
+    )
+    with engine.begin() as connection:
+        for i, kind in enumerate(
+            (
+                *migration.EXPERIMENTAL_KINDS,
+                "observations",
+                "evidence",
+                "browser_traffic",
+                "notes",
+                "application_model_future",
+            )
+        ):
+            connection.execute(
+                insert(EntityRow).values(
+                    id=str(i),
+                    kind=kind,
+                    engagement_id="p",
+                    revision=1,
+                    created_at=__import__("datetime").datetime.now(),
+                    updated_at=__import__("datetime").datetime.now(),
+                    payload={"untouched": kind},
+                )
+            )
+        connection.execute(
+            text(
+                "INSERT INTO application_model_outbox (id,engagement_id,model_session_id,source_kind,source_id,source_revision,adapter_version,payload,status,attempts,created_at) VALUES ('q','p','m','evidence','e',1,'1','{}','pending',0,CURRENT_TIMESTAMP)"
+            )
+        )
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        kinds = set(connection.execute(select(EntityRow.kind)).scalars())
+        assert kinds == {
+            "observations",
+            "evidence",
+            "browser_traffic",
+            "notes",
+            "application_model_future",
+        }
+        assert "application_model_outbox" not in inspect(connection).get_table_names()
+    command.upgrade(config, "head")
+
+
+def test_project_deletion_cannot_resurrect_previous_graph(fixture):
+    from nebula.v3.application_model.persistence import graphs, edits
+
+    store, project, _ = fixture
+    service = ApplicationModelService(store)
+    service.transact(project, tx(0, obj()))
+    store.delete(Engagement, project)
+    with store.database.engine.connect() as connection:
+        assert connection.execute(select(graphs)).all() == []
+        assert connection.execute(select(edits)).all() == []
+    store.create(Engagement(id=project, name="New project"))
+    assert service.workspace(project)["objects"] == []

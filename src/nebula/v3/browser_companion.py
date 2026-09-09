@@ -121,15 +121,7 @@ class BrowserCompanion:
     ) -> None:
         if request.operation == "tabs":
             return
-        # Shared Chromium is a first-class recorded source. Ensure it has a
-        # durable collection before storing the observation so the transactional
-        # outbox can route this interaction immediately. The first collection
-        # also imports any earlier durable companion observations.
-        from .application_model.service import ApplicationModelService
-
-        ApplicationModelService(self.store).ensure_browser_collection(
-            session.engagement_id, session.id
-        )
+        # Capture is independent of agent-composed project graph objects.
         url = self._safe_url(result.get("url") or request.url)
         metadata = {
             "browser_session_id": session.id,

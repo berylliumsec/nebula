@@ -827,7 +827,7 @@ def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
         frozen = run.runtime_snapshot["command_runtime_snapshot"]
         assert frozen["browser_runtime_enabled"] is True
         assert set(AUTONOMOUS_BROWSER_TOOLS).issubset(frozen["tool_names"])
-        assert frozen["application_model_runtime"] == "v1"
+        assert frozen["application_model_runtime"] == "v2"
         assert any(name.endswith("model.get_updates") for name in frozen["tool_names"])
         status = platform.automation.status(engagement.id, run_id=run.id)
         assert status.leases[0].session_id == session.id
@@ -1362,8 +1362,10 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
         model=None,
     )
 
-    assert session.metadata["command_runtime_enabled"] is False
-    assert "command_runtime_snapshot" not in session.metadata
+    assert session.metadata["command_runtime_enabled"] is True
+    snapshot = session.metadata["command_runtime_snapshot"]
+    assert snapshot["application_model_runtime"] == "v2"
+    assert all(name.startswith("model.") for name in snapshot["tool_names"])
 
 
 def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
@@ -1434,11 +1436,11 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             store.get(HarnessSession, frozen_session.id).metadata[
                 "command_runtime_snapshot"
             ]["runtime_digest"]
-            == old_digest
+            == old_digest + "+application-model-project-v2"
         )
         assert (
             replacement_session.metadata["command_runtime_snapshot"]["runtime_digest"]
-            == new_digest
+            == new_digest + "+application-model-project-v2"
         )
         assert rebound_chat.metadata["harness_session_rollovers"][-1]["reason"] == (
             "command_runtime_changed"
@@ -1578,7 +1580,7 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
         identity = store.create(
             BrowserIdentity(engagement_id=engagement.id, name="Model identity")
         )
-        browser = store.create(
+        store.create(
             BrowserSession(
                 engagement_id=engagement.id,
                 identity_id=identity.id,
@@ -1587,7 +1589,26 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
         )
         service = ApplicationModelService(store, runtime.artifact_store)
         store.application_model_service = service
-        collection = service.create(engagement.id, browser.id)
+        from nebula.v3.application_model.graph import GraphTransaction
+
+        service.transact(
+            engagement.id,
+            GraphTransaction.model_validate(
+                {
+                    "expected_revision": 0,
+                    "idempotency_key": "fixture",
+                    "operations": [
+                        {
+                            "op": "put_object",
+                            "id": "site-model",
+                            "label": "Model site",
+                            "authentication_context": "anonymous",
+                            "classification": {"value": "Site"},
+                        }
+                    ],
+                }
+            ),
+        )
         _, chat_turn, harness_turn = runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -1603,7 +1624,7 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
             item["name"]
             for item in catalog
             if item["name"].startswith("runtime_")
-            and item["name"].endswith("model.list_collections")
+            and item["name"].endswith("model.search")
         )
         assert any(
             item["name"].startswith("runtime_")
@@ -1616,12 +1637,12 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
         response = await runtime._gateway_call(session, selected, {})
         receipt = response["structuredContent"]
         assert receipt["schema"] == "nebula.tool-result/v2"
-        assert collection.id not in json.dumps(receipt)
+        assert "site-model" not in json.dumps(receipt)
         result = ToolOutputService(store, runtime.artifact_store).search(
             engagement_id=engagement.id,
             owner_id=chat_turn.id,
             tool_call_id=receipt["tool_call_id"],
-            query=collection.id,
+            query="site-model",
         )
         assert result["matches"]
         runtime._active.pop(session.id)

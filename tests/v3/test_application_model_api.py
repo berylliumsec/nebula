@@ -1,16 +1,13 @@
-"""Real Core routes, browser capture, durable queries and project isolation."""
+"""Real Core graph routes and the shared browser/harness tool contract."""
 
-import base64
-import json
-import time
 from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.storage import NebulaStore
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.domain import Engagement, ScopePolicy, BrowserIdentity, BrowserSession
+from nebula.v3.application_model.tools import INPUTS
 
 
-def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
+def test_real_core_graph_capture_and_project_scope(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     app = create_app(
         store,
@@ -18,27 +15,18 @@ def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
         auth_token="test-token",
     )
     auth = {"Authorization": "Bearer test-token"}
-    assert not any(
-        path.startswith("/api/v1/application-model-") for path in app.openapi()["paths"]
-    )
     with TestClient(app) as client:
         project = client.post(
-            "/api/v1/engagements", headers=auth, json={"name": "Model fixture"}
+            "/api/v1/engagements", headers=auth, json={"name": "Site A"}
         ).json()
-        scope = store.get(
-            ScopePolicy, store.get(Engagement, project["id"]).scope_policy_id
-        )
-        store.update(
-            ScopePolicy,
-            scope.id,
-            {"allowed_domains": ["app.example.test"], "allowed_ports": [443]},
-            expected_revision=scope.revision,
-        )
-        workspace = client.get(
+        base = f"/api/v1/engagements/{project['id']}/application-model"
+        assert client.get(base + "/graph").status_code == 401
+        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
+        assert len(client.get(base + "/schema", headers=auth).json()["types"]) == 77
+        browser = client.get(
             f"/api/v1/engagements/{project['id']}/browser-workspace", headers=auth
-        ).json()
-        browser = workspace["sessions"][0]
-        response = client.put(
+        ).json()["sessions"][0]
+        sync = client.put(
             f"/api/v1/browser-sessions/{browser['id']}/tabs",
             headers=auth,
             json={
@@ -46,139 +34,176 @@ def test_browser_capture_to_state_to_query_survives_reload(tmp_path):
                 "tabs": [
                     {
                         "id": "fixture",
-                        "url": "https://app.example.test/records/1",
+                        "url": "https://example.test/",
                         "title": "Fixture",
                         "position": 0,
                     }
                 ],
                 "active_tab_id": "fixture",
-                "device_owner": "desktop-fixture",
+                "device_owner": "fixture",
             },
         )
-        assert response.status_code == 200, response.text
-        current = store.get(BrowserSession, browser["id"])
-        store.update(
-            BrowserSession,
-            current.id,
-            {"capture_mode": "bodies"},
-            expected_revision=current.revision,
-        )
-        base = f"/api/v1/engagements/{project['id']}/application-model"
-        shared_identity = store.create(
-            BrowserIdentity(
-                engagement_id=project["id"],
-                name="Shared Chromium identity",
-                metadata={"browser_companion_version": 1},
-            )
-        )
-        shared_session = store.create(
-            BrowserSession(
-                engagement_id=project["id"],
-                identity_id=shared_identity.id,
-                name="Assistant browser",
-                metadata={"browser_companion_version": 1},
-            )
-        )
-        eligible = client.get(base + "/browser-sessions", headers=auth)
-        assert eligible.status_code == 200
-        assert {item["id"] for item in eligible.json()} >= {
-            browser["id"],
-            shared_session.id,
-        }
-        response = client.post(
-            base + "/sessions", headers=auth, json={"browser_session_id": browser["id"]}
-        )
-        assert response.status_code == 201, response.text
-        collection = response.json()["id"]
-        for state in ["draft", "submitted"]:
-            response = client.post(
-                f"/api/v1/browser-sessions/{browser['id']}/body-artifacts",
-                headers=auth,
-                json={
-                    "direction": "response",
-                    "media_type": "application/json",
-                    "content_base64": base64.b64encode(
-                        json.dumps(
-                            {"id": 1, "status": state, "token": "private"}
-                        ).encode()
-                    ).decode(),
-                },
-            )
-            assert response.status_code == 201, response.text
-            artifact = response.json()
-            response = client.post(
-                f"/api/v1/browser-sessions/{browser['id']}/traffic",
-                headers=auth,
-                json={
-                    "tab_id": "fixture",
-                    "url": "https://app.example.test/records/1",
-                    "method": "GET",
-                    "status_code": 200,
-                    "response_body_artifact_id": artifact["id"],
-                },
-            )
-            assert response.status_code == 201, response.text
-        app.state.application_model.process_batch()
-        data = client.get(
-            base + f"/sessions/{collection}/workspace", headers=auth
-        ).json()
-        assert len(data["states"]) == 2
-        assert len(data["objects"]) == 1
-        assert "private" not in json.dumps(data)
-        final = data["states"][-1]
-        fields = client.get(
-            base + f"/sessions/{collection}/states/{final['id']}/fields", headers=auth
-        ).json()
-        field = next(key for key in fields if key.endswith("response.status"))
-        assert fields[field]["value"] == "submitted"
-        response = client.post(
-            base + f"/sessions/{collection}/queries",
+        assert sync.status_code == 200, sync.text
+        capture = client.post(
+            f"/api/v1/browser-sessions/{browser['id']}/traffic",
             headers=auth,
             json={
-                "state_id": final["id"],
-                "formula": {
-                    "op": "eq",
-                    "args": [
-                        {"op": "field", "field": field},
-                        {"op": "literal", "value": "submitted"},
-                    ],
-                },
+                "tab_id": "fixture",
+                "method": "GET",
+                "url": "https://example.test/",
+                "blocked": True,
+                "status_code": 403,
             },
         )
-        assert response.status_code == 202, response.text
-        query = response.json()["id"]
-        for _ in range(100):
-            result = client.get(
-                base + f"/sessions/{collection}/queries/{query}", headers=auth
-            ).json()
-            if result["status"] not in {"running", "queued"}:
-                break
-            time.sleep(0.05)
-        assert result["result"] == "SAT", result
-        fork_response = client.post(
-            base + f"/sessions/{collection}/states/{final['id']}/fork",
-            headers=auth,
-            json={"assertion_ids": final["assertion_ids"]},
+        assert capture.status_code == 201, capture.text
+        evidence = client.get(base + "/evidence", headers=auth).json()["evidence"][0]
+        assert evidence["facts"]["status_code"]["value"] == 403
+        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
+        transaction = {
+            "expected_revision": 0,
+            "idempotency_key": "save",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "firewall",
+                    "label": "Possible firewall",
+                    "authentication_context": "anonymous",
+                    "classification": {
+                        "value": "Firewall",
+                        "status": "hypothesized",
+                        "evidence": [
+                            {
+                                "kind": evidence["kind"],
+                                "id": evidence["id"],
+                                "revision": evidence["revision"],
+                                "role": "supporting",
+                            }
+                        ],
+                    },
+                }
+            ],
+        }
+        response = client.post(base + "/transactions", headers=auth, json=transaction)
+        assert response.status_code == 200, response.text
+        assert (
+            client.post(base + "/transactions", headers=auth, json=transaction).json()
+            == response.json()
         )
-        assert fork_response.status_code == 200, fork_response.text
-        fork = fork_response.json()
-        assert fork["id"] != final["id"]
-        assert fork["parent_state_ids"] == [final["id"]]
-        assert fork["semantic_hash"] == final["semantic_hash"]
-        assert fork["interpretation"] is True
-        original = client.get(
-            base + f"/sessions/{collection}/states/{final['id']}", headers=auth
+        assert (
+            client.get(base + "/graph", headers=auth).json()["objects"][0][
+                "classification"
+            ]["status"]
+            == "hypothesized"
+        )
+        other = client.post(
+            "/api/v1/engagements", headers=auth, json={"name": "Other"}
         ).json()
-        assert original == final
-        assert client.get(base + f"/sessions/{collection}/workspace").status_code == 401
-    # A fresh service and Core instance reconstruct the same saved records.
-    app2 = create_app(
-        store,
-        artifact_store=ArtifactStore(tmp_path / "artifacts"),
-        auth_token="test-token",
-    )
-    with TestClient(app2) as client:
-        reloaded = client.get(
-            base + f"/sessions/{collection}/queries/{query}", headers=auth
+        otherbase = f"/api/v1/engagements/{other['id']}/application-model"
+        assert (
+            client.get(
+                otherbase + f"/evidence/{evidence['kind']}/{evidence['id']}",
+                headers=auth,
+            ).status_code
+            == 404
         )
-        assert reloaded.json()["result"] == "SAT"
+        assert client.post(base + "/sessions", headers=auth, json={}).status_code == 404
+        assert not any(
+            "queries" in path or "states" in path
+            for path in app.openapi()["paths"]
+            if "application-model" in path
+        )
+
+
+def test_browser_and_project_tools_expose_same_graph(tmp_path):
+    import asyncio
+    from nebula.v3.domain import (
+        Engagement,
+        BrowserSession,
+        ChatSession,
+        ChatTurn,
+        ToolCallOrigin,
+        ScopePolicy,
+    )
+    from nebula.v3.tools import ToolInvocation, InvalidToolArguments
+    from nebula.v3.application_model.tools import components, project_components
+    import pytest
+
+    store = NebulaStore(tmp_path / "broker.db")
+    project = store.create(Engagement(name="Shared graph"))
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Model",
+            model="fixture",
+            provider_profile_id="fixture",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            model="fixture",
+            provider_profile_id="fixture",
+            tools_enabled=True,
+        )
+    )
+    scope = ScopePolicy(engagement_id=project.id)
+    browser = components(
+        store,
+        BrowserSession(engagement_id=project.id, name="Browser", identity_id="fixture"),
+        scope,
+        tmp_path,
+    )
+    harness = project_components(store, project.id, scope, tmp_path)
+    assert set(browser.specs) == set(harness.specs) == set(INPUTS)
+
+    async def invoke(runtime, name, arguments):
+        return await runtime.broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=chat.id,
+                chat_turn_id=turn.id,
+                tool_name=name,
+                arguments=arguments,
+                workspace=tmp_path,
+            ),
+            scope,
+        )
+
+    async def journey():
+        discovered = await invoke(browser, "model.discover_schema", {})
+        assert len(discovered.output["types"]) == 77
+        tx = {
+            "expected_revision": 0,
+            "idempotency_key": "browser-edit",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "site",
+                    "label": "Site",
+                    "authentication_context": "anonymous",
+                    "classification": {"value": "Site"},
+                }
+            ],
+        }
+        assert (await invoke(browser, "model.transact", tx)).output["revision"] == 1
+        assert (await invoke(harness, "model.search", {})).output["objects"][0][
+            "id"
+        ] == "site"
+        assert (await invoke(harness, "model.transact", tx)).output["revision"] == 1
+        history = (await invoke(harness, "model.get_updates", {})).output["edits"]
+        assert len(history) == 1 and history[0]["producer"] == "assistant"
+        with pytest.raises(InvalidToolArguments):
+            await harness.broker.execute(
+                ToolInvocation(
+                    engagement_id="another-project",
+                    run_id=turn.id,
+                    tool_name="model.search",
+                    workspace=tmp_path,
+                ),
+                scope,
+            )
+
+    asyncio.run(journey())

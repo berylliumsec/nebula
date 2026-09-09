@@ -47,6 +47,7 @@ describe("WorkspacePanel uploads", () => {
       onOpenTerminal={onOpenTerminal}
     /></DialogProvider>);
 
+    await user.click(screen.getByText("Reset scratch workspace…"));
     expect(await screen.findByText("Workspace is in use")).toBeVisible();
     expect(screen.getByText(/Stop 2 active Project terminals/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Reset workspace" })).toBeDisabled();
@@ -199,5 +200,21 @@ describe("WorkspacePanel uploads", () => {
       sourceLabel: "proof.txt",
       truncated: false,
     });
+  });
+});
+
+describe('WorkspacePanel reset disclosure',()=>{
+  it('keeps reset collapsed while inspecting files',async()=>{
+    renderPanel({listWorkspace:vi.fn().mockResolvedValue(listing())});
+    const summary=await screen.findByText('Reset scratch workspace…');
+    expect(summary.closest('details')).not.toHaveAttribute('open');
+    expect(screen.getByRole('button',{name:'Reset workspace'})).not.toBeVisible();
+    fireEvent.click(summary);expect(screen.getByRole('button',{name:'Reset workspace'})).toBeVisible();
+  });
+  it('hides reset controls for linked host folders',async()=>{
+    renderPanel({listWorkspace:vi.fn().mockResolvedValue(listing()),workspaceResetStatus:vi.fn().mockResolvedValue({canReset:false,reasonCode:'linked_workspace',detail:'Linked folder',activeTerminalCount:1,activeExecutionCount:0})});
+    expect(await screen.findByText('Linked folder · bulk reset is unavailable.')).toBeVisible();
+    expect(screen.queryByText('Reset scratch workspace…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:'Reset workspace'})).not.toBeInTheDocument();
   });
 });

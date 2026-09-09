@@ -1,202 +1,797 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { PageHeader } from "../components/PageHeader";
-import { Activity, Database, GitBranch, Network, SearchCheck } from "lucide-react";
 import { ApplicationModelGraph } from "../components/ApplicationModelGraph";
+import {
+  ObjectEditor,
+  RelationshipEditor,
+  SchemaEditor,
+  cryptoId,
+} from "./ApplicationModelEditors";
+import type {
+  Claim,
+  Evidence,
+  Graph,
+  Operation,
+} from "./applicationModelTypes";
 import "./applicationModel.css";
 
-type Value = { kind: string; type: string; value?: string | number | boolean; reason?: string };
-type Collection = { id: string; browser_session_id: string; status: string; processed_count: number; last_source_id?: string; error?: string };
-type State = { id: string; created_at: string; branch_key: string; parent_state_ids: string[]; object_version_ids: string[]; observation_ids: string[] };
-type Observation = { id: string; source_kind: string; source_id: string; occurred_at: string; causal_status: string; facts: Record<string, Value>; evidence_ids: string[] };
-type Version = { id: string; object_id: string; properties: Record<string, Value>; observation_ids: string[] };
-type Formula = { op: string; field?: string; value?: string | number | boolean; args?: Formula[]; values?: unknown[] };
-type Query = { id: string; state_id: string; status: string; formula: Formula; assertion_ids: string[]; result?: string; base_result?: string; error?: string; assignments: Record<string, unknown>; unsat_core: string[] };
-type Workspace = { session: Collection; projection_errors?: string[]; states: State[]; observations: Observation[]; objects: { id: string; label: string }[]; object_versions: Version[]; assertions: { id: string; subject: string; predicate: string; support: string; lifecycle: string; formula?: unknown }[]; queries: Query[] };
-type Status = { solver_available: boolean; pending_count: number };
-
-function browserSource(project: string | undefined, browser: string, observation: Observation) {
-  const query = new URLSearchParams({ view: "browser", browserSession: browser });
-  if (observation.source_kind === "browser_traffic") {
-    query.set("tool", "traffic");
-    query.set("browserExchange", observation.source_id);
-  }
-  return `/projects/${project}/workbench?${query}`;
-}
-
-function describeCondition(formula: Formula, depth = 0): string {
-  if (depth > 20) return "…";
-  if (formula.op === "field") return formula.field?.split(".").slice(1).join(".") ?? "field";
-  if (formula.op === "literal") return JSON.stringify(formula.value);
-  return `${formula.op} (${(formula.args ?? []).map(arg => describeCondition(arg, depth + 1)).join(", ")}${formula.values?.length ? `, ${formula.values.join(", ")}` : ""})`;
-}
-
-export function buildCondition(field: string, operator: string, type: string, text: string) {
-  let value: string | boolean | number = text;
-  if (type === "integer") {
-    value = Number(text);
-    if (!text.trim() || !Number.isSafeInteger(value)) throw new Error("Enter a whole number within the supported integer range.");
-  }
-  if (type === "boolean") {
-    if (text !== "true" && text !== "false") throw new Error("Choose true or false.");
-    value = text === "true";
-  }
-  return { op: operator, args: [{ op: "field", field }, { op: "literal", value }] };
-}
+type Transaction = {
+  expected_revision: number;
+  idempotency_key: string;
+  operations: Operation[];
+};
+type Edit = {
+  revision: number;
+  producer: string;
+  updated_at: string;
+  changes: {
+    id?: string;
+    op: string;
+    reason?: string;
+    before?: unknown;
+    after?: unknown;
+  }[];
+};
 
 export function ApplicationModelPage() {
+  const { engagement } = useWorkspace();
+  return engagement ? (
+    <ProjectModel key={engagement.id} />
+  ) : (
+    <p>Select a project to explore its application model.</p>
+  );
+}
+
+function ProjectModel() {
   const { api, engagement } = useWorkspace();
+  const { requestNebulaDraft } = useWorkbenchDrafts();
   const [params, setParams] = useSearchParams();
-  const collection = params.get("collection") ?? "";
-  const [status, setStatus] = useState<Status>();
-  const [sessions, setSessions] = useState<Collection[]>([]);
-  const [browsers, setBrowsers] = useState<{ id: string; name: string }[]>([]);
-  const [workspace, setWorkspace] = useState<Workspace>();
-  const [browser, setBrowser] = useState("");
-  const [history, setHistory] = useState(true);
-  const [error, setError] = useState("");
-  const [loadError, setLoadError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [field, setField] = useState("");
-  const [operator, setOperator] = useState("eq");
-  const [literal, setLiteral] = useState("");
-  const [assumptions, setAssumptions] = useState<string[]>([]);
-  const [compare, setCompare] = useState("");
-  const [difference, setDifference] = useState<{ field: string; before: Value | null; after: Value | null }[]>();
-  const base = `engagements/${encodeURIComponent(engagement?.id ?? "")}/application-model`;
-  const select = (key: string, value: string) => {
-    const next = new URLSearchParams(params);
-    value ? next.set(key, value) : next.delete(key);
-    if (key === "collection") for (const k of ["state", "object", "query"]) next.delete(k);
-    if (key === "state") { next.delete("query"); next.delete("object"); }
-    if (key === "query") {
-      const query = workspace?.queries.find(q => q.id === value);
-      if (query) next.set("state", query.state_id);
-      else if (state) next.set("state", state.id);
-    }
-    setParams(next);
-  };
-  const load = useCallback(async (signal?: AbortSignal) => {
-    if (!api || !engagement) return;
-    const [s, list, bw] = await Promise.all([
-      api.request<Status>(`${base}/status`, { signal }),
-      api.request<Collection[]>(`${base}/sessions`, { signal }),
-      api.request<{ id: string; name: string }[]>(`${base}/browser-sessions`, { signal }),
-    ]);
-    const next = collection ? await api.request<Workspace>(`${base}/sessions/${encodeURIComponent(collection)}/workspace`, { signal }) : undefined;
-    if (signal?.aborted) return;
-    setStatus(s); setSessions(list); setBrowsers(bw); setWorkspace(next); setLoadError("");
-  }, [api, engagement, base, collection]);
+  const [graph, setGraph] = useState<Graph>();
+  const [evidence, setEvidence] = useState<Evidence[]>([]),
+    [evidenceOffset, setEvidenceOffset] = useState<number | null>(null);
+  const [history, setHistory] = useState<Edit[]>([]),
+    [historyAfter, setHistoryAfter] = useState(0),
+    [historyMore, setHistoryMore] = useState(false);
+  const [editor, setEditor] = useState<
+      "object" | "relationship" | "schema" | null
+    >(null),
+    [editing, setEditing] = useState(false);
+  const [error, setError] = useState(""),
+    [notice, setNotice] = useState(""),
+    [busy, setBusy] = useState(false),
+    [pending, setPending] = useState<Transaction>();
+  const draftRevision = useRef<number | undefined>(undefined);
+  const [question, setQuestion] = useState("");
+  const [legacy] = useState(() =>
+    ["collection", "state", "query", "modelTab"].some((k) => params.has(k)),
+  );
+  const revision = useRef(-1),
+    alive = useRef(true),
+    requestSequence = useRef(0);
+  const base = `engagements/${encodeURIComponent(engagement!.id)}/application-model`;
+  const objectId = params.get("object") ?? "",
+    edgeId = params.get("relationship") ?? "";
+  const query = params.get("q") ?? "",
+    category = params.get("category") ?? "";
+  const depth = Math.min(3, Math.max(1, Number(params.get("depth")) || 1));
+  const object = graph?.objects.find((o) => o.id === objectId),
+    edge = graph?.relationships.find((r) => r.id === edgeId);
+  const select = (key: string, value: string) =>
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      value ? next.set(key, value) : next.delete(key);
+      if (key === "object") next.delete("relationship");
+      if (key === "relationship") next.delete("object");
+      return next;
+    });
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!api) return;
+      const seq = ++requestSequence.current;
+      const next = await api.request<Graph>(`${base}/graph`, { signal });
+      if (signal?.aborted || !alive.current || seq !== requestSequence.current)
+        return;
+      if (next.revision >= revision.current) {
+        revision.current = next.revision;
+        setGraph(next);
+      }
+    },
+    [api, base],
+  );
   useEffect(() => {
+    alive.current = true;
     const controller = new AbortController();
-    setWorkspace(undefined);
-    setAssumptions([]); setCompare(""); setDifference(undefined); setError("");
-    const refresh = () => { void load(controller.signal).catch((e: unknown) => { if (!controller.signal.aborted) setLoadError(e instanceof Error ? e.message : "Could not load application model."); }); };
+    const refresh = () =>
+      void load(controller.signal).catch((e) => {
+        if (!controller.signal.aborted)
+          setError(`Could not refresh the model. ${String(e)}`);
+      });
     refresh();
-    const timer = window.setInterval(refresh, 3000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    const timer = window.setInterval(refresh, 5000);
+    window.addEventListener("online", refresh);
+    return () => {
+      alive.current = false;
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("online", refresh);
+    };
   }, [load]);
-  const mutate = async (path: string, body?: unknown, method = "POST") => {
-    if (!api) return;
-    setBusy(true); setError("");
+  useEffect(() => {
+    if (legacy)
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current);
+          for (const k of ["collection", "state", "query", "modelTab"])
+            next.delete(k);
+          return next;
+        },
+        { replace: true },
+      );
+  }, [legacy, setParams]);
+  const loadEvidence = async (offset = 0) => {
     try {
-      const result = await api.request<{ id?: string }>(`${base}${path}`, { method, body: body === undefined ? undefined : JSON.stringify(body) });
-      if (method !== "DELETE") await load();
-      return result;
-    } catch (e) { setError(e instanceof Error ? e.message : "Operation failed. Retry from this view."); }
-    finally { setBusy(false); }
+      const result = await api!.request<{
+        evidence: Evidence[];
+        next_offset: number | null;
+      }>(`${base}/evidence?offset=${offset}`);
+      if (alive.current) {
+        setEvidence((v) =>
+          offset ? [...v, ...result.evidence] : result.evidence,
+        );
+        setEvidenceOffset(result.next_offset);
+      }
+    } catch (e) {
+      setError(`Could not load evidence. ${String(e)}`);
+    }
   };
-  const stateId = params.get("state");
-  const state = stateId ? workspace?.states.find(s => s.id === stateId) : workspace?.states.at(-1);
-  const versions = useMemo(() => workspace?.object_versions.filter(v => state?.object_version_ids.includes(v.id)) ?? [], [workspace, state]);
-  const fields = useMemo(() => Object.fromEntries(versions.flatMap(v => Object.entries(v.properties).map(([name, value]) => [`${v.object_id}.${name}`, value]))), [versions]);
-  const selectedField = fields[field] ? field : Object.keys(fields)[0] ?? "";
-  const selectedQuery = workspace?.queries.find(q => q.id === params.get("query"));
-  const selectedObjectId = params.get("object") ?? "";
-  const selectedObject = workspace?.objects.find(item => item.id === selectedObjectId);
-  const selectedObjectVersion = [...(workspace?.object_versions ?? [])].reverse().find(item => item.object_id === selectedObjectId && state?.object_version_ids.includes(item.id));
-  const tab = params.get("modelTab") ?? "map";
-  const scope = `/sessions/${encodeURIComponent(collection)}`;
-  return <div className="page application-model-page">
-    <PageHeader title="Application model" description="Recorded knowledge, evidence, and constraint analysis." />
-    {(error || loadError) && <div role="alert"><p>{error || loadError}</p><button className="button" onClick={() => { setError(""); void load().catch(e => setLoadError(String(e))); }}>Retry</button>{collection && <button className="button" onClick={() => select("collection", "")}>Return to collections</button>}</div>}
-    {!status && !error && !loadError && <p role="status">Loading application model…</p>}
-    {status && <>
-      <section className="panel model-section"><h2>Collections</h2>
-        <label>Collection<select value={collection} onChange={e => select("collection", e.target.value)}><option value="">Choose a collection</option>{sessions.map(s => <option key={s.id} value={s.id}>{browsers.find(b => b.id === s.browser_session_id)?.name ?? "Browser collection"} · {s.status} · {s.processed_count} records</option>)}</select></label>
-        <form onSubmit={async e => { e.preventDefault(); const result = await mutate("/sessions", { browser_session_id: browser || browsers[0]?.id, import_history: history }); if (result?.id) select("collection", result.id); }}>
-          <label>Source browser for new model<select value={browser || browsers[0]?.id || ""} onChange={e => setBrowser(e.target.value)}>{browsers.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label>
-          <p>Shared Chromium creates its collection automatically on the first recorded interaction. Use this form to create or import another browser collection.</p>
-          <label className="model-checkbox"><input type="checkbox" checked={history} onChange={e => setHistory(e.target.checked)} />Include recorded history</label>
-          <button className="button primary" disabled={busy || !browsers.length}>Create collection</button>
-        </form>
-        {!browsers.length && <p>Open Browser in the project workbench to create a browser session first.</p>}
-      </section>
-      {workspace && <>
-        <section className="model-overview" aria-label="Application model summary">
-          <div><Network aria-hidden="true" /><span>Observations</span><strong>{workspace.observations.length}</strong></div>
-          <div><Database aria-hidden="true" /><span>Objects</span><strong>{workspace.objects.length}</strong></div>
-          <div><GitBranch aria-hidden="true" /><span>States</span><strong>{workspace.states.length}</strong></div>
-          <div><SearchCheck aria-hidden="true" /><span>Queries</span><strong>{workspace.queries.length}</strong></div>
-        </section>
-        <section className="panel model-section"><p role="status">{workspace.session.status} · {workspace.session.processed_count} records · {status.pending_count} pending</p>
-          {workspace.session.last_source_id && <details><summary>Projection checkpoint</summary><code>{workspace.session.last_source_id}</code></details>}
-          {workspace.session.error && <p role="alert">{workspace.session.error}</p>}
-          {!!workspace.projection_errors?.length && <div role="alert"><p>Some records could not be projected. Browser records remain available.</p><button className="button" disabled={busy} onClick={() => void mutate(`${scope}/retry`)}>Retry projection</button></div>}
-          <div className="model-actions"><button className="button" disabled={busy} onClick={() => void mutate(`${scope}/${workspace.session.status === "paused" ? "resume" : "pause"}`)}>{workspace.session.status === "paused" ? "Resume" : "Pause"}</button><button className="button" disabled={busy || workspace.session.status === "paused"} onClick={() => void mutate(`${scope}/import`)}>Import history</button>
-          <button className="button" disabled={busy} onClick={async () => { if (window.confirm("Delete this derived collection? Browser records and source evidence are retained.")) { const result = await mutate(scope, undefined, "DELETE"); if (result) select("collection", ""); } }}>Delete collection</button></div>
-          <nav className="model-view-tabs" aria-label="Application model views">{[["map", "Model map"], ["states", "Timeline"], ["objects", "Objects and evidence"], ["solver", "Solver"]].map(([id, label]) => <button className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} key={id} onClick={() => select("modelTab", id)}>{label}</button>)}</nav>
-          <label>Knowledge state<select value={state?.id ?? ""} onChange={e => { select("state", e.target.value); setDifference(undefined); }}><option value="">Select a state</option>{workspace.states.map((s, i) => <option key={s.id} value={s.id}>State {i + 1} · context {s.branch_key} · {new Date(s.created_at).toLocaleTimeString()}</option>)}</select></label>
-          {stateId && !state && <p role="alert">This state is unavailable in the selected collection.</p>}
-          {!workspace.states.length && <p>No recorded states yet. Interact through the existing Browser, or import its recorded history.</p>}
-        </section>
-        {state && tab === "map" && <section className="model-map-layout">
-          <ApplicationModelGraph data={workspace} selectedStateId={state.id} selectedObjectId={selectedObjectId} onSelectState={id => select("state", id)} onSelectObject={id => select("object", id)} />
-          <aside className="panel model-inspector" aria-label="Graph selection inspector">
-            {selectedObject && selectedObjectVersion ? <>
-              <span className="model-eyebrow">Selected object</span><h2>{selectedObject.label}</h2>
-              <p>{selectedObjectVersion.id.slice(0, 18)} · {Object.keys(selectedObjectVersion.properties).length} properties</p>
-              <dl>{Object.entries(selectedObjectVersion.properties).slice(0, 12).map(([name, value]) => <div key={name}><dt>{name}</dt><dd><span className={`model-value-dot ${value.kind}`} /><span className="model-inspector-value">{value.kind === "concrete" ? String(value.value) : value.reason ?? value.kind}</span></dd></div>)}</dl>
-              <button className="button" onClick={() => select("modelTab", "objects")}>Open full history</button>
-            </> : <><Activity aria-hidden="true" /><h2>Inspect the model</h2><p>Select an object to see its typed properties, unknowns, source observations, and history.</p><dl><div><dt>Current state</dt><dd>{state.id.slice(0, 16)}</dd></div><div><dt>Branch</dt><dd>{state.branch_key}</dd></div><div><dt>Parent states</dt><dd>{state.parent_state_ids.length}</dd></div></dl></>}
-          </aside>
-        </section>}
-        {state && tab === "states" && <section className="panel model-section"><h2>Recorded observations</h2><p>This snapshot represents knowledge at collection time. It does not restore the remote application.</p>
-          {state.parent_state_ids.map(id => <button className="button" key={id} onClick={() => select("state", id)}>Inspect parent state</button>)}
-          {workspace.observations.filter(o => state.observation_ids.includes(o.id)).map(o => <article key={o.id}><h3>{o.source_kind}</h3><p>{new Date(o.occurred_at).toLocaleString()} · causality {o.causal_status}</p><dl>{Object.entries(o.facts).map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value.kind === "concrete" ? String(value.value) : value.reason ?? value.kind}</dd></div>)}</dl><Link to={browserSource(engagement?.id, workspace.session.browser_session_id, o)}>Open source browser session</Link></article>)}
-          <label>Compare with<select value={compare} onChange={e => setCompare(e.target.value)}><option value="">Choose another state</option>{workspace.states.filter(s => s.id !== state.id).map((s, i) => <option value={s.id} key={s.id}>State {i + 1} · {s.branch_key} · {new Date(s.created_at).toLocaleTimeString()}</option>)}</select></label><button className="button" disabled={!compare || busy} onClick={async () => { try { const result = await api?.request<{ changes: NonNullable<typeof difference> }>(`${base}${scope}/diff?left=${encodeURIComponent(compare)}&right=${encodeURIComponent(state.id)}`); setDifference(result?.changes); } catch(e) { setError(String(e)); } }}>Compare states</button>
-          {difference && <div><h3>{difference.length} changed properties</h3>{difference.map(change => <p key={change.field}>{change.field.split(".").slice(1).join(".")}: {String(change.before?.value ?? change.before?.reason ?? "absent")} → {String(change.after?.value ?? change.after?.reason ?? "absent")}</p>)}</div>}
-        </section>}
-        {state && tab === "objects" && <section className="panel model-section"><h2>Objects and evidence</h2>{versions.map(v => <details key={v.id} open={params.get("object") === v.object_id} onToggle={e => { if (e.currentTarget.open && params.get("object") !== v.object_id) select("object", v.object_id); }}>
-          <summary>{workspace.objects.find(o => o.id === v.object_id)?.label ?? "Recorded object"}</summary>
-          <dl>{Object.entries(v.properties).map(([name, value]) => <div key={name}><dt>{name} · {value.type}</dt><dd>{value.kind === "concrete" ? String(value.value) : `${value.kind}: ${value.reason ?? "unresolved"}`}</dd></div>)}</dl>
-          <h3>Source observations</h3>
-          {workspace.observations.filter(o => v.observation_ids.includes(o.id)).map(o => <p key={o.id}><Link to={browserSource(engagement?.id, workspace.session.browser_session_id, o)}>Open {o.source_kind}</Link>{o.evidence_ids.map(id => <span key={id}> · <Link to={`/projects/${engagement?.id}/evidence/${encodeURIComponent(id)}`}>Source evidence</Link></span>)}</p>)}
-          <details><summary>Assertions and version history</summary>
-            {workspace.assertions.filter(a => a.subject === v.object_id).map(a => <p key={a.id}>{a.predicate} · {a.support} · {a.lifecycle}</p>)}
-            {workspace.object_versions.filter(old => old.object_id === v.object_id).map((old, index) => {
-              const snapshot = workspace.states.find(s => s.object_version_ids.includes(old.id));
-              return <p key={old.id}><button className="button" disabled={!snapshot || old.id === v.id} onClick={() => snapshot && select("state", snapshot.id)}>Inspect version {index + 1}{old.id === v.id ? " (selected)" : ""}</button></p>;
-            })}
-          </details>
-        </details>)}</section>}
-        {state && tab === "solver" && <section className="panel model-section"><h2>Constraint query</h2><p>Results describe consistency with recorded facts and the assumptions selected below.</p>
-          {!status.solver_available && <p role="alert">The Z3 solver is unavailable on Core. Recorded states remain readable.</p>}
-          <form onSubmit={async e => { e.preventDefault(); try { const formula = buildCondition(selectedField, operator, fields[selectedField].type, literal); const result = await mutate(`${scope}/queries`, { state_id: state.id, formula, assertion_ids: assumptions }); if (result?.id) select("query", result.id); } catch(e) { setError(e instanceof Error ? e.message : String(e)); } }}>
-            <label>Property<select value={selectedField} onChange={e => { setField(e.target.value); setLiteral(""); setOperator("eq"); }}>{Object.entries(fields).map(([name, value]) => <option key={name} value={name}>{name.split(".").slice(1).join(".")} · {value.type} · {name.slice(0, 16)}</option>)}</select></label>
-            <label>Condition<select value={operator} onChange={e => setOperator(e.target.value)}><option value="eq">Equals</option><option value="ne">Does not equal</option>{fields[selectedField]?.type === "integer" && <><option value="lt">Less than</option><option value="gt">Greater than</option></>}</select></label>
-            <label>Value{fields[selectedField]?.type === "boolean" ? <select value={literal} onChange={e => setLiteral(e.target.value)}><option value="">Choose a value</option><option value="true">true</option><option value="false">false</option></select> : <input value={literal} onChange={e => setLiteral(e.target.value)} />}</label>
-            {workspace.assertions.filter(a => a.formula).map(a => <label className="model-checkbox" key={a.id}><input type="checkbox" checked={assumptions.includes(a.id)} onChange={e => setAssumptions(e.target.checked ? [...assumptions, a.id] : assumptions.filter(id => id !== a.id))} />Assume {a.predicate} · {a.support} · {a.lifecycle}</label>)}
-            <button className="button primary" disabled={busy || !selectedField || !status.solver_available}>Check consistency</button>
-          </form>
-          <label>Saved query<select value={selectedQuery?.id ?? ""} onChange={e => select("query", e.target.value)}><option value="">Select a query</option>{workspace.queries.map((q, i) => <option key={q.id} value={q.id}>Query {i + 1} · {q.result ?? q.status}</option>)}</select></label>
-          {params.get("query") && !selectedQuery && <p role="alert">This saved query is unavailable in the selected collection.</p>}
-          {selectedQuery && <p>Saved condition: {describeCondition(selectedQuery.formula)} · {selectedQuery.assertion_ids.length} explicitly selected assumptions. The form above is a separate draft.</p>}
-          {!!selectedQuery?.unsat_core.length && <details><summary>Conflicting facts and assumptions</summary>{selectedQuery.unsat_core.map(id => <p key={id}>{workspace.assertions.find(a => a.id === id)?.predicate ?? id}</p>)}</details>}
-          {selectedQuery && <div role="status"><h3>{selectedQuery.result ?? selectedQuery.status}</h3>{selectedQuery.base_result === "UNSAT" && <p>The base assumptions are inconsistent. Review them before interpreting this result.</p>}{selectedQuery.error && <p>{selectedQuery.error}</p>}<dl>{Object.entries(selectedQuery.assignments).map(([name, value]) => <div key={name}><dt>{name.split(".").slice(1).join(".")}</dt><dd>{String(value)}</dd></div>)}</dl>{["queued", "running"].includes(selectedQuery.status) && <button className="button" onClick={() => void mutate(`${scope}/queries/${selectedQuery.id}/cancel`)}>Cancel query</button>}</div>}
-        </section>}
-      </>}
-    </>}
-  </div>;
+  const loadHistory = async (after = 0) => {
+    try {
+      const result = await api!.request<{
+        edits: Edit[];
+        next_revision: number;
+        has_more: boolean;
+      }>(`${base}/updates?after=${after}`);
+      if (alive.current) {
+        setHistory((v) => (after ? [...v, ...result.edits] : result.edits));
+        setHistoryAfter(result.next_revision);
+        setHistoryMore(result.has_more);
+      }
+    } catch (e) {
+      setError(`Could not load history. ${String(e)}`);
+    }
+  };
+  const submit = async (tx: Transaction) => {
+    setBusy(true);
+    setError("");
+    setPending(tx);
+    try {
+      const result = await api!.request<{
+        revision: number;
+        changed_ids: string[];
+      }>(`${base}/transactions`, { method: "POST", body: JSON.stringify(tx) });
+      if (!alive.current) return;
+      await load();
+      setPending(undefined);
+      setEditor(null);
+      setNotice(`Saved project revision ${result.revision}.`);
+      const first = tx.operations[0];
+      if (first.op === "put_object") select("object", String(first.id));
+      if (first.op === "put_relationship")
+        select("relationship", String(first.id));
+      if (first.op === "dismiss") {
+        select("object", "");
+        select("relationship", "");
+      }
+    } catch (e) {
+      if (alive.current) {
+        setError(`Edit not confirmed. Your draft is retained. ${String(e)}`);
+        await load().catch(() => undefined);
+      }
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  };
+  const save = async (operations: Operation[]) => {
+    if (!graph || busy) return;
+    await submit(
+      pending ?? {
+        expected_revision: editor
+          ? (draftRevision.current ?? graph.revision)
+          : graph.revision,
+        idempotency_key: cryptoId(),
+        operations,
+      },
+    );
+  };
+  const open = (kind: "object" | "relationship" | "schema", edit = false) => {
+    draftRevision.current = graph?.revision;
+    setEditor(kind);
+    setEditing(edit);
+    setPending(undefined);
+    setError("");
+    void loadEvidence();
+  };
+  const filtered =
+    graph?.objects.filter(
+      (o) =>
+        o.label.toLowerCase().includes(query.toLowerCase()) &&
+        (!category ||
+          graph.schema.types.find((t) => t.name === o.classification.value)
+            ?.category === category),
+    ) ?? [];
+  const showClaim = (claim: Claim, title: string) => (
+    <article className={`am-claim ${claim.status}`} key={title}>
+      <h3>{title}</h3>
+      <p>{String(claim.value)}</p>
+      <strong className="am-status">{claim.status}</strong>
+      <span> · {claim.review}</span>
+      {claim.reason && <p>{claim.reason}</p>}
+      <details>
+        <summary>Evidence ({claim.evidence.length}) and provenance</summary>
+        <p>
+          {claim.producer} ·{" "}
+          {claim.updated_at ? new Date(claim.updated_at).toLocaleString() : ""}
+        </p>
+        {claim.evidence.map((r) => (
+          <button
+            className="button secondary"
+            key={r.kind + r.id + r.role}
+            onClick={() => {
+              setParams((current) => {
+                const next = new URLSearchParams(current);
+                next.set("evidence", `${r.kind}:${r.id}`);
+                next.set("evidenceRevision", String(r.revision));
+                return next;
+              });
+              void loadEvidence();
+            }}
+          >
+            {r.role} · {r.kind.replaceAll("_", " ")}
+          </button>
+        ))}
+      </details>
+    </article>
+  );
+  const ev = params.get("evidence");
+  const selectedEvidence = evidence.find((e) => `${e.kind}:${e.id}` === ev);
+  useEffect(() => {
+    if (!ev || !api) return;
+    const split = ev.indexOf(":");
+    if (split < 0) return;
+    let active = true;
+    void api
+      .request<Evidence>(
+        `${base}/evidence/${encodeURIComponent(ev.slice(0, split))}/${encodeURIComponent(ev.slice(split + 1))}`,
+      )
+      .then((e) => {
+        if (active)
+          setEvidence((v) => [
+            ...v.filter((x) => x.id !== e.id || x.kind !== e.kind),
+            e,
+          ]);
+      })
+      .catch((e) => {
+        if (active) setError(`Evidence unavailable. ${String(e)}`);
+      });
+    return () => {
+      active = false;
+    };
+  }, [ev, api, base]);
+  return (
+    <div className="page application-model-page">
+      <PageHeader
+        title="Application model"
+        description="Explore what the evidence supports. Question what remains uncertain."
+      />
+      {legacy && (
+        <p role="status">
+          This older link now opens the project model. Browser evidence is
+          retained.
+        </p>
+      )}
+      {error && (
+        <div role="alert" className="am-error">
+          <p>{error}</p>
+          <button
+            className="button secondary"
+            disabled={busy}
+            onClick={() => {
+              setError("");
+              void (pending
+                ? submit(pending)
+                : load().catch((e) => setError(String(e))));
+            }}
+          >
+            Retry
+          </button>
+          {pending && (
+            <>
+              <details>
+                <summary>Review retained draft</summary>
+                <pre>{JSON.stringify(pending.operations, null, 2)}</pre>
+              </details>
+              {graph && graph.revision !== pending.expected_revision && (
+                <button
+                  className="button secondary"
+                  disabled={busy}
+                  onClick={() =>
+                    void submit({
+                      ...pending,
+                      expected_revision: graph.revision,
+                      idempotency_key: cryptoId(),
+                    })
+                  }
+                >
+                  Apply reviewed draft to revision {graph.revision}
+                </button>
+              )}
+              <button
+                className="button secondary"
+                onClick={() => {
+                  setPending(undefined);
+                  setError("");
+                }}
+              >
+                Continue editing draft
+              </button>
+            </>
+          )}
+        </div>
+      )}
+      {notice && <p role="status">{notice}</p>}
+      {!graph && !error && <p role="status">Loading project model…</p>}
+      {graph && (
+        <>
+          <div className="am-actions">
+            <button className="button primary" onClick={() => open("object")}>
+              Add object
+            </button>
+            <button
+              className="button secondary"
+              disabled={!graph.objects.length}
+              onClick={() => open("relationship")}
+            >
+              Link objects
+            </button>
+            <button className="button secondary" onClick={() => open("schema")}>
+              Define project schema
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => void loadHistory()}
+            >
+              Revision history
+            </button>
+            <button
+              className="button secondary"
+              onClick={() => void loadEvidence()}
+            >
+              Browse evidence
+            </button>
+            <span className="am-hint">Revision {graph.revision}</span>
+          </div>
+          {!graph.objects.length && (
+            <section className="panel am-empty">
+              <h2>Build a model from evidence</h2>
+              <p>
+                Browse the project site and ask the assistant to compose
+                meaningful objects, or create an object. The catalog adds no
+                empty nodes.
+              </p>
+              <Link to={`/projects/${engagement!.id}/workbench?view=browser`}>
+                Open Browser
+              </Link>
+            </section>
+          )}
+          <div className="am-workspace">
+            <aside className="panel am-outline" aria-label="Object outline">
+              <h2>
+                Objects <small>{graph.objects.length}</small>
+              </h2>
+              <label>
+                Search objects
+                <input
+                  value={query}
+                  onChange={(e) => select("q", e.target.value)}
+                />
+              </label>
+              <label>
+                Category
+                <select
+                  value={category}
+                  onChange={(e) => select("category", e.target.value)}
+                >
+                  <option value="">All categories</option>
+                  {graph.schema.categories.map((c) => (
+                    <option key={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+              {graph.schema.categories.map((c) => {
+                const items = filtered.filter(
+                  (o) =>
+                    graph.schema.types.find(
+                      (t) => t.name === o.classification.value,
+                    )?.category === c.name,
+                );
+                return items.length ? (
+                  <section key={c.name}>
+                    <h3>{c.name}</h3>
+                    {items.map((o) => (
+                      <button
+                        className={`button secondary am-object ${o.id === objectId ? "selected" : ""}`}
+                        key={o.id}
+                        onClick={() => select("object", o.id)}
+                      >
+                        {o.label}
+                        <small>
+                          {String(o.classification.value)} ·{" "}
+                          {o.classification.status}
+                        </small>
+                      </button>
+                    ))}
+                  </section>
+                ) : null;
+              })}
+              {!filtered.length && graph.objects.length > 0 && (
+                <p>
+                  No objects match.{" "}
+                  <button
+                    className="button secondary"
+                    onClick={() => {
+                      select("q", "");
+                      select("category", "");
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                </p>
+              )}
+            </aside>
+            <section className="am-map" aria-label="Project relationships">
+              <h2>Relationships</h2>
+              <p className="am-legend">
+                ━━ Observed · ┄┄ Hypothesized · ··· Disputed
+              </p>
+              <label>
+                Neighborhood depth
+                <select
+                  value={depth}
+                  onChange={(e) => select("depth", e.target.value)}
+                >
+                  {[1, 2, 3].map((n) => (
+                    <option key={n} value={n}>
+                      {n} {n === 1 ? "hop" : "hops"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div
+                className={`am-desktop-map ${params.get("map") === "show" ? "am-show-map" : ""}`}
+              >
+                <ApplicationModelGraph
+                  objects={filtered}
+                  layoutObjects={graph.objects}
+                  relationships={graph.relationships}
+                  selected={objectId}
+                  depth={depth}
+                  onSelect={(id) => select("object", id)}
+                  onRelationship={(id) => select("relationship", id)}
+                />
+              </div>
+              <button
+                className="button am-map-toggle"
+                onClick={() =>
+                  select("map", params.get("map") === "show" ? "" : "show")
+                }
+              >
+                {params.get("map") === "show" ? "Hide map" : "Show map"}
+              </button>
+              <div className="am-relationship-list">
+                {graph.relationships
+                  .filter(
+                    (r) =>
+                      (!objectId ||
+                        r.source === objectId ||
+                        r.target === objectId) &&
+                      filtered.some(
+                        (o) => o.id === r.source || o.id === r.target,
+                      ),
+                  )
+                  .map((r) => (
+                    <button
+                      className={`button secondary am-relation ${r.claim.status}`}
+                      key={r.id}
+                      onClick={() => select("relationship", r.id)}
+                    >
+                      {graph.objects.find((o) => o.id === r.source)?.label} →{" "}
+                      {r.type} →{" "}
+                      {graph.objects.find((o) => o.id === r.target)?.label}
+                      <small>{r.claim.status}</small>
+                    </button>
+                  ))}
+                {!graph.relationships.length && (
+                  <p>
+                    No relationships yet. Link objects when their relationship
+                    is supported by evidence or an explicit hypothesis.
+                  </p>
+                )}
+              </div>
+            </section>
+            <aside className="panel am-inspector" aria-label="Model inspector">
+              {editor ? (
+                <fieldset
+                  disabled={busy || !!pending}
+                  className="am-editor-boundary"
+                >
+                  {editor === "object" ? (
+                    <ObjectEditor
+                      key={editing ? objectId : "new"}
+                      graph={graph}
+                      item={editing ? object : undefined}
+                      evidence={evidence}
+                      save={save}
+                      cancel={() => setEditor(null)}
+                      busy={busy}
+                    />
+                  ) : editor === "relationship" ? (
+                    <RelationshipEditor
+                      key={editing ? edgeId : "new"}
+                      graph={graph}
+                      item={editing ? edge : undefined}
+                      evidence={evidence}
+                      save={save}
+                      cancel={() => setEditor(null)}
+                      busy={busy}
+                    />
+                  ) : (
+                    <SchemaEditor
+                      graph={graph}
+                      save={save}
+                      cancel={() => setEditor(null)}
+                      busy={busy}
+                    />
+                  )}
+                </fieldset>
+              ) : (
+                <>
+                  <h2>
+                    {object?.label ?? (edge ? edge.type : "Inspect the model")}
+                  </h2>
+                  {((objectId && !object) || (edgeId && !edge)) && (
+                    <p role="status">
+                      This item is unavailable or was dismissed.{" "}
+                      <button
+                        className="button secondary"
+                        onClick={() => {
+                          select("object", "");
+                          select("relationship", "");
+                        }}
+                      >
+                        Clear selection
+                      </button>
+                    </p>
+                  )}
+                  {object && (
+                    <>
+                      <p>Context: {object.authentication_context}</p>
+                      {showClaim(object.classification, "Classification")}
+                      {Object.entries(object.properties).map(([k, c]) => (
+                        <div key={k}>
+                          {showClaim(c, k)}
+                          <button
+                            className="button secondary"
+                            onClick={() => {
+                              const reason = window.prompt(`Why dismiss ${k}?`);
+                              if (reason)
+                                void save([
+                                  {
+                                    op: "dismiss",
+                                    kind: "property",
+                                    id: object.id,
+                                    property: k,
+                                    reason,
+                                  },
+                                ]);
+                            }}
+                          >
+                            Dismiss {k}
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        className="button secondary"
+                        onClick={() => open("object", true)}
+                      >
+                        Edit object
+                      </button>
+                    </>
+                  )}
+                  {edge && (
+                    <>
+                      {showClaim(
+                        edge.claim,
+                        `${graph.objects.find((o) => o.id === edge.source)?.label} → ${edge.type} → ${graph.objects.find((o) => o.id === edge.target)?.label}`,
+                      )}
+                      <button
+                        className="button secondary"
+                        onClick={() => open("relationship", true)}
+                      >
+                        Edit relationship
+                      </button>
+                    </>
+                  )}
+                  {(object || edge) && (
+                    <button
+                      className="button secondary"
+                      onClick={() => {
+                        const reason = window.prompt(
+                          "Why dismiss this interpretation? Original evidence and history are retained.",
+                        );
+                        if (reason)
+                          void save([
+                            {
+                              op: "dismiss",
+                              kind: object ? "object" : "relationship",
+                              id: object?.id ?? edge!.id,
+                              reason,
+                            },
+                          ]);
+                      }}
+                    >
+                      Dismiss selection
+                    </button>
+                  )}
+                  {!object && !edge && (
+                    <p>
+                      Select an object or labeled relationship to inspect
+                      individual claims and source evidence.
+                    </p>
+                  )}
+                </>
+              )}
+              {evidenceOffset !== null && (
+                <button
+                  className="button secondary"
+                  onClick={() => void loadEvidence(evidenceOffset)}
+                >
+                  Load more evidence
+                </button>
+              )}
+            </aside>
+          </div>
+          <section className="panel am-questions">
+            <h2>Ask about this model</h2>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                requestNebulaDraft(
+                  {
+                    text: `Application model question: ${question}\nProject revision: ${graph.revision}. Selected object: ${objectId || "none"}; relationship: ${edgeId || "none"}. Use model.search, model.neighborhood and model.get_evidence. Cite recorded evidence, identify contradictions, distinguish observed claims from interpretations, and propose changes before applying them.`,
+                    sourceKind: "application_model",
+                    sourceId: engagement!.id,
+                    sourceLabel: "Application model",
+                  },
+                  "chat",
+                );
+              }}
+            >
+              <label>
+                Model question
+                <textarea
+                  required
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  placeholder="What supports this relationship?"
+                />
+              </label>
+              <button className="button primary" disabled={!question.trim()}>
+                Discuss with assistant
+              </button>
+            </form>
+            <p className="am-hint">
+              Opens an editable draft in the existing assistant. Graph browsing
+              and editing work independently of the assistant runtime.
+            </p>
+          </section>
+          {!!evidence.length && (
+            <details className="panel am-evidence" open={!!ev}>
+              <summary>Recorded evidence ({evidence.length})</summary>
+              {(selectedEvidence ? [selectedEvidence] : evidence).map((e) => (
+                <article key={e.kind + e.id}>
+                  <h3>{e.kind.replaceAll("_", " ")}</h3>
+                  <p>
+                    {e.producer} · {e.occurred_at}
+                  </p>
+                  {params.get("evidenceRevision") &&
+                    Number(params.get("evidenceRevision")) !== e.revision && (
+                      <p role="status">
+                        This source changed after the cited revision. Review the
+                        saved source snapshot in revision history before
+                        changing the claim.
+                      </p>
+                    )}
+                  <dl>
+                    {Object.entries(e.facts).map(([k, v]) => (
+                      <div key={k}>
+                        <dt>{k}</dt>
+                        <dd>{String(v.value)}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {e.context.browser_session_id && (
+                    <Link
+                      to={`/projects/${engagement!.id}/workbench?view=browser&browserSession=${encodeURIComponent(e.context.browser_session_id)}${e.kind === "browser_traffic" ? `&browserEngine=native&browserTool=traffic&browserExchange=${encodeURIComponent(e.id)}` : ""}`}
+                    >
+                      Open source browser
+                    </Link>
+                  )}
+                  {e.kind === "evidence" && (
+                    <Link to={`/projects/${engagement!.id}/evidence/${e.id}`}>
+                      Open original evidence
+                    </Link>
+                  )}
+                </article>
+              ))}
+              {selectedEvidence && (
+                <button
+                  className="button secondary"
+                  onClick={() => select("evidence", "")}
+                >
+                  All evidence
+                </button>
+              )}
+              {evidenceOffset !== null && (
+                <button
+                  className="button secondary"
+                  onClick={() => void loadEvidence(evidenceOffset)}
+                >
+                  Load more evidence
+                </button>
+              )}
+            </details>
+          )}
+          {!!history.length && (
+            <details className="panel am-history" open>
+              <summary>Revision history</summary>
+              {history.map((h) => (
+                <article key={h.revision}>
+                  <h3>Revision {h.revision}</h3>
+                  <p>
+                    {h.producer} · {new Date(h.updated_at).toLocaleString()}
+                  </p>
+                  {h.changes.map((c, i) => (
+                    <details key={i}>
+                      <summary>
+                        {c.op.replaceAll("_", " ")}
+                        {c.reason ? ` · ${c.reason}` : ""}
+                      </summary>
+                      <pre>
+                        {JSON.stringify(
+                          { before: c.before, after: c.after },
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </details>
+                  ))}
+                </article>
+              ))}
+              {historyMore && (
+                <button
+                  className="button secondary"
+                  onClick={() => void loadHistory(historyAfter)}
+                >
+                  More history
+                </button>
+              )}
+            </details>
+          )}
+        </>
+      )}
+    </div>
+  );
 }

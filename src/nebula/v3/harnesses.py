@@ -5395,13 +5395,15 @@ class HarnessRuntimeService:
                     "harness command-runtime snapshot has invalid tool names"
                 )
         try:
-            components: RuntimeToolComponents | AutomationToolComponents | None = (
-                self.automation_tool_platform.chat_components(
-                    engagement_id=engagement_id,
-                )
-                if self.automation_tool_platform is not None
-                else None
-            )
+            components: RuntimeToolComponents | AutomationToolComponents | None = None
+            if self.automation_tool_platform is not None:
+                try:
+                    components = self.automation_tool_platform.chat_components(
+                        engagement_id=engagement_id
+                    )
+                except AutomationRuntimeUnavailable:
+                    # Project graph access remains available without a command runtime.
+                    components = None
             if include_browser:
                 if self.browser_automation_platform is None:
                     raise HarnessConfigurationError(
@@ -5414,26 +5416,14 @@ class HarnessRuntimeService:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
-            engagement = self.store.get(Engagement, engagement_id)
-            scope = (
-                self.store.get(ScopePolicy, engagement.scope_policy_id)
-                if engagement.scope_policy_id is not None
-                else None
-            )
-            if scope is not None and scope.engagement_id == engagement_id:
-                from .application_model.tools import project_components
+            from .application_model.tools import standalone_components
 
-                model_components = project_components(
-                    self.store,
-                    engagement_id,
-                    scope,
-                    self.workspace_resolver(engagement_id),
-                )
-                if components is None:
-                    components = model_components
-                else:
-                    components = combine_tool_components(components, model_components)
-                application_model_available = True
+            model_components = standalone_components(self.store, engagement_id)
+            if components is None:
+                components = model_components
+            else:
+                components = combine_tool_components(components, model_components)
+            application_model_available = True
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
                 return None, None
@@ -5453,7 +5443,7 @@ class HarnessRuntimeService:
         if include_browser:
             resolved["browser_runtime_enabled"] = True
         if application_model_available:
-            resolved["application_model_runtime"] = "v1"
+            resolved["application_model_runtime"] = "v2"
         if snapshot is not None and resolved != snapshot:
             raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"

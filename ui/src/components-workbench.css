@@ -2432,3 +2432,10 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .quiet-icon-action:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .action-tooltip { position: fixed; z-index: 10000; max-width: min(280px, calc(100vw - 16px)); padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); box-shadow: 0 4px 16px #0003; font-size: 12px; line-height: 1.4; font-weight: 400; overflow-wrap: anywhere; pointer-events: none; }
+
+/* File inspection owns the space; destructive maintenance is disclosed on demand. */
+.workspace-reset-summary { flex: 0 0 auto; margin: 0; padding: 8px 12px; color: var(--muted); font-size: var(--type-secondary); border-top: 1px solid var(--border-soft); }
+.workspace-reset-disclosure { flex: 0 0 auto; border-top: 1px solid var(--border-soft); }
+.workspace-reset-disclosure > summary { min-height: var(--touch-target); display: list-item; align-content: center; padding: 8px 12px; cursor: pointer; color: var(--muted); font-size: var(--type-control); }
+.workspace-reset-disclosure > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
+.workspace-reset-disclosure > .workspace-reset { max-height: 35vh; overflow-y: auto; margin: 0 12px 12px; }

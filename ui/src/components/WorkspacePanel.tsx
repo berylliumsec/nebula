@@ -94,7 +94,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   }, [loadResetStatus]);
 
   useEffect(() => {
-    if (!resetStatus || resetStatus.canReset) return;
+    if (!resetStatus || resetStatus.canReset || resetStatus.reasonCode === "linked_workspace") return;
     const controller = new AbortController();
     const timer = window.setInterval(() => void loadResetStatus(controller.signal), 2_000);
     return () => { window.clearInterval(timer); controller.abort(); };
@@ -326,12 +326,15 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
           {selected?.kind === "symlink" ? <div className="empty-state"><Link2 size={22} /><strong>Inert symbolic link</strong><p>Nebula will not follow, preview, download, or preserve this entry.</p></div> : selected?.kind === "file" ? <><header><div><h3>{selected.name}</h3><p>{selected.path} · {sizeLabel(selected.size)}</p></div><div><IconAction icon={Download} label="Download" title="Download file" onClick={() => void download()} />{preview && onUseWithAssistant && <button className="button secondary" type="button" onClick={() => onUseWithAssistant({ text: preview.text, sourceKind: "workspace_file", sourceId: selected.path, sourceLabel: selected.name, truncated: preview.truncated })}><MessageSquareText size={13} /> Use with Assistant</button>}<button className="button primary" type="button" onClick={() => void promote()}><FileCheck2 size={13} /> Preserve as Evidence</button></div></header>{preview ? <><pre data-selection-source-kind="workspace_file" data-selection-source-id={selected.path} data-selection-source-label={selected.name}>{preview.text}</pre>{preview.truncated && <p>Preview stops at 256 KiB. Download or preserve uses exact full bytes.</p>}</> : <div className="empty-state compact"><File size={21} /><strong>No plain-text preview</strong><p>The file may be binary, non-UTF-8, or still loading.</p></div>}</> : <div className="empty-state"><Folder size={23} /><strong>Select a workspace file</strong><p>Preview is read-only and bounded to 256 KiB.</p></div>}
         </section>
       </div>
-      <section className="workspace-reset panel">
+      {resetStatus?.reasonCode === "linked_workspace" ? <p className="workspace-reset-summary">Linked folder · bulk reset is unavailable.</p> : <details className="workspace-reset-disclosure" key={engagementId}>
+        <summary>Reset scratch workspace…</summary>
+        <section className="workspace-reset panel">
         <div><Trash2 size={18} /><span><strong>Reset scratch workspace</strong><small>Application-enforced limits: 5 GiB allocated data, 50,000 entries, 1 GiB per file. Promoted artifacts survive reset.</small></span></div>
         <label>Type <strong>{engagementName}</strong><input value={resetName} onChange={(event) => setResetName(event.target.value)} /></label>
         {resetStatus && !resetStatus.canReset && <div className="callout workspace-reset-blocker" role="status"><AlertTriangle size={18} /><div><strong>Workspace is in use</strong><p>{resetStatus.detail}</p></div>{resetStatus.activeTerminalCount > 0 && <button className="button secondary" type="button" onClick={onOpenTerminal}><SquareTerminal size={14} /> Open Terminal</button>}{resetStatus.activeExecutionCount > 0 && <button className="button secondary" type="button" onClick={onOpenActivity}><Activity size={14} /> View Activity</button>}</div>}
         <button className="button danger" type="button" disabled={resetName !== engagementName || resetStatusLoading || resetStatus?.canReset !== true} onClick={() => void reset()}>{resetStatusLoading ? "Checking…" : "Reset workspace"}</button>
-      </section>
+        </section>
+      </details>}
       {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
     </div>
   );

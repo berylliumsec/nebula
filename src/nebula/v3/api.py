@@ -1695,12 +1695,6 @@ def create_app(
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
-            await start_component(
-                "capture",
-                "application-model-projector",
-                application_model.startup,
-                application_model.shutdown,
-            )
         except BaseException:
             await stop_components()
             raise

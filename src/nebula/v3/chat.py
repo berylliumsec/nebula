@@ -1118,8 +1118,15 @@ class ChatService:
                 )
             ):
                 browser_session_id = None
+        model_context = any(
+            item.source_kind == "application_model"
+            for item in request.context_attachments
+        )
         tools_enabled = (
-            request.tools_enabled or bool(mcp_profiles) or bool(browser_session_id)
+            request.tools_enabled
+            or bool(mcp_profiles)
+            or bool(browser_session_id)
+            or model_context
         )
         if tools_enabled:
             if engagement_id is None:
@@ -1174,7 +1181,7 @@ class ChatService:
                     )
                 elif extra_components is not None:
                     tool_components = extra_components
-                elif browser_session_id is None:
+                elif browser_session_id is None and not model_context:
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
                     )
@@ -1198,6 +1205,13 @@ class ChatService:
                     tool_components = combine_tool_components(
                         tool_components,
                         browser_components,
+                    )
+                if model_context and not browser_session_id:
+                    from .application_model.tools import standalone_components
+
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        standalone_components(self.store, engagement_id),
                     )
             except Exception as exc:
                 record_caught_exception(
@@ -1240,6 +1254,7 @@ class ChatService:
                     ],
                     "include_oci_tools": request.tools_enabled,
                     "browser_session_id": browser_session_id,
+                    "application_model_context": model_context,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -2195,6 +2210,15 @@ class ChatService:
                     )
                 )
                 components = combine_tool_components(components, browser_components)
+            if (
+                turn.request_snapshot.get("application_model_context")
+                and not browser_session_id
+            ):
+                from .application_model.tools import standalone_components
+
+                components = combine_tool_components(
+                    components, standalone_components(self.store, turn.engagement_id)
+                )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
         except Exception as exc:

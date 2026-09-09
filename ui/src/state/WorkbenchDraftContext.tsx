@@ -62,6 +62,7 @@ export const ASSISTANT_CONTEXT_ITEM_LIMIT = 20;
 
 const handoffResourceKinds: Partial<Record<string, ResourceKind>> = {
   project: "project",
+  application_model: "project",
   conversation: "conversation",
   workbench: "conversation",
   note: "note",

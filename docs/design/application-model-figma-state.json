@@ -1,0 +1,577 @@
+{
+  "fileKey": "puxMgdpG9k7dPJj5KzYk2F",
+  "frames": {"Desktop overview":"2:44","Account":"4:30","Authentication":"4:45","Cookie":"4:60","Form":"4:75","JavaScript":"4:90","Response":"4:103","Firewall":"4:116","Database":"4:133","Evidence":"4:148","Conflicting evidence":"4:161","Edit claim":"4:174","Saved":"4:187","Add object":"4:200","Type selector":"4:215","Categories":"4:228","Custom type":"4:243","Custom relationship":"4:256","Edit relationship":"4:267","Choose endpoints":"4:282","Attach evidence":"4:293","History":"4:304","Ask":"4:315","Streaming":"4:330","Conflict":"4:341","States":"4:354","Loading":"4:375","Empty":"4:386","Error":"4:399","Unavailable":"4:410","Dense":"4:423","Dismiss":"4:438","Mobile Account":"4:449","Mobile Evidence":"4:464","Mobile Edit claim":"4:477","Mobile Saved":"4:490","Mobile Add object":"4:503","Mobile Edit relationship":"4:518","Mobile Custom type":"4:533","Mobile Ask":"4:546","Mobile Error":"4:561","Mobile Empty":"4:572","Mobile overview":"4:585","Mobile Authentication":"4:610","Mobile Cookie":"4:625","Mobile Form":"4:640","Mobile JavaScript":"4:655","Mobile Response":"4:668","Mobile Firewall":"4:681","Mobile Database":"4:698","Mobile Conflicting evidence":"4:713","Mobile Type selector":"4:726","Mobile Categories":"4:739","Mobile Custom relationship":"4:754","Mobile Choose endpoints":"4:765","Mobile Attach evidence":"4:776","Mobile History":"4:787","Mobile Streaming":"4:798","Mobile Conflict":"4:809","Mobile States":"4:822","Mobile Loading":"4:843","Mobile Unavailable":"4:854","Mobile Dense":"4:867","Mobile Dismiss":"4:882","Custom saved":"4:893","Mobile Custom saved":"4:906","Dismissed":"4:919","Mobile Dismissed":"4:932"},
+  "approval": "pending explicit user review",
+  "prototypeAudit": {"frames":68,"navigate":190,"back":66,"broken":[],"cross":[],"clipped":[]},
+  "setup": {
+    "pages": {
+      "walk": "0:1",
+      "foundations": "2:3",
+      "controls": "2:4"
+    },
+    "collection": "VariableCollectionId:2:5",
+    "mode": "2:0",
+    "createdNodeIds": [
+      "0:1",
+      "2:3",
+      "2:4"
+    ]
+  },
+  "vars": {
+    "canvas": "VariableID:2:6",
+    "surface": "VariableID:2:7",
+    "surface-raised": "VariableID:2:8",
+    "text": "VariableID:2:9",
+    "text-strong": "VariableID:2:10",
+    "muted": "VariableID:2:11",
+    "border": "VariableID:2:12",
+    "blue": "VariableID:2:13",
+    "green": "VariableID:2:14",
+    "yellow": "VariableID:2:15",
+    "red": "VariableID:2:16",
+    "focus": "VariableID:2:17",
+    "space-2": "VariableID:2:18",
+    "space-3": "VariableID:2:19",
+    "space-4": "VariableID:2:20",
+    "space-5": "VariableID:2:21",
+    "radius-control": "VariableID:2:22",
+    "radius-panel": "VariableID:2:23",
+    "touch-target": "VariableID:2:25"
+  },
+  "control": {
+    "createdNodeIds": [
+      "2:38",
+      "2:37",
+      "2:40",
+      "2:39",
+      "2:42",
+      "2:41",
+      "2:43"
+    ],
+    "control": "2:37",
+    "label": "Label#2:3",
+    "set": "2:43"
+  },
+  "desktop": {
+    "createdNodeIds": [
+      "2:44",
+      "2:45",
+      "2:46",
+      "2:47",
+      "2:48",
+      "2:49",
+      "2:50",
+      "2:51",
+      "2:52"
+    ],
+    "frame": "2:44",
+    "outline": "2:50",
+    "graph": "2:51",
+    "inspector": "2:52"
+  },
+  "screens": [
+    {
+      "key": "Account",
+      "title": "Account page",
+      "sub": "Page · Structure · /account",
+      "body": "Properties\nURL /account — Observed [1]\nTitle Account — Observed [1]\nAuthentication required — Hypothesized [2]\n\nRelationships\nAccount → authenticates_via → Sign-in flow\nSign-in form → accepts_input → Email input\nAccount → loads → app.js\n\nAn anonymous redirect suggests authentication. Access behavior in other roles remains unspecified.",
+      "actions": [
+        "Authentication",
+        "Evidence",
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Authentication",
+      "title": "Sign-in flow",
+      "sub": "AuthenticationFlow · Identity",
+      "body": "Observed: form and login response [2]\nHypothesized: Account authenticates_via Sign-in flow\n\nAuthentication context: anonymous browser → signed-in browser\nThese contexts remain distinct even when URLs match.\n\nCookie presence is observed. Its authentication role is a separate hypothesis.",
+      "actions": [
+        "Cookie",
+        "Evidence",
+        "Edit relationship",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Cookie",
+      "title": "session_hint",
+      "sub": "Cookie · Browser storage",
+      "body": "name: session_hint — Observed [2]\ndomain: site-a.test — Observed [2]\nhttpOnly: true — Observed [2]\n\nAuthentication uses_cookie session_hint\nHypothesized · 1 supporting reference · no confirming comparison\n\nThe value is omitted. Presence alone does not prove the cookie authenticates requests.",
+      "actions": [
+        "Evidence",
+        "Edit claim",
+        "History",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Form",
+      "title": "Sign-in form",
+      "sub": "Form → accepts_input → Input",
+      "body": "Action /login — Observed [1]\nMethod POST — Observed [1]\nInput name email — Observed [1]\n\nSign-in form → submits_to → Login operation\nAccount → loads → app.js\napp.js → executes → Submit handler\n\nObject identities include the source origin and authentication context.",
+      "actions": [
+        "JavaScript",
+        "Response",
+        "Evidence",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "JavaScript",
+      "title": "app.js",
+      "sub": "JavaScriptAsset specializes Asset",
+      "body": "URL /assets/app.js — Observed [1]\nContent type application/javascript — Observed [1]\n\nAccount → loads → app.js — Observed [1]\napp.js → executes → Submit handler — Hypothesized [1]\n\nA loaded script is not proof that every function executed.",
+      "actions": [
+        "Evidence",
+        "Form",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Response",
+      "title": "403 response",
+      "sub": "Response · APIs · Observed",
+      "body": "POST /login\nStatus 403 — Observed [2]\nContext anonymous · local controlled site\n\nThe response is the observation. Its cause remains uncertain.\nA firewall is one interpretation; application authorization is another.",
+      "actions": [
+        "Firewall",
+        "Evidence",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Firewall",
+      "title": "Possible firewall",
+      "sub": "Firewall · Security · Hypothesized",
+      "body": "Login operation → protected_by → Possible firewall\nHypothesized · proposed by assistant · revision 8\n\nSupporting [2]: a 403 response\nConflicting [3]: the same response occurs with invalid application credentials\n\nA 403 does not establish a firewall. Product, vendor and enforcement scope remain unspecified.",
+      "actions": [
+        "Evidence",
+        "Conflicting evidence",
+        "Edit claim",
+        "Dismiss",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Database",
+      "title": "Possible data lookup",
+      "sub": "QueryOperation specializes Operation",
+      "body": "Login operation → calls → Account lookup — Hypothesized\nAccount lookup → queries → Storage — Hypothesized\nStorage may be Database — Disputed\n\nSupporting [4]: response mentions a data lookup\nConflicting [5]: identical response from an in-memory fixture\n\nDatabase vendor, host, table and query text are unspecified. No backend topology is established.",
+      "actions": [
+        "Evidence",
+        "Conflicting evidence",
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Evidence",
+      "title": "Recorded browser evidence",
+      "sub": "Source context · illustrative local-site fixture",
+      "body": "[1] Page snapshot · Account / Sign in\nProducer browser capture · 2026-09-09 14:30 UTC\nOrigin http://site-a.test · anonymous context\n\n[2] POST /login → HTTP 403\nProducer browser capture · 14:31 UTC\nOriginal capture remains separate from graph objects.\n\nSupports: response status = 403\nDoes not establish: firewall, authentication-cookie role or backend topology.",
+      "actions": [
+        "Conflicting evidence",
+        "History",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Conflicting evidence",
+      "title": "Supporting & conflicting evidence",
+      "sub": "Claim: Login operation protected_by Possible firewall",
+      "body": "Supporting [2] · anonymous POST /login returned 403\nConflicting [3] · application credentials produce the same rejection\n\nSource context and producer are retained on each reference.\nEvidence can disagree without overwriting earlier claims.\n\nChoose a recorded capture to attach. The claim stays hypothesized until its observational basis changes.",
+      "actions": [
+        "Attach evidence",
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Edit claim",
+      "title": "Edit claim",
+      "sub": "Preserve meaning, status and provenance",
+      "body": "Claim: Login operation protected_by Possible firewall\n\nStatus     Hypothesized ▾\nOther choices: Observed / Disputed\nOperator review     Accepted interpretation\n\nAcceptance does not make this an observation.\nReason     Response alone does not establish enforcement.\nSupporting evidence     [2]\nConflicting evidence     [3]",
+      "actions": [
+        "Save claim",
+        "Conflicting evidence",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Saved",
+      "title": "Changes saved",
+      "sub": "Project Site A · revision 9",
+      "body": "The saved claim is now selected.\n\nLogin operation → protected_by → Possible firewall\nStatus: Hypothesized\nReview: Accepted interpretation\nEvidence: [2] supporting · [3] conflicting\n\nHistory records actor, timestamp, reason and previous revision.\nRefresh and reconnect restore this project revision.",
+      "actions": [
+        "Firewall",
+        "History",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Add object",
+      "title": "Create object",
+      "sub": "Discover a type, then fill its schema",
+      "body": "Category     Security ▾\nType     Firewall ▾\nDefinition     A network-traffic protection supported by evidence.\n\nLabel     Possible firewall\nStatus     Hypothesized\nIdentity context     Site A · anonymous\nEvidence     Browse recorded captures\n\nSecret values are excluded. Matching identities are offered for reuse.",
+      "actions": [
+        "Type selector",
+        "Evidence",
+        "Create object",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Type selector",
+      "title": "Choose an object type",
+      "sub": "Search types…   ·   77 built-in types   ·   project extensions",
+      "body": "Structure: Application, Site, Page, SiteLink, Route, Form, Input, Parameter, Button, Asset, Upload, Download\nAPIs: API, Endpoint, Operation, Request, Response, Header, Schema, GraphQLOperation, WebSocketChannel, EventStream, Webhook\nIdentity: User, Role, Permission, AuthenticationFlow, LoginMethod, Session, IdentityProvider, Token\nSecurity: SecurityPolicy, AccessControl, CSRFToken, RateLimit, Certificate, Firewall, WAF, BotProtection\nInfrastructure: Domain, Subdomain, Origin, Service, Server, Proxy, ReverseProxy, LoadBalancer, Gateway, CDN\nDependencies: Library, Framework, ExternalService, Storage, Database, Datastore, Cache, ObjectStorage, SearchIndex\nClient execution: JavaScriptAsset, ScriptModule, ClientComponent, EventHandler, ServiceWorker, WebWorker\nBrowser storage: Cookie, LocalStorage, SessionStorage, IndexedDB, BrowserCache\nBackend processing: Middleware, BackgroundJob, Queue, ScheduledTask\nData: Collection, Table, QueryOperation, File",
+      "actions": [
+        "Select Firewall",
+        "Custom type",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Categories",
+      "title": "Filter objects",
+      "sub": "Categories organize one project graph",
+      "body": "Structure · 6     APIs · 3     Identity · 1     Security · 1\nInfrastructure · 1     Dependencies · 1\nClient execution · 1     Browser storage · 1\nBackend processing · 0     Data · 0\n\nOnly instantiated objects appear. Empty categories do not add nodes.\n\nSelection: Security\nResult: Possible firewall · Hypothesized\n\nSearch and selection remain in the URL when filters change.",
+      "actions": [
+        "Apply Security filter",
+        "Clear filters",
+        "Type selector",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Custom type",
+      "title": "Define a project type",
+      "sub": "Same registry, validation, tools and renderer",
+      "body": "Name     TenantBoundary\nCategory     Security\nSpecializes     SecurityPolicy\nDefinition     A project-specific isolation boundary\n\nProperty     scope · text · optional\nIdentity hint     scope + authentication context\nCompatible relationships     governed_by, protected_by\nEvidence example     observed policy declaration\n\nApplies only to project Site A.",
+      "actions": [
+        "Save custom type",
+        "Custom relationship",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Custom relationship",
+      "title": "Define a relationship",
+      "sub": "Project schema · Site A",
+      "body": "Name     scoped_to\nDefinition     Restricts an object to a declared tenant boundary\nSource types     Page, Operation\nTarget types     TenantBoundary\nEvidence example     recorded policy declaration\n\nEndpoint compatibility and inherited types are validated before saving.",
+      "actions": [
+        "Save custom type",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Edit relationship",
+      "title": "Link objects",
+      "sub": "Searchable object selection · claim-level evidence",
+      "body": "From     Login operation ▾\nRelationship     protected_by ▾\nTo     Possible firewall ▾\n\nStatus     Hypothesized ▾\nSupporting evidence     [2] · browse captures\nConflicting evidence     [3]\nReason     One possible explanation of the rejection\n\nSave applies the object and relationship edits together.",
+      "actions": [
+        "Choose endpoints",
+        "Attach evidence",
+        "Save relationship",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Choose endpoints",
+      "title": "Choose an endpoint",
+      "sub": "Search objects in Site A",
+      "body": "Login operation · Operation · /login\nPossible firewall · Firewall · Hypothesized\nSign-in flow · AuthenticationFlow\nsession_hint · Cookie\n\nOnly compatible objects in this project are selectable.\nCurrent selection: Possible firewall",
+      "actions": [
+        "Use selected object",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Attach evidence",
+      "title": "Attach recorded evidence",
+      "sub": "Browse captures · Site A only",
+      "body": "Selected: [3] Application rejection response\nProducer: browser capture · 2026-09-09 14:33 UTC\nContext: invalid application credentials\n\nRole     Conflicts with claim ▾\nNote     Same response has an application-level explanation.\n\nOriginal source evidence is preserved.",
+      "actions": [
+        "Attach conflicting reference",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "History",
+      "title": "Claim history",
+      "sub": "Details disclosed on request",
+      "body": "Revision 9 · Operator · 14:40 UTC\nAccepted interpretation; status remains Hypothesized\nAdded conflicting reference [3]\n\nRevision 8 · Assistant · 14:35 UTC\nProposed protected_by relationship using [2]\n\nRevision 7 · Browser evidence · 14:31 UTC\nObserved response status 403\n\nView changes without replacing their original context.",
+      "actions": [
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Ask",
+      "title": "Ask about this model",
+      "sub": "Use recorded evidence, cite sources, propose interpretations",
+      "body": "Question\nDoes the 403 prove this site has a firewall?\n\nAnswer\nNo. We observed a 403 response [2]. Application-level rejection is also consistent with the conflicting evidence [3]. The protected_by relationship remains a hypothesis.\n\nProposed change\nRetain the hypothesis and attach [3] as conflicting evidence.\n\nYou review the proposed change before it is applied.",
+      "actions": [
+        "Evidence",
+        "Review proposed change",
+        "Streaming",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Streaming",
+      "title": "Asking about the model…",
+      "sub": "Reading recorded evidence [2] and [3]",
+      "body": "The response establishes its status code, but…\n\nReading evidence · 2 references\nSaved graph edits remain durable if you stop the answer.",
+      "actions": [
+        "Stop answer",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Conflict",
+      "title": "This claim changed while you edited",
+      "sub": "Your draft is retained · revision 9 is now available",
+      "body": "Your draft: Hypothesized, supporting [2]\nCurrent claim: Hypothesized, supporting [2], conflicting [3]\n\nReview the current revision before applying your draft.\nNo change has been silently overwritten.",
+      "actions": [
+        "Review current revision",
+        "Retry after review",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "States",
+      "title": "Model states",
+      "sub": "Recovery stays in the current workflow",
+      "body": "Preview loading, an empty project, error recovery, concurrent edits, unavailable assistant, or dense content.",
+      "actions": [
+        "Loading",
+        "Empty",
+        "Error",
+        "Conflict",
+        "Unavailable",
+        "Dense",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Loading",
+      "title": "Loading project model…",
+      "sub": "Fetching saved graph and selection",
+      "body": "Objects and evidence are loading.\nThe selected URL is retained until Core confirms whether it exists.",
+      "actions": [
+        "Finish loading",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Empty",
+      "title": "Build a model from evidence",
+      "sub": "No objects yet",
+      "body": "Browse the local site and ask the assistant to compose meaningful objects, or create an object yourself.\n\nThe full type catalog is available without adding empty nodes.",
+      "actions": [
+        "Add object",
+        "Ask",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Error",
+      "title": "Could not load the latest model",
+      "sub": "Your draft is retained",
+      "body": "The connection was interrupted. Saved project data remains on Core.\n\nRetry here to reload the durable revision and recover your selection.",
+      "actions": [
+        "Retry",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Unavailable",
+      "title": "Model questions are unavailable",
+      "sub": "Graph browsing and editing still work",
+      "body": "No assistant runtime is available for this project.\nYou can inspect evidence and edit claims now.",
+      "actions": [
+        "Evidence",
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Dense",
+      "title": "Account neighborhood",
+      "sub": "Search: account · 48 matches · showing nearest 10",
+      "body": "Account → contains → Sign-in form\nSign-in form → accepts_input → Email input\nSign-in form → submits_to → Login operation\nAccount → loads → app.js\napp.js → executes → Submit handler\nLogin operation → protected_by → Possible firewall (Hypothesized)\nAccount lookup → queries → Storage (Hypothesized)\nStorage → depends_on → External service (Disputed)\n\nLong labels wrap in the inspector. Expand a selected neighborhood without moving unrelated nodes.",
+      "actions": [
+        "Expand neighborhood",
+        "Account",
+        "Database",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Dismiss",
+      "title": "Dismiss this interpretation?",
+      "sub": "Original evidence and revision history are retained",
+      "body": "Remove the Possible firewall interpretation from the active model.\n\nReason     403 is insufficient to establish the cause.\n\nLater capture retries will not silently restore the dismissed claim.",
+      "actions": [
+        "Confirm dismissal",
+        "Back"
+      ],
+      "mobile": false
+    },
+    {
+      "key": "Mobile Account",
+      "title": "Account page",
+      "sub": "Page · Structure · /account",
+      "body": "Properties\nURL /account — Observed [1]\nTitle Account — Observed [1]\nAuthentication required — Hypothesized [2]\n\nRelationships\nAccount → authenticates_via → Sign-in flow\nSign-in form → accepts_input → Email input\nAccount → loads → app.js\n\nAn anonymous redirect suggests authentication. Access behavior in other roles remains unspecified.",
+      "actions": [
+        "Authentication",
+        "Evidence",
+        "Edit claim",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Evidence",
+      "title": "Recorded browser evidence",
+      "sub": "Source context · illustrative local-site fixture",
+      "body": "[1] Page snapshot · Account / Sign in\nProducer browser capture · 2026-09-09 14:30 UTC\nOrigin http://site-a.test · anonymous context\n\n[2] POST /login → HTTP 403\nProducer browser capture · 14:31 UTC\nOriginal capture remains separate from graph objects.\n\nSupports: response status = 403\nDoes not establish: firewall, authentication-cookie role or backend topology.",
+      "actions": [
+        "Conflicting evidence",
+        "History",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Edit claim",
+      "title": "Edit claim",
+      "sub": "Preserve meaning, status and provenance",
+      "body": "Claim: Login operation protected_by Possible firewall\n\nStatus     Hypothesized ▾\nOther choices: Observed / Disputed\nOperator review     Accepted interpretation\n\nAcceptance does not make this an observation.\nReason     Response alone does not establish enforcement.\nSupporting evidence     [2]\nConflicting evidence     [3]",
+      "actions": [
+        "Save claim",
+        "Conflicting evidence",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Saved",
+      "title": "Changes saved",
+      "sub": "Project Site A · revision 9",
+      "body": "The saved claim is now selected.\n\nLogin operation → protected_by → Possible firewall\nStatus: Hypothesized\nReview: Accepted interpretation\nEvidence: [2] supporting · [3] conflicting\n\nHistory records actor, timestamp, reason and previous revision.\nRefresh and reconnect restore this project revision.",
+      "actions": [
+        "Firewall",
+        "History",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Add object",
+      "title": "Create object",
+      "sub": "Discover a type, then fill its schema",
+      "body": "Category     Security ▾\nType     Firewall ▾\nDefinition     A network-traffic protection supported by evidence.\n\nLabel     Possible firewall\nStatus     Hypothesized\nIdentity context     Site A · anonymous\nEvidence     Browse recorded captures\n\nSecret values are excluded. Matching identities are offered for reuse.",
+      "actions": [
+        "Type selector",
+        "Evidence",
+        "Create object",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Edit relationship",
+      "title": "Link objects",
+      "sub": "Searchable object selection · claim-level evidence",
+      "body": "From     Login operation ▾\nRelationship     protected_by ▾\nTo     Possible firewall ▾\n\nStatus     Hypothesized ▾\nSupporting evidence     [2] · browse captures\nConflicting evidence     [3]\nReason     One possible explanation of the rejection\n\nSave applies the object and relationship edits together.",
+      "actions": [
+        "Choose endpoints",
+        "Attach evidence",
+        "Save relationship",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Custom type",
+      "title": "Define a project type",
+      "sub": "Same registry, validation, tools and renderer",
+      "body": "Name     TenantBoundary\nCategory     Security\nSpecializes     SecurityPolicy\nDefinition     A project-specific isolation boundary\n\nProperty     scope · text · optional\nIdentity hint     scope + authentication context\nCompatible relationships     governed_by, protected_by\nEvidence example     observed policy declaration\n\nApplies only to project Site A.",
+      "actions": [
+        "Save custom type",
+        "Custom relationship",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Ask",
+      "title": "Ask about this model",
+      "sub": "Use recorded evidence, cite sources, propose interpretations",
+      "body": "Question\nDoes the 403 prove this site has a firewall?\n\nAnswer\nNo. We observed a 403 response [2]. Application-level rejection is also consistent with the conflicting evidence [3]. The protected_by relationship remains a hypothesis.\n\nProposed change\nRetain the hypothesis and attach [3] as conflicting evidence.\n\nYou review the proposed change before it is applied.",
+      "actions": [
+        "Evidence",
+        "Review proposed change",
+        "Streaming",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Error",
+      "title": "Could not load the latest model",
+      "sub": "Your draft is retained",
+      "body": "The connection was interrupted. Saved project data remains on Core.\n\nRetry here to reload the durable revision and recover your selection.",
+      "actions": [
+        "Retry",
+        "Back"
+      ],
+      "mobile": true
+    },
+    {
+      "key": "Mobile Empty",
+      "title": "Build a model from evidence",
+      "sub": "No objects yet",
+      "body": "Browse the local site and ask the assistant to compose meaningful objects, or create an object yourself.\n\nThe full type catalog is available without adding empty nodes.",
+      "actions": [
+        "Add object",
+        "Ask",
+        "Back"
+      ],
+      "mobile": true
+    }
+  ]
+}
