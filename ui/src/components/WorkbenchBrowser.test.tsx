@@ -223,15 +223,19 @@ describe("WorkbenchBrowser", () => {
 
   it("opens web addresses externally and can add them directly to Project Sources", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
-    const { onAddKnowledgeUrl } = renderBrowser();
+    const { onAddKnowledgeUrl, api } = renderBrowser();
+    await waitFor(() => expect(api.getSecurityBrowserWorkspace).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); });
     const address = screen.getByRole("textbox", { name: "Web address" });
     fireEvent.change(address, { target: { value: "docs.example.com/guide" } });
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(open).toHaveBeenCalledWith("https://docs.example.com/guide", "_blank", "noopener,noreferrer");
-    expect(screen.getByRole("status")).toHaveTextContent("Opened the page in a separate browser tab.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Opened the page in a separate browser tab.");
     expect(screen.getByText(/In scope · Matches Project scope revision 4/)).toBeVisible();
 
-    fireEvent.click(screen.getByRole("button", { name: "Add to Sources" }));
+    const addToSources = screen.getByRole("button", { name: "Add to Sources" });
+    await waitFor(() => expect(addToSources).toBeEnabled());
+    fireEvent.click(addToSources);
     await waitFor(() => expect(onAddKnowledgeUrl).toHaveBeenCalledWith("https://docs.example.com/guide"));
     expect(screen.getByRole("status")).toHaveTextContent("Guide is ready for cited retrieval.");
   });
