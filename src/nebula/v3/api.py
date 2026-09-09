@@ -8215,7 +8215,12 @@ def create_app(
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
     from .application_model.api import model_router
-    app.include_router(model_router(application_model), prefix=API_PREFIX, dependencies=[Depends(require_auth)])
+
+    app.include_router(
+        model_router(application_model),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
     app.include_router(
         catchup_router(store, harness_runtime),
         prefix=API_PREFIX,
@@ -10021,6 +10026,22 @@ def create_app(
             )
         return browser_security.finish_handoff(handoff_id, request)
 
+    async def delete_archived_project(project: Engagement) -> None:
+        if container_terminals is not None:
+            async with container_terminals.guard_workspace_operation(project.id):
+                store.delete_archived_engagement(
+                    project.id, expected_revision=project.revision
+                )
+        elif executions is not None:
+            async with executions.engagement_lock(project.id):
+                store.delete_archived_engagement(
+                    project.id, expected_revision=project.revision
+                )
+        else:
+            store.delete_archived_engagement(
+                project.id, expected_revision=project.revision
+            )
+
     for resource, model in ENTITY_MODEL_BY_KIND.items():
         if resource in CUSTOM_RESOURCES or resource.startswith("application_model_"):
             continue
@@ -10034,6 +10055,7 @@ def create_app(
             model,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
+            delete_archived_project=delete_archived_project,
         )
     _assert_unique_api_operations(app)
 
@@ -10415,6 +10437,7 @@ def _register_crud_routes(
     read_only: bool = False,
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
+    delete_archived_project: Callable[[Engagement], Any] | None = None,
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas."""
 
@@ -10631,6 +10654,13 @@ def _register_crud_routes(
                 )
             if model is Engagement:
                 assert isinstance(current, Engagement)
+                if current.status == "archived" and delete_archived_project is not None:
+                    if if_match is None:
+                        raise ConflictError(
+                            "Refresh the project and supply its revision in If-Match before deleting."
+                        )
+                    await delete_archived_project(current)
+                    return Response(status_code=204)
                 owned_scope: ScopePolicy | None = None
                 if current.scope_policy_id:
                     candidate = store.get(ScopePolicy, current.scope_policy_id)

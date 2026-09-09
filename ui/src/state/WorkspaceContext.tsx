@@ -90,6 +90,7 @@ interface WorkspaceContextValue {
   resourceStatus: Record<WorkspaceResource, ResourceStatus>;
   engagements: EngagementSummary[];
   archivedEngagements: EngagementSummary[];
+  deleteArchivedEngagement: (id: string) => Promise<void>;
   setEngagementArchived: (id: string, archived: boolean) => Promise<string | undefined>;
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
@@ -551,6 +552,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return created;
   }, [api, coreState]);
 
+  const deleteArchivedEngagement = useCallback(async (id: string) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to delete a project.");
+    await api.deleteArchivedEngagement(id);
+    const refreshed = await api.listEngagements();
+    setEngagements(refreshed.items);
+  }, [api, coreState]);
+
   const setEngagementArchived = useCallback(async (id: string, archived: boolean) => {
     if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to update a project.");
     await api.setEngagementArchived(id, archived);
@@ -987,6 +995,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       setEngagementArchived,
+      deleteArchivedEngagement,
       addAsset,
       createFinding,
       updateFinding,
@@ -1047,6 +1056,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       setEngagementArchived,
+      deleteArchivedEngagement,
       addAsset,
       createFinding,
       updateFinding,

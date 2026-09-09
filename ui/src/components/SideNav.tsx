@@ -1,5 +1,5 @@
 import { useRef, useState, type FormEvent } from "react";
-import { Archive, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
+import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
@@ -28,6 +28,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     engagements,
     archivedEngagements,
     setEngagementArchived,
+    deleteArchivedEngagement,
   } = useWorkspace();
   const confirm = useConfirmation();
   const switcherButton = useRef<HTMLButtonElement>(null);
@@ -83,6 +84,28 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
     }
   };
 
+  const deleteArchived = async (id: string, projectName: string) => {
+    if (updating) return;
+    setUpdating(true);
+    setProjectError(undefined);
+    setNotice(undefined);
+    try {
+      if (!await confirm({
+        title: `Permanently delete ${projectName}?`,
+        message: "This removes the archived project, chats, application model and project records. It cannot be undone. Workspace files, including the linked host folder, will not be deleted. Immutable audit logs and stored artifact files are retained.",
+        confirmLabel: "Delete permanently",
+        tone: "danger",
+      })) return;
+      await deleteArchivedEngagement(id);
+      setNotice("Project deleted. Workspace files were kept.");
+    } catch (failure) {
+      setProjectError(`Could not delete the project. ${failure instanceof Error ? failure.message : "Reconnect to Core and try again."}`);
+    } finally {
+      setUpdating(false);
+      requestAnimationFrame(() => switcherButton.current?.focus());
+    }
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -128,6 +151,7 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
             {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>
               {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
               <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
+              {showArchived && <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`Delete project ${item.name}`} title="Delete permanently" onClick={() => void deleteArchived(item.id, item.name)}><Trash2 size={16} aria-hidden="true" /></button>}
             </div>)}
             {(showArchived ? archivedEngagements : engagements).length === 0 && <p>{showArchived ? "No archived projects." : "No active projects. Create a project or restore an archived one."}</p>}
           </div>}

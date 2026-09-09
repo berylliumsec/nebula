@@ -4849,6 +4849,18 @@ export class ApiClient {
     );
   }
 
+  async deleteArchivedEngagement(id: string): Promise<void> {
+    const path = `engagements/${encodeURIComponent(id)}`;
+    try {
+      const current = await this.request<WireEngagement>(path);
+      if (current.status !== "archived") throw new Error("Archive the project before deleting it.");
+      await this.request<void>(path, { method: "DELETE", headers: { "If-Match": String(current.revision) } });
+    } catch (error) {
+      // Another device, or a saved delete whose response was lost, already removed it.
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+    }
+  }
+
   async setEngagementArchived(id: string, archived: boolean): Promise<EngagementSummary> {
     const path = `engagements/${encodeURIComponent(id)}`;
     const current = await this.request<WireEngagement>(path);

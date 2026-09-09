@@ -1,11 +1,11 @@
 {
-  "change_digest": "6b55c4284a62e18ddf036118bb1a7068c5eee1c26700c3775a4fb4e15028710b",
-  "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
-  "reason": "Remove project workspace quotas and recursive quota scans from terminal readiness/start/watchdog, reviewed execution and streamed uploads. Focused tests cover large folders, no-walk admission/uploads, exact execution, overwrite/concurrency and containment. Earlier graph/activity evidence recorded in design docs. Preserve idle-timeout supervision after removing periodic quota enforcement.",
-  "exclusions": "No unrelated backend/frontend/native suites. Dedicated production browser journey runs locally; WebKit host startup was previously blocked and will be rechecked. Physical devices unavailable. Copy-of-live graph repair is a bounded migration rehearsal, not a substitute for selected tests.",
+  "change_digest": "09be2933b97380ba8e214fe0e361b9287f3b1a90a023b75317a75c90ae8d3e40",
+  "reviewed_by": "Codex, user-approved archived project deletion",
+  "reason": "Archived project delete workflow: atomic owned-record cleanup, preservation of linked folder and unrelated projects, stale/busy rejection, confirmation and durable list refresh.",
+  "exclusions": "No unrelated suites or native code. Dedicated real-Core production browser journey runs locally in eight permanent profiles. Physical devices unavailable.",
   "expected_tests": {
     "python": 8,
-    "frontend": 22,
+    "frontend": 6,
     "native": 0,
     "playwright": 0
   },
@@ -15,18 +15,12 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_executions.py::test_large_workspace_preflight_does_not_walk_tree",
-    "tests/v3/test_executions.py::test_reviewed_execution_is_exact_isolated_redacted_and_idempotent",
-    "tests/v3/test_container_terminal.py::test_large_workspace_terminal_readiness_does_not_scan",
-    "tests/v3/test_container_terminal.py::test_reviewed_terminal_uses_only_the_fixed_container_shell",
-    "tests/v3/test_workspace.py::test_workspace_upload_is_atomic_without_quota_scan_and_requires_overwrite",
-    "tests/v3/test_workspace.py::test_workspace_upload_rejects_escape_and_symlink_destination",
-    "tests/v3/test_workspace.py::test_workspace_upload_if_match_prevents_lost_terminal_changes",
-    "tests/v3/test_container_terminal.py::test_terminal_idle_timeout_is_based_on_input_and_output_activity"
+    "tests/v3/test_archived_project_deletion.py",
+    "tests/v3/test_guarded_delete.py::test_engagement_delete_rejects_orphaning_owned_entities",
+    "tests/v3/test_guarded_delete.py::test_empty_engagement_can_still_be_deleted"
   ],
   "frontend": [
-    "ui/src/components/ContainerTerminalPanel.test.tsx",
-    "ui/src/components/WorkspacePanel.test.tsx"
+    "ui/src/api/projectRemoval.test.ts"
   ],
   "native": [],
   "playwright": [],
@@ -37,9 +31,9 @@
     "dedicated_playwright": 16
   },
   "local_playwright": {
-    "config": "ui/playwright.workspace-quota.config.ts",
+    "config": "ui/playwright.project-deletion.config.ts",
     "files": [
-      "workspace-quota.spec.ts"
+      "project-deletion.spec.ts"
     ],
     "projects": [
       "model-desktop",
@@ -52,6 +46,6 @@
       "model-webkit-430"
     ],
     "expected_tests": 8,
-    "boundary": "Disposable real Core with 6 GiB sparse file and 50,001 entries; production UI on LAN, no research commands"
+    "boundary": "Disposable real Core on LAN; production UI, no research commands or live project deletion"
   }
 }
