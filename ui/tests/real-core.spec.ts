@@ -1330,20 +1330,21 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await page.getByRole("button", { name: "New file", exact: true }).first().click();
     await page.getByRole("textbox", { name: "File path" }).fill("debug-proof.py");
     const debugEditor = page.getByRole("textbox", { name: "Code editor" });
-    await debugEditor.fill("value = 41\nprint(f'debug-finished:{value + 1}')\n");
+    await debugEditor.fill("def main():\n    value = 41\n    print(f'debug-finished:{value + 1}')\nmain()\n");
     await debugEditor.press("Control+S");
     await expect(
       page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready."),
     ).toBeVisible({ timeout: 30_000 });
     await debugEditor.press("Control+Home");
+    await debugEditor.press("ArrowDown");
     await page.getByRole("button", { name: "Debug saved Python" }).click();
     const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
-    const breakpointButton = debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" });
+    const breakpointButton = debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 2" });
     await breakpointButton.click();
     await expect(breakpointButton).toHaveAttribute("aria-pressed", "true");
     await debuggerPanel.getByRole("button", { name: "Start isolated debugger" }).click();
     await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 30_000 });
-    await expect(debuggerPanel.getByText(/debug-proof\.py:1/)).toBeVisible();
+    await expect(debuggerPanel.getByText(/debug-proof\.py:2/)).toBeVisible();
     await debuggerPanel.getByRole("button", { name: "Continue" }).click();
     await expect(debuggerPanel.getByText(/^ended/)).toBeVisible({ timeout: 30_000 });
     await expect(debuggerPanel.getByText(/debug-finished:42/)).toBeVisible();
