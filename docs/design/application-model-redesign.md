@@ -12,6 +12,33 @@ remain independent and do not instantiate objects. The URL owns selection and
 filters; component state owns unsaved drafts. The journey and gate matrix below
 remain the acceptance contract.
 
+## Authorized rebase and local deployment — 2026-09-09
+
+The operator requested rebasing on current main, pushing the branch, and updating
+its local server. Rebased on `origin/main` `450ef96`; resolved the sole conflict by
+retaining main's non-intercepting tooltip behavior and the compact reset controls.
+The reviewed focused test selection is `.github/test-selection.json`: 35 backend
+checks and 17 component checks passed. Production UI build passed, with index
+SHA-256 `260b84c416776f3034113c61e9111e0f9e70e29e1154ec92689e073f10ac323a`.
+The initial selected browser matrix passed 15/16; WebKit 320 was still bootstrapping
+at a five-second readiness assertion. The bounded readiness wait was increased to
+20 seconds and only that affected profile was selected for retry; both tests passed.
+
+Deployment contract: retain the existing service environment, credentials, data
+root, browser evidence and project folders; restart the user service onto an
+immutable exported checkout of this branch (not a new git worktree), preserving
+prior hashed UI assets for open clients. Verify served bundle identity, Core health,
+migration version, source counts and paired desktop/mobile LAN navigation.
+
+Before any live change, online SQLite backup
+`~/.local/share/nebula/v3/backups/pre-hypothesis-rebase-20260909.db` passed integrity
+checking. An isolated migration rehearsal removed 329 experimental model entities
+and preserved all 1,209 other entities byte-for-byte; migration reached
+`0014_application_graph` and integrity remained `ok`. Take another stopped-service
+backup immediately before deployment. The operational rollout receipt is retained
+with these backups. The live assistant/native-capture and physical-device limits
+recorded below remain separate from deployment verification.
+
 ## Implementation and acceptance — 2026-09-09
 
 This section supersedes the historical preparation/checkpoint statuses below.

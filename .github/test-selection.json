@@ -1,18 +1,61 @@
 {
-  "change_digest": "a418d63f73f9a26465c87b6b98909228e7d208585cf2410e655ffd784cb24be0",
-  "reviewed_by": "Codex, implementing the user's explicit focused-test policy",
-  "reason": "Test orchestration and policy only. Exercise impact selection, diff binding, local guards, exceptional full approval, and the release workflow dependency contract, including rejection of implicit product-suite reruns inside packaging.",
-  "exclusions": "No application behavior changes. No frontend component, native shell, browser journey, container sandbox, or migration tests are needed. Workflow YAML was parsed and the guarded Playwright CLI listed one selected test without execution.",
-  "expected_tests": {"python": 51, "frontend": 0, "native": 0, "playwright": 0},
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": true,
-  "python": [
-    "tests/test_playwright_impact.py",
-    "tests/test_test_selection.py",
-    "tests/v3/test_packaging.py::test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy"
+  "change_digest": "918d49ef3f10988956f77979ea60f96838f1faedb424e3a09f910d8560e09ee5",
+  "reviewed_by": "Codex, rebasing and deploying the user-approved application-model branch",
+  "reason": "Rebase changes shared workspace CSS and incorporates current Core/harness changes. Select graph persistence, migration, schema and exact assistant/harness dispatch boundaries plus the three graph/workspace component files. Dedicated production browser coverage is run locally with its existing disposable-Core configuration. One WebKit run was still visibly bootstrapping at the five-second assertion; readiness now has a bounded twenty-second wait, with an exact affected-profile retry.",
+  "exclusions": "No unrelated backend/frontend suites or native-shell changes. No container or live-provider execution. The dedicated application-model Playwright configuration is not in the main CI impact catalog; CI playwright is explicitly omitted, with local selection and evidence recorded below rather than pretending a main-config entry runs it.",
+  "expected_tests": {
+    "python": 35,
+    "frontend": 17,
+    "native": 0,
+    "playwright": 0
+  },
+  "python_versions": [
+    "3.11"
   ],
-  "frontend": [],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_application_model.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_chat.py::test_model_question_uses_graph_without_command_or_browser_runtime",
+    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model",
+    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities"
+  ],
+  "frontend": [
+    "ui/src/pages/ApplicationModelPage.test.tsx",
+    "ui/src/components/ApplicationModelGraph.test.tsx",
+    "ui/src/components/WorkspacePanel.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "local_playwright": {
+    "config": "ui/playwright.application-model.config.ts",
+    "files": [
+      "application-model.spec.ts",
+      "application-model-responsive.spec.ts"
+    ],
+    "projects": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-webkit-320",
+      "model-chromium-390",
+      "model-webkit-390",
+      "model-chromium-430",
+      "model-webkit-430"
+    ],
+    "expected_tests": 16,
+    "boundary": "Production bundle, disposable SQLite/Core/workspace, Chromium/WebKit emulation; no live provider or native capture engine",
+    "retry": {
+      "files": [
+        "application-model.spec.ts",
+        "application-model-responsive.spec.ts"
+      ],
+      "projects": [
+        "model-webkit-320"
+      ],
+      "expected_tests": 2
+    }
+  }
 }

@@ -84,7 +84,7 @@ test("project graph edits, evidence, custom schema and recovery persist through 
   await page.getByRole("button", { name: "Pair device", exact: true }).click();
   await expect(
     page.getByRole("button", { name: /Nebula Core (ready|degraded)/ }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
   await page.goto(
     `/projects/${project.id}/application-model?collection=old&state=retired`,
   );

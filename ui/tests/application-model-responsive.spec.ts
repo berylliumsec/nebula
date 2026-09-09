@@ -59,7 +59,7 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   await page.getByRole("button", { name: "Pair device", exact: true }).click();
   await expect(
     page.getByRole("button", { name: /Nebula Core (ready|degraded)/ }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 20_000 });
   await page.goto(
     `/projects/${project.id}/application-model?object=page-1&depth=2`,
   );
