@@ -9,6 +9,9 @@ Treat each change as an operator workflow, not an isolated component. Establish 
 behavioral contract before editing, test it through the real entry point, and do not
 claim completion without evidence for every applicable gate.
 
+Apply the repository's `docs/design/interface-principles.md` alongside these gates:
+icon-first secondary controls, minimal copy, subtle styling and accessible actions.
+
 ## 1. Establish the contract
 
 Before implementation:

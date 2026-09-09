@@ -41,6 +41,14 @@ If a required gate is unavailable, report the work as incomplete or partially
 verified and name the missing evidence. Never describe an untested workflow as
 supported, fixed, production-ready, or complete.
 
+## Interface design rules
+
+Read and apply [Interface principles](docs/design/interface-principles.md) for
+operator-visible changes. Prefer familiar icons for secondary actions, minimal
+copy, quiet styling and progressive disclosure. Keep primary decisions and
+consequences clear. Icon buttons require accessible names, tooltips, visible focus
+and usable touch targets. Subtle must never mean hidden, illegible or ambiguous.
+
 ## Product standard
 
 Nebula is an operator product, not a collection of API endpoints. Implement the

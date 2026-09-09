@@ -1,11 +1,11 @@
 {
-  "change_digest": "2f611a48a253fc2d49042e1c258ef0169edac1d42c73fe53a6062ec7ad449b2d",
-  "reviewed_by": "Codex, user-approved archived project deletion",
-  "reason": "Correct archived deletion authority: session envelopes may remain starting or stale with no active work. Harness turns, not session labels, determine unfinished execution. Preserve real queued/running/approval guards and folder safety.",
-  "exclusions": "No UI implementation changes: prior six client checks remain applicable. No unrelated suites. Existing production browser journey now includes an unused starting harness session; physical devices unavailable.",
+  "change_digest": "57e016371d110af782aca4b8944be34874cae86fe2f9a32f49b43323cb28a8ba",
+  "reviewed_by": "Codex, user-requested icon controls and minimal interface rules",
+  "reason": "Icon-first catch-up secondary controls and durable interface rules. Focused component tests preserve retry/dismiss behavior; production browser journey checks accessible icon, keyboard activation, touch geometry, failure/recovery and reload.",
+  "exclusions": "No backend or native implementation changes, so no unrelated backend/native suites. Dedicated real-Core browser journey uses existing saved-chat fixture. Physical devices unavailable.",
   "expected_tests": {
-    "python": 14,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 2,
     "native": 0,
     "playwright": 0
   },
@@ -14,12 +14,10 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_archived_project_deletion.py",
-    "tests/v3/test_guarded_delete.py::test_engagement_delete_rejects_orphaning_owned_entities",
-    "tests/v3/test_guarded_delete.py::test_empty_engagement_can_still_be_deleted"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ChatCatchUp.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [],
   "previous_verification": {
@@ -29,9 +27,9 @@
     "dedicated_playwright": 16
   },
   "local_playwright": {
-    "config": "ui/playwright.project-deletion.config.ts",
+    "config": "ui/playwright.catch-up.config.ts",
     "files": [
-      "project-deletion.spec.ts"
+      "catch-up.spec.ts"
     ],
     "projects": [
       "model-desktop",
@@ -44,6 +42,6 @@
       "model-webkit-430"
     ],
     "expected_tests": 8,
-    "boundary": "Disposable real Core on LAN; production UI, no research commands or live project deletion"
+    "boundary": "Saved disposable chat, injected network failure then real-Core catch-up recovery; production LAN"
   }
 }
