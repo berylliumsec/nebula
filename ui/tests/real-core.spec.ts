@@ -1338,7 +1338,9 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await debugEditor.press("Control+Home");
     await page.getByRole("button", { name: "Debug saved Python" }).click();
     const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
-    await debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" }).click();
+    const breakpointButton = debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" });
+    await breakpointButton.click();
+    await expect(breakpointButton).toHaveAttribute("aria-pressed", "true");
     await debuggerPanel.getByRole("button", { name: "Start isolated debugger" }).click();
     await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 30_000 });
     await expect(debuggerPanel.getByText(/debug-proof\.py:1/)).toBeVisible();

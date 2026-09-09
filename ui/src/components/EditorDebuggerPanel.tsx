@@ -509,6 +509,7 @@ export function EditorDebuggerPanel({
             <button
               className="button quiet"
               type="button"
+              aria-pressed={breakpoints.includes(cursorLine)}
               onClick={() => onToggleBreakpoint(cursorLine)}
             >
               Toggle breakpoint at line {cursorLine}
