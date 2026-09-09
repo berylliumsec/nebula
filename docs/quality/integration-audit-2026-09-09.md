@@ -81,7 +81,10 @@ capabilities are introduced.
   click. Three local 430 repetitions passed. This log alone does not establish
   a hidden-control bug. Bounded action timing and readiness diagnostics distinguish
   actionability failures from overall test-budget exhaustion; CI now retains
-  failed browser traces and error contexts for seven days.
+  failed browser traces and error contexts for seven days, including tests that
+  pass on retry. A later hosted 430 run passed on retry: its initial click timed
+  out at ten seconds despite an open sidebar and onscreen bounds. This existing
+  project-removal flake remains unresolved; it is not an audited product fix.
 
 The complete hosted CI checks remain the merge gate. These local results do not
 claim physical Safari validation or a new release/package publication.

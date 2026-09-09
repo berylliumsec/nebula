@@ -151,8 +151,8 @@ jobs:
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
           npm --prefix ui run test:e2e -- "${args[@]}"
-      - name: Retain failed browser evidence
-        if: failure()
+      - name: Retain browser failure and retry evidence
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: playwright-failure-${{ strategy.job-index }}-${{ matrix.project }}
