@@ -5476,12 +5476,12 @@ class HarnessRuntimeService:
         return components, resolved
 
     def _ensure_oci_components(
-        self, session: HarnessSession
+        self, session: HarnessSession, *, validate_current: bool = False
     ) -> RuntimeToolComponents | AutomationToolComponents | None:
         if session.metadata.get("command_runtime_enabled") is False:
             return None
         cached = self._gateway_oci_components.get(session.id)
-        if cached is not None:
+        if cached is not None and not validate_current:
             return cached
         raw_snapshot = session.metadata.get("command_runtime_snapshot")
         snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
@@ -6115,7 +6115,9 @@ class HarnessRuntimeService:
             forked_from_session_id = previous_session_id
             session_rollover_reason = "workspace_connection_changed"
         try:
-            oci_components = self._ensure_oci_components(session)
+            # The cached broker still has its frozen mode. Validate at the next
+            # turn boundary so an explicit project change gets a fresh session.
+            oci_components = self._ensure_oci_components(session, validate_current=True)
         except HarnessCommandRuntimeSnapshotMismatch:
             if not chat_session_id:
                 raise

@@ -12,7 +12,9 @@ rules to new interfaces and to the controls touched by a fix; avoid unrelated re
    clear labels. Do not replace an explanation with an ambiguous symbol.
 3. **Use minimal presentation.** Remove redundant labels and repeated instructions.
    Prefer one concise status line to a large card. Group related secondary actions
-   near their content; avoid competing toolbars and decorative containers.
+   near their content; avoid competing toolbars and decorative containers. Align
+   status strips with their content or composer using equal side margins. Preserve
+   useful elapsed time, current work, progress and expansion when simplifying a strip.
 4. **Be subtle, not hidden.** Secondary controls use quiet styling, restrained
    borders and neutral colors. Reserve emphasis for the main action and actionable
    problems. Controls must remain discoverable on touch devices without hover.

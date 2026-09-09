@@ -1,11 +1,11 @@
 {
-  "change_digest": "57e016371d110af782aca4b8944be34874cae86fe2f9a32f49b43323cb28a8ba",
-  "reviewed_by": "Codex, user-requested icon controls and minimal interface rules",
-  "reason": "Icon-first catch-up secondary controls and durable interface rules. Focused component tests preserve retry/dismiss behavior; production browser journey checks accessible icon, keyboard activation, touch geometry, failure/recovery and reload.",
-  "exclusions": "No backend or native implementation changes, so no unrelated backend/native suites. Dedicated real-Core browser journey uses existing saved-chat fixture. Physical devices unavailable.",
+  "change_digest": "ceaf6b9eec5fe3beaced588ddc46852911ea88fe35f5b970c96eff830e56db05",
+  "reviewed_by": "Codex, runtime-mode incident investigation",
+  "reason": "Validate command runtime snapshots at warm chat turn boundaries; retain safe rollover and history. Exercise real host external-folder access and frozen Docker/approval boundaries. Move working status into compact composer area; verify plan behavior and persisted runtime policy across reload. Catch-up selection acknowledges the summary and retains pending actions.",
+  "exclusions": "No unrelated suites or research commands. Fake provider with held turn verifies composer working status, reload and host rollover. Backend checks execute only benign commands against disposable files. Physical devices unavailable.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 2,
+    "python": 5,
+    "frontend": 6,
     "native": 0,
     "playwright": 0
   },
@@ -14,8 +14,14 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_harnesses.py::test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session",
+    "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
+    "tests/v3/test_automation_runtime.py::test_docker_mode_rejects_host_paths_and_host_network_requests",
+    "tests/v3/test_automation_runtime.py::test_host_command_timeout_and_exact_approval_are_enforced"
+  ],
   "frontend": [
+    "ui/src/components/HarnessStatusRail.test.tsx",
     "ui/src/components/ChatCatchUp.test.tsx"
   ],
   "native": [],
@@ -27,9 +33,9 @@
     "dedicated_playwright": 16
   },
   "local_playwright": {
-    "config": "ui/playwright.catch-up.config.ts",
+    "config": "ui/playwright.host-mode.config.ts",
     "files": [
-      "catch-up.spec.ts"
+      "host-mode.spec.ts"
     ],
     "projects": [
       "model-desktop",
@@ -42,6 +48,6 @@
       "model-webkit-430"
     ],
     "expected_tests": 8,
-    "boundary": "Saved disposable chat, injected network failure then real-Core catch-up recovery; production LAN"
+    "boundary": "Real Core, fake provider, visible Host policy save/reload, warm same-chat rollover, symmetric expandable Working strip with axe, catch-up selection and durable read cursor, production LAN"
   }
 }

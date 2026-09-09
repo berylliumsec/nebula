@@ -1368,8 +1368,9 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
     assert all(name.startswith("model.") for name in snapshot["tool_names"])
 
 
+@pytest.mark.parametrize("restart", [False, True])
 def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
-    tmp_path,
+    tmp_path, restart,
 ):
     async def scenario() -> None:
         store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
@@ -1392,7 +1393,8 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
 
         old_digest = "sha256:" + "a" * 64
         new_digest = "sha256:" + "b" * 64
-        first_runtime.bind_automation_tool_platform(Commands(old_digest))  # type: ignore[arg-type]
+        commands = Commands(old_digest)
+        first_runtime.bind_automation_tool_platform(commands)  # type: ignore[arg-type]
         chat, _, first_turn = first_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -1407,16 +1409,22 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
         assert (
             store.get(HarnessTurn, first_turn.id).status == HarnessTurnStatus.COMPLETE
         )
-        await first_runtime.shutdown()
-
         adapter = FakeAdapter()
-        restarted_runtime = HarnessRuntimeService(
-            store,
-            credential_store=CredentialStore(),
-            workspace_resolver=lambda _: tmp_path,
-            adapter_factory=lambda _: adapter,
-        )
-        restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        if restart:
+            await first_runtime.shutdown()
+            restarted_runtime = HarnessRuntimeService(
+                store,
+                credential_store=CredentialStore(),
+                workspace_resolver=lambda _: tmp_path,
+                adapter_factory=lambda _: adapter,
+            )
+        else:
+            restarted_runtime = first_runtime
+            assert frozen_session.id in restarted_runtime._gateway_oci_components
+        if restart:
+            restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        else:
+            commands.digest = new_digest
         rebound_chat, owner, replacement_turn = restarted_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,

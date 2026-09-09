@@ -93,3 +93,9 @@
 
 .chat-catch-up-recovery { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
 .chat-catch-up-recovery > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+.chat-composer > .harness-status-rail { width: auto; max-width: calc(100% - 24px); justify-self: stretch; margin: 0 12px; border: 0; border-radius: 0; background: transparent; }
+.chat-composer > .harness-status-rail .harness-status-summary { min-height: 22px; gap: 6px; padding: 2px 0; flex-wrap: wrap; white-space: normal; }
+.chat-composer > .harness-status-rail .harness-status-summary strong { font-weight: 500; font-size: 11px; }
+.chat-composer > .harness-status-rail button.harness-status-summary { min-height: 44px; }
+.chat-composer > .harness-status-rail .harness-plan-steps { max-height: 30vh; overflow: auto; }

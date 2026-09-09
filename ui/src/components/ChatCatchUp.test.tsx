@@ -28,3 +28,14 @@ it("dismisses catch-up through the close icon and acknowledges the current revis
   expect(request.mock.calls[1][0]).toBe("chat/sessions/chat/read-cursor");
   expect(JSON.parse(request.mock.calls[1][1].body).expected_revision).toBe(2);
 });
+
+it("opens a catch-up item and clears its acknowledged summary while keeping pending actions", async () => {
+  const request = vi.fn().mockResolvedValueOnce({ ...record, items: [{ id: "m", message_id: "m", kind: "message", text: "An update" }], pending: [{ id: "p", kind: "approval", text: "Approve" }] }).mockResolvedValue({});
+  const onMessage = vi.fn();
+  render(<ChatCatchUp {...props} onMessage={onMessage} api={{ request } as unknown as ApiClient} />);
+  fireEvent.click(await screen.findByRole("button", { name: /An update/ }));
+  expect(onMessage).toHaveBeenCalledWith("m");
+  await waitFor(() => expect(screen.queryByRole("region", { name: "Catch up on this conversation" })).toBeNull());
+  expect(screen.getByRole("button", { name: "Review pending actions" })).toBeVisible();
+  expect(JSON.parse(request.mock.calls[1][1].body).expected_revision).toBe(2);
+});
