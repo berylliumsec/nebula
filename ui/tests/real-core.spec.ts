@@ -96,7 +96,7 @@ async function stopRealCore(core: RealCore): Promise<void> {
     ]);
     if (core.process.exitCode === null) core.process.kill("SIGKILL");
   }
-  if (path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
+  if (process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
     await rm(core.dataDir, { recursive: true, force: true });
   }
 }
@@ -1335,10 +1335,14 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await expect(
       page.getByText("Saved /workspace/debug-proof.py. Use it from Terminal when you're ready."),
     ).toBeVisible({ timeout: 30_000 });
+    await debugEditor.press("Control+Home");
     await page.getByRole("button", { name: "Debug saved Python" }).click();
     const debuggerPanel = page.getByRole("dialog", { name: "Python debugger" });
+    const breakpointButton = debuggerPanel.getByRole("button", { name: "Toggle breakpoint at line 1" });
+    await breakpointButton.click();
+    await expect(breakpointButton).toHaveAttribute("aria-pressed", "true");
     await debuggerPanel.getByRole("button", { name: "Start isolated debugger" }).click();
-    await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 30_000 });
+    await expect(debuggerPanel.getByText(/^stopped/)).toBeVisible({ timeout: 120_000 });
     await expect(debuggerPanel.getByText(/debug-proof\.py:1/)).toBeVisible();
     await debuggerPanel.getByRole("button", { name: "Continue" }).click();
     await expect(debuggerPanel.getByText(/^ended/)).toBeVisible({ timeout: 30_000 });

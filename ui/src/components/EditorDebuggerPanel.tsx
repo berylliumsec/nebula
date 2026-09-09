@@ -345,7 +345,6 @@ export function EditorDebuggerPanel({
           args: parsedArguments,
           justMyCode: false,
           console: "internalConsole",
-          stopOnEntry: true,
         })
         .catch((launchError) => {
           void logCaughtDiagnostic(
