@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a fail-closed Playwright matrix from a git diff."""
+"""Generate bounded coverage; uncertainty blocks for review, never expands to full."""
 
 from __future__ import annotations
 
@@ -34,9 +34,10 @@ def changed_paths(name_status: str) -> list[str]:
 def stable_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[tuple[str, ...], dict[str, Any]] = {}
     for entry in entries:
-        key = tuple(str(entry.get(field, "")) for field in (
-            "project", "test_match", "grep", "runtime", "shard"
-        ))
+        key = tuple(
+            str(entry.get(field, ""))
+            for field in ("project", "test_match", "grep", "runtime", "shard")
+        )
         if key in unique:
             areas = set(unique[key]["area"].split("+")) | set(entry["area"].split("+"))
             unique[key]["area"] = "+".join(sorted(areas))
@@ -45,14 +46,18 @@ def stable_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [unique[key] for key in sorted(unique)]
 
 
-def selected_entries(manifest: dict[str, Any], selection: list[str]) -> list[dict[str, Any]]:
+def selected_entries(
+    manifest: dict[str, Any], selection: list[str]
+) -> list[dict[str, Any]]:
     """Resolve only catalogued area, project, or exact-entry selectors."""
     entries: list[dict[str, Any]] = []
     valid_projects = {entry["project"] for entry in manifest["full_include"]}
     for token in selection:
         kind, separator, value = token.partition(":")
         if not separator or not value:
-            raise ValueError(f"invalid selection {token!r}; expected area:, project:, or entry:")
+            raise ValueError(
+                f"invalid selection {token!r}; expected area:, project:, or entry:"
+            )
         if kind == "area":
             if value not in manifest["areas"]:
                 raise ValueError(f"unknown Playwright area: {value}")
@@ -60,10 +65,16 @@ def selected_entries(manifest: dict[str, Any], selection: list[str]) -> list[dic
         elif kind == "project":
             if value not in valid_projects:
                 raise ValueError(f"unknown Playwright project: {value}")
-            entries.extend(entry for entry in manifest["full_include"] if entry["project"] == value)
+            entries.extend(
+                entry for entry in manifest["full_include"] if entry["project"] == value
+            )
         elif kind == "entry":
             area, slash, project = value.partition("/")
-            source = manifest["full_include"] if area == "full" else manifest["areas"].get(area)
+            source = (
+                manifest["full_include"]
+                if area == "full"
+                else manifest["areas"].get(area)
+            )
             if not slash or source is None:
                 raise ValueError(f"unknown Playwright entry: {value}")
             matches = [entry for entry in source if entry["project"] == project]
@@ -76,39 +87,56 @@ def selected_entries(manifest: dict[str, Any], selection: list[str]) -> list[dic
 
 
 def select_plan(
-    manifest: dict[str, Any], baseline: str | None, candidate: str,
-    paths: list[str], scope: str = "impacted", selection: list[str] | None = None,
+    manifest: dict[str, Any],
+    baseline: str | None,
+    candidate: str,
+    paths: list[str],
+    scope: str = "impacted",
+    selection: list[str] | None = None,
+    review_reason: str = "",
+    full_approved: bool = False,
 ) -> dict[str, Any]:
     selection = selection or []
     matched_rules: list[str] = []
     fallbacks: list[str] = []
     exclusions: list[str] = []
 
-    if selection:
-        include = selected_entries(manifest, selection)
-        reason = "explicit_selection"
-    elif scope == "full":
+    if scope == "full":
+        if not full_approved or not review_reason.strip() or selection:
+            raise ValueError(
+                "Full scope requires explicit user approval, a reason, and no selection override."
+            )
         include = stable_entries(manifest["full_include"])
         reason = "manual_full_scope"
+    elif selection:
+        if not review_reason.strip():
+            raise ValueError(
+                "Explicit coverage requires a review reason (including deliberate exclusions)."
+            )
+        include = [] if selection == ["none"] else selected_entries(manifest, selection)
+        reason = "explicit_selection"
     elif not baseline:
-        include = stable_entries(manifest["full_include"])
-        reason = "full_fallback"
+        include = []
+        reason = "coverage_review_required"
         fallbacks.append("no_valid_baseline")
     else:
         full_matches = [
             path for path in paths if matches(path, manifest["full_patterns"])
         ]
         if full_matches:
-            include = stable_entries(manifest["full_include"])
-            reason = "full_fallback"
+            include = []
+            reason = "coverage_review_required"
             fallbacks.extend(f"global:{path}" for path in full_matches)
         else:
             selected_areas: set[str] = set()
             covered: set[str] = set()
-            ordered_rules = sorted(manifest["rules"], key=lambda rule: rule.get("fallback", False))
+            ordered_rules = sorted(
+                manifest["rules"], key=lambda rule: rule.get("fallback", False)
+            )
             for rule in ordered_rules:
                 hits = [
-                    path for path in paths
+                    path
+                    for path in paths
                     if matches(path, rule["patterns"])
                     and (not rule.get("fallback") or path not in covered)
                 ]
@@ -118,14 +146,17 @@ def select_plan(
                     selected_areas.update(rule["areas"])
 
             unknown = sorted(
-                path for path in paths
+                path
+                for path in paths
                 if path not in covered
-                and any(path.startswith(prefix) for prefix in manifest["watched_prefixes"])
+                and any(
+                    path.startswith(prefix) for prefix in manifest["watched_prefixes"]
+                )
                 and not matches(path, manifest.get("watched_exclusions", []))
             )
             if unknown:
-                include = stable_entries(manifest["full_include"])
-                reason = "full_fallback"
+                include = []
+                reason = "coverage_review_required"
                 fallbacks.extend(f"unmapped:{path}" for path in unknown)
             else:
                 include = stable_entries(
@@ -135,6 +166,18 @@ def select_plan(
                 )
                 reason = "impacted" if include else "no_playwright_impact"
                 exclusions.extend(path for path in paths if path not in covered)
+
+    # Project selectors and unions must not bypass the exceptional-full gate.
+    def identities(entries):
+        return {
+            tuple(str(e.get(k, "")) for k in ("project", "test_match", "grep"))
+            for e in entries
+        }
+
+    if scope != "full" and identities(manifest["full_include"]) <= identities(include):
+        include = []
+        reason = "coverage_review_required"
+        fallbacks.append("selection_expands_to_full_suite")
 
     return {
         "baseline_sha": baseline,
@@ -146,6 +189,8 @@ def select_plan(
         "fallbacks": fallbacks,
         "exclusions": exclusions,
         "requested_selection": selection,
+        "review_reason": review_reason,
+        "coverage_review_required": reason == "coverage_review_required",
     }
 
 
@@ -163,38 +208,43 @@ def render_receipt(plan: dict[str, Any]) -> str:
         jobs.append(command)
     return f"""# Playwright impact receipt
 
-- Baseline: `{plan['baseline_sha'] or 'NONE'}`
-- Candidate: `{plan['candidate_sha']}`
-- Decision: `{plan['reason']}`
-- Matrix jobs: `{len(plan['include'])}`
+- Baseline: `{plan["baseline_sha"] or "NONE"}`
+- Candidate: `{plan["candidate_sha"]}`
+- Decision: `{plan["reason"]}`
+- Matrix jobs: `{len(plan["include"])}`
+- Review reason: {plan.get("review_reason") or "Not supplied"}
+- Coverage review required: `{plan.get("coverage_review_required", False)}`
+- Test count: collect/list the selected entries before execution; matrix jobs are not test counts.
 
 ## Requested selection
 
-{bullets(plan.get('requested_selection', []), 'Automatic impact selection')}
+{bullets(plan.get("requested_selection", []), "Automatic impact selection")}
 
 ## Changed files
 
-{bullets(plan['changed_files'])}
+{bullets(plan["changed_files"])}
 
 ## Matched rules
 
-{bullets(plan['matched_rules'])}
+{bullets(plan["matched_rules"])}
 
 ## Selected matrix
 
 {bullets(jobs)}
 
-## Fail-closed fallbacks
+## Review blockers (never automatic full-suite fallbacks)
 
-{bullets(plan['fallbacks'])}
+{bullets(plan["fallbacks"])}
 
 ## Excluded changes
 
-{bullets(plan['exclusions'])}
+{bullets(plan["exclusions"])}
 """
 
 
-def successful_release_baseline(runs: dict[str, Any], candidate: str) -> dict[str, str] | None:
+def successful_release_baseline(
+    runs: dict[str, Any], candidate: str
+) -> dict[str, str] | None:
     for run in runs.get("workflow_runs", []):
         tag = str(run.get("head_branch", ""))
         sha = str(run.get("head_sha", ""))
@@ -218,13 +268,19 @@ def selection_catalog(manifest: dict[str, Any]) -> dict[str, list[str]]:
             for entry in area_entries
         ]
     )
-    return {"areas": sorted(manifest["areas"]), "projects": projects, "entries": entries}
+    return {
+        "areas": sorted(manifest["areas"]),
+        "projects": projects,
+        "entries": entries,
+    }
 
 
 def git_diff(baseline: str, candidate: str) -> list[str]:
     proc = subprocess.run(
         ["git", "diff", "--name-status", "-M", baseline, candidate],
-        check=True, text=True, capture_output=True,
+        check=True,
+        text=True,
+        capture_output=True,
     )
     return changed_paths(proc.stdout)
 
@@ -238,8 +294,16 @@ def main(argv: list[str] | None = None) -> int:
     select.add_argument("--baseline")
     select.add_argument("--candidate", required=True)
     select.add_argument("--scope", choices=("impacted", "full"), default="impacted")
+    select.add_argument("--review-reason", default="")
     select.add_argument(
-        "--selection", action="append", default=[],
+        "--full-approved",
+        action="store_true",
+        help="Only after an explicit user-approved full run",
+    )
+    select.add_argument(
+        "--selection",
+        action="append",
+        default=[],
         help="catalog selector: area:NAME, project:NAME, or entry:AREA/PROJECT",
     )
     select.add_argument("--name-status", type=Path)
@@ -255,7 +319,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "catalog":
-        print(json.dumps(selection_catalog(json.loads(args.manifest.read_text())), indent=2))
+        print(
+            json.dumps(
+                selection_catalog(json.loads(args.manifest.read_text())), indent=2
+            )
+        )
         return 0
     if args.command == "release-baseline":
         result = successful_release_baseline(
@@ -277,14 +345,26 @@ def main(argv: list[str] | None = None) -> int:
             paths = []
     else:
         paths = []
-    selections = [item.strip() for value in args.selection for item in value.split(",") if item.strip()]
+    selections = [
+        item.strip()
+        for value in args.selection
+        for item in value.split(",")
+        if item.strip()
+    ]
     plan = select_plan(
-        manifest, baseline_sha, args.candidate, paths, args.scope, selections
+        manifest,
+        baseline_sha,
+        args.candidate,
+        paths,
+        args.scope,
+        selections,
+        args.review_reason,
+        args.full_approved,
     )
     args.output.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n")
     args.receipt.write_text(render_receipt(plan))
     print(json.dumps({"include": plan["include"]}, separators=(",", ":")))
-    return 0
+    return 2 if plan["coverage_review_required"] else 0
 
 
 if __name__ == "__main__":

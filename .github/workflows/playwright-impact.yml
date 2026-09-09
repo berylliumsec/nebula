@@ -14,6 +14,14 @@ on:
         description: Optional catalog selectors, e.g. area:assistant,entry:themes/mobile-webkit
         required: false
         type: string
+      review_reason:
+        description: Why these tests cover the change, including exclusions
+        required: true
+        type: string
+      full_approval:
+        description: Exceptional full run only; type RUN_FULL_SUITE after explicit user approval
+        required: false
+        type: string
   workflow_call:
     inputs:
       baseline_sha: {type: string, required: false, default: ""}
@@ -22,6 +30,8 @@ on:
       scope: {type: string, required: false, default: impacted}
       receipt_name: {type: string, required: false, default: playwright-impact-receipt}
       selection: {type: string, required: false, default: ""}
+      review_reason: {type: string, required: false, default: ""}
+      full_approval: {type: string, required: false, default: ""}
 
 permissions:
   contents: read
@@ -45,14 +55,29 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha || github.event.pull_request.head.sha || github.sha }}
           REQUESTED_SCOPE: ${{ inputs.scope || github.event.inputs.scope || 'impacted' }}
           EXPLICIT_SELECTION: ${{ inputs.selection || github.event.inputs.selection }}
+          REVIEW_REASON: ${{ inputs.review_reason || github.event.inputs.review_reason }}
+          FULL_APPROVAL: ${{ inputs.full_approval || github.event.inputs.full_approval }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          if test "$EVENT_NAME" = pull_request; then
+            python scripts/test_selection.py --baseline "$BASELINE_SHA" --candidate "$CANDIDATE_SHA" --output "$RUNNER_TEMP/reviewed-tests.json"
+            EXPLICIT_SELECTION="$(jq -r 'if (.playwright|length)==0 then "none" else .playwright|join(",") end' "$RUNNER_TEMP/reviewed-tests.json")"
+            REVIEW_REASON="$(jq -r '.reason + " Exclusions: " + .exclusions' "$RUNNER_TEMP/reviewed-tests.json")"
+          fi
           args=(
             --manifest ui/playwright-impact.json
             --candidate "$CANDIDATE_SHA"
             --scope "$REQUESTED_SCOPE"
             --output playwright-impact-plan.json
             --receipt playwright-impact-receipt.md
+            --review-reason "$REVIEW_REASON"
           )
+          if test "$REQUESTED_SCOPE" = full; then
+            test "$EVENT_NAME" = workflow_dispatch
+            test "$FULL_APPROVAL" = RUN_FULL_SUITE
+            test -n "$REVIEW_REASON"
+            args+=(--full-approved)
+          fi
           if test -n "$BASELINE_SHA" && git cat-file -e "$BASELINE_SHA^{commit}" 2>/dev/null; then
             args+=(--baseline "$BASELINE_SHA")
           fi
@@ -65,12 +90,14 @@ jobs:
           printf 'matrix=%s\nhas_jobs=%s\n' "$matrix" "$([[ "$count" -gt 0 ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           cat playwright-impact-receipt.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload impact receipt
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ inputs.receipt_name || 'playwright-impact-receipt' }}
           path: |
             playwright-impact-plan.json
             playwright-impact-receipt.md
+            ${{ runner.temp }}/reviewed-tests.json
           if-no-files-found: error
 
   playwright:
@@ -150,6 +177,8 @@ jobs:
         run: |
           args=("$TEST_MATCH" --project "$PROJECT" --workers 1 --shard "$TEST_SHARD")
           if test -n "$TEST_GREP"; then args+=(--grep "$TEST_GREP"); fi
+          # Listing is cheap and records the actual selected tests/count before running.
+          npm --prefix ui run test:e2e -- "${args[@]}" --list
           npm --prefix ui run test:e2e -- "${args[@]}"
       - name: Retain browser failure and retry evidence
         if: always()

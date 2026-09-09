@@ -22,6 +22,14 @@ on:
         description: Optional catalog selectors (area:, project:, or entry:); overrides automatic impact selection
         required: false
         type: string
+      review_reason:
+        description: Coverage rationale and deliberate exclusions
+        required: true
+        type: string
+      full_approval:
+        description: Exceptional full run only; type RUN_FULL_SUITE after explicit user approval
+        required: false
+        type: string
 
 permissions:
   actions: read
@@ -110,12 +118,12 @@ jobs:
           then
             printf 'sha=%s\ntag=%s\nrun_id=%s\n' "$sha" "$tag" "$run_id" >> "$GITHUB_OUTPUT"
           else
-            printf 'No trustworthy successful release baseline; selector will run full coverage.\n'
+            printf 'No trustworthy baseline; explicit coverage review is required, not full coverage.\n'
             printf 'sha=\ntag=\nrun_id=\n' >> "$GITHUB_OUTPUT"
           fi
 
   sandbox-integration:
-    needs: validate
+    needs: [validate, playwright]
     runs-on: ubuntu-22.04
     env:
       POETRY_VIRTUALENVS_IN_PROJECT: "true"
@@ -182,6 +190,8 @@ jobs:
       scope: ${{ inputs.scope || 'impacted' }}
       receipt_name: release-playwright-impact-${{ needs.validate.outputs.tag }}
       selection: ${{ inputs.selection || '' }}
+      review_reason: ${{ inputs.review_reason || '' }}
+      full_approval: ${{ inputs.full_approval || '' }}
 
   build:
     needs: [validate, impact-baseline, sandbox-integration, playwright]

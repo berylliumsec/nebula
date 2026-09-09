@@ -61,38 +61,58 @@ def test_documentation_and_empty_diffs_select_no_jobs():
         "pyproject.toml",
     ],
 )
-def test_global_changes_fail_closed_to_full(path):
+def test_global_changes_require_review_without_starting_tests(path):
     result = plan([path])
-    assert result["reason"] == "full_fallback"
+    assert result["reason"] == "coverage_review_required"
+    assert result["include"] == []
+
+
+def test_unknown_watched_path_requires_review():
+    result = plan(["ui/src/unknown/new-surface.ts"])
+    assert "unmapped:ui/src/unknown/new-surface.ts" in result["fallbacks"]
+    assert result["include"] == []
+    assert result["coverage_review_required"]
+
+
+def test_missing_baseline_does_not_authorize_full():
+    assert plan([], baseline=None)["reason"] == "coverage_review_required"
+    with pytest.raises(ValueError, match="explicit user approval"):
+        plan([], scope="full")
+    result = select_plan(
+        MANIFEST,
+        None,
+        "candidate",
+        [],
+        scope="full",
+        full_approved=True,
+        review_reason="User explicitly approved complete coverage",
+    )
     assert result["include"] == stable_entries(MANIFEST["full_include"])
 
 
-def test_unknown_watched_path_fails_closed_to_full():
-    result = plan(["ui/src/unknown/new-surface.ts"])
-    assert "unmapped:ui/src/unknown/new-surface.ts" in result["fallbacks"]
-    assert len(result["include"]) == len(MANIFEST["full_include"])
-
-
-def test_missing_baseline_and_manual_scope_select_full():
-    assert plan([], baseline=None)["reason"] == "full_fallback"
-    assert plan([], scope="full")["reason"] == "manual_full_scope"
-
-
 def test_entries_are_deduplicated_and_stably_ordered():
-    result = plan([
-        "ui/src/components/MobileChat.tsx",
-        "ui/src/components/UnclassifiedWidget.tsx",
-    ])
+    result = plan(
+        [
+            "ui/src/components/MobileChat.tsx",
+            "ui/src/components/UnclassifiedWidget.tsx",
+        ]
+    )
     keys = [(e["project"], e.get("grep", "")) for e in result["include"]]
     assert keys == sorted(set(keys))
 
 
 def test_identical_entries_from_multiple_areas_run_once_and_retain_provenance():
     result = select_plan(
-        MANIFEST, "base", "candidate", [],
+        MANIFEST,
+        "base",
+        "candidate",
+        [],
         selection=["area:core-api", "area:desktop-shell"],
+        review_reason="Core and shell contracts changed",
     )
-    real_core = [entry for entry in result["include"] if entry["project"] == "real-core"]
+    real_core = [
+        entry for entry in result["include"] if entry["project"] == "real-core"
+    ]
     assert len(real_core) == 1
     assert real_core[0]["area"] == "core-api+desktop-shell"
 
@@ -113,35 +133,78 @@ def test_invalid_name_status_is_rejected():
 
 
 def test_latest_successful_preparation_ignores_newer_failed_release():
-    runs = {"workflow_runs": [
-        {"id": 13, "head_branch": "nebula-v3.0.0-alpha.13", "head_sha": "bad", "conclusion": "failure"},
-        {"id": 12, "head_branch": "nebula-v3.0.0-alpha.12", "head_sha": "cancelled", "conclusion": "cancelled"},
-        {"id": 9, "head_branch": "nebula-v3.0.0-alpha.9", "head_sha": "green", "conclusion": "success"},
-    ]}
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 13,
+                "head_branch": "nebula-v3.0.0-alpha.13",
+                "head_sha": "bad",
+                "conclusion": "failure",
+            },
+            {
+                "id": 12,
+                "head_branch": "nebula-v3.0.0-alpha.12",
+                "head_sha": "cancelled",
+                "conclusion": "cancelled",
+            },
+            {
+                "id": 9,
+                "head_branch": "nebula-v3.0.0-alpha.9",
+                "head_sha": "green",
+                "conclusion": "success",
+            },
+        ]
+    }
     assert successful_release_baseline(runs, "candidate") == {
-        "tag": "nebula-v3.0.0-alpha.9", "sha": "green", "run_id": "9"
+        "tag": "nebula-v3.0.0-alpha.9",
+        "sha": "green",
+        "run_id": "9",
     }
 
 
 def test_candidate_success_is_not_its_own_baseline():
-    runs = {"workflow_runs": [
-        {"id": 14, "head_branch": "nebula-v3.0.0-alpha.14", "head_sha": "candidate", "conclusion": "success"},
-        {"id": 9, "head_branch": "nebula-v3.0.0-alpha.9", "head_sha": "green", "conclusion": "success"},
-    ]}
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 14,
+                "head_branch": "nebula-v3.0.0-alpha.14",
+                "head_sha": "candidate",
+                "conclusion": "success",
+            },
+            {
+                "id": 9,
+                "head_branch": "nebula-v3.0.0-alpha.9",
+                "head_sha": "green",
+                "conclusion": "success",
+            },
+        ]
+    }
     assert successful_release_baseline(runs, "candidate")["sha"] == "green"
 
 
 def test_full_manifest_covers_every_permanent_playwright_project():
     expected = {
-        "assistant-real-desktop", "assistant-real-compact",
-        "assistant-real-chromium-320", "assistant-real-chromium-390",
-        "assistant-real-chromium-430", "assistant-real-webkit-320",
-        "assistant-real-webkit-390", "assistant-real-webkit-430",
-        "browser-chromium-landscape", "browser-webkit-landscape", "desktop",
-        "compact", "narrow", "mobile-chromium",
-        "mobile-chromium-ledger-390", "mobile-chromium-small",
-        "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit",
-        "mobile-webkit-wide", "real-core",
+        "assistant-real-desktop",
+        "assistant-real-compact",
+        "assistant-real-chromium-320",
+        "assistant-real-chromium-390",
+        "assistant-real-chromium-430",
+        "assistant-real-webkit-320",
+        "assistant-real-webkit-390",
+        "assistant-real-webkit-430",
+        "browser-chromium-landscape",
+        "browser-webkit-landscape",
+        "desktop",
+        "compact",
+        "narrow",
+        "mobile-chromium",
+        "mobile-chromium-ledger-390",
+        "mobile-chromium-small",
+        "mobile-chromium-wide",
+        "mobile-webkit-small",
+        "mobile-webkit",
+        "mobile-webkit-wide",
+        "real-core",
     }
     assert {entry["project"] for entry in MANIFEST["full_include"]} == expected
     assert {
@@ -153,12 +216,18 @@ def test_full_manifest_covers_every_permanent_playwright_project():
 
 def test_explicit_area_selection_overrides_global_fallback():
     result = select_plan(
-        MANIFEST, "base", "candidate", ["ui/src/App.tsx"],
+        MANIFEST,
+        "base",
+        "candidate",
+        ["ui/src/App.tsx"],
         selection=["area:themes"],
+        review_reason="Routing edit only affects theme entry",
     )
     assert result["reason"] == "explicit_selection"
     assert {entry["project"] for entry in result["include"]} == {
-        "desktop", "mobile-chromium", "mobile-webkit"
+        "desktop",
+        "mobile-chromium",
+        "mobile-webkit",
     }
     assert result["requested_selection"] == ["area:themes"]
 
@@ -168,13 +237,20 @@ def test_project_and_exact_entry_selection_are_catalog_bounded():
         MANIFEST, ["project:narrow", "entry:assistant/assistant-real-desktop"]
     )
     assert {(entry["area"], entry["project"]) for entry in entries} == {
-        ("full", "narrow"), ("assistant", "assistant-real-desktop")
+        ("full", "narrow"),
+        ("assistant", "assistant-real-desktop"),
     }
 
 
 @pytest.mark.parametrize(
     "selection",
-    ["themes", "area:no-such-area", "project:no-such-project", "entry:themes/narrow", "grep:theme"],
+    [
+        "themes",
+        "area:no-such-area",
+        "project:no-such-project",
+        "entry:themes/narrow",
+        "grep:theme",
+    ],
 )
 def test_invalid_or_arbitrary_explicit_selection_is_rejected(selection):
     with pytest.raises(ValueError):

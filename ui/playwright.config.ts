@@ -1,10 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
+import { assertFocused } from "../scripts/test_scope_guard.mjs";
+
+// Protect direct npx invocations as well as guarded npm scripts.
+assertFocused("e2e", process.argv.slice(2));
 
 const testPort = process.env.NEBULA_UI_TEST_PORT ?? "1420";
 const testHost = process.env.NEBULA_UI_TEST_HOST ?? "127.0.0.1";
 const testCommand = process.env.NEBULA_UI_TEST_COMMAND
   ?? `npm run dev -- --host ${testHost} --port ${testPort}`;
-const isolatedMatrixEntry = Boolean(process.env.NEBULA_PLAYWRIGHT_MATRIX);
+// Selecting real-Core must never implicitly schedule unrelated browser projects.
+const isolatedMatrixEntry = true;
 
 export default defineConfig({
   testDir: "./tests",
