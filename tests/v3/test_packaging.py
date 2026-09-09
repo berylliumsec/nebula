@@ -136,6 +136,9 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_depl
         "needs: [validate, impact-baseline, sandbox-integration, playwright]" in release
     )
     assert "npm --prefix ui run test:e2e" in playwright_impact
+    assert "name: Retain failed browser evidence\n        if: failure()" in playwright_impact
+    assert "name: playwright-failure-${{ strategy.job-index }}-${{ matrix.project }}" in playwright_impact
+    assert "path: ui/test-results/" in playwright_impact
     assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
     assert "--dump-dom about:blank" in release

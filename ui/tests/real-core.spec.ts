@@ -1765,6 +1765,7 @@ test("assistant upgrade deployed local service retains operator workflow", async
 
 test("project removal archives, retries, restores and clears the last selection on production LAN", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
+  const startedAt = Date.now();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const stub = await startLocalModelStub();
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
@@ -1793,15 +1794,21 @@ test("project removal archives, retries, restores and clears the last selection 
     await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/projects/${linked.id}/workbench`);
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
-    const openSwitcher = async () => {
+    const openSwitcher = async () => test.step("Open project switcher", async () => {
       const sidebar = page.getByRole("button", { name: "Show sidebar" });
       const switchProject = page.getByRole("button", { name: "Switch project" });
       // Reload returns before the responsive shell has necessarily mounted.
       // Wait for its visible entry point before deciding whether to open it.
       await expect(sidebar.or(switchProject).filter({ visible: true }).first()).toBeVisible();
       if (await sidebar.isVisible()) await sidebar.click();
-      if (!await switcher.isVisible()) await switchProject.click();
-    };
+      console.info("project-removal switcher readiness", {
+        elapsedMs: Date.now() - startedAt,
+        sidebarCollapsed: await page.locator(".app-shell").evaluate(element => element.classList.contains("sidebar-collapsed")),
+        switcherBounds: await switchProject.boundingBox(),
+        coreReady: await page.getByRole("button", { name: "Nebula Core ready" }).isVisible(),
+      });
+      if (!await switcher.isVisible()) await switchProject.click({ timeout: 10_000 });
+    });
     const remove = async (name: string) => {
       await switcher.getByRole("button", { name: `Remove project ${name}`, exact: true }).click();
       await page.getByRole("button", { name: "Remove project", exact: true }).click();

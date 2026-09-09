@@ -75,10 +75,13 @@ capabilities are introduced.
   tests passed on production loopback, then passed all six repeated executions
   in the permanent `mobile-webkit-small` project. Product authentication is unchanged.
 - The project-removal helper waits for a visible responsive-shell entry point
-  before choosing the mobile sidebar or desktop switcher. This addresses the
-  hosted trace's hidden-switcher wait immediately after reload. Three permanent
-  WebKit 390 production-LAN repetitions passed; the hosted race was not
-  deterministically reproduced locally.
+  before choosing the mobile sidebar or desktop switcher. Three permanent
+  WebKit 390 production-LAN repetitions passed, but a subsequent hosted WebKit
+  430 run still exhausted its overall 90-second budget at the final switcher
+  click. Three local 430 repetitions passed. This log alone does not establish
+  a hidden-control bug. Bounded action timing and readiness diagnostics distinguish
+  actionability failures from overall test-budget exhaustion; CI now retains
+  failed browser traces and error contexts for seven days.
 
 The complete hosted CI checks remain the merge gate. These local results do not
 claim physical Safari validation or a new release/package publication.
