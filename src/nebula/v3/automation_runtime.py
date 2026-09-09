@@ -509,6 +509,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
                         try:
                             process.kill()
                         except ProcessLookupError:
+                            # diagnostic-expected: the runtime client exited between the check and signal.
                             pass
                     await process.wait()
                     raise AutomationRuntimeUnavailable(
@@ -2008,7 +2009,7 @@ async def _communicate(
             try:
                 process.kill()
             except ProcessLookupError:
-                # The child may exit between the returncode check and kill().
+                # diagnostic-expected: the child exited between the returncode check and signal.
                 pass
         await process.wait()
         raise AutomationRuntimeUnavailable("container runtime operation timed out")
