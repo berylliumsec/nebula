@@ -1,6 +1,7 @@
 """Durable evidence-bearing project graph with serializable, retryable edits."""
 
 from copy import deepcopy
+from datetime import datetime
 import hashlib
 import json
 import re
@@ -390,11 +391,15 @@ class ApplicationModelService:
     def _evidence(self, connection, project, kind, identifier, revision=None):
         if kind not in SOURCE_KINDS:
             raise ValueError("Unsupported evidence source")
+        cutoff = self._read(connection, project).get("evidence_since")
         payload = connection.execute(
             select(EntityRow.payload).where(
                 EntityRow.kind == kind,
                 EntityRow.id == identifier,
                 EntityRow.engagement_id == project,
+                EntityRow.created_at >= datetime.fromisoformat(cutoff)
+                if cutoff
+                else True,
             )
         ).scalar()
         if not payload:
@@ -427,10 +432,15 @@ class ApplicationModelService:
     def evidence_list(self, project, offset=0, limit=100):
         self.project(project)
         with self.store.database.engine.connect() as connection:
+            cutoff = self._read(connection, project).get("evidence_since")
             rows = connection.execute(
                 select(EntityRow.kind, EntityRow.id)
                 .where(
-                    EntityRow.engagement_id == project, EntityRow.kind.in_(SOURCE_KINDS)
+                    EntityRow.engagement_id == project,
+                    EntityRow.kind.in_(SOURCE_KINDS),
+                    EntityRow.created_at >= datetime.fromisoformat(cutoff)
+                    if cutoff
+                    else True,
                 )
                 .order_by(EntityRow.created_at.desc(), EntityRow.id)
                 .offset(offset)

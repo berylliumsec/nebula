@@ -91,3 +91,9 @@ class GraphTransaction(Contract):
     expected_revision: int = Field(ge=0)
     idempotency_key: Identifier
     operations: list[Operation] = Field(min_length=1, max_length=100)
+
+
+class GraphReset(Contract):
+    expected_revision: int = Field(ge=0)
+    idempotency_key: Identifier
+    confirmation: Literal["clear-model-and-browser-captures"]

@@ -6,6 +6,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ApplicationModelCategory } from "../components/ApplicationModelOutline";
 import { ApplicationModelGraph } from "../components/ApplicationModelGraph";
 import { ExpandableModelPanel } from "../components/ExpandableModelPanel";
+import { ApplicationModelReset } from "./ApplicationModelReset";
 import {
   ObjectEditor,
   RelationshipEditor,
@@ -40,14 +41,23 @@ type Edit = {
 
 export function ApplicationModelPage() {
   const { engagement } = useWorkspace();
+  const [generation, setGeneration] = useState(0);
+  const [resetProject, setResetProject] = useState<string>();
+  const [, setParams] = useSearchParams();
   return engagement ? (
-    <ProjectModel key={engagement.id} />
+    <>
+      {resetProject === engagement.id && <p role="status">Model and browser captures cleared. Ready to start fresh.</p>}
+      <ProjectModel key={`${engagement.id}:${generation}`} onReset={() => {
+        setParams(new URLSearchParams(), { replace: true });
+        setResetProject(engagement.id); setGeneration(v => v + 1);
+      }} />
+    </>
   ) : (
     <p>Select a project to explore its application model.</p>
   );
 }
 
-function ProjectModel() {
+function ProjectModel({ onReset }: { onReset: () => void }) {
   const { api, engagement } = useWorkspace();
   const { requestNebulaDraft } = useWorkbenchDrafts();
   const [params, setParams] = useSearchParams();
@@ -431,6 +441,8 @@ function ProjectModel() {
               Browse evidence
             </button>
             <span className="am-hint">Revision {graph.revision}</span>
+            <ApplicationModelReset base={base} projectName={engagement!.name} disabled={busy}
+              request={(path, options) => api!.request(path, options)} onReset={onReset} />
           </div>
           {!objectTotal && (
             <section className="panel am-empty">

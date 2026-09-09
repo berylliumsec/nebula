@@ -1,35 +1,31 @@
 {
-  "reviewed_by": "Codex, mechanism schema and fullscreen graph layout",
-  "reason": "Preserves preceding schema selection; adds graph-layout unit tests and dense Model browser geometry checks for fullscreen width/height, ultrawide resize and restore. Current layout-only increment runs 20 frontend tests and 8 dense-browser cases; preceding Python and migration checks remain valid.",
-  "exclusions": "No unrelated suites, external targets, provider calls, native changes or physical devices. Dedicated local Model Playwright config covers production real-Core desktop/mobile/LAN instead of general browser catalog. Local Python is 3.11; CI default is 3.12.",
-  "baseline": "dc8ddd1",
+  "reviewed_by": "Codex, scoped model and browser capture reset",
+  "reason": "Graph persistence, evidence cutoff, authenticated reset and confirmation lifecycle. Collected 23 Python tests, 15 frontend tests and eight dedicated production-browser cases.",
+  "exclusions": "No unrelated suites, external targets, provider calls, native changes or physical devices. Dedicated local Model config tests real-Core production LAN. No live operator data reset. Python 3.11 locally; CI 3.12. Reload open pages after reset for ongoing connections.",
+  "baseline": "f7cfa81",
   "expected_tests": {
-    "python": 40,
-    "frontend": 20,
+    "python": 23,
+    "frontend": 15,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_application_model_reset.py",
     "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_application_model_views.py",
-    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
-    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model"
+    "tests/v3/test_application_model_api.py"
   ],
   "frontend": [
-    "ui/src/pages/ApplicationModelPage.test.tsx",
-    "ui/src/components/ApplicationModelGraph.test.tsx"
+    "ui/src/pages/ApplicationModelReset.test.tsx",
+    "ui/src/pages/ApplicationModelPage.test.tsx"
   ],
   "native": [],
   "playwright": [],
   "local_playwright": {
     "config": "ui/playwright.application-model.config.ts",
     "files": [
-      "application-model.spec.ts",
-      "application-model-responsive.spec.ts"
+      "application-model-reset.spec.ts"
     ],
-    "expected_tests": 16,
+    "expected_tests": 8,
     "projects": [
       "model-desktop",
       "model-compact",
@@ -41,5 +37,5 @@
       "model-webkit-430"
     ]
   },
-  "change_digest": "7e76e3cb1f1b3f87fa0231a1f06e786d130590badce9ff587df3bd2ec0c3fcdd"
+  "change_digest": "7f2eb6ea50e568ca6792301a086d90721c8ad6d802591d3611eb2738bf0c77a6"
 }

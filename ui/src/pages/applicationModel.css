@@ -454,3 +454,13 @@
   max-height: none;
   height: max(320px, calc(100dvh - 240px));
 }
+.am-reset-trigger { margin-inline-start: auto; min-width: 44px; }
+.am-reset-dialog { width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; }
+.am-reset-dialog > header { display: flex; justify-content: space-between; gap: 16px; }
+.am-reset-dialog > header > div { min-width: 0; }
+.am-reset-project { overflow-wrap: anywhere; }
+.am-reset-dialog > p { margin: 0 22px 12px; }
+.am-reset-dialog .icon-button { min-width: 44px; }
+.am-reset-counts { font-variant-numeric: tabular-nums; }
+.am-reset-dialog button { min-height: 44px; }
+.am-reset-dialog > footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }

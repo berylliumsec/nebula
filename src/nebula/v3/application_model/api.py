@@ -1,7 +1,8 @@
 """Project-scoped schema, graph, evidence and transaction API."""
 
 from fastapi import APIRouter, Query, HTTPException
-from .graph import GraphTransaction
+from .graph import GraphTransaction, GraphReset
+from .reset import preview, reset
 
 
 def model_router(service):
@@ -15,6 +16,14 @@ def model_router(service):
             return service.schema(project, category, query)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @router.get("/reset-preview")
+    def reset_preview(project: str):
+        return preview(service, project)
+
+    @router.post("/reset")
+    def start_over(project: str, request: GraphReset):
+        return reset(service, project, request)
 
     @router.get("/graph")
     def graph(project: str):
