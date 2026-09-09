@@ -19,8 +19,18 @@ test("saved workspace failure retains identity and queue stays inside composer",
   await queue.locator("summary").click();
   await page.getByRole("button", { name: "Show activity", exact: true }).click();
   await expect(page.getByLabel("Activity requiring attention").getByText("Workspace search", { exact: true })).toBeVisible();
-  await expect(page.getByText(/Workspace search failed — search deadline exceeded/).first()).toBeVisible();
+  await expect(page.locator(".activity-ledger-failure > summary")).toContainText("search deadline exceeded");
   await expect(page.locator(".activity-ledger li")).toHaveCount(1);
+  const failure = page.locator(".activity-ledger-failure");
+  await expect(failure).not.toHaveAttribute("open");
+  const toggle = failure.locator(":scope > summary");
+  expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  if (info.project.use.hasTouch) await toggle.tap();
+  else { await toggle.focus(); await toggle.press("Enter"); }
+  await expect(failure).toHaveAttribute("open", "");
+  await toggle.click();
+  await expect(failure).not.toHaveAttribute("open");
+  expect((await new AxeBuilder({ page }).include(".activity-ledger-attention").analyze()).violations).toEqual([]);
   await page.reload();
   await expect(queue).toBeVisible();
   await expect(queue.locator("details")).not.toHaveAttribute("open");

@@ -95,7 +95,17 @@ export function ActivityLedger({
       </p>)}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
-        {attentionEntries.map((entry) => <div className={statusClass(entry.status)} key={`attention:${entry.id}`}>
+        {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>
+          <summary>
+            <span className="activity-ledger-phase-marker status-failed" aria-hidden="true" />
+            <strong>{entry.label}</strong>
+            {entry.brief && entry.brief !== entry.label && <small title={entry.brief}>{entry.brief.startsWith(`${entry.label} failed — `) ? entry.brief.slice(`${entry.label} failed — `.length) : entry.brief}</small>}
+            <em>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</em>
+            <ChevronDown size={14} aria-hidden="true" />
+          </summary>
+          {renderEntryDetails?.(entry) ?? <DefaultEntryDetails entry={entry} />}
+          {renderEntryActions && <div className="activity-ledger-entry-actions">{renderEntryActions(entry)}</div>}
+        </details> : <div className={statusClass(entry.status)} key={`attention:${entry.id}`}>
           <span className={`activity-ledger-phase-marker ${statusClass(entry.status)}`} aria-hidden="true" />
           <span><strong>{entry.label}</strong>{entry.brief && entry.brief !== entry.label && <small>{entry.brief}</small>}</span>
           <em>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</em>

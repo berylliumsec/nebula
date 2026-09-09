@@ -1,11 +1,11 @@
 {
-  "change_digest": "ceaf6b9eec5fe3beaced588ddc46852911ea88fe35f5b970c96eff830e56db05",
+  "change_digest": "a215de1d081419f495425456f47c8bb719e232c465398761d7d2098728cb8066",
   "reviewed_by": "Codex, runtime-mode incident investigation",
-  "reason": "Validate command runtime snapshots at warm chat turn boundaries; retain safe rollover and history. Exercise real host external-folder access and frozen Docker/approval boundaries. Move working status into compact composer area; verify plan behavior and persisted runtime policy across reload. Catch-up selection acknowledges the summary and retains pending actions.",
+  "reason": "Validate command runtime snapshots at warm chat turn boundaries; retain safe rollover and history. Exercise real host external-folder access and frozen Docker/approval boundaries. Move working status into compact composer area; verify plan behavior and persisted runtime policy across reload. Catch-up selection acknowledges the summary and retains pending actions. Failed command attention cards expose independent native disclosure without concealing status.",
   "exclusions": "No unrelated suites or research commands. Fake provider with held turn verifies composer working status, reload and host rollover. Backend checks execute only benign commands against disposable files. Physical devices unavailable.",
   "expected_tests": {
     "python": 5,
-    "frontend": 6,
+    "frontend": 14,
     "native": 0,
     "playwright": 0
   },
@@ -22,7 +22,8 @@
   ],
   "frontend": [
     "ui/src/components/HarnessStatusRail.test.tsx",
-    "ui/src/components/ChatCatchUp.test.tsx"
+    "ui/src/components/ChatCatchUp.test.tsx",
+    "ui/src/components/ActivityLedger.test.tsx"
   ],
   "native": [],
   "playwright": [],
@@ -33,6 +34,24 @@
     "dedicated_playwright": 16
   },
   "local_playwright": {
+    "config": "ui/playwright.workspace-recovery.config.ts",
+    "files": [
+      "workspace-recovery.spec.ts"
+    ],
+    "projects": [
+      "model-desktop",
+      "model-compact",
+      "model-chromium-320",
+      "model-webkit-320",
+      "model-chromium-390",
+      "model-webkit-390",
+      "model-chromium-430",
+      "model-webkit-430"
+    ],
+    "expected_tests": 8,
+    "boundary": "Saved synthetic Grok failure in real Core; keyboard/touch collapse, axe, reload, production LAN; no commands run"
+  },
+  "previous_local_playwright": {
     "config": "ui/playwright.host-mode.config.ts",
     "files": [
       "host-mode.spec.ts"

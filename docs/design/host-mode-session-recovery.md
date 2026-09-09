@@ -68,3 +68,23 @@ source-audited; this is not exhaustive browser testing of every setting.
 Release constraint: do not restart Core during an active research turn. The static
 UI may be published with hashed assets retained and index replacement last. Core
 activation and restart verification remain pending until the service is idle.
+
+## Collapsible command failures
+
+The operator can expand/collapse a failed command directly from the attention row
+without opening the entire activity audit. Keep its name, failed status and brief
+error in a compact collapsed summary, with full details/actions inside. Pending
+approvals retain their existing visibility. Disclosure is presentation state; saved
+Core events remain authoritative and reload starts collapsed. Verify component
+expansion across live rerenders and saved real-Core failures with keyboard/touch,
+44px targets, axe, reload and production LAN desktop/mobile Chromium/WebKit.
+
+Failure disclosure evidence: ActivityLedger.test.tsx 8 passed; committed
+workspace-recovery.spec.ts 8 passed in the permanent 1440/1024 desktop Chromium
+and 320/390/430 mobile Chromium/WebKit profiles. Real Core serves saved synthetic
+failed Grok events; no provider or command executes. Production LAN origin
+http://192.168.1.155:19442. Keyboard/touch toggle, 44px summary, scoped axe,
+visible failure identity, collapsed reload, live-rerender expansion preservation,
+and no horizontal clipping passed. Production build passed. Physical devices
+remain unavailable. Artifacts: /tmp/nebula-failure-collapse-browser-final; logs:
+/tmp/nebula-failure-collapse-components.log and /tmp/nebula-failure-collapse-build.log.

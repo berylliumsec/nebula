@@ -20,7 +20,9 @@ rules to new interfaces and to the controls touched by a fix; avoid unrelated re
    problems. Controls must remain discoverable on touch devices without hover.
 5. **Disclose detail progressively.** Counts and short summaries come first;
    logs, queue contents, historical activity and advanced forms expand on demand.
-   Keep failures, approvals and requests for operator input visible.
+   Keep failures, approvals and requests for operator input visible. Failed commands
+   may collapse to a compact name/status/error summary with expandable details;
+   do not require opening the entire activity log to inspect one failure.
 6. **Preserve usability.** Compact glyphs still need 44 px touch targets, sufficient
    contrast, visible keyboard focus and stable placement. Honor reduced motion.
    Minimalism must not remove recovery, feedback, status or accessible names.
