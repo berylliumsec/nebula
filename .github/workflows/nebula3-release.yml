@@ -154,17 +154,11 @@ jobs:
           repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
           image_digest="${repository_digest##*@}"
           source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
-          derived_tag="localhost/nebula-kali-headless:v5-${image_digest#sha256:}"
           printf 'NEBULA_KALI_SOURCE_IMAGE=%s\n' "$source_reference" >> "$GITHUB_ENV"
           # Exercise the admitted local rootless CLI path. Podman's v3 remote
           # socket transport can leave attached run/TTY clients open after the
           # worker exits, which turns successful workloads into false timeouts.
           printf 'NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/podman\n' >> "$GITHUB_ENV"
-          podman build \
-            --build-arg "KALI_SOURCE=${source_reference}" \
-            --file tests/v3/integration/Containerfile.real-core-runtime \
-            --tag "$derived_tag" \
-            .
           podman build \
             --file tests/v3/integration/Containerfile.operator-runtime \
             --tag localhost/nebula-operator-runtime:release \

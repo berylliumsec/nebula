@@ -132,14 +132,8 @@ jobs:
           repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
           image_digest="${repository_digest##*@}"
           source_reference="docker.io/kalilinux/kali-rolling@${image_digest}"
-          derived_tag="localhost/nebula-kali-headless:v5-${image_digest#sha256:}"
           printf 'NEBULA_KALI_SOURCE_IMAGE=%s\n' "$source_reference" >> "$GITHUB_ENV"
           printf 'NEBULA_TEST_CONTAINER_RUNTIME=/usr/bin/podman\n' >> "$GITHUB_ENV"
-          podman build \
-            --build-arg "KALI_SOURCE=${source_reference}" \
-            --file tests/v3/integration/Containerfile.real-core-runtime \
-            --tag "$derived_tag" \
-            .
       - name: Build production UI
         run: npm --prefix ui run build
       - name: Run selected entry serially
