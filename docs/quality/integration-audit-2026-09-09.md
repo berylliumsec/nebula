@@ -46,6 +46,9 @@ capabilities are introduced.
   timeout under concurrent work; the bounded-worker full run passed unchanged.
 - Backend affected suites: 67 passed (`test_harnesses.py`, `test_orchestration.py`).
   The harness adapter is a fixture; SQLite storage and service logic are real.
+- Hosted full backend suites passed on Python 3.11, 3.12 and 3.13. The local
+  full run exposed an expected-event assertion that needed the new `run.progress`
+  event; the corrected mission suite passed all 17 tests.
 - Production bundle built; frontend diagnostic audit passed.
 - Defaults and Copy: 16 production HTTP LAN checks passed across desktop
   1440/1024 and mobile Chromium/WebKit default/320/430 profiles.
@@ -57,6 +60,25 @@ capabilities are introduced.
   passed with a local model fixture and executable tools disabled.
 - LAN origin: `http://192.168.1.155` with isolated ephemeral test ports.
 - Mobile coverage is emulation. No physical-device test was performed.
+
+## Browser-test corrections found by the full matrix
+
+- The real-Core editor journey now runs in the permanent assistant browser
+  projects. Its 390 px Chromium and WebKit runs both passed, including exact
+  saved bytes and recovery of 21 buffers. Keyboard insertion replaces WebKit's
+  ineffective `fill()` into the shadow-root editor; visible draft and saved-byte
+  assertions retain the persistence contract. A Findings URL assertion accepts
+  the valid handoff query. No speculative editor-save product change was retained.
+- Mocked reload tests now block service workers only in their scoped fixture.
+  Otherwise WebKit's worker-owned requests bypass Playwright API interception
+  after reload and produce an unrelated authorization failure. The two affected
+  tests passed on production loopback, then passed all six repeated executions
+  in the permanent `mobile-webkit-small` project. Product authentication is unchanged.
+- The project-removal helper waits for a visible responsive-shell entry point
+  before choosing the mobile sidebar or desktop switcher. This addresses the
+  hosted trace's hidden-switcher wait immediately after reload. Three permanent
+  WebKit 390 production-LAN repetitions passed; the hosted race was not
+  deterministically reproduced locally.
 
 The complete hosted CI checks remain the merge gate. These local results do not
 claim physical Safari validation or a new release/package publication.

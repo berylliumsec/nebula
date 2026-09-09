@@ -881,8 +881,17 @@ test("a paired browser can revoke itself without a stale authentication error", 
   }
 });
 
-test("mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
+test("assistant upgrade mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
   test.setTimeout(120_000);
+  // WebKit fill() can report success without inserting into a shadow-root
+  // contenteditable. Exercise real keyboard input and check the visible draft.
+  const replaceEditorText = async (text: string) => {
+    const editor = page.getByRole("textbox", { name: "Code editor" });
+    await editor.press("Meta+A");
+    await editor.press("Control+A");
+    await page.keyboard.insertText(text);
+    await expect(editor).toContainText(text.trim());
+  };
   const core = await startRealCore();
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
@@ -900,7 +909,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "New file", exact: true }).first().click();
     await page.getByRole("textbox", { name: "File path" }).fill("mobile-proof.txt");
-    await page.getByRole("textbox", { name: "Code editor" }).fill("real Core mobile proof\n");
+    await replaceEditorText("real Core mobile proof\n");
 
     const sidebar = page.getByRole("complementary", { name: "Editor files" });
     await expect(sidebar).toBeHidden();
@@ -927,9 +936,12 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
 
     await page.getByRole("button", { name: "New editor file" }).click();
     await page.getByRole("textbox", { name: "File path" }).fill("scanner.py");
-    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return True\n");
+    await replaceEditorText("def scan_target():\n    return True\n");
     await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
     await expect(page.getByText("Saved /workspace/scanner.py. Use it from Terminal when you're ready.")).toBeVisible();
+    const scannerResponse = await api.get(`engagements/${projectId}/workspace/download?path=scanner.py`);
+    expect(scannerResponse.ok()).toBe(true);
+    expect(await scannerResponse.text()).toBe("def scan_target():\n    return True\n");
     const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
     await mkdir(path.join(workspaceRoot, ".vscode"), { recursive: true });
     await writeFile(path.join(workspaceRoot, ".vscode", "tasks.json"), `{
@@ -1003,7 +1015,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("return False  # Terminal edit");
     await expect(page.getByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
 
-    await page.getByRole("textbox", { name: "Code editor" }).fill("def scan_target():\n    return 'unsaved operator draft'\n");
+    await replaceEditorText("def scan_target():\n    return 'unsaved operator draft'\n");
     await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n\nscan_target()\n", "utf8");
     await page.getByRole("button", { name: "Chat", exact: true }).click();
     await page.getByRole("button", { name: "More workbench views" }).click();
@@ -1034,7 +1046,7 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
     const findingHandoff = page.getByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
     await expect(findingHandoff).toContainText("Nothing is validated or confirmed automatically");
     await findingHandoff.getByRole("button", { name: "Continue to Findings" }).click();
-    await expect(page).toHaveURL(/\/findings$/);
+    await expect(page).toHaveURL(/\/findings(?:\?|$)/);
     const candidate = page.getByRole("dialog", { name: "Create candidate finding" });
     await expect(candidate.getByLabel("Title")).toHaveValue(/scanner\.py:\d+ security observation/);
     await expect(candidate.getByLabel("Description")).toContainText("Source: /workspace/scanner.py:");
@@ -1054,14 +1066,14 @@ test("mobile Code keeps its controls readable and saves to authoritative real-Co
 
     await page.getByRole("button", { name: "New editor file" }).click();
     await page.getByRole("textbox", { name: "File path" }).fill("hot-exit-notes.txt");
-    await page.getByRole("textbox", { name: "Code editor" }).fill("exact unsaved λ research draft\n");
+    await replaceEditorText("exact unsaved λ research draft\n");
     await expect(page.getByText(/^3 open · 1 unsaved · recovery on$/)).toHaveText("3 open · 1 unsaved · recovery on");
 
     // Keep the last draft beyond the former 20-buffer recovery cutoff active.
     for (let index = 4; index <= 21; index++) {
       await page.getByRole("button", { name: "New editor file" }).click();
       await page.getByRole("textbox", { name: "File path" }).fill(`recovery-${index}.txt`);
-      await page.getByRole("textbox", { name: "Code editor" }).fill(`unsaved draft ${index} λ`);
+      await replaceEditorText(`unsaved draft ${index} λ`);
     }
     // Observe the actual IndexedDB transaction, not just the previous ready UI.
     await expect.poll(() => page.evaluate(async () => {
@@ -1783,8 +1795,12 @@ test("project removal archives, retries, restores and clears the last selection 
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     const openSwitcher = async () => {
       const sidebar = page.getByRole("button", { name: "Show sidebar" });
+      const switchProject = page.getByRole("button", { name: "Switch project" });
+      // Reload returns before the responsive shell has necessarily mounted.
+      // Wait for its visible entry point before deciding whether to open it.
+      await expect(sidebar.or(switchProject).filter({ visible: true }).first()).toBeVisible();
       if (await sidebar.isVisible()) await sidebar.click();
-      if (!await switcher.isVisible()) await page.getByRole("button", { name: "Switch project" }).click();
+      if (!await switcher.isVisible()) await switchProject.click();
     };
     const remove = async (name: string) => {
       await switcher.getByRole("button", { name: `Remove project ${name}`, exact: true }).click();

@@ -1,6 +1,10 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
+// Service-worker-owned requests bypass Playwright routes after reload. These
+// tests exercise mocked Core state, so preserve that authority on navigation.
+const reloadTest = test.extend({ serviceWorkers: "block" });
+
 async function installCoreQueueFixture(page: Page) {
   const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
   const actions: string[] = [];
@@ -669,7 +673,7 @@ async function findPathologicalText(page: Page) {
   });
 }
 
-test("assistant upgrade uses the configured harness default for new chats", async ({ page }) => {
+reloadTest("assistant upgrade uses the configured harness default for new chats", async ({ page }) => {
   await page.route(/\/api\/v1\/harnesses(?:\?|$)/, async route => route.fulfill({ json: [{
     ...entity, id: "configured-harness", name: "Configured harness", kind: "codex_app_server",
     connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
@@ -710,7 +714,7 @@ test("assistant upgrade copies saved code with the HTTP clipboard fallback", asy
   await expect(page.locator("textarea[readonly]")).toHaveCount(0);
 });
 
-test("assistant upgrade recovers failed workspace catalogs and mission replay without double counting", async ({ page }) => {
+reloadTest("assistant upgrade recovers failed workspace catalogs and mission replay without double counting", async ({ page }) => {
   const requests = { library: 0, harnesses: 0, runs: 0 };
   const blocked = { library: true, harnesses: true, runs: true };
   await page.addInitScript(() => {
