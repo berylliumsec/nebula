@@ -3258,6 +3258,32 @@ def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
         assert "Source presence does not establish correctness" in evidence.text
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "workspace.read",
+        "runtime_76c95459a5_model.discover_schema",
+        "runtime_4f870d4683_model.relationship_options",
+        "a" * 56,
+        "a" * 57,
+        "a" * 64,
+        "a" * 100,
+    ],
+)
+def test_grok_gateway_alias_fits_qualified_name(name):
+    import re
+    from nebula.v3.harnesses import _portable_gateway_tool_name
+
+    alias = _portable_gateway_tool_name(name)
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", "nebula__" + alias)
+    assert alias == _portable_gateway_tool_name(name)
+    assert alias != _portable_gateway_tool_name(name + "x")
+    assert _portable_gateway_tool_name("a" * 56) == "a" * 56
+    assert (
+        _portable_gateway_tool_name("workspace.read") == "workspace_read_7719d3f482d6d0a9"
+    )
+
+
 def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_path):
     from nebula.v3.harnesses import _portable_gateway_tool_name
 
@@ -3288,6 +3314,24 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
         client = GatewayClient(gateway.socket_path, gateway.token)
         try:
             catalog = await client.request("tools/list", {})
+            assert all(
+                len("nebula__" + tool["name"]) <= 64 for tool in catalog["tools"]
+            )
+            schema_alias = _portable_gateway_tool_name(
+                "runtime_76c95459a5_model.discover_schema"
+            )
+            assert schema_alias in {tool["name"] for tool in catalog["tools"]}
+            response = await client.request(
+                "tools/call", {"name": schema_alias, "arguments": {}}
+            )
+            assert response.get("isError") is not True
+            schema_calls = [
+                call
+                for call in store.list_entities(ToolCall)
+                if call.tool_name == "model.discover_schema"
+            ]
+            assert len(schema_calls) == 1
+            assert schema_calls[0].status == ToolCallStatus.COMPLETE
             alias = _portable_gateway_tool_name("workspace.read")
             assert alias in {tool["name"] for tool in catalog["tools"]}
             assert alias != _portable_gateway_tool_name("workspace_read")

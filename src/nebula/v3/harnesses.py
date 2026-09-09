@@ -373,10 +373,11 @@ def _native_tool_risk(tool_name: str) -> RiskClass:
 
 
 def _portable_gateway_tool_name(name: str) -> str:
-    """Preserve valid names and give punctuation-bearing names stable aliases."""
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+    """Keep the qualified Grok name (``nebula__`` + alias) within 64 chars."""
+    max_length = 64 - len("nebula__")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name) and len(name) <= max_length:
         return name
-    readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:40]
+    readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[: max_length - 17]
     return readable + "_" + hashlib.sha256(name.encode()).hexdigest()[:16]
 
 

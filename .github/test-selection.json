@@ -1,10 +1,11 @@
 {
-  "reviewed_by": "Codex, thinking visibility audit",
-  "reason": "Preserve exposed thinking episodes, Grok completion drain, old saved episode boundaries, generic thinking rendering and completed thinking-only activity discovery. Restore all stopped-turn history in sequence and distinguish deliberate queue cancellation from errors. Remove competing queue scroll bounds and verify last-action reachability.",
-  "exclusions": "Selected adapter/reducer/render paths only. Synthetic provider events and disposable real Core; no research commands or live model calls. Physical devices unavailable. Prior runtime/catch-up/failure evidence retained in design docs.",
+  "reviewed_by": "Codex, Grok qualified gateway name fix",
+  "reason": "Reserve nebula__ within the 64-character tool-name bound. Cover reported schema/relationship names, boundary lengths, stable aliases, real gateway schema discovery/call, unknown-name rejection and adapter create/resume.",
+  "exclusions": "Incremental fix against c68b3a7. Python-only aliases; no frontend, native, layout, origin or persistence-format changes. Fixture provider and disposable Core/gateway. Live Grok chat, production/browser/device and deployment verification outstanding. Earlier branch evidence remains in design docs and preceding selection.",
+  "baseline": "c68b3a7",
   "expected_tests": {
-    "python": 13,
-    "frontend": 35,
+    "python": 10,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
@@ -14,46 +15,12 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
-    "tests/v3/test_harness_adapters.py::test_grok_connection_separates_pre_tool_commentary_from_final_answer",
-    "tests/v3/test_harness_adapters.py::test_grok_connection_keeps_final_answer_before_session_metadata",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot",
-    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
-    "tests/v3/test_chat_queue.py::test_restart_after_durable_turn_creation_reconciles_without_replay",
-    "tests/v3/test_chat_queue.py::test_saved_cancelled_review_is_reconciled_without_replay"
+    "tests/v3/test_harnesses.py::test_grok_gateway_alias_fits_qualified_name",
+    "tests/v3/test_harnesses.py::test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown",
+    "tests/v3/test_harness_adapters.py::test_grok_receives_project_gateway_on_create_and_resume"
   ],
-  "frontend": [
-    "ui/src/pages/harnessActivity.test.ts",
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/components/ChatQueuePanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [],
-  "previous_verification": {
-    "commit": "f3985da",
-    "python": 5,
-    "frontend": 14,
-    "dedicated_playwright": 16
-  },
-  "change_digest": "fdc8e70381b7c6adcce74c6b15321329eb3d9f852fd2df0b117136f5acf744b4",
-  "local_playwright": {
-    "config": "ui/playwright.thinking.config.ts",
-    "files": [
-      "thinking.spec.ts"
-    ],
-    "projects": [
-      "model-desktop",
-      "model-compact",
-      "model-chromium-320",
-      "model-webkit-320",
-      "model-chromium-390",
-      "model-webkit-390",
-      "model-chromium-430",
-      "model-webkit-430"
-    ],
-    "expected_tests": 24,
-    "boundary": "Real Core saved thinking and cancelled turns, partial reply recovery, long review queue bottom-action hit testing, production LAN, keyboard/touch, axe and reload; no provider calls"
-  }
+  "change_digest": "b57726353b4aba2f7d116f497e474b5d12cc08f34d1aa65b5918e085cf0f45e6"
 }
