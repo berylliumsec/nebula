@@ -75,16 +75,18 @@ capabilities are introduced.
   tests passed on production loopback, then passed all six repeated executions
   in the permanent `mobile-webkit-small` project. Product authentication is unchanged.
 - The project-removal helper waits for a visible responsive-shell entry point
-  before choosing the mobile sidebar or desktop switcher. Three permanent
-  WebKit 390 production-LAN repetitions passed, but a subsequent hosted WebKit
-  430 run still exhausted its overall 90-second budget at the final switcher
-  click. Three local 430 repetitions passed. This log alone does not establish
-  a hidden-control bug. Bounded action timing and readiness diagnostics distinguish
-  actionability failures from overall test-budget exhaustion; CI now retains
-  failed browser traces and error contexts for seven days, including tests that
-  pass on retry. A later hosted 430 run passed on retry: its initial click timed
-  out at ten seconds despite an open sidebar and onscreen bounds. This existing
-  project-removal flake remains unresolved; it is not an audited product fix.
+  before choosing the mobile sidebar or desktop switcher. Hosted run
+  `34342848678`, artifact `10100795994`, retry-two trace shows repeated successful
+  clicks taking 2–4 seconds. The final switcher click succeeded in 7.652 seconds,
+  the archive toggle in 1.054 seconds, and restore in 0.811 seconds. At the
+  90-second test deadline the screenshot already showed the restored project;
+  the remaining assertions and scope check had no time left. This is evidence
+  of an insufficient whole-lifecycle budget, not a hidden-control defect.
+  The test now allows 120 seconds while retaining the ten-second switcher-click
+  bound, all lifecycle assertions, timing diagnostics, and seven-day trace
+  retention including retries. Local production-LAN WebKit 430 and TypeScript
+  validation pass; hosted validation remains required. The earlier isolated
+  ten-second click timeout is not proven eliminated by the overall budget change.
 
 The complete hosted CI checks remain the merge gate. These local results do not
 claim physical Safari validation or a new release/package publication.

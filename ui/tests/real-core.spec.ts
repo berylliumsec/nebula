@@ -1764,7 +1764,9 @@ test("assistant upgrade deployed local service retains operator workflow", async
 });
 
 test("project removal archives, retries, restores and clears the last selection on production LAN", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
+  // Hosted WebKit spends 2–4s on many successful clicks in this full lifecycle;
+  // traces reached the final restored state at 90s before the last assertions.
+  test.setTimeout(120_000);
   const startedAt = Date.now();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const stub = await startLocalModelStub();
