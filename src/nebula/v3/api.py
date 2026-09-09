@@ -6548,7 +6548,8 @@ def create_app(
                 raise HTTPException(
                     status_code=409, detail="this VPN profile is already saved"
                 )
-            secret = credentials.create(
+            secret = await asyncio.to_thread(
+                credentials.create,
                 CredentialCreateRequest(
                     secret=SecretStr(parsed.config), persistence=request.persistence
                 )
@@ -6567,11 +6568,13 @@ def create_app(
                     )
                 )
             except Exception:
-                credentials.delete(secret.reference)
+                await asyncio.to_thread(credentials.delete, secret.reference)
                 raise
             return public_vpn_profile(profile)
         except VpnProfileError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except CredentialError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.delete(
         f"{API_PREFIX}/vpn-profiles/{{profile_id}}",
@@ -6608,10 +6611,18 @@ def create_app(
                 status_code=409,
                 detail="close active terminal sessions using this VPN profile first",
             )
+        if profile.revision != request.expected_revision:
+            raise HTTPException(status_code=409, detail="VPN profile changed. Refresh and retry.")
+        try:
+            await asyncio.to_thread(credentials.delete, profile.secret_ref)
+        except CredentialError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"VPN profile was not removed. {exc}",
+            ) from exc
         store.delete(
             VpnProfile, profile_id, expected_revision=request.expected_revision
         )
-        credentials.delete(profile.secret_ref)
         return Response(status_code=204)
 
     @app.get(
@@ -7486,7 +7497,7 @@ def create_app(
         request: CredentialCreateRequest,
     ) -> CredentialStatus:
         try:
-            return credentials.create(request)
+            return await asyncio.to_thread(credentials.create, request)
         except CredentialUnavailableError as exc:
             record_caught_exception(
                 "api",
@@ -7524,7 +7535,7 @@ def create_app(
     )
     async def delete_provider_credential(reference: str) -> Response:
         try:
-            credentials.delete(reference)
+            await asyncio.to_thread(credentials.delete, reference)
         except CredentialError as exc:
             record_caught_exception(
                 "api",

@@ -131,7 +131,12 @@ class CredentialStore:
                 "environment reference or session-only credential"
             )
         try:
-            self.keyring_backend.set_password(_SERVICE_NAME, identifier, value)
+            if isinstance(self.keyring_backend, Keyring):
+                self._secret_service_write(identifier, value)
+            else:
+                self.keyring_backend.set_password(_SERVICE_NAME, identifier, value)
+        except CredentialUnavailableError:
+            raise
         except Exception as exc:
             record_caught_exception(
                 "providers",
@@ -196,6 +201,17 @@ class CredentialStore:
             raise CredentialUnavailableError(
                 "the operating-system credential vault is unavailable"
             )
+        if isinstance(self.keyring_backend, Keyring):
+            try:
+                self._secret_service_delete(reference)
+            except CredentialUnavailableError:
+                raise
+            except Exception as exc:
+                raise CredentialUnavailableError(
+                    "The credential could not be deleted from the host vault. "
+                    "Unlock the vault on the Nebula host and retry."
+                ) from exc
+            return
         try:
             self.keyring_backend.delete_password(
                 _SERVICE_NAME, reference.removeprefix("vault:")
@@ -236,6 +252,74 @@ class CredentialStore:
                 stage="credentials",
             )
             return None
+
+    def _secret_service_write(self, identifier: str, value: str) -> None:
+        """Save in an unlocked existing collection without running any prompt."""
+        from secretstorage.collection import SS_PREFIX, format_secret, open_session
+
+        backend = cast(Keyring, self.keyring_backend)
+        with closing(secretstorage.dbus_init()) as connection:
+            preferred = getattr(backend, "preferred_collection", None)
+            collection = (
+                secretstorage.Collection(connection, preferred)
+                if preferred is not None
+                else secretstorage.get_collection_by_alias(connection, "default")
+            )
+            if collection.is_locked():
+                raise CredentialUnavailableError(
+                    "The host credential vault is locked. Unlock it on the Nebula host "
+                    "and retry, or choose session-only storage."
+                )
+            session = collection.session or open_session(connection)
+            properties = {
+                SS_PREFIX + "Item.Label": ("s", f"Nebula credential {identifier}"),
+                SS_PREFIX + "Item.Attributes": (
+                    "a{ss}",
+                    backend._query(
+                        _SERVICE_NAME, identifier, application=backend.appid
+                    ),
+                ),
+            }
+            item_path, _prompt = collection._collection.call(
+                "CreateItem",
+                "a{sv}(oayays)b",
+                properties,
+                format_secret(session, value.encode("utf-8"), "text/plain"),
+                True,
+            )
+            if len(item_path) <= 1:
+                raise CredentialUnavailableError(
+                    "The host vault requires confirmation. Unlock it on the Nebula host "
+                    "and retry, or choose session-only storage."
+                )
+
+    def _secret_service_delete(self, reference: str) -> None:
+        """Never invoke a desktop unlock or confirmation prompt from Core."""
+        backend = self.keyring_backend
+        with closing(secretstorage.dbus_init()) as connection:
+            preferred = getattr(backend, "preferred_collection", None)
+            collection = (
+                secretstorage.Collection(connection, preferred)
+                if preferred is not None
+                else secretstorage.get_collection_by_alias(connection, "default")
+            )
+            if collection.is_locked():
+                raise CredentialUnavailableError(
+                    "The host credential vault is locked. Unlock it on the Nebula host and retry."
+                )
+            query = backend._query(  # type: ignore[union-attr]
+                _SERVICE_NAME, reference.removeprefix("vault:")
+            )
+            for item in collection.search_items(query):
+                item.ensure_not_locked()
+                # Item.delete() executes an interactive prompt if Delete returns
+                # one. Submit only the D-Bus operation; never wait for that prompt.
+                (prompt,) = item._item.call("Delete", "")
+                if prompt != "/":
+                    raise CredentialUnavailableError(
+                        "The host vault requires confirmation. Delete this credential "
+                        "in the host password manager, then retry in Nebula."
+                    )
 
     def _secret_service_value(self, reference: str) -> str | None:
         """Read an existing Linux vault without ever prompting to unlock/create it.
