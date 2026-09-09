@@ -12,6 +12,7 @@ export interface ReconciledConversationMessage extends ChatMessage {
   usage?: ChatUsage;
   state: ConversationMessageState;
   durable: boolean;
+  recoveredHarnessTurn?: boolean;
   detail?: string;
   sequence?: number;
   harnessTurnId?: string;
@@ -70,4 +71,29 @@ export function reconcileCompletedAssistantMessage(
     : reconciled.length;
   reconciled.splice(Math.min(insertionIndex, reconciled.length), 0, finalized);
   return reconciled;
+}
+
+/** Restore event-owned turns that ended before Core saved a final chat message. */
+export async function recoverHarnessHistory(
+  messages: ReconciledConversationMessage[],
+  getTurn: (id: string) => Promise<{id: string; status: string; error?: string}>,
+): Promise<ReconciledConversationMessage[]> {
+  const represented = new Set(messages.filter(message => message.role === "assistant").map(message => message.harnessTurnId));
+  const result: ReconciledConversationMessage[] = [];
+  for (const message of messages) {
+    result.push(message);
+    const turnId = message.harnessTurnId;
+    if (message.role !== "user" || !turnId || represented.has(turnId)) continue;
+    const turn = await getTurn(turnId);
+    if (!["failed", "cancelled", "interrupted"].includes(turn.status)) continue;
+    represented.add(turnId);
+    result.push({
+      id: `assistant-harness-recovery-${turnId}`,
+      role: "assistant", content: "", createdAt: message.createdAt, citations: [],
+      state: turn.status === "cancelled" ? "cancelled" : "error",
+      durable: false, recoveredHarnessTurn: true, harnessTurnId: turnId,
+      detail: turn.status === "cancelled" ? undefined : turn.error ?? "The harness turn was interrupted before its outcome was known.",
+    });
+  }
+  return result;
 }

@@ -123,6 +123,7 @@ import {
 import { detachChatStream } from "./chatStreamLifecycle";
 import {
   reconcileCompletedAssistantMessage,
+  recoverHarnessHistory,
   type ReconciledConversationMessage,
 } from "./chatMessageReconciliation";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -299,9 +300,10 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
   return <div className="activity-ledger-entry-body">
     {item.summary && <p>{item.summary}</p>}
     {summaryText && <p className="harness-reasoning-summary">{summaryText}</p>}
-    {reasoningSummaryState(item) === "pending" && !summaryText && <p>Codex is reasoning. A display-safe summary will appear if one is provided.</p>}
-    {reasoningSummaryState(item) === "not_provided" && <p>No display-safe reasoning summary was provided by Codex.</p>}
-    {reasoningSummaryState(item) && <small className="harness-reasoning-note">Provider-safe summary only. Private reasoning traces are not captured or retained.</small>}
+    {reasoningSummaryState(item) === "pending" && !summaryText && <p>Thinking is in progress. Text will appear if the harness provides it.</p>}
+    {reasoningSummaryState(item) === "not_provided" && <p>No thinking summary was provided by the harness.</p>}
+    {item.payload.reasoning_summary_truncated === true && <p>Thinking display shortened after 65,536 characters.</p>}
+    {reasoningSummaryState(item) && <small className="harness-reasoning-note">Thinking text provided by the harness.</small>}
     {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => {
       if (typeof step === "string") return <li key={index}>{step}</li>;
       if (!step || typeof step !== "object") return null;
@@ -1471,6 +1473,10 @@ export function SessionsPage() {
         api.listHarnessInteractions(turnId, controller.signal),
       ]);
       if (controller.signal.aborted || sessionSelectionGenerationRef.current !== selectionGeneration) return;
+      if (message.recoveredHarnessTurn) {
+        const partial = page.events.filter(event => event.type === "message_delta").map(event => event.delta ?? "").join("");
+        setMessages(current => current.map(row => row.id === message.id && row.recoveredHarnessTurn ? { ...row, content: partial } : row));
+      }
       const restored = page.events.reduce(
         (items, event) => isTimelineActivity(event)
           ? reduceHarnessActivity(items, event, message.id)
@@ -1504,7 +1510,7 @@ export function SessionsPage() {
     // Older turns remain explicitly discoverable through Inspect saved work.
     if (!api || loadingHistory || coreState !== "online") return;
     for (const message of messages.slice(-20)) {
-      if (message.role === "assistant" && message.durable && message.harnessTurnId && !historicalActivityState[message.harnessTurnId]) void loadHistoricalHarnessActivity(message);
+      if (message.role === "assistant" && (message.durable || message.recoveredHarnessTurn) && message.harnessTurnId && !historicalActivityState[message.harnessTurnId]) void loadHistoricalHarnessActivity(message);
     }
   }, [api, sessionId, messages.length, loadingHistory, coreState]);
 
@@ -1563,7 +1569,9 @@ export function SessionsPage() {
         }),
       ]);
       if (!selectionIsCurrent()) return;
-      setMessages(history.map(persistedMessage));
+      const recoveredHistory = await recoverHarnessHistory(history.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
+      if (!selectionIsCurrent()) return;
+      setMessages(recoveredHistory);
       const restoredToolCards: ToolLifecycleCard[] = history.flatMap((message) => message.role === "assistant"
         ? (message.toolResults ?? []).map((result) => ({
             assistantId: message.id,
@@ -1684,7 +1692,7 @@ export function SessionsPage() {
           () => {
             harnessFollowDetachRef.current = undefined;
             void api.listChatMessages(id).then(async (authoritative) => {
-              setMessages(authoritative.map(persistedMessage));
+              setMessages(await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
               const completedOwner = authoritative.find((message) => message.role === "assistant" && message.harnessTurnId === turnId);
               if (completedOwner) await loadHistoricalHarnessActivity(persistedMessage(completedOwner));
               await refreshSessions(id);
@@ -1725,37 +1733,7 @@ export function SessionsPage() {
         setToolCards([]);
       } else {
         setPendingResponse(undefined);
-        if (summary?.backend === "harness") {
-          const assistantTurnIds = new Set(history.filter((message) => message.role === "assistant").map((message) => message.harnessTurnId));
-          const dangling = [...history].reverse().find((message) => message.role === "user" && message.harnessTurnId && !assistantTurnIds.has(message.harnessTurnId));
-          if (dangling?.harnessTurnId) {
-            const turn = await api.getHarnessTurn(dangling.harnessTurnId, loadController.signal);
-            if (!selectionIsCurrent()) return;
-            if (["failed", "cancelled", "interrupted"].includes(turn.status)) {
-              const assistantId = makeId("assistant-harness-recovery");
-              const page = await api.getHarnessTurnEvents(turn.id, 0, loadController.signal);
-              if (!selectionIsCurrent()) return;
-              setActivityItems((current) => page.events.reduce(
-                (restored, event) => isTimelineActivity(event) ? reduceHarnessActivity(restored, event, assistantId) : restored,
-                current,
-              ));
-              const interruptedInteractions = await api.listHarnessInteractions(turn.id, loadController.signal);
-              if (!selectionIsCurrent()) return;
-              setHarnessInteractions(interruptedInteractions);
-              setMessages((current) => [...current, {
-                id: assistantId,
-                role: "assistant",
-                content: page.events.filter((event) => event.type === "message_delta").map((event) => event.delta ?? "").join(""),
-                createdAt: turn.error ? new Date().toISOString() : dangling.createdAt,
-                citations: [],
-                state: turn.status === "cancelled" ? "cancelled" : "error",
-                durable: false,
-                detail: turn.error ?? "The harness turn was interrupted before its outcome was known.",
-                harnessTurnId: turn.id,
-              }]);
-            }
-          }
-        }
+
       }
       if (!selectionIsCurrent()) return;
       setMobileListOpen(false);
@@ -1861,7 +1839,7 @@ export function SessionsPage() {
       setSessions(ordered);
       setSessionId(id);
       setConversationOpen(true);
-      setMessages(history.map(persistedMessage));
+      setMessages(await recoverHarnessHistory(history.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
       setActivityItems([]);
       setHarnessInteractions([]);
       setHistoricalActivityState({});
@@ -2443,11 +2421,11 @@ export function SessionsPage() {
       setMessages((current) => current.map((message) => message.id === assistantId
         ? { ...message, state: cancelled ? "cancelled" : "error", detail }
         : message));
-      setChatError(detail);
+      setChatError(cancelled ? undefined : detail);
       if (returnedSessionId && !cancelled) {
         try {
           const authoritative = await api.listChatMessages(returnedSessionId);
-          if (authoritative.length) setMessages(authoritative.map(persistedMessage));
+          if (authoritative.length) setMessages(await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
           await refreshSessions(returnedSessionId);
         } catch (caughtError) {
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_14", "A handled interface operation failed.", caughtError, "sessions_page");
@@ -3069,7 +3047,7 @@ export function SessionsPage() {
                     .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
                     .filter((item): item is { key: string; text: string } => Boolean(item.text));
                   const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
-                  const historicalTurnId = message.durable && message.role === "assistant" ? message.harnessTurnId : undefined;
+                  const historicalTurnId = (message.durable || message.recoveredHarnessTurn) && message.role === "assistant" ? message.harnessTurnId : undefined;
                   const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
                   const historicalError = historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined;
                   const activityLedger = messageActivityItems.length > 0
@@ -3133,7 +3111,8 @@ export function SessionsPage() {
                       </div>)}
                       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
                       {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
-                      {message.detail && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
+                      {message.state === "cancelled" && <small className="muted" role="status">Stopped</small>}
+                      {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
                       {api && sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={api} sessionId={sessionId} messageId={message.id} onResults={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})} />}
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}

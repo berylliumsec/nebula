@@ -882,7 +882,8 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
     asyncio.run(scenario())
 
 
-def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
+@pytest.mark.parametrize("vendor", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
+def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, vendor):
     class ReasoningConnection(FakeConnection):
         async def run_turn(
             self, prompt: str, *, model: str
@@ -896,7 +897,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
             )
             yield HarnessEvent(
                 type="output_delta",
-                vendor=HarnessKind.CODEX_APP_SERVER,
+                vendor=vendor,
                 item_id="reasoning-1",
                 item_kind="reasoning",
                 item_status="streaming",
@@ -910,7 +911,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
             )
             yield HarnessEvent(
                 type="item_upsert",
-                vendor=HarnessKind.CODEX_APP_SERVER,
+                vendor=vendor,
                 item_id="reasoning-1",
                 item_kind="reasoning",
                 item_status="completed",

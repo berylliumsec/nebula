@@ -479,3 +479,29 @@ it("recovers saved Grok names, failure details and stable identity across replay
   const cancelled = reduceHarnessActivity([], { ...complete, itemStatus: "cancelled", payload: { ...complete.payload, status: "cancelled" } }, "assistant");
   expect(cancelled[0].summary).toBe("Workspace search cancelled");
 });
+
+
+describe("thinking episode recovery", () => {
+  const thought = (sequence: number, delta: string): HarnessActivityEvent => ({ ...activity("output_delta"), harnessTurnId: "grok-turn", vendor: "grok_acp", itemId: "reasoning", itemKind: "reasoning", itemStatus: "streaming", stream: "reasoning_summary", sequence, delta });
+  it("renders Grok thinking and recovers legacy episodes without duplicating replay", () => {
+    const first = thought(1, "First ");
+    const second = thought(2, "episode");
+    const tool: HarnessActivityEvent = { ...activity("tool_started"), harnessTurnId: "grok-turn", vendor: "grok_acp", itemId: "t1", itemKind: "tool", sequence: 3 };
+    const last = thought(4, "Second episode");
+    const events = [first, second, tool, last];
+    const items = events.reduce((items, event) => reduceHarnessActivity(items, event, "a"), [] as ReturnType<typeof reduceHarnessActivity>);
+    const thinking = items.filter(item => item.kind === "reasoning");
+    expect(thinking.map(reasoningSummaryText)).toEqual(["First episode", "Second episode"]);
+    expect(thinking[0].status).toBe("completed");
+    expect(thinking.map(reasoningSummaryState)).toEqual(["available", "available"]);
+    const replayed = events.reduce((items, event) => reduceHarnessActivity(items, event, "a"), items);
+    expect(replayed).toEqual(items);
+    expect(events.reduce((items, event) => reduceHarnessActivity(items, event, "a"), [] as typeof items)).toEqual(items);
+  });
+  it("marks long thinking previews as truncated rather than silently losing the tail", () => {
+    let items = reduceHarnessActivity([], { ...thought(1, "a".repeat(40000)), itemId: "thinking-1" }, "a");
+    items = reduceHarnessActivity(items, { ...thought(2, "b".repeat(40000)), itemId: "thinking-1" }, "a");
+    expect(reasoningSummaryText(items[0])).toHaveLength(65536);
+    expect(items[0].payload.reasoning_summary_truncated).toBe(true);
+  });
+});

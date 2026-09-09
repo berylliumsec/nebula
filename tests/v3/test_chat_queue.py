@@ -241,6 +241,7 @@ def test_pending_approval_failure_and_revocation_pause_dispatch(tmp_path):
     [
         ("routing", "needs_review"),
         ("complete", "complete"),
+        ("cancelled", "cancelled"),
         ("interrupted", "needs_review"),
     ],
 )
@@ -265,6 +266,10 @@ def test_restart_after_durable_turn_creation_reconciles_without_replay(
     )
     asyncio.run(service.step(queue, recovering=True))
     assert service.get("s").items[0]["status"] == expected
+    if status == "cancelled":
+        assert service.get("s").paused
+        asyncio.run(service.step(service.get("s")))
+        assert service.get("s").items[0]["status"] == "cancelled"
     assert store.count(ChatTurn) == 1
 
 
@@ -330,3 +335,29 @@ def test_harness_queue_uses_durable_turn_and_selected_context(tmp_path):
         await runtime.shutdown()
 
     asyncio.run(run())
+
+
+def test_saved_cancelled_review_is_reconciled_without_replay(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+    queue = enqueue(service, request)
+    turn = store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status="cancelled",
+        )
+    )
+    items = queue.items
+    items[0].update(status="needs_review", turn_id=turn.id)
+    queue = store.update(
+        ChatQueue,
+        queue.id,
+        {"items": items, "paused": True},
+        expected_revision=queue.revision,
+    )
+    asyncio.run(service.step(queue, recovering=True))
+    assert service.get("s").items[0]["status"] == "cancelled"
+    assert service.get("s").paused
+    assert store.count(ChatTurn) == 1

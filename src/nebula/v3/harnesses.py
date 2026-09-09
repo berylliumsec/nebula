@@ -3938,6 +3938,9 @@ class GrokAcpConnection(HarnessConnection):
         message_parts: list[str] = []
         pending_agent_parts: list[str] = []
         commentary_sequence = 0
+        thinking_sequence = 0
+        thinking_id: str | None = None
+        event_task: asyncio.Task | None = None
         tool_calls: dict[str, dict[str, Any]] = {}
         yield HarnessEvent(
             type="started",
@@ -3945,18 +3948,23 @@ class GrokAcpConnection(HarnessConnection):
             external_session_id=self.external_session_id,
         )
         try:
-            while not request.done():
-                # diagnostic-expected: the losing event task is cancelled and drained below.
-                event_task = asyncio.create_task(self.rpc.events.get())
-                done, _ = await asyncio.wait(
-                    {request, event_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                if request in done:
-                    event_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await event_task
-                    break
-                raw = event_task.result()
+            while True:
+                if request.done():
+                    if self.rpc.events.empty():
+                        break
+                    raw = self.rpc.events.get_nowait()
+                else:
+                    # Completion and the last queued update can become ready together.
+                    event_task = asyncio.create_task(self.rpc.events.get())
+                    await asyncio.wait(
+                        {request, event_task}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if not event_task.done():
+                        event_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await event_task
+                        continue
+                    raw = event_task.result()
                 if isinstance(raw, BaseException):
                     raise raw
                 method = str(raw.get("method") or "")
@@ -3985,6 +3993,16 @@ class GrokAcpConnection(HarnessConnection):
                 item_id = str(
                     update.get("toolCallId") or update.get("id") or kind or "activity"
                 )
+                if thinking_id and kind in {"agent_message_chunk", "tool_call"}:
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.GROK_ACP,
+                        item_id=thinking_id,
+                        item_kind="reasoning",
+                        item_status="completed",
+                        title="Thinking",
+                    )
+                    thinking_id = None
                 if kind == "agent_message_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
@@ -4008,10 +4026,13 @@ class GrokAcpConnection(HarnessConnection):
                 if kind == "agent_thought_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
+                        if thinking_id is None:
+                            thinking_sequence += 1
+                            thinking_id = f"thinking-{thinking_sequence}"
                         yield HarnessEvent(
                             type="output_delta",
                             vendor=HarnessKind.GROK_ACP,
-                            item_id="reasoning",
+                            item_id=thinking_id,
                             item_kind="reasoning",
                             item_status="streaming",
                             title="Reasoning",
@@ -4072,9 +4093,17 @@ class GrokAcpConnection(HarnessConnection):
                 elif kind in {"tool_call", "tool_call_update"}:
                     details = _grok_tool_details(update, tool_calls.get(item_id))
                     tool_calls[item_id] = details
-                    terminal = details["item_status"] in {"completed", "failed", "cancelled"}
+                    terminal = details["item_status"] in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                    }
                     yield HarnessEvent(
-                        type="tool_completed" if terminal else "tool_started" if kind == "tool_call" else "item_upsert",
+                        type="tool_completed"
+                        if terminal
+                        else "tool_started"
+                        if kind == "tool_call"
+                        else "item_upsert",
                         vendor=HarnessKind.GROK_ACP,
                         item_id=item_id,
                         item_kind="tool",
@@ -4091,6 +4120,18 @@ class GrokAcpConnection(HarnessConnection):
                         payload=_bounded(update, limit=8_000),
                     )
             result = await request
+            if thinking_id:
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.GROK_ACP,
+                    item_id=thinking_id,
+                    item_kind="reasoning",
+                    item_status="cancelled"
+                    if isinstance(result, dict)
+                    and result.get("stopReason") in {"cancelled", "canceled"}
+                    else "completed",
+                    title="Thinking",
+                )
             for delta in pending_agent_parts:
                 message_parts.append(delta)
                 yield HarnessEvent(
@@ -4119,8 +4160,14 @@ class GrokAcpConnection(HarnessConnection):
             )
         finally:
             self.active = False
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await event_task
             if not request.done():
                 request.cancel()
+                with suppress(asyncio.CancelledError):
+                    await request
 
     async def _permission(
         self, raw: dict[str, Any], params: dict[str, Any]

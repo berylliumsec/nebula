@@ -2217,3 +2217,39 @@ def test_grok_tool_identity_failure_and_nested_command_receipt():
         assert tools[1].item_status == "failed"
         assert "search deadline exceeded" in tools[1].summary
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stop_reason", ["end_turn", "cancelled"])
+def test_grok_thinking_episodes_drain_completion_race(stop_reason):
+    class ThinkingRpc(FixtureGrokRpc):
+        async def request(self, method, params):
+            if method != "session/prompt":
+                return await super().request(method, params)
+            for update in [
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "First "}},
+                {"sessionUpdate": "current_mode_update", "currentModeId": "auto"},
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "episode"}},
+                {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read"},
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Second episode"}},
+                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Public answer"}},
+                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Last episode"}},
+            ]:
+                self.events.put_nowait({"method": "session/update", "params": {"update": update}})
+            # Return immediately: completion races with the queue reader.
+            return {"stopReason": stop_reason}
+
+    async def scenario():
+        async def denied(_request):
+            raise AssertionError("No permission expected")
+        connection = GrokAcpConnection(ThinkingRpc(), external_session_id="thinking-test", permission_handler=denied)
+        events = [event async for event in connection.run_turn("test", model="fixture")]
+        thoughts = [event for event in events if event.stream == "reasoning_summary"]
+        assert [event.item_id for event in thoughts] == ["thinking-1", "thinking-1", "thinking-2", "thinking-3"]
+        assert "".join(event.delta for event in thoughts) == "First episodeSecond episodeLast episode"
+        closed = [event for event in events if event.type == "item_upsert" and event.item_kind == "reasoning"]
+        assert len(closed) == 3
+        assert closed[-1].item_status == ("cancelled" if stop_reason == "cancelled" else "completed")
+        assert events[-1].type == ("interrupted" if stop_reason == "cancelled" else "completed")
+        next_turn = [event async for event in connection.run_turn("next", model="fixture")]
+        assert next(event for event in next_turn if event.stream == "reasoning_summary").item_id == "thinking-1"
+    asyncio.run(scenario())

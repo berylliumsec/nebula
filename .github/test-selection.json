@@ -1,11 +1,10 @@
 {
-  "change_digest": "a215de1d081419f495425456f47c8bb719e232c465398761d7d2098728cb8066",
-  "reviewed_by": "Codex, runtime-mode incident investigation",
-  "reason": "Validate command runtime snapshots at warm chat turn boundaries; retain safe rollover and history. Exercise real host external-folder access and frozen Docker/approval boundaries. Move working status into compact composer area; verify plan behavior and persisted runtime policy across reload. Catch-up selection acknowledges the summary and retains pending actions. Failed command attention cards expose independent native disclosure without concealing status.",
-  "exclusions": "No unrelated suites or research commands. Fake provider with held turn verifies composer working status, reload and host rollover. Backend checks execute only benign commands against disposable files. Physical devices unavailable.",
+  "reviewed_by": "Codex, thinking visibility audit",
+  "reason": "Preserve exposed thinking episodes, Grok completion drain, old saved episode boundaries, generic thinking rendering and completed thinking-only activity discovery. Restore all stopped-turn history in sequence and distinguish deliberate queue cancellation from errors. Remove competing queue scroll bounds and verify last-action reachability.",
+  "exclusions": "Selected adapter/reducer/render paths only. Synthetic provider events and disposable real Core; no research commands or live model calls. Physical devices unavailable. Prior runtime/catch-up/failure evidence retained in design docs.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 14,
+    "python": 13,
+    "frontend": 35,
     "native": 0,
     "playwright": 0
   },
@@ -15,28 +14,34 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harnesses.py::test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session",
-    "tests/v3/test_automation_runtime.py::test_host_mode_requires_consent_and_reads_external_folder_without_docker",
-    "tests/v3/test_automation_runtime.py::test_docker_mode_rejects_host_paths_and_host_network_requests",
-    "tests/v3/test_automation_runtime.py::test_host_command_timeout_and_exact_approval_are_enforced"
+    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
+    "tests/v3/test_harness_adapters.py::test_grok_connection_separates_pre_tool_commentary_from_final_answer",
+    "tests/v3/test_harness_adapters.py::test_grok_connection_keeps_final_answer_before_session_metadata",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot",
+    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
+    "tests/v3/test_chat_queue.py::test_restart_after_durable_turn_creation_reconciles_without_replay",
+    "tests/v3/test_chat_queue.py::test_saved_cancelled_review_is_reconciled_without_replay"
   ],
   "frontend": [
-    "ui/src/components/HarnessStatusRail.test.tsx",
-    "ui/src/components/ChatCatchUp.test.tsx",
-    "ui/src/components/ActivityLedger.test.tsx"
+    "ui/src/pages/harnessActivity.test.ts",
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/components/ChatQueuePanel.test.tsx"
   ],
   "native": [],
   "playwright": [],
   "previous_verification": {
-    "commit": "41f5917",
-    "python": 35,
-    "frontend": 17,
+    "commit": "f3985da",
+    "python": 5,
+    "frontend": 14,
     "dedicated_playwright": 16
   },
+  "change_digest": "fdc8e70381b7c6adcce74c6b15321329eb3d9f852fd2df0b117136f5acf744b4",
   "local_playwright": {
-    "config": "ui/playwright.workspace-recovery.config.ts",
+    "config": "ui/playwright.thinking.config.ts",
     "files": [
-      "workspace-recovery.spec.ts"
+      "thinking.spec.ts"
     ],
     "projects": [
       "model-desktop",
@@ -48,25 +53,7 @@
       "model-chromium-430",
       "model-webkit-430"
     ],
-    "expected_tests": 8,
-    "boundary": "Saved synthetic Grok failure in real Core; keyboard/touch collapse, axe, reload, production LAN; no commands run"
-  },
-  "previous_local_playwright": {
-    "config": "ui/playwright.host-mode.config.ts",
-    "files": [
-      "host-mode.spec.ts"
-    ],
-    "projects": [
-      "model-desktop",
-      "model-compact",
-      "model-chromium-320",
-      "model-webkit-320",
-      "model-chromium-390",
-      "model-webkit-390",
-      "model-chromium-430",
-      "model-webkit-430"
-    ],
-    "expected_tests": 8,
-    "boundary": "Real Core, fake provider, visible Host policy save/reload, warm same-chat rollover, symmetric expandable Working strip with axe, catch-up selection and durable read cursor, production LAN"
+    "expected_tests": 24,
+    "boundary": "Real Core saved thinking and cancelled turns, partial reply recovery, long review queue bottom-action hit testing, production LAN, keyboard/touch, axe and reload; no provider calls"
   }
 }

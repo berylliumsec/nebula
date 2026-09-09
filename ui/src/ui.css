@@ -16,6 +16,7 @@
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
 
+.chat-composer .chat-follow-up-queue { max-height: none; overflow: visible; }
 .chat-follow-up-queue:empty { display: none; }
 .chat-follow-up-queue { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
 .chat-follow-up-queue p { overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -54,6 +55,7 @@
 .chat-message-actions { flex-wrap: wrap; }
 .chat-message-actions > button { flex: 0 0 auto; }
 .chat-panel > .chat-composer { max-height: 42%; overflow: auto; }
+.chat-panel > .chat-composer:has(.chat-follow-up-queue > details[open]) { max-height: calc(100% - 96px); }
 .chat-composer footer { flex-wrap: wrap; }
 .chat-composer footer > button { flex-shrink: 0; }
 .assistant-search { max-height: 28%; }

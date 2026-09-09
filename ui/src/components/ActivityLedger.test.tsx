@@ -129,3 +129,11 @@ it("collapses failed command details without hiding their status, and preserves 
   expect(within(attention).getByText("Detailed command failure output")).not.toBeVisible();
   expect(screen.getByRole("button", { name: "Show activity" })).toHaveAttribute("aria-expanded", "false");
 });
+
+it("keeps saved thinking discoverable even when a completed turn used no tools", async () => {
+  const user = userEvent.setup();
+  render(<ActivityLedger compact model={model({ status: "complete", actionCount: 0, entries: [{ ...model().entries[0], kind: "reasoning", status: "complete", countsAsAction: false, label: "Thinking", summary: "Saved thinking episode" }] })} />);
+  await user.click(screen.getByRole("button", { name: "Show activity" }));
+  await user.click(screen.getByText("Thinking"));
+  expect(screen.getByText("Saved thinking episode")).toBeVisible();
+});
