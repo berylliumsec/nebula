@@ -43,7 +43,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       "--allow-browser-diagnostics",
       ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
-      "--static-dir", path.join(repository, "ui/dist"),
+      ...(process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1" ? [] : ["--static-dir", path.join(repository, "ui/dist")]),
     ],
     {
       cwd: repository,
@@ -2014,6 +2014,28 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
     const reports = await (await api.get(`reports?engagement_id=${project.id}`)).json() as {observation_ids: string[]}[];
     expect(reports).toHaveLength(1);
     expect(reports[0].observation_ids).toContain(notes.find(note => note.title === "Local fixture mechanism")!.id);
+    const rendering = page.waitForResponse(response => /\/reports\/[^/]+\/renders$/.test(response.url()) && response.request().method() === "POST");
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Export PDF", exact: true}).click();
+    const renderResponse = await rendering;
+    expect(renderResponse.ok(), await renderResponse.text()).toBe(true);
+    const rendered = await renderResponse.json();
+    const download = await downloading;
+    const pdfPath = await download.path();
+    expect(pdfPath).toBeTruthy();
+    const pdf = await readFile(pdfPath!);
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const extracted = spawnSync(process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python"), ["-c", "import sys; from pypdf import PdfReader; print('\\n'.join(p.extract_text() for p in PdfReader(sys.argv[1]).pages))", pdfPath!], {encoding: "utf8", timeout: 15_000});
+    expect(extracted.status, extracted.stderr).toBe(0);
+    expect(extracted.stdout).toContain("Reviewed local mechanism");
+    expect(extracted.stdout).toContain("Ready to Saved");
+    const durableRender = await (await api.get(`report-renders/${rendered.id}`)).json();
+    expect(durableRender.status).toBe("completed");
+    expect(durableRender.report_revision).toBe(rendered.report_revision);
+    await testInfo.attach("saved-report.pdf", {body: pdf, contentType: "application/pdf"});
+    await testInfo.attach("saved-render", {body: JSON.stringify(durableRender), contentType: "application/json"});
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
     await page.getByRole("button", {name: /Local fixture mechanism/}).click();
     await page.getByRole("button", {name: "Delete", exact: true}).click();
@@ -2021,6 +2043,74 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
     await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
     await testInfo.attach("saved-output-lineage", {body: JSON.stringify({origin: core.origin, notes, reports}), contentType: "application/json"});
     await testInfo.attach("note-retention", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose(); await stopRealCore(core);}
+});
+
+test("stabilization real Core Library makes uploads visible and retains originals through removal", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const filename = "mechanism-fixture.md";
+  const content = Buffer.from("# Local mechanism fixture\n\nThe local button changes Ready to Saved. This document is synthetic and no script executes.\n");
+  try {
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Library acceptance"}});
+    expect(pairing.ok()).toBe(true);
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Library acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/library`);
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    await page.getByRole("searchbox", {name: "Search Library", exact: true}).fill("a-stale-filter");
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", {name: "Add document or script", exact: true}).click();
+    await (await chooser).setFiles({name: filename, mimeType: "text/markdown", buffer: content});
+    await expect(page.getByText(`${filename} is available to every project.`, {exact: true})).toBeVisible({timeout: 60_000});
+    const row = page.locator(".source-list > article").filter({hasText: filename});
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("searchbox", {name: "Search Library", exact: true})).toHaveValue("");
+    const items = await (await api.get("library/items")).json();
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item.status).toBe("ready");
+    expect(item.document_count).toBeGreaterThan(0);
+    await row.getByRole("button", {name: "Inspect", exact: true}).click();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Close Library details", exact: true}).click();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toHaveCount(0);
+    await page.goBack();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toHaveCount(0);
+    const downloading = page.waitForEvent("download");
+    await row.getByRole("button", {name: `Download ${filename}`, exact: true}).click();
+    const downloaded = await downloading;
+    expect(await readFile((await downloaded.path())!)).toEqual(content);
+    let failReindex = true;
+    await page.route(`**/library/items/${item.id}/reindex`, async route => {
+      if (failReindex) {failReindex = false; await route.fulfill({status: 503, json: {detail: "Injected local index failure"}});}
+      else await route.continue();
+    });
+    const reindex = row.getByRole("button", {name: `Reindex ${filename}`, exact: true});
+    await reindex.click();
+    await expect(page.getByText("Injected local index failure", {exact: false}).first()).toBeVisible();
+    await expect(reindex).toBeEnabled();
+    await reindex.click();
+    await expect(page.getByText(`${filename} was reindexed.`, {exact: true})).toBeVisible();
+    await expect(row.locator(".source-state")).toHaveText("ready");
+    await row.getByRole("button", {name: `Remove ${filename}`, exact: true}).click();
+    await page.getByRole("dialog", {name: `Remove ${filename}?`}).getByRole("button", {name: "Remove item", exact: true}).click();
+    await expect(row).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    const retained = await api.get(`artifacts/${item.artifact_id}/content`);
+    expect(retained.ok()).toBe(true);
+    expect(await retained.body()).toEqual(content);
+    await testInfo.attach("library-durable-item", {body: JSON.stringify({origin: core.origin, item, original_retained: true, index_removed: true}), contentType: "application/json"});
+    await testInfo.attach("library-removed", {body: await page.screenshot(), contentType: "image/png"});
   } finally {await api.dispose(); await stopRealCore(core);}
 });
 

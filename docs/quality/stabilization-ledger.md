@@ -16,13 +16,13 @@ applicable. Not-applicable lifecycle steps require a reason in the evidence.
 
 | Area / entry | Observable invariant and lifecycle | State authorities | Regression layers | Baseline / candidate evidence |
 | --- | --- | --- | --- | --- |
-| Launch/navigation | Connect/pair, select/search, deep-link, back/forward, reload/relaunch preserve the correct identity | Core/device auth, URL | component, real Core LAN, native | Pending |
-| Assistant | Select runtime, send/stream, approve/reject/stop, complete, queue/switch/reconnect/retry without duplicate work or contradictory status | approval, turn, harness request, canonical projection | service failure injection, real Core, UI, real harness, native | Reported approved decision with waiting turn; full reproduction pending |
-| Browser | Navigate/input, control handoff, capture, reload/reconnect, explain unsupported devices | Core browser session and owning device | local fixture, UI, LAN/native | Pending |
-| Model | Inspect mechanisms/evidence, select/filter/expand/resize, clear only model/captures | Core model/evidence, local viewport | component, real Core, LAN/native | Pending |
-| Workspace | Link/browse/upload/edit/save/recover, terminal, switch projects; one linked folder everywhere | Core workspace, filesystem, device drafts | service, real Core, native | Pending |
-| Project/outputs | Create/update/archive/restore and discover/reuse notes, evidence, findings/reports/Library | Core durable entities | real Core, UI | Pending |
-| Settings/recovery | Save/rediscover runtimes and policies; retry failures; show accurate build/capability identity | Core catalog, frozen session policy, build manifest | component, real Core, native | Pending |
+| Launch/navigation | Connect/pair, select/search, deep-link, back/forward, reload/relaunch preserve the correct identity | Core/device auth, URL | component, real Core LAN, native | Partial: pairing/reload, project isolation, resource Back/Forward and native relaunch passed; final artifact walkthrough pending |
+| Assistant | Select runtime, send/stream, approve/reject/stop, complete, queue/switch/reconnect/retry without duplicate work or contradictory status | approval, turn, harness request, canonical projection | service failure injection, real Core, UI, real harness, native | Partial: A1–A6 regressions, native approve/reject/stop and fresh configured runtime smoke passed; real-process failure matrix remains |
+| Browser | Navigate/input, control handoff, capture, reload/reconnect, explain unsupported devices | Core browser session and owning device | local fixture, UI, LAN/native | Partial: headed local input/reconnect and packaged managed capture passed; complete device/handoff matrix pending |
+| Model | Inspect mechanisms/evidence, select/filter/expand/resize, clear only model/captures | Core model/evidence, local viewport | component, real Core, LAN/native | Partial: 16 real-Core production browser cases passed; native graph and final candidate pending |
+| Workspace | Link/browse/upload/edit/save/recover, terminal, switch projects; one linked folder everywhere | Core workspace, filesystem, device drafts | service, real Core, native | Partial: real linked workspace/terminal and mobile Code conflict/draft journeys passed; final/native coverage pending |
+| Project/outputs | Create/update/archive/restore and discover/reuse notes, evidence, findings/reports/Library | Core durable entities | real Core, UI | Partial: project lifecycle, note/report/PDF and Library lifecycle passed; independent findings/evidence and upload failure coverage pending |
+| Settings/recovery | Save/rediscover runtimes and policies; retry failures; show accurate build/capability identity | Core catalog, frozen session policy, build manifest | component, real Core, native | Partial: component identity and configured runtime discovery passed; real setup/retry and native identity screen pending |
 
 ## Defects and work batches
 
@@ -296,6 +296,60 @@ fix, regression and verification here before being called resolved.
   execution remains pending a newly built identical package; source-level tests
   are not native acceptance. Selected runs are 1440x900 and 1024x768, with
   approve/reject/stop, fullscreen bounds, application relaunch and wheel scrolling.
+- Candidate `1b621b7942e955e1c4539de8e3cda045b350e8bc`, built
+  `2026-09-10T18:09:10Z`: 66 selected Python cases passed in 31.18s; Core/web
+  identity and all 81 emitted asset hashes match. Managed DEB SHA256:
+  `5e8bc450a1e97b32d89d1965438713b6d5b9f1ec4a0885ee35efdffd887efc2b`.
+  Extracted native 1440x900 passed approve/reject/stop, durable handoff/progress,
+  exact-once receipts, focus-mode bounds, actual app relaunch, saved-conversation
+  selection and native wheel scrolling. Reviewed its relaunch screenshot; notice,
+  transcript and composer are reachable. Evidence:
+  `/tmp/nebula-stabilization-candidate3-WQ2nf3`. The 1024x768 run is pending.
+- The same candidate also passed the complete selected native journey at
+  1024x768. Both viewport directories retain three independent session states,
+  adapter receipts, approval/rejection and relaunch/scroll screenshots. These
+  verify A4/A5/A6 and N4/N6 in the extracted package; they are not installed-live
+  acceptance or proof of every remaining whole-product journey.
+
+### Output completion contract
+
+- Library: from Add document or script, upload only a synthetic local document;
+  verify failure/retry, indexing, saved-item discovery despite a stale filter,
+  inspect/reload/download/reindex/remove and retained immutable artifact. Core's
+  item/artifact records and local Chroma index are authoritative; the browser
+  owns the chosen file and search filter. A failed upload must preserve a valid
+  retry action. No scripts execute. The local embedding model is already cached.
+- Reports: extend the saved-note/report journey through Export PDF, verify the
+  downloaded PDF contains the persisted title/note and its render references
+  that saved revision. No draft or unrelated live content may enter the export.
+- Layers: real-Core production LAN desktop first, then the same journeys across
+  the eight permanent profiles; retained traces, downloads and durable records.
+  Add embedded-UI acceptance support to the real-Core test launcher so final
+  packaged-Core LAN checks do not mix in an unrelated static directory.
+- L1 red reproduction: a successful Library upload remains hidden behind its
+  earlier filter. The production real-Core test found zero visible item rows
+  despite the success notice (`output-completion-baseline`, 1 PDF pass/1 Library
+  failure). Clear that stale filter only after successful persistence.
+- L2 red reproduction after L1: Close Library details changes the route but keeps
+  the inspector mounted; its action menu intercepts Download for the remainder
+  of the test. The shared `useCanonicalResourceSelection` serves Library,
+  assets, evidence, sources and findings. Contract: closing/back to the list
+  clears presentation selection, and an invalid new ID must not show another
+  record. Preserve an unchanged selected record's edit snapshot/revision.
+  Add component navigation regressions before repair, then repeat real-Core
+  Library and the affected inspector UI journeys. Evidence:
+  `/tmp/nebula-stabilization-library-discovery`.
+- L1/L2 green: four navigation regressions passed, including unchanged edit
+  revision preservation. The complete selected frontend batch passed 64 tests
+  in 34.95s. Production LAN real-Core Library and note/report/PDF journeys passed
+  all eight desktop/Chromium/WebKit profiles: 16 passed in 122.60s, zero skips or
+  flaky cases. Retained traces, screenshots, original downloads, rendered PDFs
+  and durable records: `/tmp/nebula-stabilization-output-matrix`; full command
+  results: `/tmp/nebula-stabilization-output-matrix.log` and
+  `/tmp/nebula-stabilization-resource-frontend.log`. Library covers stale-filter
+  discovery, Close/Back/Forward, reload, download, reindex failure/retry and
+  removal while retaining the immutable artifact. Upload failure/lost-response
+  behavior itself remains a separate gate; no unsafe blind upload retry added.
 - A3 repair passed both missing-record cases and the full 28-case continuation,
   projection and catch-up selection (18.08s). Selected shell/state frontend
   tests: 49 passed in 29.64s. These results do not prove every crash boundary.
@@ -311,14 +365,16 @@ fix, regression and verification here before being called resolved.
   `/tmp/nebula-stabilization-outputs-real-matrix`. PDF export and Library lifecycle
   still require their own evidence.
 
-This is not a completed whole-product release. Packaged/installed desktop
-approval/reconnect/fullscreen/scroll/relaunch acceptance, the remaining real-Core
-workspace/output/settings lifecycle journeys, crash-at-every-delivery-boundary
-coverage, and final same-artifact staging walkthrough remain required. The
-current inert approval browser fixture covers approve/reject/reload/idempotency,
-not every mandatory failure scenario. Acknowledgement currently records Core
-waiter delivery; vendor execution is not inferred from it. No physical device
-claim is made. Follow `stabilization-release.md` only after the ledger gates pass.
+This is not a completed whole-product release. Extracted-package native
+approve/reject/stop/focus-mode/scroll/relaunch passed on candidate `1b621b7`;
+installed acceptance, native graph and explicit transport recovery, remaining
+real-Core output/settings lifecycles, crash-at-every-delivery-boundary coverage
+and final same-artifact staging walkthrough remain required. The inert approval
+browser fixture covers approve/reject/reload/idempotency, not every mandatory
+failure scenario. Projection distinguishes Core waiter delivery, adapter
+transport/callback handoff and subsequent durable progress; none alone is proof
+of remote command execution. No physical device claim is made. Follow
+`stabilization-release.md` only after the ledger gates pass.
 
 Candidate `963e76681f289b625fc7815336a7cee0a745ecbe` (built
 `2026-09-10T16:48:25Z`) passed the repeated 16-case primary-screen/dialog browser

@@ -110,6 +110,9 @@ export function LibraryPage() {
         mediaType: file.type || undefined,
         contentBase64: encodeBase64(await file.arrayBuffer()),
       });
+      // A successful upload must be discoverable even if an earlier search
+      // would hide the newly saved item.
+      setQuery("");
       setMessage(`${file.name} is available to every project.`);
     } catch (caughtError) {
       void logCaughtDiagnostic(

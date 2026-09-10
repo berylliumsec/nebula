@@ -19,6 +19,14 @@ export function useCanonicalResourceSelection<T extends { id: string }>(
   useEffect(() => {
     const changedInHistory = previousResourceId.current !== resourceId;
     previousResourceId.current = resourceId;
+    // Navigation owns which record is presented. Keeping a previous selection
+    // after Close/Back leaves an invisible-route inspector blocking the page.
+    // Same-ID refreshes deliberately retain the edit snapshot for revision
+    // conflict checks; navigation is not an implicit refresh of that snapshot.
+    if (changedInHistory && selected?.id !== resourceId) {
+      setSelected(requested);
+      return;
+    }
     if (!resourceId) {
       return;
     }
@@ -28,6 +36,6 @@ export function useCanonicalResourceSelection<T extends { id: string }>(
   return {
     missingResourceId: resourceId && !requested ? resourceId : undefined,
     openResource: (item: T) => navigate(resourcePath(engagement?.id, kind, item.id)),
-    closeResource: () => navigate(resourcePath(engagement?.id, kind)),
+    closeResource: () => { setSelected(undefined); navigate(resourcePath(engagement?.id, kind)); },
   };
 }

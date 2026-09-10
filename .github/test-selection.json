@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Approval decision/waiter/adapter/progress tracking, exact binding and no-replay recovery; monotonic session state; resize-aware composition and compact diagnostic disclosure; note/report retention and build identity. Reviewed 66 Python cases (including three inert native-peer contracts), 60 frontend cases and bounded production-browser selections. The permanent extracted-package journey adds Stop, fullscreen, actual relaunch and scrolling at 1440/1024; its acceptance remains a separate required gate, not implied by unit tests.",
+  "reason": "Approval decision/waiter/adapter/progress tracking, exact binding and no-replay recovery; monotonic session state; resize-aware composition and compact diagnostic disclosure; note/report/PDF retention, Library discovery, URL-authoritative inspector navigation and build identity. Reviewed 66 Python cases (including three inert native-peer contracts), 64 frontend cases and bounded production-browser selections. Native approve/reject/stop, focus mode, relaunch and scrolling passed at 1440/1024 on candidate 1b621b7; later resource fixes require a new final candidate. Six real-Core catalog journeys include Library lifecycle and saved PDF export, independently passed across eight profiles (16 output cases).",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,9 +8,9 @@
   ],
   "expected_tests": {
     "python": 66,
-    "frontend": 60,
+    "frontend": 64,
     "native": 0,
-    "playwright": 69
+    "playwright": 70
   },
   "python": [
     "tests/test_stabilization_acp.py",
@@ -30,7 +30,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -44,6 +44,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "04d65a49e20d15ad981e21b5aca9ab333e614bd353aff8341048cbe999d80400",
+  "change_digest": "51a24eadcb743e64f7a68c58cde0fc69c1edca0bb1cc65d39cb90cac2e548fae",
   "python_node": false
 }
