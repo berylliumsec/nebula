@@ -49,6 +49,7 @@ import {
   type DiagnosticStatus,
 } from "./types";
 import { DiagnosticErrorNotice } from "./DiagnosticErrorNotice";
+import { BuildIdentity } from "../components/BuildIdentity";
 
 const levels: Array<{ value: DiagnosticLevel; label: string; description: string }> = [
   { value: "error", label: "Errors", description: "Operation failures and cleanup gaps only (recommended)." },
@@ -697,6 +698,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       )}
 
       <section className="diagnostics-current" aria-labelledby="diagnostics-current-title">
+        <BuildIdentity coreCommit={currentHealth?.commit} />
         <header className="panel-header compact"><div><h3 id="diagnostics-current-title">Current status</h3><p>Live checks only. Past failures are listed separately.</p></div></header>
         <div className="diagnostics-status-grid">
           <StatusCard label="Nebula Core" {...coreStatus} />

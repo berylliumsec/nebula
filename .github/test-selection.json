@@ -1,44 +1,43 @@
 {
-  "reviewed_by": "Codex, resolved approval recovery and unclipped controls",
-  "reason": "Durable resolved approvals must not reappear as pending or abort history restoration. Test read-only Core projection, scoped UI fallback, explicit stop, reload and short-window layouts.",
-  "exclusions": "No full suites, live approval decisions, replay, provider calls, native deployment or physical devices. Production LAN browser tests use API/WebSocket fixtures; Core persistence separately uses disposable SQLite HTTP tests. Full live harness continuation remains unverified.",
-  "baseline": "2a4e79b",
+  "reviewed_by": "Codex, stabilization foundation acceptance review",
+  "reason": "Approval delivery/idempotency/failure recovery, canonical session display, empty-project recovery, plan scrolling/accessibility and build identity. Exact production browser selections were collected; real Core and no-tool configured-runtime evidence is retained in the acceptance ledger.",
+  "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
+  "baseline": "fdaca50",
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 11,
-    "frontend": 6,
+    "python": 38,
+    "frontend": 13,
     "native": 0,
-    "playwright": 0
+    "playwright": 60
   },
   "python": [
-    "tests/v3/test_chat_catchup.py"
+    "tests/test_stabilization_build.py",
+    "tests/v3/test_approval_continuation.py",
+    "tests/v3/test_session_state.py",
+    "tests/v3/test_chat_catchup.py",
+    "tests/v3/test_api.py::test_chat_origin_approval_decision_does_not_require_an_agent_run",
+    "tests/v3/test_api.py::test_approval_decision_is_revisioned_and_recorded_in_run_ledger",
+    "tests/v3/test_api.py::test_expired_approval_is_durably_expired_instead_of_approved",
+    "tests/v3/test_api.py::test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision",
+    "tests/v3/test_harnesses.py::test_explicit_stop_cancels_detached_work_without_completing_it",
+    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay"
   ],
-  "frontend": [
-    "ui/src/components/ChatCatchUp.test.tsx",
-    "ui/src/components/ResolvedApprovalNotice.test.tsx"
-  ],
+  "frontend": ["ui/src/pages/useSessionState.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx"],
   "native": [],
-  "playwright": [],
+  "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
     "config": "ui/playwright.config.ts",
     "files": [
       "tests/interface.spec.ts"
     ],
-    "grep": "pending approval restores and reviews (resolved|stale catalog)",
+    "grep": "assistant upgrade pending approval restores and reviews (resolved|stale catalog)",
     "expected_tests": 24,
     "projects": [
-      "desktop",
-      "compact",
-      "mobile-chromium-small",
-      "mobile-chromium-ledger-390",
-      "mobile-chromium-wide",
-      "mobile-webkit-small",
-      "mobile-webkit",
-      "mobile-webkit-wide"
+      "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "f2ab766a7f376e67879eb2146bbf78305703749b0d4da948fdbef6ffeb3c2cdb",
+  "change_digest": "84f22fb364e2adf8e0f09d25ebb7370da8a4f8ea1b7bf8f6493cf93fb066f196",
   "python_node": false
 }

@@ -4742,6 +4742,7 @@ export class ApiClient {
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
+      commit: health.commit,
       mode:
         health.mode ??
         (health.dialect?.startsWith("postgres") ? "team" : "local"),
