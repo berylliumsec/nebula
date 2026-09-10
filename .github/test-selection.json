@@ -1,18 +1,19 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Approval decision, waiter delivery, adapter handoff and ordered execution activity; idempotency, exact owner binding and no-replay restart recovery; monotonic session projection and additive cache migration; actual transport observation; empty-project recovery; resize-aware composition and compact diagnostic disclosure with stationary 44px controls, focus return and recovery; note-to-report retention and build identity. Exact 63 backend, 60 frontend and bounded production browser selections reviewed; native and remaining whole-product gates remain required.",
+  "reason": "Approval decision/waiter/adapter/progress tracking, exact binding and no-replay recovery; monotonic session state; resize-aware composition and compact diagnostic disclosure; note/report retention and build identity. Reviewed 66 Python cases (including three inert native-peer contracts), 60 frontend cases and bounded production-browser selections. The permanent extracted-package journey adds Stop, fullscreen, actual relaunch and scrolling at 1440/1024; its acceptance remains a separate required gate, not implied by unit tests.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 63,
+    "python": 66,
     "frontend": 60,
     "native": 0,
     "playwright": 69
   },
   "python": [
+    "tests/test_stabilization_acp.py",
     "tests/test_stabilization_build.py",
     "tests/v3/test_approval_continuation.py",
     "tests/v3/test_approval_handoff.py",
@@ -43,6 +44,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "3bd56fba0c9b99801e59de181c2b1d44403f40e0e952386e783eab5d889d5b1f",
+  "change_digest": "04d65a49e20d15ad981e21b5aca9ab333e614bd353aff8341048cbe999d80400",
   "python_node": false
 }

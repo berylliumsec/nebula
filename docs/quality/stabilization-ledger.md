@@ -290,6 +290,12 @@ fix, regression and verification here before being called resolved.
   must not replay a command or invent approval continuation. Record the actual
   native viewport/build and retained screenshots; native graph fullscreen and
   LAN disconnect/restart remain distinct gates, not implied by focus mode.
+- Native acceptance extension: three inert ACP protocol cases passed (0.07s),
+  covering allow/deny/cancel, independent receipt writes, bounded long output
+  and no output on cancellation. Runner lint/compilation passed. Actual native
+  execution remains pending a newly built identical package; source-level tests
+  are not native acceptance. Selected runs are 1440x900 and 1024x768, with
+  approve/reject/stop, fullscreen bounds, application relaunch and wheel scrolling.
 - A3 repair passed both missing-record cases and the full 28-case continuation,
   projection and catch-up selection (18.08s). Selected shell/state frontend
   tests: 49 passed in 29.64s. These results do not prove every crash boundary.

@@ -88,6 +88,11 @@ def main():
                 if allowed
                 else "NATIVE_APPROVAL_DECLINED"
             )
+            if allowed:
+                answer += "\n\n" + "\n\n".join(
+                    f"Local fixture paragraph {index}. No command or network action occurred."
+                    for index in range(1, 61)
+                )
             emit(
                 {
                     "method": "session/update",

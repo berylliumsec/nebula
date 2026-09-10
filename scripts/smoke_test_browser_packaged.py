@@ -402,10 +402,68 @@ async def smoke(
                         if stabilization:
                             from native_stabilization_journeys import exercise
 
+                            async def relaunch():
+                                nonlocal prefix, session_id, backend
+                                (await webdriver.delete(prefix)).raise_for_status()
+                                session_id = None
+                                launched = await webdriver.post(
+                                    "/session",
+                                    json={
+                                        "capabilities": {
+                                            "alwaysMatch": {
+                                                "tauri:options": {
+                                                    "application": str(
+                                                        package_root
+                                                        / "usr/bin/nebula-ui"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                )
+                                launched.raise_for_status()
+                                session_id = launched.json()["value"]["sessionId"]
+                                prefix = f"/session/{session_id}"
+                                await wait_for(
+                                    "return Boolean(window.__TAURI_INTERNALS__ && document.querySelector('main'));"
+                                )
+                                (
+                                    await webdriver.post(
+                                        prefix + "/window/rect", json=requested_rect
+                                    )
+                                ).raise_for_status()
+                                await wait_for(
+                                    f"return innerWidth==={width} && innerHeight==={height};"
+                                )
+                                resolved = await webdriver.post(
+                                    prefix + "/execute/async",
+                                    json={
+                                        "script": "const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('resolve_backend_connection').then(done).catch(e=>done({error:String(e)}));",
+                                        "args": [],
+                                    },
+                                )
+                                resolved.raise_for_status()
+                                backend = resolved.json()["value"]
+                                assert (
+                                    "error" not in backend
+                                    and backend["source"] == "local"
+                                ), (
+                                    "Isolated packaged Core did not reconnect after relaunch"
+                                )
+                                return prefix, backend
+
                             await exercise(
-                                webdriver=webdriver, prefix=prefix, backend=backend,
-                                profile=profile, project=project, evidence_root=evidence_root,
-                                execute=execute, wait_for=wait_for, element=element, click=click,
+                                webdriver=webdriver,
+                                prefix=prefix,
+                                backend=backend,
+                                profile=profile,
+                                project=project,
+                                evidence_root=evidence_root,
+                                execute=execute,
+                                wait_for=wait_for,
+                                element=element,
+                                click=click,
+                                relaunch=relaunch,
                             )
                         if conversation_id:
 
@@ -510,7 +568,11 @@ if __name__ == "__main__":
     parser.add_argument("--codex-home", type=Path)
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=900)
-    parser.add_argument("--stabilization", action="store_true", help="Exercise approvals using an inert local ACP peer, no model calls or tools")
+    parser.add_argument(
+        "--stabilization",
+        action="store_true",
+        help="Exercise approvals using an inert local ACP peer, no model calls or tools",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
