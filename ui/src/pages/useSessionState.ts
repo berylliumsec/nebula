@@ -12,6 +12,7 @@ export interface SessionState {
   busy: boolean;
   detail: string;
   connection: "connected" | "disconnected" | "unknown";
+  connection_scope?: "harness_transport";
   actions: ("check_status" | "review" | "stop")[];
   pending: {id: string; turn_id: string; kind: "approval" | "input"; text: string}[];
   decisions: {approval_id: string; status: string; continuation: {

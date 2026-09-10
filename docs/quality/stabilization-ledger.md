@@ -131,6 +131,42 @@ fix, regression and verification here before being called resolved.
 
 ## Remaining release gates
 
+### Canonical projection hardening contract
+
+- A4: the first projection uses a maximum timestamp as its revision. That is not
+  monotonic when a clock moves backwards, a request expires without a write, or
+  a retained request is deleted. Before release, add a durable, serialized
+  revision for the derived snapshot, separate from execution records. The same
+  state must keep its revision; a changed state must advance it after reload,
+  restart and concurrent reads. Building a display snapshot must never change
+  an approval, turn, policy or command. Catch-up's pending lookup must not toggle
+  the authoritative connection projection by omitting runtime observations.
+  Planned layers: failing clock/deletion/expiry/concurrency tests, additive
+  cache-table migration/rollback, stale-revision component tests, real-Core UI.
+- A5: `session_activity.live` means an active turn, not a connected transport.
+  Idle must not be labelled disconnected simply because no turn is running.
+  Observe the adapter's actual transport where available and report unknown
+  where unavailable; keep execution, connection and decision delivery separate.
+  Planned layers: deterministic RPC/idle/exit tests and configured runtime smoke.
+- A4/A5 focused result: 16 passed (12.02s). The red regressions proved a
+  backwards clock could decrease the revision, removal/expiry could leave it
+  unchanged, and an idle connected adapter appeared disconnected. A derived
+  cache now serializes semantic revisions; unchanged concurrent reads share a
+  revision and reopened SQLite retains it. Catch-up uses the same pure pending
+  computation without overwriting connection state. The additive migration's
+  downgrade removes only the cache; retained turns survive. Codex/ACP transport
+  reader/exit probes are covered; adapters without a probe report unknown.
+  PostgreSQL is not configured and has not been exercised. Real-Core browser
+  and new packaged-build verification of these changes remain required.
+- A4/A5 integration: all 50 selected backend/compatibility cases passed in
+  22.92s; the projection passed focused type checking and lint. The current
+  production web build passed and all 16 real-Core approve/reject/reload cases
+  passed in 1.4m across desktop and mobile Chromium/WebKit profiles. Evidence:
+  `/tmp/nebula-stabilization-projection-python.log`,
+  `/tmp/nebula-stabilization-projection-web-build.log`,
+  `/tmp/nebula-stabilization-projection-real-matrix`. This is a dirty diagnostic
+  build, not a release candidate. New native artifact verification remains open.
+
 ### Candidate native and additional lifecycle findings
 
 - Clean candidate `b382bef99f6a5646f18b77698536f29f20178446`, built at
@@ -192,7 +228,18 @@ not every mandatory failure scenario. Acknowledgement currently records Core
 waiter delivery; vendor execution is not inferred from it. No physical device
 claim is made. Follow `stabilization-release.md` only after the ledger gates pass.
 
-No stabilization release has been committed, pushed, installed or deployed yet.
+Candidate `963e76681f289b625fc7815336a7cee0a745ecbe` (built
+`2026-09-10T16:48:25Z`) passed the repeated 16-case primary-screen/dialog browser
+walkthrough and native approval/rejection/reload/duplicate-decision journeys at
+1440x900 and 1024x768. Both runs used the extracted managed DEB and its bundled
+Core with an inert local ACP peer; independent receipts prove exactly one
+adapter delivery for each decision. This verifies N4's native clipping repair,
+not the entire native lifecycle or the subsequent A4/A5 changes. Evidence:
+`/tmp/nebula-stabilization-candidate2-2fD6dg`; retained DEB SHA256:
+`bcfe717d7a1c66ffdb3600594213396cd43582ee0122a0a689be2d9fa41782af`.
+
+Stabilization work has local commits, but no release has been pushed, installed
+or deployed. Live remains unchanged.
 
 ## Test and release policy
 

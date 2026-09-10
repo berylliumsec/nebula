@@ -136,12 +136,12 @@ def catchup_projection(store, session, cursor):
                     }
                 )
     items.sort(key=lambda item: item["at"], reverse=True)
-    from .session_state import session_state
+    from .session_state import session_projection
 
     # The read cursor owns what is unseen, not whether an action is pending.
     pending = [
         {**item, "kind": "pending", "message_id": None}
-        for item in session_state(store, session)["pending"]
+        for item in session_projection(store, session)["pending"]
     ]
     unseen_pending = [
         entry

@@ -877,6 +877,11 @@ class HarnessConnection(ABC):
     external_session_id: str | None
     adapter_version: str
 
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        """Adapters without a transport probe must not invent connectivity."""
+        return "unknown"
+
     @abstractmethod
     def run_turn(
         self,
@@ -1220,6 +1225,16 @@ class _CodexRpc:
         self.stderr_tail = ""
         self._closing = False
 
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        if self._closing or (
+            self.process is not None and self.process.returncode is not None
+        ):
+            return "disconnected"
+        if self._reader_task is None:
+            return "unknown"
+        return "disconnected" if self._reader_task.done() else "connected"
+
     async def start(self) -> None:
         self._reader_task = create_diagnostic_task(
             self._reader(),
@@ -1455,6 +1470,10 @@ def _discard_queued_session_replay(events: asyncio.Queue[Any]) -> None:
 
 class CodexAppServerConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/codex-v2"
+
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        return self.rpc.connection_state
 
     def __init__(
         self,
@@ -3889,6 +3908,10 @@ def _goal_item_status(goal: HarnessGoalSnapshot) -> HarnessItemStatus:
 
 class GrokAcpConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/grok-acp-v1"
+
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        return self.rpc.connection_state
 
     def __init__(
         self,
@@ -8200,6 +8223,12 @@ class HarnessRuntimeService:
                 "harness knowledge transfer requires explicit operator confirmation"
             )
         return True
+
+    def connection_state(
+        self, session_id: str
+    ) -> Literal["connected", "disconnected", "unknown"]:
+        connection = self._connections.get(session_id)
+        return connection.connection_state if connection is not None else "disconnected"
 
     def session_activity(self, session_id: str) -> HarnessSessionActivity:
         """Return the authoritative reservation state without exposing turn content."""

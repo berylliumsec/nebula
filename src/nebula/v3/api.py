@@ -8228,7 +8228,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_chat_session_state(
+    def get_chat_session_state(
         session_id: str, response: Response
     ) -> dict[str, Any]:
         from .session_state import session_state

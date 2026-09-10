@@ -1,13 +1,13 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Approval delivery/idempotency/orphaned-record restart recovery, canonical session display, empty-project recovery, shared notices/composer scrolling, note-to-report retention and build identity. Exact production browser selections were collected; real Core and no-tool configured-runtime evidence is retained in the acceptance ledger.",
+  "reason": "Approval delivery/idempotency/orphaned-record restart recovery; monotonic session projection across clock rollback, expiry, deletion, concurrent reads and reopen; additive cache-only migration rollback; actual adapter transport observation; empty-project recovery, shared notices/composer scrolling, note-to-report retention and build identity. Exact production browser selections were collected; real Core and no-tool configured-runtime evidence is retained in the acceptance ledger.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 40,
+    "python": 50,
     "frontend": 49,
     "native": 0,
     "playwright": 69
@@ -16,6 +16,8 @@
     "tests/test_stabilization_build.py",
     "tests/v3/test_approval_continuation.py",
     "tests/v3/test_session_state.py",
+    "tests/v3/test_session_projection_migration.py",
+    "tests/v3/test_harness_connection_state.py",
     "tests/v3/test_chat_catchup.py",
     "tests/v3/test_api.py::test_chat_origin_approval_decision_does_not_require_an_agent_run",
     "tests/v3/test_api.py::test_approval_decision_is_revisioned_and_recorded_in_run_ledger",
@@ -38,6 +40,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "2ff6ad3203c379e49f98965bab12797d3688e02b41fc33551ae73df05923ac29",
+  "change_digest": "6fbdca6549f2df995d1f4b7c0e7010ecf05f9645c11c34bc6f033dcb05ecdfab",
   "python_node": false
 }
