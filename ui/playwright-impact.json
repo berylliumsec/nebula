@@ -19,6 +19,112 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "branch-review": [
+  {
+    "area": "branch-review",
+    "project": "desktop",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "compact",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-chromium-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-chromium-ledger-390",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-chromium-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-webkit-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-webkit",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "mobile-webkit-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization|browser Assistant |assistant upgrade pending approval|activity ledger groups repeated work|assistant follow-up queue|conversation switching|harness model controls",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "browser-chromium-landscape",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "browser Assistant ",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "browser-webkit-landscape",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "browser Assistant ",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "assistant-real-desktop",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "assistant-real-chromium-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "branch-review",
+    "project": "assistant-real-webkit-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "stabilization real Core|assistant upgrade stabilization failure|project creation switches|project removal archives",
+    "runtime": "real-core",
+    "shard": "1/1"
+  }
+],
     "assistant-viewer": [
       {"area":"assistant-viewer","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
       {"area":"assistant-viewer","project":"compact","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},

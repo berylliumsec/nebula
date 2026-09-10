@@ -926,6 +926,7 @@ def test_model_question_uses_graph_without_command_or_browser_runtime(
         "model.discover_schema",
         "model.search",
         "model.neighborhood",
+        "model.relationship_options",
         "model.list_evidence",
         "model.get_evidence",
         "model.get_updates",

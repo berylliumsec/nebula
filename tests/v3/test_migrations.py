@@ -30,11 +30,14 @@ def _run_migration(
 
 def _exercise_migration_cycle(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
+    reversible_head = "0013_application_model_outbox"
     try:
         if "alembic_version" in inspect(engine).get_table_names():
             _run_migration(engine, command.downgrade, "base")
 
-        _run_migration(engine, command.upgrade, "head")
+        # The graph replacement intentionally cannot reconstruct experimental
+        # records. Exercise the reversible chain independently of that boundary.
+        _run_migration(engine, command.upgrade, reversible_head)
         assert "operation_events" in inspect(engine).get_table_names()
 
         metadata = MetaData()
@@ -77,11 +80,21 @@ def _exercise_migration_cycle(database_url: str) -> None:
                 ).scalar_one()
             assert remaining == 0
 
-        _run_migration(engine, command.upgrade, "head")
+        _run_migration(engine, command.upgrade, reversible_head)
         assert "operation_events" in inspect(engine).get_table_names()
         _run_migration(engine, command.downgrade, "base")
         assert "operation_events" not in inspect(engine).get_table_names()
         assert "run_events" not in inspect(engine).get_table_names()
+
+        _run_migration(engine, command.upgrade, "head")
+        assert {"operation_events", "application_graphs", "session_projections"} <= set(
+            inspect(engine).get_table_names()
+        )
+        with pytest.raises(RuntimeError, match="irreversible; restore a backup"):
+            _run_migration(engine, command.downgrade, reversible_head)
+        assert "operation_events" in inspect(engine).get_table_names()
+        assert "application_graphs" in inspect(engine).get_table_names()
+        _run_migration(engine, command.upgrade, "head")
     finally:
         engine.dispose()
 
