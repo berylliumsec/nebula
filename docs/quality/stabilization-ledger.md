@@ -26,6 +26,55 @@ applicable. Not-applicable lifecycle steps require a reason in the evidence.
 
 ## Defects and work batches
 
+S2 policy-scope contract: Settings search → Project execution policy must explain
+that the command-runtime approval setting does not decide harness, MCP or browser
+permissions. Existing sessions retain their frozen revision. Exercise unsaved
+Never selection without enabling it, save failure/retry with retained host consent,
+reload, and changing new-session defaults while an existing disposable command
+session keeps its original revision. The only executed command reads a synthetic
+marker in a temporary directory; no networking or live policy changes. Core owns
+policy revisions and execution receipts; React owns unsaved settings. Add the
+missing explanatory-copy regression before editing; use production real-Core
+desktop/mobile checks and retain native/compiled-artifact follow-up evidence.
+
+S3 loading-state defect: S2 passed six profiles but Chromium430 lost the unsaved
+Never selection when initial policy hydration completed. Approval/network inputs
+were interactive before the saved policy arrived, unlike Execution mode. The
+entire server-owned form must remain disabled until its selected project's data
+loads. Old-project load responses must not overwrite a newly selected project's
+form, and a load failure must expose an in-place retry. Add component regressions
+for delayed load, reordered project loads and load retry; no policy semantics or
+approval boundaries change. Red evidence: `/tmp/nebula-stabilization-runtime-policy8`.
+
+S2/S3 result: loading, out-of-order project loads, load retry and late runtime/
+scope save responses have five component regressions (initial three all failed
+before repair). Both forms now share a selected-project readiness boundary;
+fieldsets disable unsaved inputs during load/save, stale responses are ignored,
+and failed loads have an in-place retry. Existing command approval values and
+execution policy enforcement are unchanged. The initial one-response failure
+injection was consumed by a concurrent policy reader (v2); the corrected fixture
+holds the policy service unavailable until the operator clicks Retry, instead
+of assuming the first request belongs to the form.
+
+Evidence: 9 focused policy component/parser cases passed in 1.53s; the complete
+reviewed frontend selection passed **140/140 in 28.37s**. Production LAN policy
+journey passed **8/8 in 56.43s**, zero skips/flaky, including initial load failure,
+saved-form failure/retry, unsaved Never disclosure (never enabled), host consent,
+reload and two synthetic local marker reads on the same frozen revision after
+defaults change. Axe, focus and horizontal-overflow checks passed. Evidence:
+`/tmp/nebula-stabilization-policy-unit9.log`,
+`/tmp/nebula-stabilization-frontend140.log` (selections adjacent),
+`/tmp/nebula-stabilization-runtime-policy8-v3`.
+
+Same-artifact model acceptance: added a bounded launcher for the candidate's
+unmodified compiled Core, embedded assets, private generated token and temporary
+data. It adds no test routes. The existing reset/lost-response/fresh-collection
+journey passed on compiled candidate206ab62 in 4.6s at
+`/tmp/nebula-stabilization-model-candidate-check-L6QZTA/reset`. Dense graph + reset
+now have 16 selected permanent profiles for the next candidate. Native acceptance
+also exercises reset cancellation/confirmation and verifies all disposable
+conversation messages remain. Its updated native gate is still pending.
+
 1. Establish reproducible baseline from production UI entry points; record traces.
 2. Repair decision/delivery/progress contract, idempotency and restart recovery.
 3. Consume canonical revisioned session state across all status surfaces.

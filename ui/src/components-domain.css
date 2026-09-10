@@ -469,7 +469,7 @@
 .policy-revision { color: var(--muted); font-size: 11px; }
 .policy-editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 12px; }
 .policy-form { min-width: 0; max-width: 100%; overflow: hidden; }
-.policy-form-body { display: grid; min-width: 0; max-width: 100%; gap: 11px; padding: 13px; }
+.policy-form-body { display: grid; min-width: 0; max-width: 100%; gap: 11px; padding: 13px; margin: 0; border: 0; }
 .policy-form-body > label, .policy-form-body > .resource-form-grid, .policy-form-body > .inline-validation-notice { min-width: 0; max-width: 100%; }
 .scope-import-trigger { justify-self: start; }
 .scope-import-dialog { width: min(780px, calc(100vw - 32px)); }

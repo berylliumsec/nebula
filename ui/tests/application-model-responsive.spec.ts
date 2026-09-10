@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import {modelAuthHeaders} from "./fixtures/model-auth";
 
 test("dense model retains selection, filters, focus and readable mobile landscape", async ({
   page,
@@ -10,7 +11,7 @@ test("dense model retains selection, filters, focus and readable mobile landscap
     if (new URL(request.url()).pathname.endsWith("/application-model/graph"))
       graphTransfers.push(request.url());
   });
-  const headers = { Authorization: "Bearer model-test-token" };
+  const headers = await modelAuthHeaders();
   const project = await (
     await request.post("/api/v1/engagements", {
       headers,

@@ -42,6 +42,19 @@ those as `NEBULA_BUILD_COMMIT`, `NEBULA_BUILD_TIMESTAMP` and
    override `--static-dir` with assets from another build. Repeat the ledger
    walkthrough and configured-runtime smoke checks. No silent test skips.
 
+   Use `nebula-core ui --no-browser --host 0.0.0.0 --port <staging-port>
+   --data-dir <temporary-data> --lan --allow-insecure-lan` on the trusted test
+   LAN. `serve` without `--static-dir` is intentionally API-only, not an embedded
+   frontend check. Do not disable authentication; keep the generated test token
+   private. For the permanent model/reset projects, the bounded launcher
+   `scripts/stabilization_model_candidate.py --core <candidate-core>
+   --port <staging-port> --auth-file <new-private-file>` is selected with
+   `NEBULA_MODEL_TEST_COMMAND`; set `NEBULA_MODEL_TEST_AUTH_FILE` to that file.
+   It launches the unmodified compiled Core, removes frontend overrides and adds
+   no test routes. Only `application-model-responsive.spec.ts` and
+   `application-model-reset.spec.ts` use this candidate mode; tests requiring
+   custom fixture routes still use the separately identified source fixture.
+
 ## Maintenance handoff and installation
 
 Only proceed after an explicit maintenance handoff confirms active work may be

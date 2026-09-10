@@ -1,8 +1,9 @@
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import {modelAuthHeaders} from "./fixtures/model-auth";
 
 test("scoped reset, cancellation, lost-response retry and fresh collection", async ({ page, request }, info) => {
-  const headers = { Authorization: "Bearer model-test-token" };
+  const headers = await modelAuthHeaders();
   const project = await (await request.post("/api/v1/engagements", { headers, data: { name: "Start over — " + "long project name ".repeat(6) } })).json();
   const base = `/api/v1/engagements/${project.id}/application-model`;
   const browser = (await (await request.get(`/api/v1/engagements/${project.id}/browser-workspace`, { headers })).json()).sessions[0];

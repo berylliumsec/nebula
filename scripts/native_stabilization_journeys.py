@@ -296,6 +296,48 @@ async def exercise(
             == graph_bounds["selected"]
         )
 
+        # The reset boundary must also work in the actual desktop package. This
+        # project's model is synthetic; its completed chats must survive reset.
+        await named_click("Start over")
+        await wait_for("return Boolean(document.querySelector('[role=dialog]'));")
+        await named_click("Cancel", "document.querySelector('[role=dialog]')")
+        preview = await core.get(
+            f"engagements/{project['id']}/application-model/reset-preview"
+        )
+        preview.raise_for_status()
+        assert preview.json()["objects"] == 12, preview.text
+        await named_click("Start over")
+        await wait_for("return Boolean(document.querySelector('[role=dialog]'));")
+        await named_click(
+            "Clear and start over", "document.querySelector('[role=dialog]')"
+        )
+        await wait_for(
+            "return [...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('Model and browser captures cleared'));"
+        )
+        preview = await core.get(
+            f"engagements/{project['id']}/application-model/reset-preview"
+        )
+        preview.raise_for_status()
+        assert preview.json()["objects"] == 0 and preview.json()["captures"] == 0, (
+            preview.text
+        )
+        reset_result = {"preview": preview.json(), "chat_sessions_preserved": []}
+        for saved_session in sessions:
+            history = await core.get(
+                f"chat/sessions/{saved_session['session_id']}/messages"
+            )
+            history.raise_for_status()
+            assert history.json(), "Model reset must preserve the conversation's messages"
+            reset_result["chat_sessions_preserved"].append(saved_session["session_id"])
+        (evidence_root / "native-model-reset.json").write_text(
+            json.dumps(reset_result, indent=2)
+        )
+        screenshot = await webdriver.get(prefix + "/screenshot")
+        screenshot.raise_for_status()
+        (evidence_root / "native-model-reset.png").write_bytes(
+            base64.b64decode(screenshot.json()["value"])
+        )
+
         # Close and launch the actual native application, retaining only this
         # disposable profile. Rediscover the completed chat through its list.
         prefix, backend = await relaunch()

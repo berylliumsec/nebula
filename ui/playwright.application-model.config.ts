@@ -12,5 +12,5 @@ export default defineConfig({
       { name: `model-webkit-${width}`, use: { ...devices["iPhone 13"], viewport: { width, height: 844 } } },
     ]),
   ],
-  webServer: { command: `${process.env.NEBULA_TEST_PYTHON ?? "python"} ../tests/v3/application_model_fixture.py`, url: `http://${host}:${port}`, timeout: 60000 },
+  webServer: { command: process.env.NEBULA_MODEL_TEST_COMMAND ?? `${process.env.NEBULA_TEST_PYTHON ?? "python"} ../tests/v3/application_model_fixture.py`, url: `http://${host}:${port}`, timeout: 60000 },
 });

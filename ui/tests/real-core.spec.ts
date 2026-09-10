@@ -2682,13 +2682,21 @@ for (const runtime of ["provider", "harness"] as const) {
   });
 }
 
-test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
+test("stabilization real Core runtime policy explains approvals and preserves frozen sessions", async ({ page }, info) => {
   test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const backup = await mkdtemp(path.join(tmpdir(), "nebula-host-mode-backup-"));
   await writeFile(path.join(backup, "marker.txt"), "HOST_MODE_BACKUP_MARKER");
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
+    let failPolicyLoad = true;
+    await page.route("**/automation-policy", route => {
+      if (route.request().method() === "GET" && failPolicyLoad) {
+        return route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic initial policy outage"})});
+      }
+      return route.continue();
+    });
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
     const openPolicy = async () => {
@@ -2697,6 +2705,18 @@ test("project execution mode saves host consent and executes against a host fold
       await page.getByRole("option", { name: /Project policy and network scope/ }).click();
     };
     await openPolicy();
+    const approvalPolicy = page.getByRole("combobox", {name: "Approval policy", exact: true});
+    const retryLoad = page.getByRole("button", {name: "Retry loading project policy"});
+    await expect(retryLoad).toBeVisible();
+    await expect(approvalPolicy).toBeDisabled();
+    failPolicyLoad = false;
+    await retryLoad.click();
+    await expect(approvalPolicy).toBeEnabled();
+    await expect(approvalPolicy).toHaveAccessibleDescription(/Harness, MCP and browser permissions are separate/);
+    await approvalPolicy.selectOption("never");
+    await expect(page.getByText("Commands run without per-command approval; scope and other permission checks still apply.", {exact: true})).toBeVisible();
+    await approvalPolicy.selectOption("on_boundary");
+    await expect(page.getByText("Existing sessions keep their frozen policy revision.", {exact: true})).toBeVisible();
     const mode = page.getByRole("combobox", { name: "Project execution mode" });
     await expect(mode).toHaveValue("docker");
     await mode.selectOption("host");
@@ -2704,6 +2724,18 @@ test("project execution mode saves host consent and executes against a host fold
     await expect(save).toBeDisabled();
     await page.getByRole("checkbox", { name: /Allow host filesystem and network access/ }).check();
     await expect(save).toBeEnabled();
+    let failedSave = false;
+    await page.route("**/automation-policy", route => {
+      if (route.request().method() === "PUT" && !failedSave) {
+        failedSave = true;
+        return route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic policy save outage; retry this form."})});
+      }
+      return route.continue();
+    });
+    await save.click();
+    await expect(page.getByRole("alert").filter({hasText: "Synthetic policy save outage"})).toBeVisible();
+    await expect(mode).toHaveValue("host");
+    await expect(page.getByRole("checkbox", { name: /Allow host filesystem and network access/ })).toBeChecked();
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
@@ -2714,7 +2746,11 @@ test("project execution mode saves host consent and executes against a host fold
     expect(await ready.json()).toMatchObject({ ready: true, runner_profile_id: "host" });
     const command = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, { data: { command: "cat marker.txt", cwd: backup } });
     expect(command.ok(), await command.text()).toBe(true);
-    expect(await command.json()).toMatchObject({ exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER" });
+    const result = await command.json();
+    expect(result).toMatchObject({ exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER" });
+    const firstReceipts = await (await api.get(`automation-sessions/${result.session_id}/processes`)).json();
+    expect(firstReceipts).toHaveLength(1);
+    expect(firstReceipts[0].policy_revision).toBe(policy.revision);
     await page.goto("about:blank");
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
@@ -2725,6 +2761,20 @@ test("project execution mode saves host consent and executes against a host fold
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
     expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    const stillFrozen = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, {data: {command: "cat marker.txt", cwd: backup}});
+    expect(stillFrozen.ok(), await stillFrozen.text()).toBe(true);
+    expect(await stillFrozen.json()).toMatchObject({session_id: result.session_id, exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER"});
+    const receipts = await (await api.get(`automation-sessions/${result.session_id}/processes`)).json();
+    expect(receipts).toHaveLength(2);
+    expect(receipts.map((receipt: {policy_revision: number}) => receipt.policy_revision)).toEqual([policy.revision, policy.revision]);
+    await page.evaluate(async () => { await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))); });
+    const accessibility = await new AxeBuilder({page}).include("#engagement-policy-settings").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(accessibility.violations).toEqual([]);
+    expect(await page.locator("#engagement-policy-settings").evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await page.getByRole("button", {name: "Close setting", exact: true}).focus();
+    await expect(page.getByRole("button", {name: "Close setting", exact: true})).toBeFocused();
+    await info.attach("policy-scope-and-frozen-revision", {body: JSON.stringify({origin: core.origin, policy, receipts}), contentType: "application/json"});
+    await info.attach("policy-scope-screen", {body: await page.screenshot(), contentType: "image/png"});
   } finally {
     await api.dispose();
     await stopRealCore(core);
