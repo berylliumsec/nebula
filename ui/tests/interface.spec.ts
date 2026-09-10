@@ -2097,9 +2097,30 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
       await expect(send).toBeFocused();
       await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
       expect((await new AxeBuilder({page}).include("main").analyze()).violations).toEqual([]);
+      const details = page.getByRole("button", {name: "Diagnostics notice details", exact: true});
+      const noticeBounds = await details.evaluate(button => {
+        const row = button.closest('.workspace-notices')!.getBoundingClientRect();
+        const controls = [...button.closest('.diagnostics-unavailable')!.querySelectorAll('button, strong')];
+        return controls.map(control => {
+          const r = control.getBoundingClientRect();
+          return {label: control.textContent || control.getAttribute('aria-label'), top: r.top, bottom: r.bottom, rowTop: row.top, rowBottom: row.bottom, transform: getComputedStyle(control).transform, fits: r.top >= row.top && r.bottom <= row.bottom && r.left >= row.left && r.right <= row.right};
+        });
+      });
+      expect(noticeBounds.every(control => control.fits), JSON.stringify(noticeBounds)).toBe(true);
+      await details.click();
+      const dialog = page.getByRole("dialog", {name: /(?:Local diagnostics|Browser event capture) (?:are|is) unavailable/});
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("button", {name: "Close", exact: true})).toBeInViewport();
+      expect((await new AxeBuilder({page}).include(".diagnostics-notice-dialog").analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(details).toBeFocused();
+      await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
     }
   }
   await testInfo.attach("workspace-notices", {body: await page.screenshot(), contentType: "image/png"});
+  await page.getByRole("button", {name: "Dismiss diagnostics notice", exact: true}).click();
+  await expect(page.locator(".diagnostics-unavailable")).toHaveCount(0);
 });
 
 test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {

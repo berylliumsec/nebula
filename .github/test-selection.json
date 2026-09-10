@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Approval decision, waiter delivery, adapter handoff and ordered execution activity; idempotency, exact owner binding and no-replay restart recovery; monotonic session projection and additive cache migration; actual transport observation; empty-project recovery; resize-aware composer sizing, short-window notices and 44px controls; note-to-report retention and build identity. Exact 63 backend, 54 frontend and bounded production browser selections reviewed; native and remaining whole-product gates remain required.",
+  "reason": "Approval decision, waiter delivery, adapter handoff and ordered execution activity; idempotency, exact owner binding and no-replay restart recovery; monotonic session projection and additive cache migration; actual transport observation; empty-project recovery; resize-aware composition and compact diagnostic disclosure with stationary 44px controls, focus return and recovery; note-to-report retention and build identity. Exact 63 backend, 60 frontend and bounded production browser selections reviewed; native and remaining whole-product gates remain required.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,7 +8,7 @@
   ],
   "expected_tests": {
     "python": 63,
-    "frontend": 54,
+    "frontend": 60,
     "native": 0,
     "playwright": 69
   },
@@ -29,7 +29,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -43,6 +43,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "6ac0b505853a9f8c7f262cffd79dbb6a0736e4f15afa43b39faab0032f03a377",
+  "change_digest": "3bd56fba0c9b99801e59de181c2b1d44403f40e0e952386e783eab5d889d5b1f",
   "python_node": false
 }

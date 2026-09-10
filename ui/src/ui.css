@@ -19,6 +19,17 @@
 /* The shell allocates notice height before the bounded workbench. A 100%-height
    page plus a sibling banner clips the composer behind the navigation dock. */
 .workspace-notices:empty { display: none; }
+.diagnostics-unavailable.diagnostics-compact { display: flex; align-items: center; gap: 6px; min-height: 44px; margin: 0; padding: 0 8px; border: 0; border-radius: 0; }
+.diagnostics-compact > svg { flex: 0 0 17px; margin: 0; }
+.diagnostics-compact .surface-notice-copy { flex: 1; min-width: 0; }
+.diagnostics-compact .surface-notice-copy strong { font-size: 12px; line-height: 16px; }
+.diagnostics-compact .surface-notice-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 0; }
+.diagnostics-compact .surface-notice-actions .icon-button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; transform: none; }
+.diagnostics-notice-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.diagnostics-notice-dialog > header, .diagnostics-notice-dialog > footer { flex: 0 0 auto; }
+.diagnostics-notice-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; }
+.diagnostics-notice-dialog > footer .button { min-height: 44px; }
+.diagnostics-notice-detail { min-height: 0; overflow: auto; padding: 0 16px; overflow-wrap: anywhere; }
 .app-shell .main-content:has(> .sessions-page.chat-active:not(.full-screen)) {
   display: flex;
   flex-direction: column;

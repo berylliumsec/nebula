@@ -16,13 +16,18 @@ those as `NEBULA_BUILD_COMMIT`, `NEBULA_BUILD_TIMESTAMP` and
 
 1. Run the reviewed, collected test selections in `.github/test-selection.json`.
    Validate its digest against the final diff using `scripts/test_selection.py`.
+   For candidate browser runs, retain successful traces too: `--trace=on` and
+   `--reporter=list,json`, with a distinct `--output` directory and captured
+   stdout receipt per bounded batch. The default failure-only reporter discards
+   successful screenshot attachments. Inspect retained screenshots as well as
+   geometry assertions; a bounded row may still clip its own controls.
 2. Run `npm --prefix ui run build`, then `python -m scripts.build_nebula_core`.
 3. Run `python scripts/verify_stabilization_build.py --web ui/dist
    --core-identity build/nebula-core-metadata/BUILD_INFO.json --commit <commit>`.
    It rejects dirty/mixed builds, missing/extra assets and changed service workers.
 4. Stage the locked browser runtime with `python -m scripts.stage_playwright_runtime
    ui/src-tauri/resources/playwright-browsers --target <target>`.
-5. From `ui`, build the managed DEB with `npm exec tauri build -- --ci
+5. From `ui`, build the managed DEB with `npm exec -- tauri build --ci
    --target <target> --bundles deb --config src-tauri/tauri.managed.conf.json`.
    Keep the same identity environment during Tauri's frontend rebuild; repeat the
    integrity check afterward. Retain the DEB, its SHA-256, Core build metadata,

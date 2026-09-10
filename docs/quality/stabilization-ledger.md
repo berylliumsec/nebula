@@ -255,6 +255,41 @@ fix, regression and verification here before being called resolved.
   `/tmp/nebula-stabilization-composer-frontend.log`. Successful browser traces
   are retained in the subsequent `notices-retained` run; the earlier default
   reporter retains failure traces only, not successful attachment bodies.
+- N5 retained rerun: 8 passed in 64.43s, zero skipped/flaky cases, with successful
+  traces/screenshots in `/tmp/nebula-stabilization-notices-retained` and the
+  list/JSON receipt in `/tmp/nebula-stabilization-notices-retained.log`.
+  The 32-case approval/plan-scroll regression batch also passed (2.6m).
+- N6 visual review of that retained WebKit landscape screenshot: bounding the
+  notice row protects the composer but clips the notice's own detail/actions.
+  Before repair, add a regression requiring its controls to fit without scrolling
+  the row. Keep the failure summary visible, move verbose diagnostic detail to
+  the shared modal with focus restoration, and retain dismissal semantics.
+  State owners: diagnostic health event and device-local dismissal; no Core
+  execution state. Layers: banner component lifecycle, eight production profiles,
+  keyboard/detail/dismiss/focus, long content and packaged native walkthrough.
+- N6 component result: six cases pass, including resolved detail staying closed
+  on a later failure. The combined selected frontend batch passed 60 cases in
+  23.22s (`/tmp/nebula-stabilization-notice-frontend.log`). A browser regression
+  also caught a hover transform lifting the 44px Details control 1px above its
+  row; compact notice controls now keep stationary bounds. No dismissal,
+  diagnostic collection, execution or policy authority changed.
+- N6 production evidence: all eight profiles passed in 69.63s, zero skipped or
+  flaky cases. Detail/close/dismiss, focus return, short/long messages, portrait
+  and landscape, action bounds and axe passed. Reviewed the retained WebKit
+  landscape screenshot: complete status row and both controls, no cut-off
+  diagnostic text. Traces and JSON/list receipt:
+  `/tmp/nebula-stabilization-notice-disclosure-stable`,
+  `/tmp/nebula-stabilization-notice-disclosure-stable.log`. This is production
+  web with API fixtures; new native verification is still required.
+- Native continuation lifecycle contract for the next batch: use only the
+  extracted package, isolated XDG profile and inert ACP fixture. Through visible
+  controls, approve/reject, stop a separate pending request, enter/exit focus
+  mode, close/relaunch the actual app and rediscover saved conversations.
+  Core records own terminal outcomes; the adapter receipt file independently
+  detects duplicate/late delivery; URL owns the selected conversation. Relaunch
+  must not replay a command or invent approval continuation. Record the actual
+  native viewport/build and retained screenshots; native graph fullscreen and
+  LAN disconnect/restart remain distinct gates, not implied by focus mode.
 - A3 repair passed both missing-record cases and the full 28-case continuation,
   projection and catch-up selection (18.08s). Selected shell/state frontend
   tests: 49 passed in 29.64s. These results do not prove every crash boundary.
