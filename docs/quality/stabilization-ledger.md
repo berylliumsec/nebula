@@ -75,6 +75,21 @@ now have 16 selected permanent profiles for the next candidate. Native acceptanc
 also exercises reset cancellation/confirmation and verifies all disposable
 conversation messages remain. Its updated native gate is still pending.
 
+N10 visual review: the passing WebKit320 policy screenshot still shows underlying
+Findings text through the settings lens header. Like N8's inspectors, this shared
+overlay uses a translucent surface token. Before building candidate5, add an
+opacity regression to the policy journey and use the existing opaque overlay
+token for the shared SettingsLens container (all settings lenses, not per-form
+CSS). Retain decorative surfaces inside it. Evidence screenshot:
+`/tmp/nebula-stabilization-handoff-review-FA6Fy1/a1db18d34b8b3df37d402cc701c3f4af25aa6826`.
+
+N10 red measured alpha230/255. The shared SettingsLens now uses the existing
+opaque overlay token; policy recovery passed **8/8 in 58.80s**, zero skips/flaky,
+including zero-dark, zero-light, dark and light opacity checks. Production build
+passed. Evidence: `/tmp/nebula-stabilization-settings-lens-opacity-red`,
+`/tmp/nebula-stabilization-runtime-policy8-v4`, and reviewed WebKit320 screenshot
+`/tmp/nebula-stabilization-handoff-review-FA6Fy1/cb6996c7ad3fed418fe84c45e515e564281ceb67`.
+
 1. Establish reproducible baseline from production UI entry points; record traces.
 2. Repair decision/delivery/progress contract, idempotency and restart recovery.
 3. Consume canonical revisioned session state across all status surfaces.

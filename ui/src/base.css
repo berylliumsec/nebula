@@ -275,7 +275,7 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .command-palette footer span { display: flex; align-items: center; gap: 4px; }
 
 .settings-lens-backdrop { position: fixed; z-index: 110; inset: 0; display: grid; place-items: center; padding: 24px; background: var(--overlay-scrim); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
-.settings-lens { display: grid; width: min(1080px, calc(100vw - 48px)); max-height: min(860px, calc(100dvh - 48px)); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-raised); box-shadow: var(--shadow-overlay); }
+.settings-lens { display: grid; width: min(1080px, calc(100vw - 48px)); max-height: min(860px, calc(100dvh - 48px)); grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-overlay); box-shadow: var(--shadow-overlay); }
 .settings-lens-header { display: grid; min-width: 0; grid-template-columns: 40px minmax(0, 1fr) 44px; align-items: start; gap: 12px; padding: 18px 20px 16px; border-bottom: 1px solid var(--border-soft); }
 .settings-lens-header > div { min-width: 0; }
 .settings-lens-header small { color: var(--blue); font-size: 11px; font-weight: var(--weight-bold); text-transform: uppercase; letter-spacing: .045em; }

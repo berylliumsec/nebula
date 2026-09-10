@@ -2712,6 +2712,21 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     failPolicyLoad = false;
     await retryLoad.click();
     await expect(approvalPolicy).toBeEnabled();
+    const originalTheme = await page.locator("html").getAttribute("data-theme");
+    for (const theme of ["zero-dark", "zero-light", "dark", "light", originalTheme ?? "zero-dark"]) {
+      await page.evaluate(theme => {
+        localStorage.setItem("nebula.theme", theme);
+        window.dispatchEvent(new StorageEvent("storage", {key: "nebula.theme", newValue: theme}));
+      }, theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      expect(await page.locator(".settings-lens").evaluate(element => {
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = getComputedStyle(element).backgroundColor;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      }), `${theme}: settings must not show the underlying page through their content`).toBe(255);
+    }
     await expect(approvalPolicy).toHaveAccessibleDescription(/Harness, MCP and browser permissions are separate/);
     await approvalPolicy.selectOption("never");
     await expect(page.getByText("Commands run without per-command approval; scope and other permission checks still apply.", {exact: true})).toBeVisible();
