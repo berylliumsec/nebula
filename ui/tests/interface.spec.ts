@@ -2030,6 +2030,26 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
+reloadTest("stabilization empty project offers the existing project picker after reload", async ({ page }, testInfo) => {
+  await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({json: []}));
+  await page.goto("/?view=chat");
+  await expect(page.getByRole("heading", {name: "Choose a project"})).toBeVisible();
+  await expect(page.getByText("Opening project…", {exact: true})).toHaveCount(0);
+  await page.reload();
+  const choose = page.getByRole("button", {name: "Choose project", exact: true});
+  await expect(choose).toBeVisible();
+  await choose.focus();
+  await page.keyboard.press("Enter");
+  const picker = page.getByRole("dialog", {name: "Project switcher"});
+  await expect(picker).toBeVisible();
+  await picker.getByRole("button", {name: "New project"}).click();
+  await expect(picker.getByLabel("Name", {exact: true})).toBeFocused();
+  await picker.getByLabel("Name", {exact: true}).fill("Disposable workspace");
+  await expect(picker.getByRole("button", {name: "Create", exact: true})).toBeInViewport();
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", await page.locator("body").evaluate(el => el.clientWidth));
+  await testInfo.attach("empty-project-recovery", {body: await page.screenshot(), contentType: "image/png"});
+});
+
 test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
   let durableScope = {
     ...entity,
@@ -3713,7 +3733,7 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
   await expect(restoredLedger.getByText("Search evidence", { exact: true })).toBeVisible();
 });
 
-test("completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
+test("stabilization completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
@@ -3874,10 +3894,11 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
+    overflow: [...element.querySelectorAll<HTMLElement>("*")].filter(child => child.getBoundingClientRect().right > element.getBoundingClientRect().right + 1).map(child => ({tag: child.tagName, className: child.className, width: child.getBoundingClientRect().width, right: child.getBoundingClientRect().right, margin: getComputedStyle(child).margin, padding: getComputedStyle(child).padding})),
   }));
   expect(planGeometry.left).toBeGreaterThanOrEqual(0);
   expect(planGeometry.right).toBeLessThanOrEqual(planGeometry.viewportWidth + 1);
-  expect(planGeometry.scrollWidth).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
+  expect(planGeometry.scrollWidth, JSON.stringify(planGeometry)).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
   if ((page.viewportSize()?.width ?? 0) >= 1024) expect(planGeometry.width).toBeLessThanOrEqual(841);
   if (testInfo.project.name.startsWith("mobile-")) {
     const planToggleBounds = await collapsePlan.boundingBox();
@@ -3885,6 +3906,8 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   }
   const planAccessibility = await new AxeBuilder({ page }).include(".harness-status-rail").analyze();
   expect(planAccessibility.violations).toEqual([]);
+  await planSteps.focus();
+  await expect(planSteps).toBeFocused();
   await collapsePlan.click();
   await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
   const ledger = page.getByRole("region", { name: "Work summary" });
@@ -3926,8 +3949,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
   await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);
-  await completedMessage.hover();
+  // A long article's center can lie behind fixed chrome even after scrolling.
+  // Exercise the visible end of the answer where the operator reaches actions.
+  await completedMessage.locator(".assistant-markdown p").last().hover();
   await expect(completedMessage.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
+  await forkAction.scrollIntoViewIfNeeded();
+  await expect(forkAction).toBeInViewport();
   if (testInfo.project.name.startsWith("mobile-")) {
     const bounds = await forkAction.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
@@ -5032,7 +5059,7 @@ test("Light preserves each critical workspace hierarchy", async ({ page }) => {
   }
 });
 
-test("audit every primary workspace view", async ({ page }, testInfo) => {
+test("stabilization audit every primary workspace view", async ({ page }, testInfo) => {
   // This journey renders 24 full-page captures; software WebKit needs a larger
   // total budget while each interaction and geometry assertion stays unchanged.
   test.setTimeout(testInfo.project.name.includes("webkit") ? 300_000 : 150_000);
@@ -5246,7 +5273,7 @@ test("Assistant session details use reloadable drawer navigation", async ({ page
   await expect.poll(() => new URL(page.url()).searchParams.get("drawer")).toBeNull();
 });
 
-test("audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
+test("stabilization audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const captureDialog = async (name: string, opener: ReturnType<Page["getByRole"]>, dialogName: string) => {
     await opener.scrollIntoViewIfNeeded();
@@ -5741,6 +5768,16 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
       if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: "chat-review", engagement_id: "scratch-project", title: "Review pending approval", backend: "harness", harness_profile_id: "harness-ready", harness_session_id: "session-review", model: "gpt-5-codex", metadata: {} }]);
       if (path.endsWith("/chat/sessions/chat-review/messages")) return json([]);
+      if (path.endsWith("/chat/sessions/chat-review/state")) return json({
+        schema: "nebula.session-state/v1", session_id: "chat-review", revision: Date.now(),
+        turn_id: "chat-turn-review", harness_turn_id: "turn-review",
+        execution: stopped ? "cancelled" : waiting && !decision ? resolved ? "continuing" : "waiting_approval" : "running",
+        busy: !stopped, connection: stopped ? "disconnected" : "connected",
+        detail: stopped ? "Response stopped." : resolved && waiting ? "Decision recorded; waiting for execution progress." : "Review the pending action to continue.",
+        actions: stopped ? ["check_status"] : ["check_status", "stop"],
+        pending: !stopped && waiting && !decision && !resolved ? [{id: approval.id, turn_id: "chat-turn-review", kind: "approval", text: "Review file read"}] : [],
+        decisions: resolved || decision ? [{approval_id: approval.id, status: decision === "reject" ? "rejected" : resolved ? approval.status : "approved", continuation: null}] : [],
+      });
       if (path.endsWith("/chat/sessions/chat-review/pending-turn")) return json(stopped ? null : { ...entity, id: "chat-turn-review", session_id: "chat-review", status: decision ? "routing" : waiting ? "waiting_approval" : "routing", harness_turn_id: "turn-review", approval_id: waiting && !decision ? approval.id : null, tool_call_ids: [] });
       if (path.endsWith("/harness-turns/turn-review/stop")) { stopped = true; return json({}); }
       // The workspace catalog deliberately never contains this approval.

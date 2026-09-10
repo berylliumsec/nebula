@@ -1463,7 +1463,8 @@ kbd { font-size: 11px; }
 button.harness-status-summary { cursor: pointer; }
 button.harness-status-summary:hover { background: var(--surface-hover); }
 button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-.harness-status-chevron { margin-left: auto; flex: 0 0 auto; transition: transform 160ms ease; }
+.harness-status-chevron-slot { display: grid; place-items: center; margin-left: auto; flex: 0 0 24px; width: 24px; height: 24px; }
+.harness-status-chevron { flex: 0 0 auto; transition: transform 160ms ease; }
 .harness-status-rail.expanded .harness-status-chevron { transform: rotate(180deg); }
 .harness-plan-steps { display: grid; gap: 0; margin: 0; padding: 0; border-top: 1px solid var(--border-soft); list-style: none; }
 .harness-plan-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px; padding: 8px 11px; border-bottom: 1px solid var(--border-soft); white-space: normal; }

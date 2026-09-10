@@ -19,6 +19,19 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "stabilization": [
+      {"area":"stabilization","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
+      {"area":"stabilization","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"}
+    ],
+    "stabilization-core": [
+      {"area":"stabilization-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core|project creation switches|project removal archives","runtime":"real-core","shard":"1/1"}
+    ],
     "assistant": [
       {"area":"assistant","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},

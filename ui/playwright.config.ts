@@ -112,7 +112,12 @@ export default defineConfig({
       dependencies: isolatedMatrixEntry ? [] : ["desktop", "compact", "narrow"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-  ],
+  ].map(project => ({
+    ...project,
+    // Stabilization journeys must not silently disappear behind older per-screen
+    // filters. File/project boundaries still apply, including isolated real Core.
+    ...("grep" in project ? {grep: new RegExp(`stabilization|${project.grep.source}`)} : {}),
+  })),
   webServer: {
     command: testCommand,
     url: `http://${testHost}:${testPort}`,

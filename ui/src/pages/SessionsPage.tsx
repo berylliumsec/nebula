@@ -6,6 +6,8 @@ import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
+import { isPendingRequest, useSessionState } from "./useSessionState";
+import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
@@ -561,7 +563,8 @@ export function SessionsPage() {
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [approvalDecisionBusy, setApprovalDecisionBusy] = useState(false);
   const [resolvedApproval, setResolvedApproval] = useState<{ id: string; status: string; turnId: string; harnessTurnId?: string }>();
-  const [resolvedApprovalIds, setResolvedApprovalIds] = useState<string[]>([]);
+  const {state: authoritativeState, error: stateSyncError, refresh: refreshSessionState} = useSessionState(api ?? undefined, sessionId, coreState === "online");
+  const pendingResponseActive = Boolean(pendingResponse && isPendingRequest(authoritativeState, pendingResponse.approval.id));
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
@@ -1272,7 +1275,6 @@ export function SessionsPage() {
 
   const newConversation = () => {
     setResolvedApproval(undefined);
-    setResolvedApprovalIds([]);
     // URL navigation and state updates are committed on separate React turns.
     // Suppress the old URL session during that gap so it cannot immediately
     // re-select the conversation the operator just detached from.
@@ -1548,7 +1550,6 @@ export function SessionsPage() {
     setSending(false);
     setSessionId(id);
     setResolvedApproval(undefined);
-    setResolvedApprovalIds([]);
     setConversationOpen(true);
     if (updateUrl) {
       pendingSessionNavigationRef.current = id;
@@ -1608,7 +1609,6 @@ export function SessionsPage() {
         : undefined;
       if (!selectionIsCurrent()) return;
       const approval = approvalRecord?.status === "pending" ? approvalRecord : undefined;
-      if (approvalRecord && !approval && pendingTurn) setResolvedApprovalIds([approvalRecord.id, pendingTurn.id]);
       const decisionRecorded = approvalRecord && !approval && pendingTurn?.status === "waiting_approval";
       if (decisionRecorded) setResolvedApproval({ id: approvalRecord.id, status: approvalRecord.status, turnId: pendingTurn.id, harnessTurnId: pendingTurn.harnessTurnId });
       setLoadingHistory(false);
@@ -1895,6 +1895,9 @@ export function SessionsPage() {
     userId: string,
     request: ChatCompletionRequest,
   ) => {
+    // Events invalidate the durable snapshot; they never independently resolve
+    // an approval. Polling/visibility recovery also covers missed stream events.
+    if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) refreshSessionState();
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       setSessionId(streamEvent.sessionId);
       openSessionChatView(streamEvent.sessionId, true);
@@ -2215,7 +2218,7 @@ export function SessionsPage() {
 
   const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }) => {
     event?.preventDefault();
-    const activeTurn = sending || Boolean(pendingResponse);
+    const activeTurn = composerBusy;
     if (activeTurn && !queuedFollowUp && !queueOptions) {
       const text = draft.trim();
       const canSteer = sending
@@ -2235,7 +2238,7 @@ export function SessionsPage() {
     const content = (queuedFollowUp?.text ?? draft.trim()) || (pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
-    if (!content || (!queueOptions && (sending || pendingResponse)) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
+    if (!content || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
 
     const failQueuedFollowUp = (detail: string) => {
       if (!queuedFollowUp) return;
@@ -2512,6 +2515,7 @@ export function SessionsPage() {
         decision: decision === "edit" ? "approve" : decision,
         editedArguments,
       });
+      refreshSessionState();
       if (pendingResponse.request.backend === "harness") {
         if (decision === "stop") {
           followUpAutoDrainRef.current = false;
@@ -2947,7 +2951,7 @@ export function SessionsPage() {
       document.removeEventListener("keydown", closeActions);
     };
   }, [workbenchActionsOpen]);
-  const composerBusy = sending || Boolean(pendingResponse);
+  const composerBusy = sending || Boolean(authoritativeState?.busy) || pendingResponseActive;
   const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     sending
@@ -2977,9 +2981,13 @@ export function SessionsPage() {
     if (!sessionId || reloadingConversation) return;
     setReloadingConversation(true);
     await selectSession(sessionId, false);
+    refreshSessionState();
     setReloadingConversation(false);
   };
-  const visibleHarnessProgress: HarnessProgress | undefined = runtimeKind !== "harness" || !harnessSessionId
+  const visibleHarnessProgress: HarnessProgress | undefined = authoritativeState && harnessSessionId
+    ? {phase: authoritativeState.execution === "continuing" ? "decision_recorded" : authoritativeState.execution === "idle" ? "ready" : authoritativeState.execution,
+       detail: authoritativeState.detail, sessionId: harnessSessionId, turnId: authoritativeState.harness_turn_id ?? undefined}
+    : runtimeKind !== "harness" || !harnessSessionId
     ? harnessProgress
     : harnessProgress ?? (harnessActivityError
       ? { phase: "status_unavailable", detail: harnessActivityError, sessionId: harnessSessionId }
@@ -3002,11 +3010,14 @@ export function SessionsPage() {
       .filter((runtime) => runtime.offline && runtime.scopedNetwork)
       .map((runtime) => runtime.language) ?? [],
   ), [executionCapabilities]);
-  const pendingHarnessRequests = harnessInteractions.filter((item) => item.status === "pending").length;
+  const pendingHarnessRequests = authoritativeState?.pending.length ?? harnessInteractions.filter((item) => item.status === "pending").length;
+  const decisionNotice = authoritativeState
+    ? authoritativeState.execution === "continuing" ? authoritativeState.decisions.at(-1) : undefined
+    : resolvedApproval;
   const showHarnessStatusRail = runtimeKind === "harness"
-    && (!resolvedApproval || pendingHarnessRequests > 0)
+    && (!decisionNotice || pendingHarnessRequests > 0)
     && Boolean(harnessActivity)
-    && Boolean(harnessActivity?.busy || pendingHarnessRequests);
+    && Boolean((authoritativeState?.busy ?? harnessActivity?.busy) || pendingHarnessRequests);
   const assistantSource = runtimeKind === "harness"
     ? selectedHarness?.name ?? "Agent harness"
     : selectedProvider?.name ?? "Model provider";
@@ -3141,7 +3152,7 @@ export function SessionsPage() {
                           </>;
                         }}
                       />}
-                      {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
+                      {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending" && isPendingRequest(authoritativeState, interaction.id)).map((interaction) => <div className="chat-approval-card harness-interaction" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
                         <strong>{interaction.prompt}</strong>
                         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
                           const questionId = typeof question.id === "string" ? question.id : String(index);
@@ -3152,7 +3163,7 @@ export function SessionsPage() {
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
                       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
-                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
+                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && pendingResponseActive && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.state === "cancelled" && <small className="muted" role="status">Stopped</small>}
                       {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
@@ -3170,13 +3181,14 @@ export function SessionsPage() {
                   </ThreadPrimitive.Viewport>
                 </ThreadPrimitive.Root>
               </AssistantRuntimeProvider>
-              {resolvedApproval && <ResolvedApprovalNotice status={resolvedApproval.status}
+              {decisionNotice && <ResolvedApprovalNotice status={decisionNotice.status}
                 busy={reloadingConversation || harnessControlBusy}
                 canStop={runtimeKind !== "harness" || selectedHarness?.capabilities?.interruption !== false}
                 onCheck={() => void reloadActiveConversation()}
                 onStop={() => { if (harnessControlBusy) return; setHarnessControlBusy(true); void stopCurrentResponse().then(stopped => { if (stopped) setResolvedApproval(undefined); }).finally(() => setHarnessControlBusy(false)); }} />}
               <div className="chat-operator-updates">
-              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} resolvedApprovalIds={resolvedApprovalIds} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
+              {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
+              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
@@ -3185,7 +3197,7 @@ export function SessionsPage() {
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
-              {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} />}
+              {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} authoritativeStatus={authoritativeState?.detail} />}
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
                   <header><div><strong>Context pack</strong><small>{assistantDrafts.length} selection{assistantDrafts.length === 1 ? "" : "s"} · {assistantDrafts.reduce((total, item) => total + item.text.length, 0).toLocaleString()} characters</small></div><button className="button quiet" type="button" onClick={clearAssistantDrafts}>Clear all</button></header>
                   <div role="list">{assistantDrafts.map((item, index) => {

@@ -6,12 +6,12 @@ vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
 const record = { initialized: true, revision: 2, through_at: "2026-09-09T12:00:00Z", items: [], pending: [], truncated: false };
 const props = { sessionId: "chat", ready: true, atLatest: true, onMessage: vi.fn(), onPending: vi.fn(), onTurn: vi.fn() };
 
-it("filters only the known resolved approval, retaining another request on the same turn", async () => {
+it("uses authoritative pending requests, retaining another request on the same turn", async () => {
   const request = vi.fn().mockResolvedValue({ ...record, items: [{ id: "turn", kind: "pending", text: "Old approval" }], pending: [
     { id: "turn", turn_id: "turn", kind: "pending", text: "Old approval" },
     { id: "question", turn_id: "turn", kind: "pending", text: "Answer still needed" },
   ] });
-  render(<ChatCatchUp {...props} resolvedApprovalIds={["turn"]} api={{ request } as unknown as ApiClient} />);
+  render(<ChatCatchUp {...props} pendingActions={[{id: "question", turn_id: "turn", kind: "input", text: "Answer still needed"}]} api={{ request } as unknown as ApiClient} />);
   expect(await screen.findByText("1 action needs review")).toBeVisible();
   expect(screen.queryByRole("region", { name: "Catch up on this conversation" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Review pending actions" }));

@@ -46,6 +46,7 @@ export function AppShell() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [settingLens, setSettingLens] = useState<{ entry: SettingCatalogEntry; returnFocus: HTMLElement | null }>();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const stored = localStorage.getItem("nebula.sidebar.collapsed");
@@ -62,6 +63,10 @@ export function AppShell() {
     return !value;
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openProjectPicker = useCallback(() => {
+    setSidebarCollapsed(false);
+    setProjectPickerOpen(true);
+  }, []);
   const closeMobileSidebar = useCallback(() => {
     if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
   }, [sidebarCollapsed, toggleSidebar]);
@@ -144,13 +149,14 @@ export function AppShell() {
     sidebarCollapsed,
     toolbarHost,
     openPalette,
+    openProjectPicker,
     setActivityOpen,
     setContextualCommands,
     setPaletteOpen,
     setToolbarHost,
     toggleActivity,
     toggleSidebar,
-  }), [activityOpen, contextualCommands, openPalette, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
+  }), [activityOpen, contextualCommands, openPalette, openProjectPicker, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>
@@ -159,7 +165,7 @@ export function AppShell() {
             <BrowserAutomationWorker />
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
-              <SideNav collapsed={sidebarCollapsed} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
+              <SideNav collapsed={sidebarCollapsed} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
               <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />
               <TopBar
                 activityOpen={activityOpen}

@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
 import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItems } from "../navigation";
@@ -12,11 +12,13 @@ import "./ProjectSwitcher.css";
 
 interface SideNavProps {
   collapsed: boolean;
+  open: boolean;
+  setOpen: Dispatch<SetStateAction<boolean>>;
   onNavigate: () => void;
   variant?: "standard" | "zero";
 }
 
-export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNavProps) {
+export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "standard" }: SideNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const {
@@ -36,7 +38,6 @@ export function SideNav({ collapsed, onNavigate, variant = "standard" }: SideNav
   const [updating, setUpdating] = useState(false);
   const [projectError, setProjectError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [clientName, setClientName] = useState("");

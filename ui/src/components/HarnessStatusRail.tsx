@@ -5,6 +5,7 @@ import type { HarnessPlanEntry, HarnessSessionActivity } from "../api/types";
 interface Props {
   activity: HarnessSessionActivity;
   pendingRequests: number;
+  authoritativeStatus?: string;
 }
 
 const statusLabels: Record<HarnessPlanEntry["status"], string> = {
@@ -21,7 +22,7 @@ function PlanStatusIcon({ status }: { status: HarnessPlanEntry["status"] }) {
   return <Circle size={11} aria-hidden="true" />;
 }
 
-export function HarnessStatusRail({ activity, pendingRequests }: Props) {
+export function HarnessStatusRail({ activity, pendingRequests, authoritativeStatus }: Props) {
   const [expanded, setExpanded] = useState(false);
   const planId = useId();
   const plan = activity.plan ?? [];
@@ -33,7 +34,7 @@ export function HarnessStatusRail({ activity, pendingRequests }: Props) {
     return () => clearInterval(timer);
   }, [activity.busy, activity.startedAt]);
   const elapsed = activity.startedAt ? Math.max(0, Math.floor((now - Date.parse(activity.startedAt)) / 1000)) : undefined;
-  const status = pendingRequests || activity.turnStatus === "waiting_approval" ? "Action required" : activity.turnStatus === "queued" ? "Queued" : activity.busy ? "Working" : "Ready for your next message";
+  const status = authoritativeStatus ?? (pendingRequests || activity.turnStatus === "waiting_approval" ? "Action required" : activity.turnStatus === "queued" ? "Queued" : activity.busy ? "Working" : "Ready for your next message");
   const currentStep = activity.goal?.currentStep ?? plan.find((entry) => entry.status === "in_progress")?.title;
   const summary = <>
     <span className={`status-dot ${activity.busy ? "pending" : "available"}`} />
@@ -53,8 +54,8 @@ export function HarnessStatusRail({ activity, pendingRequests }: Props) {
       aria-controls={planId}
       aria-label={`${expanded ? "Collapse" : "Expand"} plan steps, ${completed} of ${plan.length} completed`}
       onClick={() => setExpanded((value) => !value)}
-    >{summary}<ChevronDown className="harness-status-chevron" size={15} aria-hidden="true" /></button> : <div className="harness-status-summary">{summary}</div>}
-    {plan.length > 0 && expanded && <ol id={planId} className="harness-plan-steps" aria-label="Plan steps">
+    >{summary}<span className="harness-status-chevron-slot" aria-hidden="true"><ChevronDown className="harness-status-chevron" size={15} /></span></button> : <div className="harness-status-summary">{summary}</div>}
+    {plan.length > 0 && expanded && <ol id={planId} className="harness-plan-steps" aria-label="Plan steps" tabIndex={0}>
       {plan.map((entry, index) => <li className={`status-${entry.status}`} key={entry.id || `${index}-${entry.title}`}>
         <span className="harness-plan-marker"><PlanStatusIcon status={entry.status} /></span>
         <span><strong>{entry.title}</strong><small>{statusLabels[entry.status]}</small></span>

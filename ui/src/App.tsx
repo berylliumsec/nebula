@@ -3,6 +3,7 @@ import { Link, Navigate, Outlet, Route, Routes, useLocation, useParams } from "r
 import { AppShell } from "./components/AppShell";
 import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRoutes";
 import { useWorkspace } from "./state/WorkspaceContext";
+import { useChrome } from "./state/ChromeContext";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
@@ -34,6 +35,7 @@ function CanonicalProjectBoundary() {
 
 function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurface | "project"; legacyView?: string }) {
   const { coreState, engagement, workspaceState } = useWorkspace();
+  const { openProjectPicker } = useChrome();
   const location = useLocation();
   if (legacyView && !new URLSearchParams(location.search).has("view")) {
     const legacyParams = new URLSearchParams(location.search);
@@ -41,7 +43,7 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
     return <Navigate to={`${location.pathname}?${legacyParams.toString()}`} replace />;
   }
   if (!engagement && (workspaceState === "starting" || workspaceState === "bootstrapping")) return <div className="route-loading" role="status">Opening project…</div>;
-  if (!engagement && coreState === "online") return <div className="route-loading" role="status">Opening project…</div>;
+  if (!engagement && coreState === "online") return <section className="page"><div className="standard-empty-state"><h1>Choose a project</h1><p>Create a project or restore an archived one to start working.</p><button type="button" className="button primary" onClick={openProjectPicker}>Choose project</button></div></section>;
   if (!engagement) {
     if (surface === "findings") return route(<FindingsPage />);
     if (surface === "reports") return route(<ReportsPage />);

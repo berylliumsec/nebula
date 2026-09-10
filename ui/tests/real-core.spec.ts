@@ -1668,21 +1668,97 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+for (const decision of ["Approve", "Reject"] as const) {
+  test(`assistant upgrade stabilization real Core ${decision.toLowerCase()} continues exactly once`, async ({page}, testInfo) => {
+    test.setTimeout(90_000);
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-stabilization-core-"));
+    const reservation = createServer();
+    await new Promise<void>(resolve => reservation.listen(0, "0.0.0.0", resolve));
+    const port = (reservation.address() as AddressInfo).port;
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+    const origin = `http://${localNetworkIpv4()}:${port}`;
+    const processHandle = spawn(python, [path.join(repository, "ui/tests/fixtures/approval_core.py"), "--root", dataDir, "--static-dir", path.join(repository, "ui/dist"), "--port", String(port)], {cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}});
+    let logs = "";
+    processHandle.stdout.on("data", chunk => {logs += chunk.toString();});
+    processHandle.stderr.on("data", chunk => {logs += chunk.toString();});
+    const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: "Bearer stabilization-fixture"}});
+    try {
+      await expect.poll(async () => {
+        if (processHandle.exitCode !== null) throw new Error(logs);
+        try {return (await api.get("health")).ok();} catch {return false;}
+      }, {timeout: 30_000}).toBe(true);
+      expect((await api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+      const pairingResponse = await api.post(`http://127.0.0.1:${port}/api/v1/auth/pairings`, {data: {name: "Stabilization browser"}});
+      expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+      const pairing = await pairingResponse.json();
+      await page.goto(`${origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Stabilization browser");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${origin}/?view=chat`);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await expect(composer).toBeEnabled();
+      await composer.fill("Review the inert fixture request. No commands execute.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await page.getByRole("button", {name: "Review pending actions", exact: true}).click({timeout: 30_000});
+      const card = page.getByRole("region", {name: "Approval required", exact: true});
+      await expect(card).toBeVisible();
+      await page.reload();
+      await expect(card).toBeVisible();
+      await card.getByRole("button", {name: decision, exact: true}).click();
+      const answer = decision === "Approve" ? "APPROVAL_ACCEPTED_ONCE" : "APPROVAL_DECLINED";
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText(answer);
+      await expect(page.getByRole("button", {name: "Review pending actions", exact: true})).toHaveCount(0);
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0);
+      const id = new URL(page.url()).searchParams.get("session"); expect(id).toBeTruthy();
+      const state = await (await api.get(`chat/sessions/${id}/state`)).json();
+      expect(state.execution).toBe("complete"); expect(state.pending).toEqual([]);
+      expect(state.decisions[0].continuation.status).toBe("delivered");
+      const approval = state.decisions[0];
+      const repeated = await api.post(`approvals/${approval.approval_id}/decision`, {data: {decision: decision.toLowerCase()}});
+      expect(repeated.ok()).toBe(true);
+      await page.reload();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText(answer);
+      await testInfo.attach("real-core-approval", {body: JSON.stringify({origin, state, runtime: "inert adapter; real Core/persistence/UI"}), contentType: "application/json"});
+      await testInfo.attach("real-core-approval-screen", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {
+      await api.dispose();
+      await stopRealCore({process: processHandle, dataDir, origin, token: "stabilization-fixture"});
+    }
+  });
+}
+
 for (const runtime of [
-  {name: "codex", kind: "codex_app_server", executable: process.env.NEBULA_ASSISTANT_CODEX_EXECUTABLE ?? "/home/agent/.local/bin/codex", model: "gpt-5.6-luna"},
-  {name: "grok", kind: "grok_acp", executable: "/home/agent/.local/bin/grok", model: "grok-4.6"},
+  {name: "codex", kind: "codex_app_server"},
+  {name: "grok", kind: "grok_acp"},
 ]) {
   test(`assistant upgrade native ${runtime.name} production LAN conversation`, async ({page}, testInfo) => {
     test.skip(process.env.NEBULA_ASSISTANT_NATIVE_ACCEPTANCE !== "1", "Requires an explicitly enabled local CLI login; fixture coverage runs separately.");
     test.setTimeout(180_000);
+    const database = process.env.NEBULA_ASSISTANT_PROFILE_DB;
+    if (!database) throw new Error("Set NEBULA_ASSISTANT_PROFILE_DB to discover an existing runtime; no hardcoded model fallback is used.");
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const configured = spawnSync(process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python"),
+      [path.join(import.meta.dirname, "fixtures/configured_harness.py"), database, runtime.kind], {encoding: "utf8"});
+    if (configured.status !== 0) throw new Error(`Runtime discovery failed: ${configured.stderr}`);
+    const configuration = JSON.parse(configured.stdout);
     const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
     const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
     try {
-      const response = await api.post("harnesses", {data: {name: `Assistant acceptance ${runtime.name}`, kind: runtime.kind, executable: runtime.executable, connection_mode: "spawn", transport: "stdio", auth_mode: "existing_session", default_model: runtime.model, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
+      const response = await api.post("harnesses", {data: {...configuration, name: `Assistant acceptance ${runtime.name}`, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
       expect(response.ok(), await response.text()).toBe(true);
       const profile = await response.json() as {id: string};
       const health = await api.post(`harnesses/${profile.id}/health`);
       expect(health.ok(), await health.text()).toBe(true);
+      const discovered = await (await api.get(`harnesses/${profile.id}`)).json();
+      const model = discovered.default_model || discovered.capabilities?.models?.[0];
+      expect(typeof model === "string" && model.length > 0, "Health discovery must advertise a model").toBe(true);
       const url = `${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`;
       await page.goto(url);
       await page.getByRole("button", {name: "New chat", exact: true}).click();
@@ -1699,7 +1775,7 @@ for (const runtime of [
       await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
       await page.locator(".chat-evidence").last().locator("summary").first().click();
       await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
-      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model: runtime.model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
       await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
     } finally {await api.dispose(); await stopRealCore(core);}
   });

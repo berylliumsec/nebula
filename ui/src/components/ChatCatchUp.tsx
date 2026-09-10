@@ -9,14 +9,14 @@ function readDeviceId() {
   const existing = localStorage.getItem(key); if (existing) return existing;
   const value = `reader-${Date.now()}-${Math.random().toString(36).slice(2)}`; localStorage.setItem(key, value); return value;
 }
-export function ChatCatchUp({api, sessionId, ready, atLatest, actionRevision, resolvedApprovalIds = [], onMessage, onPending, onTurn}: {api: ApiClient; sessionId: string; ready: boolean; atLatest: boolean; actionRevision?: string; resolvedApprovalIds?: string[]; onMessage: (id: string) => void; onPending: () => void; onTurn: (id: string) => void}) {
+export function ChatCatchUp({api, sessionId, ready, atLatest, actionRevision, pendingActions, onMessage, onPending, onTurn}: {api: ApiClient; sessionId: string; ready: boolean; atLatest: boolean; actionRevision?: string; pendingActions?: CatchUpEntry[]; onMessage: (id: string) => void; onPending: () => void; onTurn: (id: string) => void}) {
   const [card, setCard] = useState<CatchUpRecord>(); const cardRef = useRef<CatchUpRecord | undefined>(undefined);
   const [pending, setPending] = useState<CatchUpEntry[]>([]); const [error, setError] = useState<string>(); const [refresh, setRefresh] = useState(0);
   const needsCatchupRef = useRef(true);
   const atLatestRef = useRef(atLatest); atLatestRef.current = atLatest;
   const acknowledgeRef = useRef<((record: CatchUpRecord) => Promise<void>) | undefined>(undefined);
-  const visiblePending = pending.filter(item => !resolvedApprovalIds.includes(item.id));
-  const visibleItems = card?.items.filter(item => !["pending", "approval"].includes(item.kind) || !resolvedApprovalIds.includes(item.id)) ?? [];
+  const visiblePending = pendingActions ?? pending;
+  const visibleItems = card?.items.filter(item => !["pending", "approval"].includes(item.kind) || pendingActions === undefined || pendingActions.some(request => request.id === item.id)) ?? [];
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController(); let busy = false; let needsCatchup = needsCatchupRef.current;
