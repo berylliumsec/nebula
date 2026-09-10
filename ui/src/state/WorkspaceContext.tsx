@@ -197,6 +197,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, []);
 
   useEffect(() => {
+    if (connectionLost.current) return;
     if (workspaceState !== "ready" && workspaceState !== "degraded") return;
     const degraded = health?.status === "degraded"
       || setupStatus?.core.status !== "ready"

@@ -664,6 +664,58 @@ owns unsent address input. Existing tests replace window.open with a fake handle
 so add a real popup journey before repairing any returned-handle assumption.
 No research execution, scanning, remote URL ingestion or external navigation.
 
+B2 baseline: the real popup test failed before opening a tab because delayed
+desktop-tab hydration cleared the device browser's typed address. Component
+regressions separately cover input ownership across hydration and the null
+window handle returned with opener isolation. Device-local unsent input must
+remain distinct from Core's saved desktop tabs; opening must retain isolation
+and provide truthful retry guidance, not infer popup failure from a null handle.
+Loading, typing, handoff, scope feedback, retry and project switching apply;
+embedded capture/execution remain outside this fallback's capabilities. Test
+layers: component race/error cases, real popup in production LAN browser profiles,
+and retained native browsing compatibility. Queue baseline separately omitted
+the existing summary expansion; correct that test's actual entry sequence before
+interpreting its timeout as a product defect.
+
+B3 production handoff accessibility found 36px controls (the first failure was
+Research workbench), below the selected 44px interaction bar. Red matrix retained
+at `/tmp/nebula-stabilization-device-handoff8`. Constrain the device-browser action
+areas to 44px and keep the start form scrollable in short windows; retain a
+visible keyboard focus indicator. This is a shared fallback layout correction,
+not a change to native browser execution or control policies.
+
+B2/B3 evidence: 15 component cases passed in 3.14s; production LAN device
+handoff passed all eight permanent profiles in 37.81s with zero skips/flaky.
+Includes real local popups with null opener, truthful status, address/scope
+retention, Axe, keyboard order, 44px controls and 844×390 reachability. Traces:
+`/tmp/nebula-stabilization-device-handoff8-v3`; reviewed WebKit320 portrait and
+short-window screenshots under `/tmp/nebula-stabilization-handoff-review-FA6Fy1`.
+The short coarse-pointer layout intentionally uses the main vertical scroller;
+controls remain reachable. The first CSS repair lost to a more specific existing
+button rule (v2); v3 restores the required dimensions without weakening assertions.
+
+Candidate 206ab62 compiled-Core embedded-UI conversation/project follow-up:
+**6 passed in 108.38s**, zero skips/flaky, at
+`/tmp/nebula-stabilization-candidate4-gqcUYx/conversations-projects6-v2`.
+Queue editing/reordering/background completion, URL/context recovery, project
+isolation and archive/retry/restore passed at desktop1440 and WebKit390.
+
+A10 integration regression: the 130-case frontend batch exposed an offline
+transition overwritten by the optional-resource health aggregation effect
+(`WorkspaceContext.recovery`, 129 pass/1 fail). The effect must respect the
+connection-loss authority even if it was scheduled by an older ready render.
+Do not infer recovered connectivity from cached catalogs or health. Retain
+the regression and repeat the bounded integration selection before committing.
+
+A10 deterministic red: a layout-phase offline event between a catalog render
+and its passive health effect produces incorrect ready status before the guard
+(`/tmp/nebula-stabilization-catalog-offline-red.log`). After the guard, the complete
+reviewed frontend selection passed **131/131 in 28.55s** and all eight real-Core
+outage profiles passed **8/8 in 58.99s**, zero skips/flaky. Evidence:
+`/tmp/nebula-stabilization-frontend131.log` (selection adjacent) and
+`/tmp/nebula-stabilization-core-outage8-v5`. Production rebuild passed. No live
+installation was changed; new clean native/embedded-artifact candidate is required.
+
 ### Next approval failure-injection contract
 
 Baseline desktop: Stop, actual double-click, lost decision response and browser

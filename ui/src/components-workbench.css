@@ -905,8 +905,12 @@ kbd { font-size: 11px; }
 .browser-automation-card details li small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-automation-mobile-note { padding: 7px; border-left: 2px solid var(--blue); background: var(--canvas); }
 @media (max-width: 760px) { .browser-ca-card dl, .browser-automation-card dl { grid-template-columns: 1fr; } .browser-automation-form .resource-form-grid, .browser-suite-form { grid-template-columns: 1fr; } .browser-suite-actions .button, .browser-suite-select { min-height: 44px; } .browser-result-list > li { grid-template-columns: auto minmax(0, 1fr); } .browser-result-list > li > span { grid-column: 1 / -1; } }
-.browser-web-research-bar { display: flex; min-height: 45px; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
-.web-browser-fallback .browser-research-panel { top: 45px; width: min(920px, 100%); }
+.browser-web-research-bar { display: flex; min-height: 55px; flex: 0 0 auto; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+.web-browser-fallback :is(.browser-web-research-bar, .browser-start, .browser-notice) :is(button, input) { min-width: 44px; min-height: 44px; }
+.web-browser-fallback .browser-notice > button { flex-shrink: 0; justify-content: center; }
+.web-browser-fallback .browser-start { overflow: auto; justify-content: safe center; }
+.web-browser-fallback .browser-start input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.web-browser-fallback .browser-research-panel { top: 55px; width: min(920px, 100%); }
 .web-browser-fallback.research-open > .browser-surface { margin-right: min(920px, 68vw); }
 @media (max-width: 1100px) {
   .workbench-browser.research-open > .browser-surface, .web-browser-fallback.research-open > .browser-surface { margin-right: 0; visibility: hidden; }
@@ -919,7 +923,7 @@ kbd { font-size: 11px; }
   .browser-selection-assistant > footer .button { min-height: 44px; justify-content: center; }
   .workbench-browser.research-open > .browser-surface, .web-browser-fallback.research-open > .browser-surface { margin-right: 0; visibility: hidden; }
   .browser-research-panel { top: 86px; width: 100%; min-width: 0; border-left: 0; }
-  .web-browser-fallback .browser-research-panel { top: 45px; }
+  .web-browser-fallback .browser-research-panel { top: 55px; }
   .browser-research-panel > nav button { min-height: 44px; }
   .browser-web-research-bar > span { display: none; }
   .security-browser-layout { display: flex; flex-direction: column; overflow: auto; }

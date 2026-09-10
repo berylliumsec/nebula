@@ -743,6 +743,77 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
   }
 });
 
+test("stabilization real Core device-browser handoff opens an isolated local tab without a false failure", async ({page}, testInfo) => {
+  test.setTimeout(65_000);
+  page.setDefaultTimeout(10_000);
+  const fixture = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end("<!doctype html><html lang='en'><title>Local handoff fixture</title><h1>Local browser handoff</h1><p>Harmless fixture content.</p></html>");
+  });
+  await new Promise<void>(resolve => fixture.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}/fixture`;
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const project = (await (await api.get("engagements")).json())[0];
+    const scope = await (await api.get(`engagements/${project.id}/scope`)).json();
+    const saved = await api.put(`engagements/${project.id}/scope`, {data: {
+      expected_revision: scope.revision, allowed_urls: [url], allowed_ports: [Number(new URL(url).port)],
+    }});
+    expect(saved.ok(), await saved.text()).toBe(true);
+    await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
+    await expect(page.locator(".connection-chip")).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await page.getByLabel("Browser engine").selectOption("native");
+    await expect(page.getByText("Browse from this device", {exact: true})).toBeVisible();
+    const address = page.getByRole("textbox", {name: "Web address", exact: true});
+    await address.fill(url);
+    const popupPromise = page.context().waitForEvent("page", {timeout: 10_000});
+    await page.getByRole("button", {name: "Open", exact: true}).click();
+    const popup = await popupPromise;
+    await expect(popup.getByRole("heading", {name: "Local browser handoff"})).toBeVisible();
+    expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+    await popup.close();
+    await expect(page.getByRole("alert").filter({hasText: "blocked the new tab"})).toHaveCount(0);
+    await expect(address).toHaveValue(url);
+    await expect(page.getByText(/The isolated embedded webview is a desktop-app capability/)).toBeVisible();
+    await expect(page.getByRole("button", {name: "Ask Nebula about the live page"})).toHaveCount(0);
+    await expect(page.getByText(/In scope · Matches Project scope/)).toBeVisible();
+    await page.evaluate(async () => { await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))); });
+    const accessibility = await new AxeBuilder({page}).include(".web-browser-fallback").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(accessibility.violations).toEqual([]);
+    const geometry = await page.locator(".web-browser-fallback").evaluate(element => ({
+      overflow: element.scrollWidth - element.clientWidth,
+      controls: [...element.querySelectorAll("button,input")].filter(node => node.getBoundingClientRect().width > 0).map(node => {
+        const rect = node.getBoundingClientRect();
+        return {name: node.getAttribute("aria-label") ?? node.textContent, width: rect.width, height: rect.height};
+      }),
+    }));
+    expect(geometry.overflow).toBeLessThanOrEqual(1);
+    for (const control of geometry.controls) {
+      expect(control.width, JSON.stringify(control)).toBeGreaterThanOrEqual(44);
+      expect(control.height, JSON.stringify(control)).toBeGreaterThanOrEqual(44);
+    }
+    await address.focus();
+    await address.press("Tab");
+    await expect(page.getByRole("button", {name: "Open", exact: true})).toBeFocused();
+    await testInfo.attach("device-browser-handoff", {body: await page.screenshot(), contentType: "image/png"});
+    await page.setViewportSize({width: 844, height: 390});
+    await address.focus();
+    await address.scrollIntoViewIfNeeded();
+    const visibleAddress = await address.boundingBox();
+    expect(visibleAddress!.y).toBeGreaterThanOrEqual(0);
+    expect(visibleAddress!.y + visibleAddress!.height).toBeLessThanOrEqual(390);
+    await page.getByRole("button", {name: "Add to Sources", exact: true}).scrollIntoViewIfNeeded();
+    const addBox = await page.getByRole("button", {name: "Add to Sources", exact: true}).boundingBox();
+    expect(addBox!.y).toBeGreaterThanOrEqual(0);
+    expect(addBox!.y + addBox!.height).toBeLessThanOrEqual(390);
+    await testInfo.attach("device-browser-short-window", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {
+    await api.dispose(); await stopRealCore(core);
+    await new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()));
+  }
+});
+
 test("real Core persists network scope changed through universal settings search", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();
@@ -1626,6 +1697,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await composer.fill("Queue second task");
     await page.getByRole("button", {name: "Queue for later", exact: true}).click();
     await expect(queue.locator("li")).toHaveCount(2);
+    await queue.locator("summary").click();
     await queue.getByRole("button", {name: "Edit queued message 1", exact: true}).click();
     await queue.getByRole("textbox", {name: "Edit queued text"}).fill("Edited queued first task");
     await queue.getByRole("button", {name: "Save queued edit"}).click();
