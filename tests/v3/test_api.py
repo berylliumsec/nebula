@@ -669,3 +669,33 @@ def test_websocket_rejects_conflicting_valid_credentials(api):
         ):
             pass
     assert exc_info.value.code == 4401
+
+
+def test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision(api):
+    client, store, _ = api
+    engagement = Engagement(id="eng-review", name="Review")
+    approval = Approval(
+        id="approval-review",
+        engagement_id=engagement.id,
+        run_id="turn-review",
+        origin=ToolCallOrigin.CHAT,
+        risk_class=RiskClass.PASSIVE,
+        exact_request={
+            "tool_name": "read_file",
+            "arguments": {"path": "notes.txt"},
+            "cwd": "/workspace",
+        },
+        policy_rationale="Operator confirmation required",
+        requested_by="chat-assistant",
+    )
+    store.create_many([engagement, approval])
+    endpoint = f"/api/v1/approvals/{approval.id}"
+    assert client.get(endpoint).status_code == 401
+    response = client.get(endpoint, headers=_auth())
+    assert response.status_code == 200
+    assert response.json()["exact_request"] == approval.exact_request
+    decision = client.post(
+        f"{endpoint}/decision", headers=_auth(), json={"decision": "reject"}
+    )
+    assert decision.status_code == 200
+    assert client.get(endpoint, headers=_auth()).json()["status"] == "rejected"

@@ -195,3 +195,20 @@ def test_workflows_never_implicitly_expand_test_targets():
     assert 'test "$EVENT_NAME" = workflow_dispatch' in matrix
     assert 'test "$FULL_APPROVAL" = RUN_FULL_SUITE' in matrix
     assert "args+=(--full-approved)" in matrix
+
+
+def test_playwright_workers_revalidate_the_parent_selection():
+    source = """
+      import {assertPlaywrightInvocation} from './scripts/test_scope_guard.mjs';
+      import assert from 'node:assert/strict';
+      const env = {};
+      const args = ['tests/interface.spec.ts', '--project=desktop', '--grep', 'pending approval restores'];
+      assertPlaywrightInvocation(args, env);
+      assert.deepEqual(JSON.parse(env.NEBULA_PLAYWRIGHT_FOCUSED_ARGS), args);
+      assertPlaywrightInvocation([], {...env, TEST_WORKER_INDEX: '0'});
+      assert.throws(() => assertPlaywrightInvocation([], env));
+      for (const value of [undefined, 'null', '[]', '["--list"]', '["--help"]', '[3]', 'invalid', '["tests/interface.spec.ts"]', '["tests/interface.spec.ts","--project=*"]']) {
+        assert.throws(() => assertPlaywrightInvocation([], {TEST_WORKER_INDEX: '0', NEBULA_PLAYWRIGHT_FOCUSED_ARGS: value}));
+      }
+    """
+    subprocess.run(["node", "--input-type=module", "-e", source], cwd=ROOT, check=True)

@@ -1,47 +1,47 @@
 {
-  "reviewed_by": "Codex, explanatory-value admission",
-  "reason": "Enforce nonblank purpose on new objects through shared Core, expose editor explanation, keep old records editable, and guide selective modelling. Collected focused backend, component and production browser selections.",
-  "exclusions": "No full suites, external targets, provider calls, native changes, deployment or live mutations. Semantic relevance is guided, not proven by a text field. No physical devices. Local Python 3.11; CI 3.12. Dedicated local Playwright config covers real-Core production LAN.",
-  "baseline": "26531ea",
+  "reviewed_by": "Codex, approval review branch correction",
+  "reason": "Restore exact pending approvals without stale catalog dependence, handle reconnect events, focus the review control, and clear the notice after decisions. Collection: 46 focused frontend cases, 2 exact API cases, 24 exact browser regressions. Preserve branch-specific catch-up interactions. The selected browser run exposed loss of selector argv in workers; preserve and revalidate parent selection, with two collected guard checks. No scope widening.",
+  "exclusions": "No full suites, native changes, application-model changes, live approval decisions or physical-device tests. Browser API/WebSocket fixtures test UI only; live harness continuation remains unverified. Local exact browser selection is used because catalog area selectors include unrelated journeys. No CI push in this task.",
+  "baseline": "937db70",
+  "python_versions": [
+    "3.11"
+  ],
   "expected_tests": {
-    "python": 57,
-    "frontend": 17,
+    "python": 4,
+    "frontend": 46,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_application_model_admission.py",
-    "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_api.py",
-    "tests/v3/test_application_model_reset.py",
-    "tests/v3/test_application_model_registry.py",
-    "tests/v3/test_browser_companion.py::test_agent_browser_result_carries_durable_model_evidence",
-    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
-    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model"
+    "tests/v3/test_api.py::test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision",
+    "tests/v3/test_api.py::test_chat_origin_approval_decision_does_not_require_an_agent_run",
+    "tests/test_test_selection.py::test_local_guard_without_starting_any_test_runtime",
+    "tests/test_test_selection.py::test_playwright_workers_revalidate_the_parent_selection"
   ],
   "frontend": [
-    "ui/src/pages/ApplicationModelReset.test.tsx",
-    "ui/src/pages/ApplicationModelPage.test.tsx"
+    "ui/src/api/client.test.ts",
+    "ui/src/components/ChatCatchUp.test.tsx"
   ],
   "native": [],
   "playwright": [],
   "local_playwright": {
-    "config": "ui/playwright.application-model.config.ts",
+    "config": "ui/playwright.config.ts",
     "files": [
-      "application-model.spec.ts",
-      "application-model-reset.spec.ts"
+      "tests/interface.spec.ts"
     ],
-    "expected_tests": 16,
+    "grep": "pending approval restores",
+    "expected_tests": 24,
     "projects": [
-      "model-desktop",
-      "model-compact",
-      "model-chromium-320",
-      "model-webkit-320",
-      "model-chromium-390",
-      "model-webkit-390",
-      "model-chromium-430",
-      "model-webkit-430"
+      "desktop",
+      "compact",
+      "mobile-chromium-small",
+      "mobile-chromium-ledger-390",
+      "mobile-chromium-wide",
+      "mobile-webkit-small",
+      "mobile-webkit",
+      "mobile-webkit-wide"
     ]
   },
-  "change_digest": "15a558e0cb7ec60df05d8b63c09c4fc4500a63712105dfc73fdf8de8d1c2be59"
+  "change_digest": "eb109463b90042bf0f7a9fa9ec4896872a8f49f81bb59996e71f2ab9cdfad6fa",
+  "python_node": true
 }

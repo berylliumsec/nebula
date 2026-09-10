@@ -2449,3 +2449,28 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .chat-composer .chat-follow-up-queue p { margin: 4px 8px; overflow-wrap: anywhere; }
 .chat-composer .chat-follow-up-queue ol { max-height: none; overflow: visible; margin: 0; padding: 0 8px 8px; }
 .chat-composer .chat-follow-up-queue li { padding: 6px 0; }
+/* Pending decisions stay visible and have a clear route to the request. */
+.chat-pending-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 6px 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.chat-pending-actions > strong { flex: 1; min-width: 0; }
+.chat-pending-actions > .button { min-height: 44px; }
+.chat-approval-card { min-width: 0; overflow-wrap: anywhere; }
+.chat-approval-card > div { flex-wrap: wrap; }
+.chat-approval-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.chat-approval-resource {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

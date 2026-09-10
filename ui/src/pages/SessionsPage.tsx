@@ -478,7 +478,6 @@ export function SessionsPage() {
   const {
     api,
     activeOperator,
-    approvals,
     assets,
     coreState,
     createObservation,
@@ -558,6 +557,7 @@ export function SessionsPage() {
   const [artifactBusy, setArtifactBusy] = useState(false);
   const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
+  const [approvalDecisionBusy, setApprovalDecisionBusy] = useState(false);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
@@ -1547,6 +1547,7 @@ export function SessionsPage() {
     setToolCards([]);
     setActivityItems([]);
     setHarnessInteractions([]);
+    setPendingResponse(undefined);
     setHistoricalActivityState({});
     setHistoricalActivityErrors({});
     harnessFollowDetachRef.current?.();
@@ -1586,10 +1587,17 @@ export function SessionsPage() {
           }))
         : []);
       setToolCards(restoredToolCards);
+      // Restore the exact durable request, independently of the workspace catalog cache.
+      const approval = pendingTurn?.approvalId
+        ? await api.getApproval(pendingTurn.approvalId, loadController.signal)
+        : undefined;
+      if (!selectionIsCurrent()) return;
+      if (approval && approval.status !== "pending") {
+        throw new Error("This approval was already resolved. Reload the conversation to see its current state.");
+      }
       setLoadingHistory(false);
       if (pendingTurn && summary?.backend === "provider") {
         const assistantId = makeId("assistant-pending");
-        const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
         const resumeRequest: ChatCompletionRequest = {
           backend: "provider",
           providerId: summary.providerId,
@@ -1622,9 +1630,7 @@ export function SessionsPage() {
             assistantId,
             userId: "",
             request: resumeRequest,
-            approval: approval
-              ? { ...approval, exact_request: { tool_name: approval.toolName, arguments: approval.arguments } }
-              : { id: pendingTurn.approvalId },
+            approval: approval ?? { id: pendingTurn.approvalId },
           });
         } else {
           setPendingResponse(undefined);
@@ -1675,6 +1681,11 @@ export function SessionsPage() {
           turnId,
           page.nextSequence,
           (event) => {
+            if (!selectionIsCurrent()) return;
+            if (event.type === "approval_required") {
+              void selectSession(id, false);
+              return;
+            }
             if (event.type === "message_delta" && event.delta) {
               queueStreamDelta(assistantId, event.delta);
             }
@@ -1711,7 +1722,6 @@ export function SessionsPage() {
             setChatError(`${error.message} Reload this conversation to read its authoritative saved state.`);
           },
         );
-        const approval = approvals.find((item) => item.id === pendingTurn.approvalId);
         setPendingResponse(approval ? {
           turnId: pendingTurn.id,
           assistantId,
@@ -1725,10 +1735,7 @@ export function SessionsPage() {
             model: summary.model,
             messages: [],
           },
-          approval: {
-            ...approval,
-            exact_request: { tool_name: approval.toolName, arguments: approval.arguments },
-          },
+          approval: { ...approval },
         } : undefined);
         setToolCards([]);
       } else {
@@ -2453,7 +2460,7 @@ export function SessionsPage() {
 
 
   const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
-    if (!pendingResponse || !api) return;
+    if (!pendingResponse || !api || approvalDecisionBusy) return;
     const approvalId = typeof pendingResponse.approval.id === "string"
       ? pendingResponse.approval.id
       : undefined;
@@ -2461,6 +2468,7 @@ export function SessionsPage() {
       setChatError("The pending approval is missing its durable ID.");
       return;
     }
+    setApprovalDecisionBusy(true);
     try {
       let editedArguments: Record<string, unknown> | undefined;
       if (decision === "edit") {
@@ -2526,6 +2534,7 @@ export function SessionsPage() {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_15", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not resume the response.");
     } finally {
+      setApprovalDecisionBusy(false);
       setSending(false);
     }
   };
@@ -2932,6 +2941,17 @@ export function SessionsPage() {
     && !harnessControlBusy,
   );
   const queueMode = composerBusy && !canSteerCurrentHarness;
+  const [reviewPendingRequested, setReviewPendingRequested] = useState(false);
+  const focusPendingAction = (card: HTMLDivElement | null) => {
+    if (!card || !reviewPendingRequested || loadingHistory || reloadingConversation) return;
+    card.scrollIntoView({ block: "center", behavior: "instant" });
+    card.focus({ preventScroll: true });
+    setReviewPendingRequested(false);
+  };
+  const reviewPendingActions = async () => {
+    await reloadActiveConversation();
+    setReviewPendingRequested(true);
+  };
   const reloadActiveConversation = async () => {
     if (!sessionId || reloadingConversation) return;
     setReloadingConversation(true);
@@ -3099,7 +3119,7 @@ export function SessionsPage() {
                           </>;
                         }}
                       />}
-                      {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" key={interaction.id}>
+                      {harnessInteractions.filter((interaction) => interaction.harnessTurnId === message.harnessTurnId && interaction.status === "pending").map((interaction) => <div className="chat-approval-card harness-interaction" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
                         <strong>{interaction.prompt}</strong>
                         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
                           const questionId = typeof question.id === "string" ? question.id : String(index);
@@ -3110,7 +3130,7 @@ export function SessionsPage() {
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
                       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
-                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
+                      {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.state === "cancelled" && <small className="muted" role="status">Stopped</small>}
                       {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
@@ -3129,8 +3149,8 @@ export function SessionsPage() {
                 </ThreadPrimitive.Root>
               </AssistantRuntimeProvider>
               <div className="chat-operator-updates">
-              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} ready={!loadingHistory} atLatest={!hasNewerMessages} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reloadActiveConversation()} />}
-              {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
+              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
+              {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}

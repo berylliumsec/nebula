@@ -5720,6 +5720,10 @@ export class ApiClient {
     });
   }
 
+  getApproval(id: string, signal?: AbortSignal): Promise<WireApproval> {
+    return this.request<WireApproval>(`approvals/${encodeURIComponent(id)}`, { signal });
+  }
+
   listApprovals(
     engagementId: string,
     signal?: AbortSignal,

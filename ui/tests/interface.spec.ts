@@ -5715,3 +5715,77 @@ test("browser Assistant uploads a selected device file only after inline approva
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });
+for (const scenario of ["stale catalog", "request failure", "reconnected approval"] as const) {
+  test(`assistant upgrade pending approval restores and reviews ${scenario}`, async ({ page }, testInfo) => {
+    let waiting = scenario !== "reconnected approval";
+    let failRequest = scenario === "request failure";
+    let decision: string | undefined;
+    let approvalReads = 0;
+    let notifyApproval: (() => void) | undefined;
+    const approval = {
+      ...entity, id: "approval-review", engagement_id: "scratch-project", run_id: "",
+      origin: "chat", status: "pending", risk_class: "passive", requested_by: "harness",
+      requested_at: entity.created_at, policy_rationale: "Review the file read",
+      exact_request: { tool_name: "read_file", arguments: { path: `/workspace/${"nested/".repeat(30)}notes.txt` }, cwd: "/workspace" },
+    };
+    await page.routeWebSocket("**/harness-turns/turn-review/events/ws**", socket => {
+      notifyApproval = () => {
+        waiting = true;
+        socket.send(JSON.stringify({ kind: "event", event: { type: "approval_required", sequence: 1, harness_turn_id: "turn-review", approval_id: approval.id } }));
+      };
+    });
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
+      if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: "chat-review", engagement_id: "scratch-project", title: "Review pending approval", backend: "harness", harness_profile_id: "harness-ready", harness_session_id: "session-review", model: "gpt-5-codex", metadata: {} }]);
+      if (path.endsWith("/chat/sessions/chat-review/messages")) return json([]);
+      if (path.endsWith("/chat/sessions/chat-review/pending-turn")) return json({ ...entity, id: "chat-turn-review", session_id: "chat-review", status: decision ? "routing" : waiting ? "waiting_approval" : "routing", harness_turn_id: "turn-review", approval_id: waiting && !decision ? approval.id : null, tool_call_ids: [] });
+      // The workspace catalog deliberately never contains this approval.
+      if (path.endsWith("/approvals")) return json([]);
+      if (path.endsWith(`/approvals/${approval.id}`)) {
+        approvalReads++;
+        return failRequest ? json({ detail: "Approval details temporarily unavailable" }, 503) : json(approval);
+      }
+      if (path.endsWith(`/approvals/${approval.id}/decision`)) {
+        decision = route.request().postDataJSON().decision;
+        return json({ ...approval, status: "approved" });
+      }
+      if (path.endsWith("/harness-turns/turn-review/events")) return json({ events: [], next_sequence: 1 });
+      if (path.endsWith("/harness-turns/turn-review/interactions")) return json([]);
+      if (path.endsWith("/harness-sessions/session-review/activity")) return json({ session_id: "session-review", session_status: "active", busy: true, live: true, turn_id: "turn-review", turn_status: waiting ? "waiting_approval" : "running", detail: "Harness input or approval is required." });
+      if (path.endsWith("/chat/sessions/chat-review/catch-up")) return json({ initialized: true, revision: 1, through_at: entity.updated_at, items: [], pending: decision ? [] : [{ id: approval.id, kind: "approval", text: "Review file read" }], truncated: false });
+      await route.fallback();
+    });
+    await openWorkspace(page, "/?view=chat&session=chat-review", "Workbench");
+    if (scenario === "request failure") {
+      await expect(page.getByText("Approval details temporarily unavailable", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+      failRequest = false;
+    }
+    if (scenario === "reconnected approval") {
+      await expect.poll(() => Boolean(notifyApproval)).toBe(true);
+      notifyApproval!();
+      await expect(page.getByRole("region", { name: "Approval required", exact: true })).toBeVisible();
+    }
+    await page.getByRole("button", { name: "Review pending actions", exact: true }).click();
+    const card = page.getByRole("region", { name: "Approval required", exact: true });
+    await expect(card).toBeVisible();
+    await expect(card).toBeFocused();
+    await expect(card.getByText("read_file", { exact: true })).toBeVisible();
+    if (scenario === "stale catalog") await page.screenshot({ path: testInfo.outputPath("pending-approval.png") });
+    await card.getByText("Exact request", { exact: true }).click();
+    await expect(card.locator("pre")).toContainText('"cwd": "/workspace"');
+    expect(approvalReads).toBeGreaterThan(0);
+    const bounds = await card.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    const accessibility = await new AxeBuilder({ page }).include(".chat-approval-card").include(".chat-pending-actions").analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.reload();
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect.poll(() => decision).toBe("approve");
+    await expect(card).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+  });
+}
