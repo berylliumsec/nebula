@@ -51,7 +51,11 @@ class PutObject(Contract):
     label: str = Field(min_length=1, max_length=300)
     classification: Claim
     authentication_context: str = Field(min_length=1, max_length=200)
-    properties: dict[str, Claim] = Field(default_factory=dict, max_length=100)
+    properties: dict[str, Claim] = Field(
+        default_factory=dict,
+        max_length=100,
+        description="New objects require a purpose claim with a nonblank textual value explaining behavior, a meaningful dependency or a specific uncertainty. Existing objects can be edited without inventing missing explanations.",
+    )
 
 
 class PutRelationship(Contract):

@@ -676,6 +676,17 @@ class ApplicationModelService:
                             raise ValueError(
                                 "This inventory type is legacy-only. Choose a mechanism type from the current schema; existing records remain readable"
                             )
+                        purpose = op["properties"].get("purpose")
+                        if (not before or purpose is not None) and (
+                            not purpose
+                            or not isinstance(purpose["value"], str)
+                            or not purpose["value"].strip()
+                        ):
+                            raise ValueError(
+                                "Explain what this object adds to understanding the application in properties.purpose: "
+                                "a behavior, meaningful dependency, or specific uncertainty. "
+                                "If it only inventories a page or resource, keep it as evidence instead."
+                            )
                         if before and (
                             before["classification"]["value"] != typename
                             or before["authentication_context"]

@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { ApplicationModelPage } from "./ApplicationModelPage";
-import { RelationshipEditor } from "./ApplicationModelEditors";
+import { ObjectEditor, RelationshipEditor } from "./ApplicationModelEditors";
 import { blankClaim, parseProperty, type Graph } from "./applicationModelTypes";
 const request = vi.hoisted(() => vi.fn());
 const draft = vi.hoisted(() => vi.fn());
@@ -29,7 +29,7 @@ const graph: Graph = {
         label: "Page",
         description: "A page",
         category: "Structure",
-        properties: [],
+        properties: [{ name: "purpose", kind: "string", description: "What this explains", choices: [] }],
         identity_hints: [],
         outgoing_relationships: [],
         incoming_relationships: [],
@@ -40,6 +40,30 @@ const graph: Graph = {
 };
 beforeEach(() => {
   request.mockReset();
+});
+it("requires an explanation, retains the draft, and saves its claim", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<ObjectEditor graph={graph} evidence={[]} save={save} cancel={() => {}} busy={false} />);
+  fireEvent.change(screen.getByLabelText("Object label"), { target: { value: "Login" } });
+  fireEvent.submit(screen.getByRole("form", { name: "Create object" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("leave it as evidence");
+  expect(save).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("Object label")).toHaveValue("Login");
+  fireEvent.change(screen.getByLabelText("What this explains"), { target: { value: "Login delegates authentication to the identity provider." } });
+  fireEvent.submit(screen.getByRole("form", { name: "Create object" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0][0].properties.purpose).toMatchObject({ value: "Login delegates authentication to the identity provider.", status: "hypothesized", evidence: [] });
+});
+
+it("does not invent an explanation when editing an existing object", async () => {
+  const save = vi.fn().mockResolvedValue(undefined);
+  render(<ObjectEditor graph={graph} item={{ id: "old", label: "Old page", classification: blankClaim("Page"), authentication_context: "anonymous", properties: {}, revision: 1 }} evidence={[]} save={save} cancel={() => {}} busy={false} />);
+  expect(screen.getByLabelText("What this explains")).not.toBeRequired();
+  fireEvent.change(screen.getByLabelText("What this explains"), { target: { value: "Unsent thought" } });
+  fireEvent.change(screen.getByLabelText("What this explains"), { target: { value: "" } });
+  fireEvent.submit(screen.getByRole("form", { name: "Edit object" }));
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  expect(save.mock.calls[0][0][0].properties).toEqual({});
 });
 it("preserves a legacy relationship meaning when editing its claim", () => {
   const objects = ["a", "b"].map(id => ({id, label: id,
@@ -96,6 +120,7 @@ describe("application graph workflow", () => {
     revision = 1;
     fireEvent(window, new Event("online"));
     await screen.findByText("Revision 1");
+    fireEvent.change(screen.getByLabelText("What this explains"), { target: { value: "Identify the entry point into the login workflow." } });
     fireEvent.click(screen.getByRole("button", { name: "Save object" }));
     await screen.findByRole("alert");
     const write = request.mock.calls.find((c) => c[1]?.method === "POST");
@@ -160,6 +185,7 @@ describe("application graph workflow", () => {
     fireEvent.change(screen.getByLabelText("Object label"), {
       target: { value: "Account" },
     });
+    fireEvent.change(screen.getByLabelText("What this explains"), { target: { value: "Explain where account session state becomes visible." } });
     fireEvent.click(screen.getByRole("button", { name: "Save object" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "draft is retained",

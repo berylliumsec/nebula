@@ -9,7 +9,22 @@ executable scripts, modules and handlers; logical data and persistence; evidence
 service dependencies and background work. Promote an observation only when it
 explains behavior, establishes a meaningful dependency, or resolves a stated
 uncertainty about how the application works. State what it explains in the purpose
-property or claim reason. Do not inventory generic assets, links, footer credits,
+property. New objects REQUIRE a nonblank properties.purpose claim; a classification
+reason is not a substitute. Before creating one, answer: what does this newly
+explain, or which specific uncertainty does it support, challenge or resolve?
+If there is no concrete answer, keep the observation as evidence and make no edit.
+Do not invent a purpose merely to pass validation. Repeated observations should
+strengthen or challenge existing claims rather than multiply objects.
+Examples: an OAuth login explains an authentication flow and identity-provider
+dependency; API documentation explains documented operations, schemas and access
+requirements, not just another page. Keep documented behavior distinct from runtime
+behavior actually observed. A forbidden response records a denial in its request
+and authentication context; firewall, application authorization and other causes
+remain alternatives until evidence distinguishes them. A JavaScript dependency
+merits a claim about its functional responsibility, not an inventory of downloads.
+A plain static recipe page adds nothing unless it reveals functionality such as
+saving recipes or subscriber access. Links are discovery leads, not graph edges.
+Do not inventory generic assets, links, footer credits,
 marketing copy, cosmetic controls, individual requests/responses or every library.
 Keep those in evidence, not the model. A script merits an object for its evidenced
 responsibility, not merely because it downloaded. Never collect credential values.

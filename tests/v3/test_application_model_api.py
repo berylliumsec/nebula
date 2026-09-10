@@ -66,6 +66,11 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
                 {
                     "op": "put_object",
                     "id": "firewall",
+                    "properties": {
+                        "purpose": {
+                            "value": "Track why this request was denied; enforcement mechanism remains uncertain."
+                        }
+                    },
                     "label": "Possible firewall",
                     "authentication_context": "anonymous",
                     "classification": {
@@ -83,6 +88,16 @@ def test_real_core_graph_capture_and_project_scope(tmp_path):
                 }
             ],
         }
+        missing_purpose = {
+            **transaction,
+            "operations": [{**transaction["operations"][0], "properties": {}}],
+        }
+        rejected = client.post(
+            base + "/transactions", headers=auth, json=missing_purpose
+        )
+        assert rejected.status_code == 422
+        assert "properties.purpose" in rejected.text
+        assert client.get(base + "/graph", headers=auth).json()["objects"] == []
         response = client.post(base + "/transactions", headers=auth, json=transaction)
         assert response.status_code == 200, response.text
         assert (
@@ -182,6 +197,11 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
                 {
                     "op": "put_object",
                     "id": "site",
+                    "properties": {
+                        "purpose": {
+                            "value": "Define the application boundary for its authentication workflow."
+                        }
+                    },
                     "label": "Site",
                     "authentication_context": "anonymous",
                     "classification": {"value": "Application"},
@@ -205,6 +225,11 @@ def test_browser_and_project_tools_expose_same_graph(tmp_path):
                     {
                         "op": "put_object",
                         "id": "page",
+                        "properties": {
+                            "purpose": {
+                                "value": "Identify the user entry point into the authentication workflow."
+                            }
+                        },
                         "label": "Page",
                         "authentication_context": "anonymous",
                         "classification": {"value": "Page"},

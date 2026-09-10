@@ -61,8 +61,9 @@ class RelationshipDefinition(Definition):
 class SchemaRegistry:
     """Immutable registry snapshot; extend per project, never mutate globally.
 
-    Identity hints guide evidence interpretation, not automatic merging. No field
-    is required merely because it exists in the catalog: unknowns stay absent.
+    Identity hints guide evidence interpretation, not automatic merging. Unknowns
+    stay absent; the graph service separately requires explanatory purpose when
+    admitting a new object, without requiring speculative mechanism details.
     """
 
     version = 2

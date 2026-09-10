@@ -1,18 +1,23 @@
 {
-  "reviewed_by": "Codex, scoped model and browser capture reset",
-  "reason": "Graph persistence, evidence cutoff, authenticated reset and confirmation lifecycle. Collected 23 Python tests, 15 frontend tests and eight dedicated production-browser cases.",
-  "exclusions": "No unrelated suites, external targets, provider calls, native changes or physical devices. Dedicated local Model config tests real-Core production LAN. No live operator data reset. Python 3.11 locally; CI 3.12. Reload open pages after reset for ongoing connections.",
-  "baseline": "f7cfa81",
+  "reviewed_by": "Codex, explanatory-value admission",
+  "reason": "Enforce nonblank purpose on new objects through shared Core, expose editor explanation, keep old records editable, and guide selective modelling. Collected focused backend, component and production browser selections.",
+  "exclusions": "No full suites, external targets, provider calls, native changes, deployment or live mutations. Semantic relevance is guided, not proven by a text field. No physical devices. Local Python 3.11; CI 3.12. Dedicated local Playwright config covers real-Core production LAN.",
+  "baseline": "26531ea",
   "expected_tests": {
-    "python": 23,
-    "frontend": 15,
+    "python": 57,
+    "frontend": 17,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_application_model_reset.py",
+    "tests/v3/test_application_model_admission.py",
     "tests/v3/test_application_model.py",
-    "tests/v3/test_application_model_api.py"
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model_reset.py",
+    "tests/v3/test_application_model_registry.py",
+    "tests/v3/test_browser_companion.py::test_agent_browser_result_carries_durable_model_evidence",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
+    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model"
   ],
   "frontend": [
     "ui/src/pages/ApplicationModelReset.test.tsx",
@@ -23,9 +28,10 @@
   "local_playwright": {
     "config": "ui/playwright.application-model.config.ts",
     "files": [
+      "application-model.spec.ts",
       "application-model-reset.spec.ts"
     ],
-    "expected_tests": 8,
+    "expected_tests": 16,
     "projects": [
       "model-desktop",
       "model-compact",
@@ -37,5 +43,5 @@
       "model-webkit-430"
     ]
   },
-  "change_digest": "7f2eb6ea50e568ca6792301a086d90721c8ad6d802591d3611eb2738bf0c77a6"
+  "change_digest": "15a558e0cb7ec60df05d8b63c09c4fc4500a63712105dfc73fdf8de8d1c2be59"
 }

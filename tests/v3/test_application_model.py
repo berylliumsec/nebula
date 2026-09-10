@@ -37,12 +37,21 @@ def fixture(tmp_path):
 
 
 def obj(identifier="page", type="Page", **kwargs):
+    properties = kwargs.pop("properties", {})
+    if type != "Asset":
+        properties = {
+            "purpose": {
+                "value": f"Explain the responsibility of {identifier} in the application workflow."
+            },
+            **properties,
+        }
     return dict(
         op="put_object",
         id=identifier,
         label=identifier,
         classification={"value": type},
         authentication_context="anonymous",
+        properties=properties,
         **kwargs,
     )
 

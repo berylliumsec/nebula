@@ -16,7 +16,7 @@ test("scoped reset, cancellation, lost-response retry and fresh collection", asy
   }
   await capture();
   async function object(revision: number, id: string) {
-    const response = await request.post(base + "/transactions", { headers, data: { expected_revision: revision, idempotency_key: id, operations: [{ op: "put_object", id, label: id, classification: { value: "Page" }, authentication_context: "anonymous" }] } });
+    const response = await request.post(base + "/transactions", { headers, data: { expected_revision: revision, idempotency_key: id, operations: [{ op: "put_object", id, label: id, properties: { purpose: { value: "Identify the entry point into the login workflow." } }, classification: { value: "Page" }, authentication_context: "anonymous" }] } });
     expect(response.ok(), await response.text()).toBeTruthy();
   }
   await object(0, "old-page");

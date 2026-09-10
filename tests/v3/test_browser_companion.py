@@ -987,7 +987,7 @@ def test_agent_browser_result_carries_durable_model_evidence(
                         "status": "observed",
                         "evidence": [reference],
                     },
-                    "properties": {},
+                    "properties": {"purpose": {"value": "Identify the entry point into the captured application workflow."}},
                 }
             ],
         }

@@ -161,6 +161,9 @@ export function ObjectEditor({
         e.preventDefault();
         setError("");
         try {
+          if ((!item || properties.purpose) && !String(properties.purpose?.value ?? "").trim()) {
+            throw Error("Explain the behavior, dependency or uncertainty this object adds—or leave it as evidence instead.");
+          }
           const values = Object.fromEntries(
             Object.entries(properties).map(([k, c]) => [
               k,
@@ -203,7 +206,7 @@ export function ObjectEditor({
           disabled={!!item}
           onChange={(e) => {
             setType(e.target.value);
-            setProperties({});
+            setProperties((v): Record<string, Claim> => v.purpose ? { purpose: v.purpose } : {});
           }}
         >
           {graph.schema.categories.map((c) => (
@@ -252,6 +255,28 @@ export function ObjectEditor({
       <p className="am-hint">
         Keep anonymous and signed-in observations separate. Omit secret values.
       </p>
+      {(!item || definition?.properties.some(p => p.name === "purpose")) && <>
+        <label>
+          What this explains
+          <textarea
+            aria-describedby="am-purpose-help"
+            required={!item || !!properties.purpose}
+            maxLength={2000}
+            value={String(properties.purpose?.value ?? "")}
+            onChange={e => setProperties(v => {
+              const next = { ...v };
+              if (item && !item.properties.purpose && !e.target.value.trim()) delete next.purpose;
+              else next.purpose = { ...(v.purpose ?? blankClaim("")), value: e.target.value };
+              return next;
+            })}
+          />
+        </label>
+        <p id="am-purpose-help" className="am-hint">Explain a behavior, meaningful dependency or specific uncertainty—not just what the page contains. If it adds no understanding, leave it as evidence.</p>
+        {properties.purpose && <details><summary>Explanation evidence and status</summary>
+          <ClaimFields title="Explanation claim" claim={properties.purpose} evidence={evidence}
+            onChange={c => setProperties(v => ({ ...v, purpose: c }))} />
+        </details>}
+      </>}
       <ClaimFields
         title="Object classification"
         claim={classification}
@@ -262,7 +287,7 @@ export function ObjectEditor({
       <p className="am-hint">
         Enable only properties supported by your evidence or interpretation.
       </p>
-      {definition?.properties.map((p) => (
+      {definition?.properties.filter(p => p.name !== "purpose").map((p) => (
         <details key={p.name}>
           <summary>
             {p.name}

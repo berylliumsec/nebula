@@ -19,6 +19,7 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   ).json();
   const objects = Array.from({ length: 30 }, (_, i) => ({
     op: "put_object",
+    properties: { purpose: { value: "Identify this step's responsibility in the application workflow." } },
     id: `page-${i}`,
     label:
       i === 1

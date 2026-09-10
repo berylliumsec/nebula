@@ -616,7 +616,7 @@ def builtin_registry() -> SchemaRegistry:
                             PropertyDefinition(
                                 name=field,
                                 description=(
-                                    "What this explains about application behavior; not a page-content summary."
+                                    "Required for new objects: what this newly explains about behavior, a meaningful dependency, or a specific uncertainty. Not a page-content summary."
                                     if field == "purpose"
                                     else f"Evidenced {field.replace('_', ' ')}; omit unknowns and secret values."
                                 ),

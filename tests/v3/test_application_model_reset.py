@@ -42,6 +42,11 @@ def setup(tmp_path):
             {
                 "op": "put_object",
                 "id": "page",
+                "properties": {
+                    "purpose": {
+                        "value": "Identify the entry point into the login workflow."
+                    }
+                },
                 "label": "Page",
                 "classification": {"value": "Page"},
                 "authentication_context": "anonymous",
@@ -117,6 +122,11 @@ def test_retry_does_not_clear_new_captures_or_model(setup):
                 {
                     "op": "put_object",
                     "id": "new",
+                    "properties": {
+                        "purpose": {
+                            "value": "Identify the entry point into the fresh login workflow."
+                        }
+                    },
                     "label": "New",
                     "classification": {"value": "Page"},
                     "authentication_context": "anonymous",

@@ -162,9 +162,16 @@ test("project graph edits, evidence, custom schema and recovery persist through 
     .getByLabel("Authentication context", { exact: true })
     .fill("anonymous");
   await page.getByRole("button", { name: "Save object", exact: true }).click();
+  expect(await page.getByLabel("What this explains", { exact: true }).evaluate((field: HTMLTextAreaElement) => field.validity.valueMissing)).toBe(true);
+  await expect(page.getByLabel("Object label", { exact: true })).toHaveValue("Login operation");
+  await page.getByLabel("What this explains", { exact: true }).fill("Explain how the login operation establishes an authenticated session.");
+  await page.getByRole("button", { name: "Save object", exact: true }).click();
   await expect(page.getByText("Saved project revision 1.")).toBeVisible();
   const operationId = new URL(page.url()).searchParams.get("object");
   expect(operationId).toBeTruthy();
+  const savedOperation = (await (await request.get(base + "/graph", { headers })).json()).objects.find((o: { id: string }) => o.id === operationId);
+  expect(savedOperation.properties.purpose.value).toBe("Explain how the login operation establishes an authenticated session.");
+  expect(savedOperation.properties.purpose.status).toBe("hypothesized");
   await page.getByRole("button", { name: "Add object", exact: true }).click();
   await page
     .getByRole("combobox", { name: "Object type", exact: true })
@@ -184,6 +191,7 @@ test("project graph edits, evidence, custom schema and recovery persist through 
   await page
     .getByLabel("Reason", { exact: true })
     .fill("403 is consistent with multiple explanations.");
+  await page.getByLabel("What this explains", { exact: true }).fill("Track the denial of this operation; the enforcement mechanism remains uncertain.");
   await page.getByRole("button", { name: "Save object", exact: true }).click();
   await expect(page.getByText("Saved project revision 2.")).toBeVisible();
   const firewallId = new URL(page.url()).searchParams.get("object");
@@ -226,6 +234,7 @@ test("project graph edits, evidence, custom schema and recovery persist through 
         {
           op: "put_object",
           id: "competing",
+          properties: { purpose: { value: "Identify a second entry point into the authentication workflow." } },
           label: "Competing object",
           classification: { value: "Page" },
           authentication_context: "anonymous",

@@ -1610,6 +1610,7 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
                         {
                             "op": "put_object",
                             "id": "site-model",
+                            "properties": {"purpose": {"value": "Define the application boundary for its authentication workflow."}},
                             "label": "Model site",
                             "authentication_context": "anonymous",
                             "classification": {"value": "Application"},
