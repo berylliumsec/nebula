@@ -1960,6 +1960,67 @@ test("project removal archives, retries, restores and clears the last selection 
   }
 });
 
+test("stabilization real Core preserves note drafts and reuses saved notes in reports", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as {id: string}[];
+    const project = projects[0];
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Output acceptance"}});
+    expect(pairing.ok()).toBe(true);
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Output acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
+    await page.getByRole("button", {name: "New note", exact: true}).click();
+    await page.getByLabel("Note title", {exact: true}).fill("Local fixture mechanism");
+    await page.getByLabel("Note body", {exact: true}).fill("The local fixture button changes Ready to Saved. No external site was contacted.");
+    let failSave = true;
+    await page.route("**/api/v1/observations", async route => {
+      if (failSave && route.request().method() === "POST") {
+        failSave = false;
+        await route.fulfill({status: 503, json: {detail: "Injected fixture save failure"}});
+      } else await route.continue();
+    });
+    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await expect(page.getByText("Injected fixture save failure", {exact: false}).first()).toBeVisible();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Edit Local fixture mechanism", exact: true})).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", {name: /Local fixture mechanism/}).click();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    const notes = await (await api.get(`observations?engagement_id=${project.id}`)).json() as {id: string; title: string}[];
+    expect(notes.filter(note => note.title === "Local fixture mechanism")).toHaveLength(1);
+    await page.goto(`${core.origin}/projects/${project.id}/reports`);
+    await page.getByRole("button", {name: "New report", exact: true}).click();
+    const dialog = page.getByRole("dialog", {name: "New report", exact: true});
+    await dialog.getByLabel("Title", {exact: true}).fill("Disposable mechanism report");
+    await dialog.getByRole("button", {name: "Create report", exact: true}).click();
+    await expect(dialog).toBeHidden();
+    await page.getByLabel("Report title", {exact: true}).fill("Reviewed local mechanism");
+    await page.getByRole("checkbox", {name: /Local fixture mechanism/}).check();
+    await page.getByRole("button", {name: "Save report", exact: true}).click();
+    await expect(page.getByRole("button", {name: "Save report", exact: true})).toBeDisabled();
+    await page.reload();
+    await expect(page.getByLabel("Report title", {exact: true})).toHaveValue("Reviewed local mechanism");
+    await expect(page.getByRole("checkbox", {name: /Local fixture mechanism/})).toBeChecked();
+    const reports = await (await api.get(`reports?engagement_id=${project.id}`)).json() as {observation_ids: string[]}[];
+    expect(reports).toHaveLength(1);
+    expect(reports[0].observation_ids).toContain(notes.find(note => note.title === "Local fixture mechanism")!.id);
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
+    await page.getByRole("button", {name: /Local fixture mechanism/}).click();
+    await page.getByRole("button", {name: "Delete", exact: true}).click();
+    await expect(page.getByText("This note is retained by a report", {exact: true})).toBeVisible();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    await testInfo.attach("saved-output-lineage", {body: JSON.stringify({origin: core.origin, notes, reports}), contentType: "application/json"});
+    await testInfo.attach("note-retention", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose(); await stopRealCore(core);}
+});
+
 test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });

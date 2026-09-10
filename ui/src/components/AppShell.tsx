@@ -178,8 +178,9 @@ export function AppShell() {
                 variant={zero ? "zero" : "standard"}
               />
               <main id="main-content" className="main-content" tabIndex={-1}>
-                {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
                 {zero && <span className="zero-route-flare" aria-hidden="true" key={`${location.pathname}${location.search}`} />}
+                <div className="workspace-notices" role="region" aria-label="Workspace notices" tabIndex={0}>
+                {workspaceState !== "failed" && <DiagnosticsAvailabilityBanner />}
                 {workspaceState === "starting" && <div className="workspace-state-banner starting" role="status"><span><strong>Starting Nebula…</strong><small>{runtime?.mode === "desktop_remote" ? "Connecting this UI shell to the selected remote Core." : "Connecting to the local Core service."}</small></span></div>}
                 {workspaceState === "bootstrapping" && <div className="workspace-state-banner starting" role="status"><span><strong>Preparing your workspace…</strong><small>{setupStatus?.stageDetail ?? "Loading Projects and checking Terminal setup."}</small></span></div>}
                 {workspaceState === "degraded" && <div className="workspace-state-banner degraded" role="status"><span><strong>Nebula is ready with limited features.</strong>{coreError && <small>{coreError}</small>}</span>{coreError && <button className="button quiet" type="button" onClick={reconnect}>Retry Core</button>}</div>}
@@ -192,6 +193,7 @@ export function AppShell() {
                 {workspaceState === "failed" && authorizationRecovery ? <div className="workspace-state-banner failed expired-session-state" role="alert"><span>{authorizationRecovery === "pair" ? <><strong>Pair this browser to continue</strong><small>On an authorized browser on the Nebula host, open Settings → Advanced → Identity &amp; Security → Paired devices, choose Pair phone, then scan the QR code. If this device was previously paired, pair it again because its access expired or was revoked.</small></> : <><strong>Browser session expired</strong><small>Nebula keeps the Core token in memory only, so reloading this page intentionally clears access. Close this tab and relaunch the interface with <code>nebula-core ui</code>.</small></>}</span></div> : workspaceState === "failed" ? <div className="workspace-state-banner failed"><DiagnosticErrorNotice error={coreError ?? "Check the local service and try again."} title="Nebula Core could not start." fallback="Check the local service and try again." compact /><button className="button primary" type="button" onClick={reconnect}>Try again</button></div> : null}
                 <UpdateBanner />
                 <HandoffRecoveryNotice />
+                </div>
                 <Outlet />
               </main>
               <ActivityCenter open={activityOpen} onClose={() => setActivityOpen(false)} view={activityView} onViewChange={setActivityView} />

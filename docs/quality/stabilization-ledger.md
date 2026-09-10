@@ -131,6 +131,58 @@ fix, regression and verification here before being called resolved.
 
 ## Remaining release gates
 
+### Candidate native and additional lifecycle findings
+
+- Clean candidate `b382bef99f6a5646f18b77698536f29f20178446`, built at
+  `2026-09-10T16:13:20Z`: web/Core identities and 82 asset hashes verified;
+  managed DEB compiled and extracted without installation. Native browser
+  navigation/capture attachment passed at 1440x900 and 1024x768. Evidence:
+  `/tmp/nebula-stabilization-candidate-eoGxo3`. The older native smoke selector
+  depended on button styling; it now uses the existing accessible Go control.
+- N4, actual extracted desktop candidate: a diagnostics availability banner above
+  the workbench consumes height in addition to a 100%-height session page. The
+  composer submit button extends below the main viewport, behind the shell dock;
+  native WebDriver cannot click it. At 1440x900, main ends at y=800 while the
+  composer ends at y=841. Evidence: `native-approval-1440-retry` in the candidate
+  directory. Required contract: shell owns page height, notices consume their
+  own row, transcript owns scrolling, and primary actions remain visible with
+  zero/one/wrapped notices at desktop/mobile and short landscape. Add a permanent
+  production regression before adjusting this shared layout.
+- A3, restart with a removed approval ToolCall or HarnessTurn currently raises
+  NotFoundError and can prevent Core startup. New selected failure-injection
+  regression reproduces this. Required contract: mark only that saved delivery
+  failed, retain the recorded decision/binding, continue startup without replay
+  or fabricating an owner. Verify both missing-record cases and prior continuation
+  tests before committing.
+- Real-Core workspace batch: 3 passed in 18.9s (linked host-folder selection,
+  LAN quick-open, Git diff and terminal handoff), evidence
+  `/tmp/nebula-stabilization-workspace-real`. Chromium/WebKit emulated 390px:
+  edit/save, external-change recovery, 21 draft buffers, evidence and candidate
+  finding handoff passed (2 in 36.8s), evidence
+  `/tmp/nebula-stabilization-code-real-mobile`.
+- N4 repair: the shell now allocates a bounded, focusable notices row before the
+  workbench. A second failure at 320px proved the composer's 42% height cap clipped
+  its own footer. Context/activity now scroll independently of input and actions.
+  Eight notice/hit-test/accessibility profiles passed in 21.2s; all 32 selected
+  approval/plan-scroll regressions passed in 2.2m. Evidence:
+  `/tmp/nebula-stabilization-notices-matrix-2`,
+  `/tmp/nebula-stabilization-composer-contract-matrix`. Native verification of
+  this repair requires a newly built package, not the earlier extracted binary.
+- A3 repair passed both missing-record cases and the full 28-case continuation,
+  projection and catch-up selection (18.08s). Selected shell/state frontend
+  tests: 49 passed in 29.64s. These results do not prove every crash boundary.
+- Model/reset: all 16 production LAN real-Core profiles passed in 1.3m, including
+  desktop, Chromium/WebKit 320/390/430, and each journey's landscape/fullscreen,
+  lost-response retry and scoped reset checks. Evidence:
+  `/tmp/nebula-stabilization-model-matrix`.
+- New permanent notes-to-report journey passed all 8 real-Core browser profiles
+  (desktop 11.4s; remaining 7 in 51.3s). It verifies an injected pre-save failure
+  retains the draft, retry creates exactly one saved note, reload, report
+  selection/reuse, and an in-place dependency explanation preventing deletion
+  of a retained note. Evidence: `/tmp/nebula-stabilization-outputs-real`,
+  `/tmp/nebula-stabilization-outputs-real-matrix`. PDF export and Library lifecycle
+  still require their own evidence.
+
 This is not a completed whole-product release. Packaged/installed desktop
 approval/reconnect/fullscreen/scroll/relaunch acceptance, the remaining real-Core
 workspace/output/settings lifecycle journeys, crash-at-every-delivery-boundary

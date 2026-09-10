@@ -37,6 +37,7 @@ async def smoke(
     codex_home: Path | None = None,
     width: int = 1440,
     height: int = 900,
+    stabilization: bool = False,
 ) -> dict[str, object]:
     evidence_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nebula-packaged-profile-") as temporary:
@@ -284,12 +285,12 @@ async def smoke(
                                     base64.b64decode(screenshot.json()["value"])
                                 )
                             details = await execute(
-                                "return document.querySelector('.managed-assistant-browser')?.innerText;"
+                                "return document.querySelector('main')?.innerText;"
                             )
                             raise RuntimeError(
                                 "Packaged UI condition timed out: "
                                 + script
-                                + " Browser state: "
+                                + " Visible state: "
                                 + str(details)
                             )
 
@@ -382,7 +383,7 @@ async def smoke(
                             )
                         ).raise_for_status()
                         await click(
-                            '.managed-browser-toolbar button[type="submit"], .managed-browser-toolbar button.button.primary'
+                            '.managed-browser-navigation button[aria-label="Go"]'
                         )
                         await wait_for(
                             "return document.querySelector('.managed-browser-capture pre')?.textContent === 'Ready';"
@@ -398,6 +399,14 @@ async def smoke(
                             "Packaged desktop: page context attached beside the live page",
                             flush=True,
                         )
+                        if stabilization:
+                            from native_stabilization_journeys import exercise
+
+                            await exercise(
+                                webdriver=webdriver, prefix=prefix, backend=backend,
+                                profile=profile, project=project, evidence_root=evidence_root,
+                                execute=execute, wait_for=wait_for, element=element, click=click,
+                            )
                         if conversation_id:
 
                             async def send_question(text: str) -> None:
@@ -427,7 +436,7 @@ async def smoke(
                             )
                             # Native element clicks target the same visible operator controls.
                             await execute(
-                                "const button = [...document.querySelectorAll('.managed-browser-toolbar button')].find(b => b.textContent === 'Resume assistant control'); if (button) button.setAttribute('data-validation-resume','true'); return true;"
+                                "const button = document.querySelector('.managed-browser-toolbar button[aria-label=\"Resume assistant control\"]'); if (button) button.setAttribute('data-validation-resume','true'); return true;"
                             )
                             if await execute(
                                 "return Boolean(document.querySelector('[data-validation-resume]'));"
@@ -446,7 +455,7 @@ async def smoke(
                                 180,
                             )
                             await execute(
-                                "[...document.querySelectorAll('.managed-browser-toolbar button')].find(b => b.textContent === 'Ask about page').setAttribute('data-validation-capture','true'); return true;"
+                                "document.querySelector('.managed-browser-toolbar button[aria-label=\"Ask about page\"]').setAttribute('data-validation-capture','true'); return true;"
                             )
                             await click("[data-validation-capture]")
                             await wait_for(
@@ -475,6 +484,7 @@ async def smoke(
                         "managed_chromium_visible": True,
                         "page_navigation_and_context_attachment": True,
                         "live_codex_inline_approval": bool(conversation_id),
+                        "inert_packaged_approval_journeys": stabilization,
                         "workflow_limit": "Physical input and full lifecycle matrix remain separate gates.",
                     }
                 finally:
@@ -500,6 +510,7 @@ if __name__ == "__main__":
     parser.add_argument("--codex-home", type=Path)
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=900)
+    parser.add_argument("--stabilization", action="store_true", help="Exercise approvals using an inert local ACP peer, no model calls or tools")
     args = parser.parse_args()
     print(
         json.dumps(
@@ -513,6 +524,7 @@ if __name__ == "__main__":
                     args.codex_home,
                     args.width,
                     args.height,
+                    args.stabilization,
                 )
             ),
             sort_keys=True,

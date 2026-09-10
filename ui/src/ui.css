@@ -16,6 +16,27 @@
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
 
+/* The shell allocates notice height before the bounded workbench. A 100%-height
+   page plus a sibling banner clips the composer behind the navigation dock. */
+.workspace-notices:empty { display: none; }
+.app-shell .main-content:has(> .sessions-page.chat-active:not(.full-screen)) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(36%, 18rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.main-content > .sessions-page.chat-active:not(.full-screen) {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
+
 .chat-composer .chat-follow-up-queue { max-height: none; overflow: visible; }
 .chat-follow-up-queue:empty { display: none; }
 .chat-follow-up-queue { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
@@ -54,8 +75,11 @@
 .chat-follow-up-queue ol { max-height: none; overflow: visible; }
 .chat-message-actions { flex-wrap: wrap; }
 .chat-message-actions > button { flex: 0 0 auto; }
-.chat-panel > .chat-composer { max-height: 42%; overflow: auto; }
-.chat-panel > .chat-composer:has(.chat-follow-up-queue > details[open]) { max-height: calc(100% - 96px); }
+.chat-panel > .chat-composer { display: flex; flex-direction: column; max-height: calc(100% - 48px); overflow: hidden; }
+.chat-composer-context { flex: 1 1 auto; min-height: 0; max-height: min(200px, 28cqh); overflow: auto; overscroll-behavior: contain; }
+.chat-composer-context:empty { display: none; }
+.chat-composer > .chat-composer-input { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }
+.chat-composer > footer { flex: 0 0 auto; }
 .chat-composer footer { flex-wrap: wrap; }
 .chat-composer footer > button { flex-shrink: 0; }
 .assistant-search { max-height: 28%; }
@@ -69,7 +93,7 @@
   .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
-.chat-panel > .chat-composer:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
+.chat-panel > .chat-composer:has(.chat-skill-menu), .chat-composer-input:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
 
 /* Recovery and composition form one scrollable surface in short app windows. */
 .chat-panel:has(> .chat-resolved-approval) { overflow-y: auto; overscroll-behavior: contain; }
@@ -100,11 +124,11 @@
 .chat-catch-up-recovery { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
 .chat-catch-up-recovery > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 
-.chat-composer > .harness-status-rail { width: auto; max-width: calc(100% - 24px); justify-self: stretch; margin: 0 12px; border: 0; border-radius: 0; background: transparent; }
-.chat-composer > .harness-status-rail .harness-status-summary { min-height: 22px; gap: 6px; padding: 2px 0; flex-wrap: wrap; white-space: normal; }
-.chat-composer > .harness-status-rail .harness-status-summary strong { font-weight: 500; font-size: 11px; }
-.chat-composer > .harness-status-rail button.harness-status-summary { min-height: 44px; }
-.chat-composer > .harness-status-rail .harness-plan-steps { max-height: 30vh; overflow: auto; }
+.chat-composer-context > .harness-status-rail { width: auto; max-width: calc(100% - 24px); justify-self: stretch; margin: 0 12px; border: 0; border-radius: 0; background: transparent; }
+.chat-composer-context > .harness-status-rail .harness-status-summary { min-height: 22px; gap: 6px; padding: 2px 0; flex-wrap: wrap; white-space: normal; }
+.chat-composer-context > .harness-status-rail .harness-status-summary strong { font-weight: 500; font-size: 11px; }
+.chat-composer-context > .harness-status-rail button.harness-status-summary { min-height: 44px; }
+.chat-composer-context > .harness-status-rail .harness-plan-steps { max-height: 30vh; overflow: auto; }
 
 .activity-ledger-failure { min-width: 0; border-radius: var(--radius-control); background: var(--red-muted); }
 .activity-ledger-failure > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 9px; cursor: pointer; list-style: none; }

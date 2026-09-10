@@ -2050,6 +2050,44 @@ reloadTest("stabilization empty project offers the existing project picker after
   await testInfo.attach("empty-project-recovery", {body: await page.screenshot(), contentType: "image/png"});
 });
 
+test("stabilization workspace notices leave the composer reachable", async ({page}, testInfo) => {
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
+    ...entity, id: "notice-fixture", name: "Configured fixture", kind: "grok_acp",
+    connection_mode: "spawn", transport: "stdio", executable: "/bin/true", auth_mode: "existing_session",
+    enabled: true, default_model: "fixture", privacy: {local_only: true, permits_sensitive_data: true},
+    capabilities: {models: ["fixture"], checked_at: entity.updated_at},
+  }]}));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await page.goto("/?view=chat");
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+  await expect(composer).toBeVisible();
+  for (const detail of ["Browser event capture is disabled for this binding.", "Local diagnostic storage is temporarily unavailable. ".repeat(8)]) {
+    await page.evaluate(reason => window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {detail: {available: false, reason}})), detail);
+    await expect(page.locator(".diagnostics-unavailable")).toBeVisible();
+    await composer.fill("Keep my draft and primary actions visible.");
+    const send = page.getByRole("button", {name: "Send message", exact: true});
+    await expect(send).toBeEnabled();
+    const geometry = await send.evaluate(button => {
+      const rect = button.getBoundingClientRect();
+      const main = document.querySelector("main")!.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      const parents = []; let node: HTMLElement | null = button;
+      while (node) { const r = node.getBoundingClientRect(); parents.push({class: node.className, top: r.top, bottom: r.bottom, scroll: node.scrollHeight, height: node.clientHeight, overflow: getComputedStyle(node).overflowY}); node = node.parentElement; }
+      return {top: rect.top, bottom: rect.bottom, boundary: main.bottom,
+        hit: button.contains(hit), hitName: hit?.className, parents};
+    });
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.boundary);
+    if (!geometry.hit) await testInfo.attach("notice-clipping", {body: await page.screenshot(), contentType: "image/png"});
+    expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
+    await send.focus();
+    await expect(send).toBeFocused();
+    await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
+    expect((await new AxeBuilder({page}).include("main").analyze()).violations).toEqual([]);
+  }
+  await testInfo.attach("workspace-notices", {body: await page.screenshot(), contentType: "image/png"});
+});
+
 test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
   let durableScope = {
     ...entity,
