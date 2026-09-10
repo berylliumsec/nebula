@@ -2438,6 +2438,14 @@ class ApprovalContinuation(NebulaModel):
     harness_turn_id: str
     status: Literal["pending", "delivered", "failed"] = "pending"
     detail: str | None = Field(default=None, max_length=1_000)
+    adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None
+    adapter_status: Literal["not_required", "pending", "sent", "failed", "unknown"] = (
+        "not_required"
+    )
+    adapter_detail: str | None = Field(default=None, max_length=1_000)
+    # Ordered activity after this boundary may demonstrate turn progress, not
+    # necessarily execution of the approved command. Wall-clock order is unsafe.
+    progress_after_sequence: int | None = Field(default=None, ge=0)
     updated_at: datetime = Field(default_factory=utc_now)
 
 

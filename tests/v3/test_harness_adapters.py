@@ -1836,6 +1836,7 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         )
         monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
         observed_permissions: list[Any] = []
+        handoff_receipts: list[str] = []
 
         async def permission(request):
             observed_permissions.append(request)
@@ -1843,7 +1844,7 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
                 asyncio.get_running_loop().create_future()
             )
             future.set_result(HarnessPermissionDecision(allowed=True))
-            return PermissionTicket(None, "call-1", future)
+            return PermissionTicket(None, "call-1", future, handoff_receipts.append)
 
         credentials = CredentialStore()
         credential = credentials.create(
@@ -1910,6 +1911,7 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
             "mcp__workspace_server__read_file", {"path": "README.md"}, None
         )
         assert permission_result.behavior == "allow"
+        assert handoff_receipts == ["sent"]
         assert observed_permissions[0].server_name == "workspace_server"
         assert observed_permissions[0].tool_name == "read_file"
 

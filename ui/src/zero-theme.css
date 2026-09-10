@@ -104,9 +104,9 @@
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 64px minmax(0, 1fr) 78px;
-  gap: 10px;
-  padding: 12px;
+  grid-template-rows: var(--shell-top-row, 64px) minmax(0, 1fr) 78px;
+  gap: var(--shell-row-gap, 10px);
+  padding: var(--shell-inset, 12px);
   overflow: hidden;
   background: transparent;
   transition: none;
@@ -615,9 +615,9 @@
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.with-activity,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.sidebar-collapsed,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.sidebar-collapsed.with-activity {
-    grid-template-rows: 58px minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px;
+    grid-template-rows: var(--shell-top-row, 58px) minmax(0, 1fr);
+    gap: var(--shell-row-gap, 8px);
+    padding: var(--shell-inset, 8px);
   }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band { padding-inline: 10px; border-radius: 21px; }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band .top-bar-leading { min-width: 0; }

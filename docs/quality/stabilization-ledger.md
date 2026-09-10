@@ -169,6 +169,31 @@ fix, regression and verification here before being called resolved.
 
 ### Candidate native and additional lifecycle findings
 
+- A6 contract, approval-to-continuation: the API's current `delivered` receipt
+  ends at Core's waiter. Native permission consumers must declare their handoff
+  target before the decision, with a pending adapter handoff persisted in the
+  decision transaction. Record transport-write acknowledgement (or SDK callback
+  return) separately from execution progress; these protocols do not provide an
+  acknowledgement-of-acknowledgement and must not be described as proving that
+  a command ran. Actual subsequent turn activity comes from the durable ledger,
+  ordered after delivery, not from the callback that merely releases waiting.
+  Failures/restart between waiter delivery and adapter handoff must preserve the
+  known decision and known delivery, mark uncertainty, and never replay. Late
+  receipts must not overwrite recorded outcomes or bind to another turn. Tests:
+  red API/projection regression, deterministic Codex/ACP handoff failure,
+  restart at both boundaries, ordered activity/second-request isolation, then
+  real-Core and native fixture journeys. Existing policy gates remain unchanged.
+- A6 implementation and bounded evidence: 63 selected backend cases passed in
+  33.05s, including 11 new handoff/ordering/owner-binding cases and the real
+  Codex/ACP permission consumers. A decision now carries adapter intent in its
+  atomic save; receipts distinguish transport write/SDK callback from ordered
+  execution activity. Restart preserves known delivery and records an unknown
+  handoff without replay. Removed historical owner guessing. Evidence:
+  `/tmp/nebula-stabilization-handoff-python.log`. Sixteen production LAN
+  real-Core approval/rejection cases passed in 1.3m with the stronger durable
+  activity assertions (`/tmp/nebula-stabilization-handoff-real-matrix`). These
+  use an inert broker adapter; actual packaged adapter acceptance remains open.
+
 - Clean candidate `b382bef99f6a5646f18b77698536f29f20178446`, built at
   `2026-09-10T16:13:20Z`: web/Core identities and 82 asset hashes verified;
   managed DEB compiled and extracted without installation. Native browser
@@ -204,6 +229,32 @@ fix, regression and verification here before being called resolved.
   `/tmp/nebula-stabilization-notices-matrix-2`,
   `/tmp/nebula-stabilization-composer-contract-matrix`. Native verification of
   this repair requires a newly built package, not the earlier extracted binary.
+- N5, follow-up short-window regression: at 844x390 with a diagnostics notice,
+  Send extends to y=326.23 while the work area ends at y=304. The two-profile
+  production check failed on desktop and stopped its WebKit peer early. Retain
+  the existing N4 contract: notices must consume bounded space, required actions
+  remain reachable, and transcript/input have explicit scroll ownership. Evidence:
+  `/tmp/nebula-stabilization-notices-landscape`. Inspect all height consumers;
+  do not remove the assertion or shrink touch targets to make it pass.
+- N5 follow-up: Chromium passes the compact-shell repair, but WebKit still clips
+  after rotation. The transcript has correctly shrunk to zero; message search
+  consumes 36.95px and the composer retains 124px from portrait. Inspection found
+  textarea autosizing depends only on draft/view, so an unchanged draft retains
+  its narrow-pane height after becoming wider. Add a resize-observed autosize
+  hook (with width-change/cleanup/no-loop regressions) before completing the
+  short-window matrix. Evidence: `/tmp/nebula-stabilization-notices-webkit-geometry`.
+- N5 resolution evidence: resize observation was necessary but insufficient.
+  WebKit also measured minimum-height padding as content (63px for one line),
+  while fixed search/composer rows exceeded their container. Measure natural
+  content before restoring the CSS minimum, remove inline baseline spacing,
+  and allow bounded input shrinkage. Short windows reduce shell spacing rather
+  than touch targets. All eight profiles passed portrait and 844x390 landscape
+  with short/long notices, entire composer/search bounds, hit testing, keyboard
+  focus, 44px controls and axe (40.7s). Five sizing regressions and the selected
+  frontend batch passed: 54 tests, 30.52s. Evidence:
+  `/tmp/nebula-stabilization-composer-frontend.log`. Successful browser traces
+  are retained in the subsequent `notices-retained` run; the earlier default
+  reporter retains failure traces only, not successful attachment bodies.
 - A3 repair passed both missing-record cases and the full 28-case continuation,
   projection and catch-up selection (18.08s). Selected shell/state frontend
   tests: 49 passed in 29.64s. These results do not prove every crash boundary.

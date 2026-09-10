@@ -75,14 +75,16 @@
 .chat-follow-up-queue ol { max-height: none; overflow: visible; }
 .chat-message-actions { flex-wrap: wrap; }
 .chat-message-actions > button { flex: 0 0 auto; }
-.chat-panel > .chat-composer { display: flex; flex-direction: column; max-height: calc(100% - 48px); overflow: hidden; }
+.chat-panel > .chat-composer { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; max-height: calc(100% - 48px); overflow: hidden; }
 .chat-composer-context { flex: 1 1 auto; min-height: 0; max-height: min(200px, 28cqh); overflow: auto; overscroll-behavior: contain; }
 .chat-composer-context:empty { display: none; }
 .chat-composer > .chat-composer-input { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }
+.chat-composer-input > textarea { display: block; }
 .chat-composer > footer { flex: 0 0 auto; }
 .chat-composer footer { flex-wrap: wrap; }
 .chat-composer footer > button { flex-shrink: 0; }
-.assistant-search { max-height: 28%; }
+.chat-composer footer > .chat-composer-submit { min-width: 44px; min-height: 44px; }
+.assistant-search { min-height: 45px; max-height: 28%; }
 .assistant-search input[type="search"] { max-width: 100%; min-width: 0; }
 .assistant-search label:first-child { min-width: 0; }
 @media (max-width: 600px) {
@@ -94,6 +96,16 @@
 }
 
 .chat-panel > .chat-composer:has(.chat-skill-menu), .chat-composer-input:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
+
+/* Short windows spend less height on shell ornamentation. Do not reserve a
+   transcript strip by shrinking the input/actions below their usable height. */
+@media (max-height: 520px) {
+  :root { --shell-top-row: 48px; --shell-row-gap: 4px; --shell-inset: 4px; }
+  :root .main-content > .sessions-page.chat-active:not(.full-screen) { padding-block: 4px; }
+  .main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices { max-height: min(24%, 44px); }
+  .assistant-search { padding-block: 0; }
+  .chat-panel > .chat-composer { margin-block: 2px; max-height: calc(100% - 4px); }
+}
 
 /* Recovery and composition form one scrollable surface in short app windows. */
 .chat-panel:has(> .chat-resolved-approval) { overflow-y: auto; overscroll-behavior: contain; }

@@ -112,6 +112,15 @@ async def exercise(
             assert snapshot["pending"] == [], snapshot
             approval = snapshot["decisions"][-1]
             assert approval["continuation"]["status"] == "delivered", snapshot
+            assert approval["continuation"]["adapter_handoff"] == "transport_write", (
+                snapshot
+            )
+            assert approval["continuation"]["adapter_status"] == "sent", snapshot
+            assert approval["progress"] == "observed", snapshot
+            assert (
+                approval["progress_sequence"]
+                > approval["continuation"]["progress_after_sequence"]
+            ), snapshot
             repeated = await core.post(
                 f"approvals/{approval['approval_id']}/decision",
                 json={"decision": decision.lower()},

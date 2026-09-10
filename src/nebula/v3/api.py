@@ -6032,11 +6032,9 @@ def create_app(
         if harness_turn is not None:
             # Same durable row/transaction as the decision: a crash cannot lose
             # the fact that delivery still needs reconciliation.
-            changes["continuation"] = {
-                "harness_turn_id": harness_turn.id,
-                "status": "pending",
-                "updated_at": utc_now().isoformat(),
-            }
+            from .approval_delivery import decision_delivery_intent
+
+            changes["continuation"] = decision_delivery_intent(store, approval, harness_turn)
         if request.edited_arguments is not None:
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments

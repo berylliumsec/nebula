@@ -10,10 +10,10 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from .database import EntityRow, SessionProjectionRow
+from .database import EntityRow, OperationEventRow, SessionProjectionRow
 from .domain import (
     Approval,
     ChatSession,
@@ -201,6 +201,39 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
         and turn
         and (item.chat_turn_id == turn.id or item.id == turn.approval_id)
     ]
+    for decision in decisions:
+        continuation = decision["continuation"]
+        after_sequence = (
+            continuation.get("progress_after_sequence") if continuation else None
+        )
+        sequence = None
+        if (
+            continuation
+            and after_sequence is not None
+            and continuation["status"] == "delivered"
+            and continuation.get("adapter_status", "not_required")
+            in {"not_required", "sent"}
+        ):
+            # Read the immutable ledger, not a running reservation or the
+            # callback that released an approval waiter. Use the first observed
+            # activity so later output chunks do not churn display revisions.
+            sequence = database.scalar(
+                select(func.min(OperationEventRow.sequence)).where(
+                    OperationEventRow.operation_id == continuation["harness_turn_id"],
+                    OperationEventRow.operation_kind == "harness_turn",
+                    OperationEventRow.sequence > after_sequence,
+                    OperationEventRow.event_type.in_(
+                        {
+                            "harness.message_delta",
+                            "harness.completed",
+                            "harness.tool_started",
+                            "harness.tool_completed",
+                        }
+                    ),
+                )
+            )
+        decision["progress"] = "observed" if sequence is not None else "not_observed"
+        decision["progress_sequence"] = sequence
     execution = turn.status.value if turn else "idle"
     if harness and execution not in TERMINAL:
         execution = harness.status.value
@@ -209,8 +242,16 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
         execution = "waiting_approval"
     elif execution == "waiting_approval":
         execution = "continuing" if decisions else "status_unavailable"
+    elif execution == "running" and any(
+        item["progress"] == "not_observed" for item in decisions
+    ):
+        execution = "continuing"
     if execution not in TERMINAL and any(
-        item["continuation"] and item["continuation"]["status"] == "failed"
+        item["continuation"]
+        and (
+            item["continuation"]["status"] == "failed"
+            or item["continuation"].get("adapter_status") in {"failed", "unknown"}
+        )
         for item in decisions
     ):
         execution = "interrupted"

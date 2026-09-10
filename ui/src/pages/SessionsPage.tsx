@@ -20,6 +20,7 @@ import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
+import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
 import {
   AssistantRuntimeProvider,
@@ -831,20 +832,7 @@ export function SessionsPage() {
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
   }, [assistantDrafts]);
 
-  useLayoutEffect(() => {
-    if (view !== "chat" && view !== "browser") return;
-    const composer = composerRef.current;
-    if (!composer) return;
-    if (!draft) {
-      composer.style.height = "";
-      composer.style.overflowY = "hidden";
-      return;
-    }
-    composer.style.height = "auto";
-    const nextHeight = Math.min(composer.scrollHeight, CHAT_COMPOSER_MAX_HEIGHT);
-    composer.style.height = `${nextHeight}px`;
-    composer.style.overflowY = composer.scrollHeight > CHAT_COMPOSER_MAX_HEIGHT ? "auto" : "hidden";
-  }, [draft, view]);
+  useComposerAutosize(composerRef, draft, CHAT_COMPOSER_MAX_HEIGHT, `${view}:${conversationOpen}:${sessionId ?? "new"}`);
 
   useEffect(() => {
     if (!executionDraft) return;

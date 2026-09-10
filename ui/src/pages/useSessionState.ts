@@ -15,8 +15,12 @@ export interface SessionState {
   connection_scope?: "harness_transport";
   actions: ("check_status" | "review" | "stop")[];
   pending: {id: string; turn_id: string; kind: "approval" | "input"; text: string}[];
-  decisions: {approval_id: string; status: string; continuation: {
+  decisions: {approval_id: string; status: string; progress?: "not_observed" | "observed"; progress_sequence?: number | null; continuation: {
     harness_turn_id: string; status: "pending" | "delivered" | "failed"; detail?: string;
+    adapter_handoff?: "transport_write" | "sdk_callback" | null;
+    adapter_status?: "not_required" | "pending" | "sent" | "failed" | "unknown";
+    adapter_detail?: string | null;
+    progress_after_sequence?: number | null;
   } | null}[];
 }
 

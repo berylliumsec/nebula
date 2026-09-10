@@ -1718,6 +1718,9 @@ for (const decision of ["Approve", "Reject"] as const) {
       const state = await (await api.get(`chat/sessions/${id}/state`)).json();
       expect(state.execution).toBe("complete"); expect(state.pending).toEqual([]);
       expect(state.decisions[0].continuation.status).toBe("delivered");
+      expect(state.decisions[0].continuation.adapter_status).toBe("not_required");
+      expect(state.decisions[0].progress).toBe("observed");
+      expect(state.decisions[0].progress_sequence).toBeGreaterThan(state.decisions[0].continuation.progress_after_sequence);
       const approval = state.decisions[0];
       const repeated = await api.post(`approvals/${approval.approval_id}/decision`, {data: {decision: decision.toLowerCase()}});
       expect(repeated.ok()).toBe(true);

@@ -2062,28 +2062,42 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
   await expect(composer).toBeVisible();
-  for (const detail of ["Browser event capture is disabled for this binding.", "Local diagnostic storage is temporarily unavailable. ".repeat(8)]) {
-    await page.evaluate(reason => window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {detail: {available: false, reason}})), detail);
-    await expect(page.locator(".diagnostics-unavailable")).toBeVisible();
-    await composer.fill("Keep my draft and primary actions visible.");
-    const send = page.getByRole("button", {name: "Send message", exact: true});
-    await expect(send).toBeEnabled();
-    const geometry = await send.evaluate(button => {
-      const rect = button.getBoundingClientRect();
-      const main = document.querySelector("main")!.getBoundingClientRect();
-      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
-      const parents = []; let node: HTMLElement | null = button;
-      while (node) { const r = node.getBoundingClientRect(); parents.push({class: node.className, top: r.top, bottom: r.bottom, scroll: node.scrollHeight, height: node.clientHeight, overflow: getComputedStyle(node).overflowY}); node = node.parentElement; }
-      return {top: rect.top, bottom: rect.bottom, boundary: main.bottom,
-        hit: button.contains(hit), hitName: hit?.className, parents};
-    });
-    expect(geometry.bottom).toBeLessThanOrEqual(geometry.boundary);
-    if (!geometry.hit) await testInfo.attach("notice-clipping", {body: await page.screenshot(), contentType: "image/png"});
-    expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
-    await send.focus();
-    await expect(send).toBeFocused();
-    await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
-    expect((await new AxeBuilder({page}).include("main").analyze()).violations).toEqual([]);
+  for (const landscape of [false, true]) {
+    if (landscape) await page.setViewportSize({width: 844, height: 390});
+    for (const detail of ["Browser event capture is disabled for this binding.", "Local diagnostic storage is temporarily unavailable. ".repeat(8)]) {
+      await page.evaluate(reason => window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {detail: {available: false, reason}})), detail);
+      await expect(page.locator(".diagnostics-unavailable")).toBeVisible();
+      await composer.fill("Keep my draft and primary actions visible.");
+      const send = page.getByRole("button", {name: "Send message", exact: true});
+      await expect(send).toBeEnabled();
+      const geometry = await send.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const panel = button.closest('.chat-panel')!;
+        const box = button.closest('.chat-composer')!.getBoundingClientRect();
+        const search = panel.querySelector('.assistant-search')!;
+        const summary = search.querySelector('summary')!.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return {
+          bottom: rect.bottom, height: rect.height, width: rect.width, hit: button.contains(hit),
+          boundary: document.querySelector("main")!.getBoundingClientRect().bottom,
+          composerBottom: box.bottom, panelBottom: panel.getBoundingClientRect().bottom,
+          searchBottom: search.getBoundingClientRect().bottom,
+          summaryBottom: summary.bottom, summaryHeight: summary.height,
+        };
+      });
+      await testInfo.attach(`workspace-notices-${landscape ? "landscape" : "portrait"}`, {body: await page.screenshot(), contentType: "image/png"});
+      expect(geometry.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.boundary);
+      expect(geometry.composerBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.panelBottom);
+      expect(geometry.summaryBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.searchBottom);
+      expect(geometry.height).toBeGreaterThanOrEqual(44);
+      expect(geometry.width).toBeGreaterThanOrEqual(44);
+      expect(geometry.summaryHeight).toBeGreaterThanOrEqual(44);
+      expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
+      await send.focus();
+      await expect(send).toBeFocused();
+      await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
+      expect((await new AxeBuilder({page}).include("main").analyze()).violations).toEqual([]);
+    }
   }
   await testInfo.attach("workspace-notices", {body: await page.screenshot(), contentType: "image/png"});
 });

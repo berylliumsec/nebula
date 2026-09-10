@@ -10,6 +10,7 @@ from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .approval_delivery import (
     approval_harness_turn,
     pending_deliveries,
+    record_adapter_handoff,
     record_delivery,
 )
 from .diagnostics import (
@@ -114,7 +115,7 @@ from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
-from .storage import NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError
 from .mcp import (
     MAX_MCP_MESSAGE_BYTES,
     McpGatewaySession,
@@ -844,6 +845,22 @@ class PermissionTicket:
     approval_id: str | None
     tool_call_id: str | None
     decision: asyncio.Future[HarnessPermissionDecision]
+    handoff_receipt: Callable[[Literal["sent", "failed"]], None] | None = None
+
+    def acknowledge_handoff(self, status: Literal["sent", "failed"]) -> None:
+        if self.handoff_receipt is not None:
+            self.handoff_receipt(status)
+
+
+async def _respond_permission(rpc, ticket: PermissionTicket, request_id, result) -> None:
+    try:
+        await rpc.respond(request_id, result)
+    except BaseException:
+        # Record uncertainty even on cancellation; never resend a partially
+        # written response. A receipt failure propagates, leaving startup intent.
+        ticket.acknowledge_handoff("failed")
+        raise
+    ticket.acknowledge_handoff("sent")
 
 
 PermissionHandler = Callable[[HarnessPermissionRequest], Awaitable[PermissionTicket]]
@@ -2261,7 +2278,7 @@ class CodexAppServerConnection(HarnessConnection):
             }
         else:
             response = {"decision": "approved" if allowed else "denied"}
-        await self.rpc.respond(raw.get("id"), response)
+        await _respond_permission(self.rpc, ticket, raw.get("id"), response)
 
     async def steer(self, text: str) -> None:
         if not self.active_turn_id:
@@ -4268,7 +4285,7 @@ class GrokAcpConnection(HarnessConnection):
             if option_id
             else {"outcome": {"outcome": "cancelled"}}
         )
-        await self.rpc.respond(raw.get("id"), result)
+        await _respond_permission(self.rpc, ticket, raw.get("id"), result)
 
     async def steer(self, text: str) -> None:
         del text
@@ -4775,20 +4792,23 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             decision = await ticket.decision
             if decision.allowed:
                 allow = getattr(sdk, "PermissionResultAllow", None)
-                return (
+                result = (
                     allow(updated_input=input_data)
                     if allow
                     else {"behavior": "allow", "updatedInput": input_data}
                 )
-            deny = getattr(sdk, "PermissionResultDeny", None)
-            return (
-                deny(message=decision.reason or "Denied by Nebula policy")
-                if deny
-                else {
-                    "behavior": "deny",
-                    "message": decision.reason or "Denied by Nebula policy",
-                }
-            )
+            else:
+                deny = getattr(sdk, "PermissionResultDeny", None)
+                result = (
+                    deny(message=decision.reason or "Denied by Nebula policy")
+                    if deny
+                    else {
+                        "behavior": "deny",
+                        "message": decision.reason or "Denied by Nebula policy",
+                    }
+                )
+            ticket.acknowledge_handoff("sent")
+            return result
 
         async def enforce_native_tool(
             hook_input: Any, _tool_use_id: str | None, _context: Any
@@ -5142,17 +5162,16 @@ class HarnessRuntimeService:
         for approval in pending_deliveries(self.store):
             try:
                 turn = approval_harness_turn(self.store, approval)
-            except NotFoundError:
+            except (NotFoundError, ConflictError):
                 # diagnostic-expected: retained decisions may outlive deleted
                 # request records. Retire only this delivery, never infer a new
                 # owner or prevent unrelated sessions from starting.
-                record_delivery(
-                    self.store, approval.id, approval.continuation.harness_turn_id,
-                    "failed", "The original request record was removed. No work was replayed.",
-                )
+                self._fail_unbound_approval(approval)
                 continue
             if turn is not None:
                 self._fail_approval_delivery(approval, turn)
+            else:
+                self._fail_unbound_approval(approval)
         for turn in self.store.list_entities(HarnessTurn, limit=1_000):
             if turn.status not in {
                 HarnessTurnStatus.RUNNING,
@@ -7600,8 +7619,20 @@ class HarnessRuntimeService:
         return latest
 
     async def resolve_approval(self, approval: Approval) -> None:
-        related_turn = approval_harness_turn(self.store, approval)
+        try:
+            related_turn = approval_harness_turn(self.store, approval)
+        except (NotFoundError, ConflictError):
+            # diagnostic-expected: a removed or changed request is not deliverable.
+            related_turn = None
         future = self._approval_futures.pop(approval.id, None)
+        if related_turn is None:
+            if future is not None and not future.done():
+                future.cancel()
+            self._broker_approval_ids.discard(approval.id)
+            self._fail_unbound_approval(approval)
+            raise HarnessStateError(
+                "The original approval binding is unavailable; no work was replayed"
+            )
         if future is None or future.done():
             if related_turn is not None:
                 self._fail_approval_delivery(approval, related_turn)
@@ -7646,22 +7677,6 @@ class HarnessRuntimeService:
                 },
                 expected_revision=call.revision,
             )
-        related_turn = related_turn or next(
-            (
-                item
-                for item in self.store.list_entities(
-                    HarnessTurn, engagement_id=approval.engagement_id, limit=1_000
-                )
-                if (
-                    approval.chat_turn_id and item.chat_turn_id == approval.chat_turn_id
-                )
-                or (
-                    approval.origin == ToolCallOrigin.MISSION
-                    and item.run_id == approval.run_id
-                )
-            ),
-            None,
-        )
         if related_turn is not None:
             related_session = self.store.get(
                 HarnessSession, related_turn.harness_session_id
@@ -7708,6 +7723,37 @@ class HarnessRuntimeService:
                 related_turn.id,
                 "delivered",
                 "Decision delivered to the active Core waiter; execution progress is tracked separately.",
+            )
+
+    def _fail_unbound_approval(self, approval: Approval) -> None:
+        """Retire uncertainty using only the saved owner, never conversation search."""
+        if approval.continuation is None:
+            return
+        turn_id = approval.continuation.harness_turn_id
+        try:
+            turn = self.store.get(HarnessTurn, turn_id)
+        except NotFoundError:
+            # diagnostic-expected: a retained delivery can outlive its owning turn.
+            turn = None
+        if (
+            turn is not None
+            and turn.engagement_id == approval.engagement_id
+            and (
+                not approval.chat_turn_id or turn.chat_turn_id == approval.chat_turn_id
+            )
+            and (
+                not approval.chat_session_id
+                or turn.chat_session_id == approval.chat_session_id
+            )
+        ):
+            self._fail_approval_delivery(approval, turn)
+        else:
+            record_delivery(
+                self.store,
+                approval.id,
+                turn_id,
+                "failed",
+                "The original request binding is unavailable. No work was replayed.",
             )
 
     def _fail_approval_delivery(self, approval: Approval, turn: HarnessTurn) -> None:
@@ -9391,7 +9437,13 @@ class HarnessRuntimeService:
                 )
                 return PermissionTicket(None, None, future)
             active_turn = self._active_gateway_turn(session.id)
-            return await self._request_permission(active_turn.id, request)
+            return await self._request_permission(
+                active_turn.id,
+                request,
+                adapter_handoff="sdk_callback"
+                if profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+                else "transport_write",
+            )
 
         async def interaction_handler(
             request: HarnessInteractionRequest,
@@ -9493,7 +9545,11 @@ class HarnessRuntimeService:
         return connection
 
     async def _request_permission(
-        self, turn_id: str, request: HarnessPermissionRequest
+        self,
+        turn_id: str,
+        request: HarnessPermissionRequest,
+        *,
+        adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
@@ -9540,6 +9596,7 @@ class HarnessRuntimeService:
                 "category": request.category,
                 "budget_class": "execution",
                 "vendor_request_id": request.vendor_request_id,
+                "adapter_handoff": adapter_handoff,
                 "vendor_item_id": request.annotations.get("vendor_item_id"),
             },
         )
@@ -9653,7 +9710,18 @@ class HarnessRuntimeService:
                     },
                 ),
             )
-        return PermissionTicket(approval.id, call.id, future)
+        return PermissionTicket(
+            approval.id,
+            call.id,
+            future,
+            (
+                lambda status: record_adapter_handoff(
+                    self.store, approval.id, turn.id, status
+                )
+            )
+            if adapter_handoff
+            else None,
+        )
 
     async def _request_interaction(
         self, turn_id: str, request: HarnessInteractionRequest
