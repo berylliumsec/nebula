@@ -595,6 +595,75 @@ Interface/Core/Desktop commits must agree. Core owns graph data, UI owns viewpor
 and selection, build manifests own identity. No live model or installation is
 modified. Actual clean-package runs at 1440 and 1024 remain the required gate.
 
+### Native visual review: N9 relationship label collisions
+
+Candidate `206ab62`, native 1440 → 1024 resize: the fullscreen panel fills the
+window and retains selection, but relationship buttons overlap object cards and
+each other, obscuring names. Evidence:
+`/tmp/nebula-stabilization-candidate4-gqcUYx/native1440/native-model-fullscreen-resized.png`.
+The map must preserve readable object names and individually reachable labeled
+relationship controls at desktop/mobile widths. Graph objects/edges remain Core
+owned; positions and measured button bounds are presentation only. Add a failing
+production collision regression, then a deterministic placement test; verify
+resize, long labels, keyboard inspection, focus restoration and dense maps.
+Do not hide required relationship actions or change the model schema.
+
+The same native journey initially asserted transcript contents immediately when
+global Core readiness returned. URL/draft were retained, but history refresh is
+asynchronous. The regression now waits for exactly one saved answer and still
+fails on absence/duplication. Native final completion remains gated on that check.
+
+Candidate 4 artifact identity: `206ab62ea4b451018e3b07160d22cbec75458a93`,
+timestamp `2026-09-10T20:20:21Z`, version `3.0.0-alpha.13`, managed Linux x86_64.
+DEB SHA-256 `a5fb7d9a6c46277d7d08636356c54612f3a004db9a5481effb2d3be6951da14e`;
+extracted Core SHA-256 `26fa6b61ba917e18333547e5c8577b4eb4e9c350d3472bed3061aded640d7218`.
+Both match retained artifacts in `/tmp/nebula-stabilization-candidate4-gqcUYx`.
+All 81 embedded web assets passed exact integrity checks before/after Tauri.
+Python selection: **66 passed in 31.81s**. Native **1440 and 1024 passed** the
+inert approve/reject/stop, restart/relaunch, transcript scrolling, fullscreen
+resize, unsent draft retention and three-way displayed identity checks. Native
+evidence: `native1440-v2` and `native1024` under the candidate directory. N9
+visual overlap is not waived by those earlier geometry/interaction passes.
+
+The compiled-Core LAN harness initially used API-only `serve` without a static
+directory: root returned 404. That is a harness entry-point error, not acceptance.
+It now uses the packaged product's `ui --no-browser --lan --allow-insecure-lan`
+entry point, reads its generated disposable token privately and clears any external
+UI directory override. One asset case then passed (12.8s), followed by **48
+resource/draft/settings cases in 481.30s** and **16 note/report/PDF/Library cases
+in 301.77s**. Both matrices used the exact compiled Core plus embedded web assets
+on all eight profiles; zero skips/unexpected/flaky. Failed original batches are
+retained but not counted. Evidence: `resources-settings48-v2` and `outputs16-v2`.
+
+N9 production regression failed with an overlapping label in the dense model.
+Labels now use measured free row space, avoid each other and keep 44px targets;
+crowded layouts extend the existing scrollable canvas. Object positions/schema
+are unchanged; opaque cards and subtle label guide lines retain readability.
+**23 graph/page tests passed in 3.64s**, then the desktop regression passed in
+14.7s including 2800px expansion. Its screenshot was reviewed. Evidence:
+`/tmp/nebula-stabilization-model-collision-red2`,
+`/tmp/nebula-stabilization-model-unit23.log`,
+`/tmp/nebula-stabilization-model-collision-green`. Eight-profile and updated
+native collision checks remain required. The first red attempt used the wrong
+Python import path; it is setup failure, not a product regression result.
+N9 eight-profile result: **8 passed in 102.14s**, zero skips/unexpected/flaky,
+at `/tmp/nebula-stabilization-model-collision8`. Includes desktop 1440/1024,
+ultrawide 2800 and emulated Chromium/WebKit 320/390/430, long labels, accessible
+inspection/focus, restoration and short landscape. Native collision assertions
+have been added; they require a package containing the actual graph repair.
+
+### Browser handoff contract
+
+From Workbench → Browser, choose the device-browser engine, open a harmless local
+fixture in a real separate tab, and return to Nebula. The opened tab must have no
+opener; the original screen must explain that embedded inspection is unavailable
+on this device without falsely reporting that a successful popup was blocked.
+Retain the normalized address, scope indication and a valid retry path. The
+browser owns tab creation; Core owns the selected project's saved scope; React
+owns unsent address input. Existing tests replace window.open with a fake handle,
+so add a real popup journey before repairing any returned-handle assumption.
+No research execution, scanning, remote URL ingestion or external navigation.
+
 ### Next approval failure-injection contract
 
 Baseline desktop: Stop, actual double-click, lost decision response and browser

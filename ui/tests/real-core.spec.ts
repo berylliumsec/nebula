@@ -30,12 +30,19 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
   const coreBinary = coreCandidates.find(existsSync);
   if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
-  const token = "playwright-real-core-token-2026";
+  let token = "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
+  const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
   const child = spawn(
     coreBinary,
-    [
+    embedded ? [
+      // `serve` is intentionally API-only unless a static directory is given.
+      // The packaged product's `ui` entry point resolves its embedded assets.
+      "ui", "--no-browser", "--host", bindHost, "--port", "0",
+      "--data-dir", dataDir,
+      ...(bindHost === "127.0.0.1" ? [] : ["--lan", "--allow-insecure-lan"]),
+    ] : [
       "serve",
       "--host", bindHost,
       "--port", "0",
@@ -44,13 +51,14 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       "--allow-browser-diagnostics",
       ...(bindHost === "127.0.0.1" ? [] : ["--allow-remote"]),
       "--data-dir", dataDir,
-      ...(process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1" ? [] : ["--static-dir", path.join(repository, "ui/dist")]),
+      "--static-dir", path.join(repository, "ui/dist"),
     ],
     {
       cwd: repository,
       env: {
         ...process.env,
         PYTHONUNBUFFERED: "1",
+        ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
         PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       },
     },
@@ -61,7 +69,9 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
-      if (match) {
+      const generatedToken = output.match(/"token"\s*:\s*"([^"]+)"/);
+      if (match && (!embedded || generatedToken)) {
+        if (embedded) token = generatedToken![1];
         clearTimeout(timeout);
         resolve(`http://${browserHost}:${match[1]}`);
       }

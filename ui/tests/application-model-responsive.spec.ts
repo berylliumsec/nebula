@@ -131,6 +131,17 @@ test("dense model retains selection, filters, focus and readable mobile landscap
     exact: true,
   });
   await expect(restore).toBeFocused();
+  const assertNoLabelCollisions = async () => {
+    await expect.poll(() => fullscreen.locator(".am-graph-canvas").evaluate(canvas => {
+      const nodes = [...canvas.querySelectorAll(".am-node")].map(n => n.getBoundingClientRect());
+      const labels = [...canvas.querySelectorAll(".am-edge-label")].map(n => n.getBoundingClientRect());
+      const overlap = (a: DOMRect, b: DOMRect) => Math.min(a.right, b.right) > Math.max(a.left, b.left) + 1
+        && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top) + 1;
+      return labels.flatMap((label, i) => nodes.some(node => overlap(label, node))
+        || labels.slice(0, i).some(other => overlap(label, other)) ? [i] : []);
+    })).toEqual([]);
+  };
+  await assertNoLabelCollisions();
   const fullscreenBox = await fullscreen.boundingBox();
   expect(fullscreenBox!.x).toBe(0);
   expect(fullscreenBox!.y).toBe(0);
@@ -145,6 +156,7 @@ test("dense model retains selection, filters, focus and readable mobile landscap
   // must reflow into that space, including an ultrawide viewport like the report.
   const originalViewport = page.viewportSize()!;
   const assertGraphFillsWidth = async () => {
+    await assertNoLabelCollisions();
     await expect
       .poll(async () =>
         fullscreen.locator(".am-graph-scroll").evaluate((el) => {

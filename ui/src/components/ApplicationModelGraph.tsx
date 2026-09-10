@@ -101,6 +101,62 @@ export function connectionEndpoints(a: Box, b: Box) {
   };
 }
 
+export function relationshipLabelLayout(
+  edges: Relationship[], nodes: Map<string, Box>,
+  sizes: Record<string, {width: number; height: number}>, width: number, minimumHeight: number,
+) {
+  const padding = 8;
+  const occupied = [...nodes.values()];
+  const positions = new Map<string, Box>();
+  let height = minimumHeight;
+  // Free horizontal bands between measured rows keep labels away from every
+  // object, including wrapped, unusually tall cards. Do not move the objects.
+  const bands: {top: number; bottom: number}[] = [];
+  let bottom = padding;
+  for (const node of [...occupied].sort((a, b) => a.y - b.y)) {
+    if (node.y - padding > bottom) bands.push({top: bottom, bottom: node.y - padding});
+    bottom = Math.max(bottom, node.y + node.height + padding);
+  }
+  if (height - padding > bottom) bands.push({top: bottom, bottom: height - padding});
+  const overlaps = (a: Box, b: Box) => a.x < b.x + b.width + padding
+    && a.x + a.width + padding > b.x && a.y < b.y + b.height + padding
+    && a.y + a.height + padding > b.y;
+  for (const edge of edges) {
+    const endpoints = connectionEndpoints(nodes.get(edge.source)!, nodes.get(edge.target)!);
+    const anchor = {x: (endpoints.x1 + endpoints.x2) / 2, y: (endpoints.y1 + endpoints.y2) / 2};
+    const size = sizes[edge.id] ?? {width: 160, height: 44};
+    const boxWidth = Math.min(Math.max(44, size.width), width - 2 * padding);
+    const boxHeight = Math.max(44, size.height);
+    const preferredX = Math.max(padding, Math.min(width - padding - boxWidth, anchor.x - boxWidth / 2));
+    const xs = [preferredX];
+    for (let x = padding; x <= width - padding - boxWidth; x += 16) xs.push(x);
+    let best: Box | undefined;
+    let distance = Infinity;
+    for (const band of bands) {
+      if (band.bottom - band.top < boxHeight) continue;
+      const ys = [Math.max(band.top, Math.min(band.bottom - boxHeight, anchor.y - boxHeight / 2))];
+      for (let y = band.top; y <= band.bottom - boxHeight; y += boxHeight + padding) ys.push(y);
+      for (const y of ys) for (const x of xs) {
+        const candidate = {x, y, width: boxWidth, height: boxHeight};
+        const score = (x + boxWidth / 2 - anchor.x) ** 2 + (y + boxHeight / 2 - anchor.y) ** 2;
+        if (score >= distance || occupied.some(other => overlaps(candidate, other))) continue;
+        best = candidate;
+        distance = score;
+      }
+    }
+    if (!best) {
+      // Crowded maps grow inside their existing scroll owner. Never hide an
+      // inspection action or place one over another card to force a fit.
+      best = {x: preferredX, y: Math.max(height, bottom) + padding, width: boxWidth, height: boxHeight};
+      height = best.y + boxHeight + padding;
+      bands.push({top: best.y, bottom: best.y + boxHeight});
+    }
+    positions.set(edge.id, best);
+    occupied.push(best);
+  }
+  return {positions, height};
+}
+
 export function ApplicationModelGraph({
   objects,
   layoutObjects,
@@ -128,9 +184,11 @@ export function ApplicationModelGraph({
   const [sizes, setSizes] = useState<
     Record<string, { width: number; height: number }>
   >({});
+  const [labelSizes, setLabelSizes] = useState<Record<string, {width: number; height: number}>>({});
   useLayoutEffect(() => {
     const nodes =
       canvas.current?.querySelectorAll<HTMLElement>("[data-node-id]");
+    const labels = canvas.current?.querySelectorAll<HTMLElement>("[data-edge-id]");
     const measure = () => {
       if (scroll.current?.clientWidth)
         setCanvasWidth(Math.max(260, scroll.current.clientWidth));
@@ -160,13 +218,26 @@ export function ApplicationModelGraph({
         });
         return changed ? next : previous;
       });
+      setLabelSizes(previous => {
+        const next = {...previous};
+        let changed = false;
+        labels?.forEach(label => {
+          const id = label.dataset.edgeId!;
+          const {width, height} = label.getBoundingClientRect();
+          if (width && height && (next[id]?.width !== width || next[id]?.height !== height)) {
+            next[id] = {width, height}; changed = true;
+          }
+        });
+        return changed ? next : previous;
+      });
     };
     measure();
     const observer = new ResizeObserver(measure);
     nodes?.forEach((node) => observer.observe(node));
+    labels?.forEach(label => observer.observe(label));
     if (scroll.current) observer.observe(scroll.current);
     return () => observer.disconnect();
-  }, [objects, selected, depth, expanded]);
+  }, [objects, relationships, selected, depth, expanded]);
   const visible = neighborhood(objects, relationships, selected, depth);
   // Selected neighborhoods use local insertion order and fit the available width.
   const ordered = selected ? visible : (layoutObjects ?? objects);
@@ -180,6 +251,7 @@ export function ApplicationModelGraph({
   const edges = relationships
     .filter((e) => ids.has(e.source) && ids.has(e.target))
     .slice(0, 100);
+  const labels = relationshipLabelLayout(edges, positions, labelSizes, canvasWidth, height);
   return (
     <div
       ref={scroll}
@@ -194,11 +266,11 @@ export function ApplicationModelGraph({
       <div
         ref={canvas}
         className="am-graph-canvas"
-        style={{ height, width: canvasWidth }}
+        style={{ height: labels.height, width: canvasWidth }}
       >
         <svg
           width={canvasWidth}
-          height={height}
+          height={labels.height}
           aria-hidden="true"
           className="am-edges"
         >
@@ -214,6 +286,12 @@ export function ApplicationModelGraph({
               <path d="M0,0 L8,4 L0,8" fill="currentColor" />
             </marker>
           </defs>
+          {edges.map(e => {
+            const endpoints = connectionEndpoints(positions.get(e.source)!, positions.get(e.target)!);
+            const label = labels.positions.get(e.id)!;
+            return <path key={`label-${e.id}`} className="am-label-guide"
+              d={`M ${(endpoints.x1 + endpoints.x2) / 2} ${(endpoints.y1 + endpoints.y2) / 2} L ${label.x + label.width / 2} ${label.y + label.height / 2}`} />;
+          })}
           {edges.map((e) => {
             const a = positions.get(e.source)!,
               b = positions.get(e.target)!;
@@ -239,19 +317,20 @@ export function ApplicationModelGraph({
             );
           })}
         </svg>
-        {edges.map((e, i) => {
-          const a = positions.get(e.source)!,
-            b = positions.get(e.target)!;
+        {edges.map((e) => {
+          const label = labels.positions.get(e.id)!;
           return (
             <button
               key={e.id}
+              data-edge-id={e.id}
               className={`am-edge-label ${e.claim.status}`}
               style={{
-                left: (a.x + b.x) / 2 + 5,
-                top: (a.y + b.y) / 2 + 70 + (i % 2) * 20,
+                left: label.x,
+                top: label.y,
               }}
               onClick={() => onRelationship(e.id)}
               aria-label={`Inspect ${e.type} relationship`}
+              title={`${objects.find(o => o.id === e.source)?.label ?? e.source} → ${objects.find(o => o.id === e.target)?.label ?? e.target}`}
             >
               {e.type} → <small>{e.claim.status}</small>
             </button>

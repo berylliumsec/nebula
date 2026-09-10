@@ -137,7 +137,7 @@
   text-align: left;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--surface-raised);
+  background: var(--surface-overlay);
   color: var(--text);
   cursor: pointer;
   overflow-wrap: anywhere;
@@ -149,13 +149,18 @@
 .am-edge-label {
   position: absolute;
   z-index: 1;
-  max-width: 240px;
+  width: max-content;
+  max-width: min(240px, calc(100% - 16px));
+  min-width: 44px;
+  min-height: 44px;
+  overflow-wrap: anywhere;
   background: var(--canvas);
   color: var(--text);
   border: 0;
   cursor: pointer;
   font-size: 12px;
 }
+.am-label-guide { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 4; opacity: .65; fill: none; }
 .am-edge-label small {
   display: block;
   color: var(--muted);

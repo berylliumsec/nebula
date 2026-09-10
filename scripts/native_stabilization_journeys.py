@@ -227,14 +227,20 @@ async def exercise(
           const panel=document.querySelector('.am-map.am-fullscreen'); if(!panel)return null;
           const r=panel.getBoundingClientRect(),s=panel.querySelector('.am-graph-scroll').getBoundingClientRect();
           const nodes=[...panel.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());
+          const labels=[...panel.querySelectorAll('.am-edge-label')].map(n=>n.getBoundingClientRect());
+          const overlap=(a,b)=>Math.min(a.right,b.right)>Math.max(a.left,b.left)+1 && Math.min(a.bottom,b.bottom)>Math.max(a.top,b.top)+1;
           return {top:r.top,left:r.left,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,
             spread:(Math.max(...nodes.map(n=>n.right))-Math.min(...nodes.map(n=>n.left)))/s.width,
+            labelCollisions:labels.filter((b,i)=>nodes.some(n=>overlap(b,n))||labels.slice(0,i).some(n=>overlap(b,n))).length,
+            labelMinimum:Math.min(...labels.flatMap(b=>[b.width,b.height])),
             count:nodes.length,selected:panel.querySelector('.am-node.selected')?.getAttribute('data-node-id')};
         """
         await wait_for(
             "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return n.length===12 && (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
         )
         graph_bounds = await execute(graph_measure)
+        assert graph_bounds["labelCollisions"] == 0, graph_bounds
+        assert graph_bounds["labelMinimum"] >= 44, graph_bounds
         assert graph_bounds["selected"] == "native-mechanism-0", graph_bounds
         assert graph_bounds["spread"] > 0.7 and graph_bounds["count"] == 12, (
             graph_bounds
@@ -262,6 +268,8 @@ async def exercise(
             "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
         )
         graph_resized = await execute(graph_measure)
+        assert graph_resized["labelCollisions"] == 0, graph_resized
+        assert graph_resized["labelMinimum"] >= 44, graph_resized
         assert graph_resized["selected"] == graph_bounds["selected"], graph_resized
         assert abs(graph_resized["width"] - graph_resized["viewportWidth"]) <= 1, (
             graph_resized
@@ -407,7 +415,7 @@ async def exercise(
             await execute("return document.querySelector('#analyst-message')?.value;")
             == "Unsent native reconnect draft. Do not send."
         )
-        assert await execute(
+        await wait_for(
             "return [...document.querySelectorAll('.assistant-markdown')].filter(e=>e.textContent.includes('NATIVE_APPROVAL_ACCEPTED_ONCE')).length===1;"
         )
         screenshot = await webdriver.get(prefix + "/screenshot")

@@ -5,6 +5,7 @@ import {
   neighborhood,
   connectionEndpoints,
   graphLayout,
+  relationshipLabelLayout,
 } from "./ApplicationModelGraph";
 import { blankClaim, type GraphObject } from "../pages/applicationModelTypes";
 const objects: GraphObject[] = ["Page", "Form", "Input"].map((type, i) => ({
@@ -35,6 +36,30 @@ const wideObjects = Array.from({ length: 11 }, (_, i) => ({
   ...objects[0],
   id: `wide-${i}`,
 }));
+it("places dense relationship controls outside cards and each other at every width", () => {
+  const edges = wideObjects.slice(1).flatMap((o, i) => [
+    {...relationships[0], id: `e-${i}`, source: "wide-0", target: o.id},
+    {...relationships[0], id: `second-${i}`, source: "wide-0", target: o.id},
+  ]);
+  for (const width of [260, 320, 840, 1440, 2800]) {
+    const graph = graphLayout(wideObjects, {"wide-1": {width: 220, height: 240}}, width, 800);
+    const labels = relationshipLabelLayout(edges, graph.positions, {"e-0": {width: 240, height: 90}}, width, graph.height);
+    const occupied = [...graph.positions.values()];
+    for (const box of labels.positions.values()) {
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(labels.height);
+      expect(occupied.some(other => box.x < other.x + other.width && box.x + box.width > other.x
+        && box.y < other.y + other.height && box.y + box.height > other.y)).toBe(false);
+      occupied.push(box);
+    }
+    expect(labels.positions.size).toBe(edges.length);
+    expect(graph.positions.get("wide-1")?.height).toBe(240);
+    expect(relationshipLabelLayout(edges, graph.positions, {"e-0": {width: 240, height: 90}}, width, graph.height)).toEqual(labels);
+  }
+});
 it("uses the full width of a wide fullscreen graph rather than three fixed columns", () => {
   const { positions } = graphLayout(wideObjects, {}, 2800, 1000);
   const boxes = [...positions.values()];

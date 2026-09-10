@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Reviewed 66 Python, 92 frontend and 89 catalog browser cases (64 mocked plus 25 real Core). A9 adds bounded Core reachability and authoritative reconnect after outages; includes deadline/stale probe and workspace integration coverage, all 92 frontend cases passed. The three existing disconnect/restart/crash compatibility cases passed after repair. N8/S1 resource/settings matrix has 48 passing production LAN cases. Native graph resize, supervisor outage, draft preservation and displayed identity assertions extend the permanent package journey; clean-package and final artifact gates remain required. No release approval is inferred from earlier passes.",
+  "reason": "Reviewed 66 Python, 115 frontend and 89 catalog browser cases, plus eight focused model profiles in the supplemental local gate. N9 prevents relationship labels covering cards or each other; all 115 frontend tests and eight production model profiles passed. Candidate 206ab62 passed both native viewport journeys and compiled-Core embedded-UI resource/settings48 plus outputs16 matrices, but visual N9 still required repair and a new native collision gate. The embedded harness now uses the actual ui entry point. Browser handoff, final conversation walkthrough and updated native candidate gates remain open; this is not release approval.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,7 +8,7 @@
   ],
   "expected_tests": {
     "python": 66,
-    "frontend": 92,
+    "frontend": 115,
     "native": 0,
     "playwright": 89
   },
@@ -30,7 +30,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx", "ui/src/state/WorkspaceContext.recovery.test.tsx", "ui/src/state/useCoreConnectionMonitor.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx", "ui/src/state/WorkspaceContext.recovery.test.tsx", "ui/src/state/useCoreConnectionMonitor.test.tsx", "ui/src/components/ApplicationModelGraph.test.tsx", "ui/src/pages/ApplicationModelPage.test.tsx"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -44,6 +44,7 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "856fb894443f00a02f15425692a8be66c4f96d0c55824b271d869dcb6ba9e6ae",
-  "python_node": false
+  "change_digest": "2be2cf96136a71908527bf97f257d314cce4bb4268354f3eefc6ce802b19dbcc",
+  "python_node": false,
+  "supplemental_local_playwright": [{"config":"ui/playwright.application-model.config.ts","files":["tests/application-model-responsive.spec.ts"],"projects":["model-desktop","model-compact","model-chromium-320","model-chromium-390","model-chromium-430","model-webkit-320","model-webkit-390","model-webkit-430"],"expected_tests":8,"reason":"Permanent real-Core model fixture and production LAN collision/resize gate; invoked separately from the default CI config."}]
 }
