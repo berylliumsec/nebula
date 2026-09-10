@@ -1716,6 +1716,7 @@ def create_app(
     )
     app.state.store = store
     app.state.application_model = application_model
+    app.state.browser_companion = browser_companion
     app.state.artifact_store = artifact_store
     app.state.knowledge_index = knowledge_index
     app.state.auth_token = token
@@ -9606,6 +9607,11 @@ def create_app(
     async def operate_browser_companion(
         session_id: str, request: CompanionRequest
     ) -> dict[str, Any]:
+        if request.operation not in {"tabs", "capture"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Assistant browser is read-only here. Give browsing directions in the Assistant.",
+            )
         try:
             return await browser_companion.request(session_id, request)
         except ValueError as exc:
@@ -9640,18 +9646,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def propose_browser_upload(session_id: str, request: CompanionRequest) -> Any:
-        if request.operation != "upload":
-            raise HTTPException(
-                status_code=422,
-                detail="Choose a file input and attached file to propose an upload.",
-            )
-        try:
-            browser_companion.takeover(session_id, True)
-            return browser_companion.propose(
-                session_id, request, operator_requested=True
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=403,
+            detail="Ask the Assistant to propose the upload. Attaching a file does not send it to the page.",
+        )
 
     @app.get(
         f"{API_PREFIX}/browser-companion/{{session_id}}/credentials",
@@ -9681,8 +9679,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_select_tab(session_id: str, tab_id: str) -> dict[str, str]:
-        await browser_companion.select_tab(session_id, tab_id)
-        return {"active_tab_id": tab_id}
+        raise HTTPException(
+            status_code=403,
+            detail="Only the Assistant changes the active browser tab. Viewing a tab does not select it for the Assistant.",
+        )
 
     @app.get(
         f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
@@ -9781,29 +9781,15 @@ def create_app(
 
                 async def inputs() -> None:
                     while True:
-                        event = await websocket.receive_json()
+                        await websocket.receive_json()
                         browser_companion.session(session_id)
-                        if event.get("kind") not in {
-                            "mouse",
-                            "touch",
-                            "key",
-                            "text",
-                            "resize",
-                        }:
-                            continue
-                        if len(json.dumps(event)) > 8000:
-                            await websocket.close(code=4400, reason="input too large")
-                            return
-                        if not (
-                            event.get("kind") == "mouse"
-                            and event.get("type") == "mouseMoved"
-                        ):
-                            browser_companion.invalidate_pending_actions(session_id)
-                        async with browser_companion._locks.setdefault(
-                            session_id, asyncio.Lock()
-                        ):
-                            browser_companion.session(session_id)
-                            await upstream.send(json.dumps(event))
+                        # Old clients must not mutate the page or invalidate an
+                        # assistant approval through this passive viewing channel.
+                        await websocket.close(
+                            code=4403,
+                            reason="Assistant browser is read-only. Give directions in the Assistant.",
+                        )
+                        return
 
                 # diagnostic-expected: paired pumps are cancelled and drained in finally.
                 sender = asyncio.create_task(frames())

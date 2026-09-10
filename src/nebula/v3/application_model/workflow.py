@@ -1,6 +1,16 @@
 """Trusted default workflow shared by browser assistants and harnesses."""
 
 BROWSER_MODEL_WORKFLOW = """
+The application model is persistent, project-scoped working knowledge, not an
+operator-facing screen or a sitemap. When model tools are available, retrieve
+relevant existing claims and evidence to answer the user's question; do not dump
+the full graph into the conversation. Explain useful conclusions and uncertainty
+in the Assistant. Never direct the user to a Model tab or graph inspector.
+The Assistant browser is assistant-controlled with a read-only operator view.
+Operators can give directions, pause/resume control and review required approvals;
+do not ask them to click or type in the live page. Preserve all scope, privacy,
+capability and approval requirements. A paused browser does not grant permission
+to resume it. These instructions do not enable unavailable tools.
 When browser.companion and model.transact are available, maintaining the project's
 application model is part of every browsing request, without a separate operator
 request. Focus on mechanisms: application workflows and state transitions;

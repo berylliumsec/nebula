@@ -5610,7 +5610,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
 
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   const browserToolbar = page.locator(".managed-browser-toolbar");
-  for (const name of ["New tab", "Close tab", "Go", "Reconnect view", "Ask about page", "Ask about selected text", "Pick element", "Select region"]) {
+  for (const name of ["Reconnect view", "Ask about page"]) {
     const action = browserToolbar.getByRole("button", { name, exact: true });
     await expect(action.locator("svg")).toBeVisible();
     await expect(action).toHaveText("");
@@ -5628,25 +5628,20 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   const browserBounds = await page.locator(".integrated-browser-page").boundingBox();
   expect(expandedPage!.height).toBeGreaterThanOrEqual(160);
   expect(expandedPage!.y - browserBounds!.y).toBeLessThan(205);
-  await page.getByLabel("Browser address").fill("https://draft.example/");
+  await expect(page.getByLabel("Browser address")).toHaveAttribute("readonly", "");
   await page.getByRole("button", { name: "Hide browser controls", exact: true }).click();
   await expect(page.getByLabel("Browser address")).toBeHidden();
   const collapsedPage = await pageSurface.boundingBox();
   expect(expandedPage!.y - collapsedPage!.y).toBeGreaterThan(70);
   expect(collapsedPage!.height).toBeGreaterThanOrEqual(expandedPage!.height);
   await page.getByRole("button", { name: "Show browser controls", exact: true }).click();
-  await expect(page.getByLabel("Browser address")).toHaveValue("https://draft.example/");
-  await page.locator(".managed-browser-view-options summary").click();
-  await expect(page.getByLabel("Page viewport")).toBeVisible();
-  expect((await pageSurface.boundingBox())!.height).toBeCloseTo(expandedPage!.height, 0);
-  await page.locator(".managed-browser-view-options summary").click();
-  await expect(page.getByLabel("Page viewport")).toBeHidden();
+  await expect(page.getByLabel("Browser address")).toHaveAttribute("readonly", "");
+  await expect(page.getByLabel("Page viewport")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("quiet-browser.png") });
   await page.keyboard.press("Escape");
-  await page.getByLabel("Browser address").fill("https://example.test/");
   await page.getByRole("button", { name: "Resume assistant control", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Stop assistant control", exact: true }).click();
   await expect(page.getByRole("button", { name: "Resume assistant control", exact: true })).toBeEnabled();
@@ -5793,7 +5788,7 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
 });
 
-test("browser Assistant uploads a selected device file only after inline approval", async ({ page }) => {
+test("browser Assistant approves its requested upload after a device file is staged", async ({ page }) => {
   test.setTimeout(60000);
   const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
   const actions: Array<Record<string, any>> = [];
@@ -5808,6 +5803,7 @@ test("browser Assistant uploads a selected device file only after inline approva
         const body = route.request().postDataJSON();
         expect(body.filename).toBe("sample.txt");
         files.push({ reference: "file-ref", filename: body.filename, size: 12, media_type: "text/plain" });
+        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: {operation: "upload", file_ref: "file-ref", tab_id: "file-tab", page_revision: "file-page", element_id: "file-input"} });
       }
       await route.fulfill({ json: files });
     } else if (path.endsWith("/file-browser/files/file-ref")) {
@@ -5820,12 +5816,7 @@ test("browser Assistant uploads a selected device file only after inline approva
       expect(route.request().postDataJSON().operation).toBe("capture");
       await route.fulfill({ json: { url: "https://example.test/", title: "Upload form", text: "Choose a document", page_revision: "file-page", captured_at: entity.updated_at, elements: [{ id: "file-input", tag: "input", type: "file", label: "Document", sensitive: false }] } });
     } else if (path.endsWith("/file-browser/actions")) {
-      if (method === "POST") {
-        const body = route.request().postDataJSON();
-        expect(body).toMatchObject({ operation: "upload", file_ref: "file-ref", page_revision: "file-page", element_id: "file-input" });
-        expect(body).not.toHaveProperty("content_base64");
-        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: true, request: body });
-      }
+      expect(method).toBe("GET");
       await route.fulfill({ json: method === "POST" ? actions[0] : actions });
     } else if (path.endsWith("/file-browser/actions/upload-action")) {
       decisions += 1; actions[0].status = "complete"; await route.fulfill({ json: actions[0] });
@@ -5837,11 +5828,10 @@ test("browser Assistant uploads a selected device file only after inline approva
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByLabel("Files for this page (0)", { exact: true }).click();
   await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
-  await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");
+  await expect(page.getByText("sample.txt · 12 bytes", {exact: true})).toBeVisible();
   await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
-  await page.locator("summary", { hasText: "Accessible page controls (1)" }).click();
-  await page.getByRole("button", { name: "Upload selected file", exact: true }).click();
+  await expect(page.getByRole("button", {name: "Upload selected file", exact: true})).toHaveCount(0);
   const approval = page.getByRole("region", { name: "Browser action approval" });
   await expect(approval).toContainText("sample.txt");
   expect(decisions).toBe(0);
@@ -5850,7 +5840,7 @@ test("browser Assistant uploads a selected device file only after inline approva
   expect(decisions).toBe(1);
   await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Remove sample.txt", exact: true }).click();
-  await expect(page.getByLabel("File to upload")).toHaveValue("");
+  await expect(page.getByText("sample.txt · 12 bytes", {exact: true})).toHaveCount(0);
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });

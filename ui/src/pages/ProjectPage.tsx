@@ -5,16 +5,14 @@ import { AssetsPage } from "./AssetsPage";
 import { EvidencePage } from "./EvidencePage";
 import { KnowledgePage } from "./KnowledgePage";
 import { OverviewPage } from "./OverviewPage";
-import { ApplicationModelPage } from "./ApplicationModelPage";
 
-type ProjectView = "overview" | "assets" | "evidence" | "sources" | "application-model";
+type ProjectView = "overview" | "assets" | "evidence" | "sources";
 
 const projectViews = [
   { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
   { id: "assets" as const, label: "Assets", icon: Network },
   { id: "evidence" as const, label: "Evidence", icon: FileSearch },
   { id: "sources" as const, label: "Sources", icon: BookOpen },
-  { id: "application-model" as const, label: "Application model", icon: Network },
 ];
 
 function isProjectView(value: string | null): value is ProjectView {
@@ -60,7 +58,6 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
       {view === "assets" ? <AssetsPage /> : null}
       {view === "evidence" ? <EvidencePage /> : null}
       {view === "sources" ? <KnowledgePage /> : null}
-      {view === "application-model" ? <ApplicationModelPage /> : null}
     </div>
   );
 }

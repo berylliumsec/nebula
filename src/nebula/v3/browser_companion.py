@@ -156,7 +156,7 @@ class BrowserCompanion:
             Observation(
                 engagement_id=session.engagement_id,
                 observation_type="browser_companion_interaction",
-                title=f"Shared Chromium {request.operation}",
+                title=f"Assistant browser {request.operation}",
                 source="browser_companion",
                 metadata={
                     key: value for key, value in metadata.items() if value is not None

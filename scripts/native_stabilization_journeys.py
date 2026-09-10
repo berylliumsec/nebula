@@ -210,166 +210,15 @@ async def exercise(
             },
         )
         seeded.raise_for_status()
-        await named_click("Application model")
-        await wait_for(
-            "return Boolean(document.querySelector('.am-category summary'));"
+        assert await execute(
+            "return !document.querySelector('[aria-label=\"Application model\"]') && !document.querySelector('.application-model-page');"
         )
-        await click(".am-category summary")
-        await wait_for(
-            "return document.querySelectorAll('.am-outline .am-object').length===12;"
+        knowledge = await core.get(
+            f"engagements/{project['id']}/application-model/graph"
         )
-        # WebKitWebDriver does not reliably scroll nested main/outline owners
-        # when clicking. Exercise the operator's real wheel gesture, not a DOM
-        # scrollTop override or a synthetic click on an offscreen object.
-        reveal = await execute(
-            "const e=document.querySelector('.am-outline .am-object'),r=e.getBoundingClientRect(),m=document.querySelector('main').getBoundingClientRect();return r.bottom>m.bottom?{x:Math.round(m.right-24),y:Math.round((m.top+m.bottom)/2),deltaY:Math.ceil(r.bottom-m.bottom+64)}:null;"
-        )
-        if reveal:
-            scrolled = await webdriver.post(
-                prefix + "/actions",
-                json={
-                    "actions": [
-                        {
-                            "type": "wheel",
-                            "id": "native-model-reveal",
-                            "actions": [
-                                {
-                                    "type": "scroll",
-                                    "origin": "viewport",
-                                    "deltaX": 0,
-                                    "duration": 200,
-                                    **reveal,
-                                }
-                            ],
-                        }
-                    ]
-                },
-            )
-            scrolled.raise_for_status()
-        await wait_for(
-            "const e=document.querySelector('.am-outline .am-object'),r=e.getBoundingClientRect(),m=document.querySelector('main').getBoundingClientRect();return r.top>=m.top && r.bottom<=m.bottom && e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));"
-        )
-        await click(".am-outline .am-object")
-        await named_click("Expand relationships")
-        await wait_for(
-            "return Boolean(document.querySelector('.am-map.am-fullscreen'));"
-        )
-        graph_measure = """
-          const panel=document.querySelector('.am-map.am-fullscreen'); if(!panel)return null;
-          const r=panel.getBoundingClientRect(),s=panel.querySelector('.am-graph-scroll').getBoundingClientRect();
-          const nodes=[...panel.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());
-          const labels=[...panel.querySelectorAll('.am-edge-label')].map(n=>n.getBoundingClientRect());
-          const overlap=(a,b)=>Math.min(a.right,b.right)>Math.max(a.left,b.left)+1 && Math.min(a.bottom,b.bottom)>Math.max(a.top,b.top)+1;
-          return {top:r.top,left:r.left,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,
-            spread:(Math.max(...nodes.map(n=>n.right))-Math.min(...nodes.map(n=>n.left)))/s.width,
-            labelCollisions:labels.filter((b,i)=>nodes.some(n=>overlap(b,n))||labels.slice(0,i).some(n=>overlap(b,n))).length,
-            labelMinimum:Math.min(...labels.flatMap(b=>[b.width,b.height])),
-            count:nodes.length,selected:panel.querySelector('.am-node.selected')?.getAttribute('data-node-id')};
-        """
-        await wait_for(
-            "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return n.length===12 && (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
-        )
-        graph_bounds = await execute(graph_measure)
-        assert graph_bounds["labelCollisions"] == 0, graph_bounds
-        assert graph_bounds["labelMinimum"] >= 44, graph_bounds
-        assert graph_bounds["selected"] == "native-mechanism-0", graph_bounds
-        assert graph_bounds["spread"] > 0.7 and graph_bounds["count"] == 12, (
-            graph_bounds
-        )
-        assert abs(graph_bounds["top"]) <= 1 and abs(graph_bounds["left"]) <= 1, (
-            graph_bounds
-        )
-        assert abs(graph_bounds["width"] - graph_bounds["viewportWidth"]) <= 1, (
-            graph_bounds
-        )
-        assert abs(graph_bounds["height"] - graph_bounds["viewportHeight"]) <= 1, (
-            graph_bounds
-        )
-        original_window = (await webdriver.get(prefix + "/window/rect")).json()["value"]
-        resized = await webdriver.post(
-            prefix + "/window/rect",
-            json={
-                "width": 1024 if graph_bounds["viewportWidth"] > 1200 else 1440,
-                "height": 768,
-            },
-        )
-        resized.raise_for_status()
-        await wait_for(f"return innerWidth!=={graph_bounds['viewportWidth']};")
-        await wait_for(
-            "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
-        )
-        graph_resized = await execute(graph_measure)
-        assert graph_resized["labelCollisions"] == 0, graph_resized
-        assert graph_resized["labelMinimum"] >= 44, graph_resized
-        assert graph_resized["selected"] == graph_bounds["selected"], graph_resized
-        assert abs(graph_resized["width"] - graph_resized["viewportWidth"]) <= 1, (
-            graph_resized
-        )
-        assert abs(graph_resized["height"] - graph_resized["viewportHeight"]) <= 1, (
-            graph_resized
-        )
-        screenshot = await webdriver.get(prefix + "/screenshot")
-        screenshot.raise_for_status()
-        (evidence_root / "native-model-fullscreen-resized.png").write_bytes(
-            base64.b64decode(screenshot.json()["value"])
-        )
-        (
-            await webdriver.post(prefix + "/window/rect", json=original_window)
-        ).raise_for_status()
-        await named_click("Restore relationships")
-        await wait_for(
-            "return !document.querySelector('.am-fullscreen') && document.activeElement?.getAttribute('aria-label')==='Expand relationships';"
-        )
-        assert (
-            await execute(
-                "return document.querySelector('.am-node.selected')?.getAttribute('data-node-id');"
-            )
-            == graph_bounds["selected"]
-        )
-
-        # The reset boundary must also work in the actual desktop package. This
-        # project's model is synthetic; its completed chats must survive reset.
-        await named_click("Start over")
-        await wait_for("return Boolean(document.querySelector('[role=dialog]'));")
-        await named_click("Cancel", "document.querySelector('[role=dialog]')")
-        preview = await core.get(
-            f"engagements/{project['id']}/application-model/reset-preview"
-        )
-        preview.raise_for_status()
-        assert preview.json()["objects"] == 12, preview.text
-        await named_click("Start over")
-        await wait_for("return Boolean(document.querySelector('[role=dialog]'));")
-        await named_click(
-            "Clear and start over", "document.querySelector('[role=dialog]')"
-        )
-        await wait_for(
-            "return [...document.querySelectorAll('[role=status]')].some(e=>e.textContent.includes('Model and browser captures cleared'));"
-        )
-        preview = await core.get(
-            f"engagements/{project['id']}/application-model/reset-preview"
-        )
-        preview.raise_for_status()
-        assert preview.json()["objects"] == 0 and preview.json()["captures"] == 0, (
-            preview.text
-        )
-        reset_result = {"preview": preview.json(), "chat_sessions_preserved": []}
-        for saved_session in sessions:
-            history = await core.get(
-                f"chat/sessions/{saved_session['session_id']}/messages"
-            )
-            history.raise_for_status()
-            assert history.json(), (
-                "Model reset must preserve the conversation's messages"
-            )
-            reset_result["chat_sessions_preserved"].append(saved_session["session_id"])
-        (evidence_root / "native-model-reset.json").write_text(
-            json.dumps(reset_result, indent=2)
-        )
-        screenshot = await webdriver.get(prefix + "/screenshot")
-        screenshot.raise_for_status()
-        (evidence_root / "native-model-reset.png").write_bytes(
-            base64.b64decode(screenshot.json()["value"])
-        )
+        knowledge.raise_for_status()
+        assert len(knowledge.json()["objects"]) == 12
+        knowledge_revision = knowledge.json()["revision"]
 
         # Close and launch the actual native application, retaining only this
         # disposable profile. Rediscover the completed chat through its list.
@@ -438,6 +287,13 @@ async def exercise(
             base_url=backend["endpoint"].rstrip("/") + "/",
             headers={"Authorization": "Bearer " + backend["token"]},
         ) as reopened:
+            retained = await reopened.get(
+                f"engagements/{project['id']}/application-model/graph"
+            )
+            retained.raise_for_status()
+            assert retained.json() == knowledge.json(), (
+                "Relaunch must preserve working knowledge"
+            )
             for saved in sessions:
                 restored = await reopened.get(
                     f"chat/sessions/{saved['session_id']}/state"
@@ -555,8 +411,8 @@ async def exercise(
             "native_core_outage_recovery": True,
             "native_reconnect_draft_retained": True,
             "fullscreen_workbench": fullscreen,
-            "fullscreen_model": graph_bounds,
-            "resized_model": graph_resized,
+            "internal_knowledge_revision": knowledge_revision,
+            "model_gui_retired": True,
             "displayed_build_identity": identity,
         }
         (evidence_root / "native-approval-evidence.json").write_text(

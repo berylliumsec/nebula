@@ -57,6 +57,9 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
   let targetSurface = surface;
   if (surface === "project") {
     const requested = params.get("view");
+    if (requested === "application-model" || requested === "model") {
+      return <Navigate to={`${projectSurface(engagement.id, "workbench")}?view=chat`} replace />;
+    }
     targetSurface = requested === "assets" || requested === "evidence" || requested === "sources" ? requested : undefined;
   }
   if (surface === "project") params.delete("view");
@@ -75,15 +78,32 @@ function LegacyWorkbenchRedirect({ view }: { view: string }) {
   return <Navigate to={`/?${params.toString()}`} replace />;
 }
 
+function RetiredModelRedirect() {
+  const { projectId = "" } = useParams();
+  // Object/edge filters belong to the retired inspector, not a conversation.
+  return <Navigate to={`${projectSurface(projectId, "workbench")}?view=chat`} replace />;
+}
+
+function WorkbenchRoute() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  if (["model", "application-model"].includes(params.get("view") ?? "")) {
+    params.set("view", "chat");
+    for (const key of ["object", "edge", "category", "query"]) params.delete(key);
+    return <Navigate to={`${location.pathname}?${params}`} replace />;
+  }
+  return <SessionsPage />;
+}
+
 export function App() {
   return <Routes><Route element={<AppShell />}>
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route index element={route(<ProjectPage canonicalView="overview" />)} />
-      <Route path="workbench" element={route(<SessionsPage />)} />
+      <Route path="workbench" element={route(<WorkbenchRoute />)} />
       <Route path="assets/:resourceId?" element={route(<ProjectPage canonicalView="assets" />)} />
       <Route path="evidence/:resourceId?" element={route(<ProjectPage canonicalView="evidence" />)} />
       <Route path="sources/:resourceId?" element={route(<ProjectPage canonicalView="sources" />)} />
-      <Route path="application-model" element={route(<ProjectPage canonicalView="application-model" />)} />
+      <Route path="application-model" element={<RetiredModelRedirect />} />
       <Route path="findings/:resourceId?" element={route(<FindingsPage />)} />
       <Route path="reports/:resourceId?" element={route(<ReportsPage />)} />
     </Route>

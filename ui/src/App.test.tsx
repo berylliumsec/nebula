@@ -58,7 +58,7 @@ describe("Nebula workspace", () => {
       expect(screen.getByRole("link", { name: label })).toBeVisible();
     }
     expect(await screen.findByRole("tab", { name: "Terminal" }, { timeout: 5_000 })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Application model" })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: "Application model" })).not.toBeInTheDocument();
     expect(screen.queryByText("Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files.")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Workspace code editor" })).toBeVisible();

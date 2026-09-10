@@ -1,51 +1,65 @@
 {
-  "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Reviewed 66 Python, 152 frontend and 91 catalog browser cases plus 16 focused model/reset profiles. Candidate9f08047 passed 27 Core workflows, model16, configured runtimes2, native1440/1024 and installed-native1440. Source frontend152, backend66 and production UI64 passed. Follow-up acceptance-only changes add read-only ECONNRESET recovery after deliberate process replacement (crash3 and Core27 passed), real native wheel input/hydration checks, and one explicit paired-browser post-install journey (staging and live passed). Installed Core/web/desktop identities and all 81 served assets match9f08047. Prior candidate5 broader evidence remains separately identified, not silently counted as a final-candidate rerun.",
-  "exclusions": "No full suites, scans, existing-session decisions, live-data clearing or tool replay. Private runtime smoke and installed/live acceptance run locally, not in CI; the explicit live case uses only newly created inert fixtures. No Rust application changes in this follow-up; native package verification is through WebDriver. Physical devices are outside the selected release bar and unverified. Local deployment was explicitly requested; this selection does not claim completion of every original whole-product gate or authorize public publication.",
-  "baseline": "fdaca50",
+  "reviewed_by": "Codex, working-knowledge and Assistant browser contract review",
+  "reason": "Retire application-model GUI without data loss; project-scoped legacy links open Assistant. Make managed browser an observable, read-only viewer while retaining pause/resume, protected resources, approvals and existing assistant tool capabilities. Reviewed and collected 29 Core, 54 frontend, 24 browser conversation/context/approval UI cases, plus 16 real-Core knowledge/viewer cases on eight permanent profiles. Input rejection, model tool access, project isolation, reconnect and accessibility are the affected boundaries.",
+  "exclusions": "No full suites, scans, external-site interactions, existing session continuation, live-data clearing or tool replay. Graph editing/reset/fullscreen GUI tests are retired with that removed feature; backend graph/reset contracts are not removed. New real-Core browser selection runs separately with Xvfb and a disposable local fixture. No new desktop package, live update or physical-device acceptance is requested/performed; changed native acceptance scripts require a future package run. No Rust implementation change.",
+  "baseline": "158548e",
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 66,
-    "frontend": 152,
+    "python": 29,
+    "frontend": 54,
     "native": 0,
-    "playwright": 91
+    "playwright": 24
   },
   "python": [
-    "tests/test_stabilization_acp.py",
-    "tests/test_stabilization_build.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_session_state.py",
-    "tests/v3/test_session_projection_migration.py",
-    "tests/v3/test_harness_connection_state.py",
-    "tests/v3/test_chat_catchup.py",
-    "tests/v3/test_api.py::test_chat_origin_approval_decision_does_not_require_an_agent_run",
-    "tests/v3/test_api.py::test_approval_decision_is_revisioned_and_recorded_in_run_ledger",
-    "tests/v3/test_api.py::test_expired_approval_is_durably_expired_instead_of_approved",
-    "tests/v3/test_api.py::test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision",
-    "tests/v3/test_harnesses.py::test_explicit_stop_cancels_detached_work_without_completing_it",
-    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
-    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
-    "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
+    "tests/v3/test_assistant_browser_viewer.py",
+    "tests/v3/test_application_model_api.py",
+    "tests/v3/test_application_model_admission.py",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
+    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities",
+    "tests/v3/test_harnesses.py::test_harness_mcp_exposes_project_application_model",
+    "tests/v3/test_browser_companion.py::test_assistant_waits_for_inline_approval_and_receives_actual_result",
+    "tests/v3/test_browser_companion.py::test_decided_mutation_is_never_replayed",
+    "tests/v3/test_browser_companion.py::test_takeover_revokes_pending_actions_across_service_instances",
+    "tests/v3/test_browser_companion.py::test_expired_approval_does_not_execute"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx", "ui/src/state/WorkspaceContext.recovery.test.tsx", "ui/src/state/useCoreConnectionMonitor.test.tsx", "ui/src/components/ApplicationModelGraph.test.tsx", "ui/src/pages/ApplicationModelPage.test.tsx", "ui/src/components/WorkbenchBrowser.test.tsx", "ui/src/components/EngagementPolicySettings.test.ts", "ui/src/components/EngagementPolicySettings.loading.test.tsx", "ui/src/diagnostics/logger.test.ts"],
+  "frontend": [
+    "ui/src/App.test.tsx",
+    "ui/src/components/ManagedAssistantBrowser.test.tsx",
+    "ui/src/components/BrowserPageSurface.test.tsx"
+  ],
   "native": [],
-  "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
-  "local_playwright": {
-    "config": "ui/playwright.config.ts",
-    "files": [
-      "tests/interface.spec.ts"
-    ],
-    "grep": "assistant upgrade pending approval restores and reviews (resolved|stale catalog)",
-    "expected_tests": 24,
-    "projects": [
-      "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
-    ]
-  },
-  "change_digest": "89a641e36a9d4971de7ec412c42db58fb936d75af01ed6c37e3b88a98cf0e8b1",
-  "python_node": false,
-  "supplemental_live_playwright": {"config":"ui/playwright.config.ts","files":["tests/release-live.spec.ts"],"projects":["desktop"],"expected_tests":1,"reason":"Explicit local deployment acceptance only: private origin/token/commit, newly created inert harness and project, actual pairing/approval/reload/reconnect, exactly one adapter receipt, then disable/archive/revoke only these fixtures. No commands execute. Traces are disabled to keep live credentials out; sanitized receipts and screenshots are retained. Not scheduled in CI."},
-  "supplemental_local_playwright": [{"config":"ui/playwright.application-model.config.ts","files":["tests/application-model-responsive.spec.ts","tests/application-model-reset.spec.ts"],"projects":["model-desktop","model-compact","model-chromium-320","model-chromium-390","model-chromium-430","model-webkit-320","model-webkit-390","model-webkit-430"],"expected_tests":16,"reason":"Permanent production LAN model collision/resize and scoped reset gates; final acceptance uses the unmodified compiled Core launcher and embedded assets. Invoked separately from the default CI config."}]
+  "playwright": [
+    "assistant-viewer/desktop",
+    "assistant-viewer/compact",
+    "assistant-viewer/mobile-chromium-small",
+    "assistant-viewer/mobile-chromium-ledger-390",
+    "assistant-viewer/mobile-chromium-wide",
+    "assistant-viewer/mobile-webkit-small",
+    "assistant-viewer/mobile-webkit",
+    "assistant-viewer/mobile-webkit-wide"
+  ],
+  "supplemental_local_playwright": [
+    {
+      "config": "ui/playwright.application-model.config.ts",
+      "files": [
+        "tests/working-knowledge.spec.ts",
+        "tests/assistant-browser-viewer.spec.ts"
+      ],
+      "projects": [
+        "model-desktop",
+        "model-compact",
+        "model-chromium-320",
+        "model-chromium-390",
+        "model-chromium-430",
+        "model-webkit-320",
+        "model-webkit-390",
+        "model-webkit-430"
+      ],
+      "expected_tests": 16,
+      "reason": "Real Core with production LAN UI, fixed local fixture; no target supplied by clients, no scans. New knowledge survives retired links/reload; read-only image, HTTP and WS rejection, reconnect, unchanged page, pause/resume and axe. Distinct from compiled/installed package acceptance."
+    }
+  ],
+  "change_digest": "604cd832d479266658f76c9168a389a69d9c4b8361307b13ad8fdb2547ef9fd2"
 }

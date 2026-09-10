@@ -370,23 +370,12 @@ async def smoke(
                         print(
                             "Packaged desktop: managed Chromium is visible", flush=True
                         )
-                        address = await element('[aria-label="Browser address"]')
-                        (
-                            await webdriver.post(
-                                prefix + f"/element/{address}/clear", json={}
-                            )
-                        ).raise_for_status()
-                        (
-                            await webdriver.post(
-                                prefix + f"/element/{address}/value",
-                                json={"text": target_url},
-                            )
-                        ).raise_for_status()
-                        await click(
-                            '.managed-browser-navigation button[aria-label="Go"]'
+                        assert await execute(
+                            "return document.querySelector('[aria-label=\"Browser address\"]')?.readOnly && !document.querySelector('[aria-label=\"Go\"]');"
                         )
+                        await click('button[aria-label="Ask about page"]')
                         await wait_for(
-                            "return document.querySelector('.managed-browser-capture pre')?.textContent === 'Ready';"
+                            "return Boolean(document.querySelector('.managed-browser-capture'));"
                         )
                         await click(".managed-browser-capture button.button.primary")
                         await wait_for(
@@ -501,7 +490,7 @@ async def smoke(
                             ):
                                 await click("[data-validation-resume]")
                             await send_question(
-                                "Use browser.companion only to capture fresh context, click Ready once, wait for my approval, and report its new label."
+                                f"Use browser.companion only to open this local fixture {target_url}, capture fresh context, click Ready once, wait for my approval, and report its new label."
                             )
                             await wait_for(
                                 "return Boolean(document.querySelector('[aria-label=\"Browser action approval\"]'));",
@@ -540,7 +529,7 @@ async def smoke(
                         "profile_isolated": True,
                         "viewport": viewport,
                         "managed_chromium_visible": True,
-                        "page_navigation_and_context_attachment": True,
+                        "read_only_page_observation_and_context_attachment": True,
                         "live_codex_inline_approval": bool(conversation_id),
                         "inert_packaged_approval_journeys": stabilization,
                         "workflow_limit": "Physical input and full lifecycle matrix remain separate gates.",

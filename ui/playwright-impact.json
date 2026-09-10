@@ -19,6 +19,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "assistant-viewer": [
+      {"area":"assistant-viewer","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"compact","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-viewer","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays beside|approves its requested)","runtime":"mock","shard":"1/1"}
+    ],
     "stabilization": [
       {"area":"stabilization","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},
       {"area":"stabilization","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization|assistant upgrade pending approval restores and reviews (resolved|stale catalog)","runtime":"mock","shard":"1/1"},

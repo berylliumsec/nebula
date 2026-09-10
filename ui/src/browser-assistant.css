@@ -9,6 +9,8 @@
 .integrated-browser-assistant > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .integrated-browser-assistant > header > strong { margin-right: auto; }
 .integrated-browser-assistant .chat-panel { flex: 1; min-height: 0; }
+/* Recovery remains scrollable without pushing composition out of a short pane. */
+.integrated-browser-assistant .chat-operator-updates { flex: 0 1 auto; max-height: 30%; }
 .integrated-browser-assistant .chat-panel > .chat-composer { flex: 0 1 auto; min-height: 0; max-height: calc(100% - 24px); overflow-y: auto; }
 .integrated-browser-assistant button { min-height: 44px; }
 .integrated-browser-assistant button > svg { pointer-events: none; }
@@ -19,7 +21,7 @@
 .managed-browser-toolbar select { max-width: 100%; }
 .managed-assistant-browser button, .managed-assistant-browser input, .managed-assistant-browser select { min-height: 44px; }
 .managed-browser-screen { position: relative; min-height: 100px; overflow: auto; }
-.managed-browser-screen > img { display: block; width: auto; max-width: 100%; height: auto; touch-action: none; }
+.managed-browser-screen > img { display: block; width: auto; max-width: 100%; height: auto; touch-action: auto; }
 .managed-browser-capture { max-height: 40vh; overflow: auto; }
 .managed-browser-capture pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 .managed-browser-capture img { max-width: 100%; }
@@ -58,7 +60,7 @@
 .integrated-browser-assistant { border-left: 1px solid var(--border-soft); padding: 0 16px 12px; }
 .integrated-browser-assistant > header { min-height: 56px; flex-wrap: nowrap; border-bottom: 1px solid var(--border-soft); margin-bottom: 12px; }
 .integrated-browser-assistant > header > strong { font-size: 13px; font-weight: 600; }
-.managed-browser-navigation { display: grid; grid-template-columns: minmax(80px, 140px) 44px 44px minmax(80px, 1fr) 44px 44px; align-items: center; gap: 4px; padding: 10px 12px; }
+.managed-browser-navigation { display: grid; grid-template-columns: minmax(72px, min(25%, 180px)) minmax(0, 1fr) 44px; align-items: center; gap: 4px; padding: 10px 12px; }
 .managed-browser-navigation input, .managed-browser-navigation select { width: 100%; min-width: 0; font-size: 12px; border-radius: 10px; background: var(--surface-muted); border: 1px solid var(--border-soft); }
 .managed-browser-navigation input { padding: 0 12px; }
 .managed-browser-navigation select { padding-inline: 8px; text-overflow: ellipsis; }
@@ -120,6 +122,8 @@
 .managed-browser-utility-panel label { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
 .managed-browser-utility-panel input, .managed-browser-utility-panel select { width: 100%; min-width: 0; }
 .managed-assistant-browser > p[role="status"] { padding: 2px 12px; }
+.managed-browser-view-hint { margin: 0; padding: 0 12px 6px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.managed-browser-screen:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 @media (max-width: 760px) {
   .managed-browser-tool-strip { gap: 0; padding: 0 4px; }
   .managed-browser-actions { flex: 1 1 auto; min-width: 0; overflow-x: auto; }
