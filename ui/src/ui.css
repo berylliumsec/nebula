@@ -40,9 +40,9 @@
 
 /* Assistant controls share a bounded column; transcript and composer stay reachable. */
 .chat-panel > .chat-thread { flex: 1 1 0; min-height: 0; overflow: hidden; }
-.chat-operator-updates { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; overscroll-behavior: contain; }
+.chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30dvh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
 .chat-operator-updates:empty { display: none; }
-.chat-operator-updates > * { margin: 6px 12px; }
+.chat-operator-updates > * { margin: 6px 0; }
 .chat-operator-updates .chat-follow-up-queue, .chat-operator-updates .chat-catch-up { max-height: none; overflow: visible; }
 .chat-follow-up-queue > header { flex-wrap: wrap; }
 .chat-follow-up-queue > p, .chat-follow-up-queue > [role="alert"] { padding: 8px 12px; }
@@ -65,11 +65,15 @@
   .chat-message-actions > button { min-width: 44px; min-height: 44px; }
   .chat-composer footer .chat-runtime-summary { max-width: 120px; }
   .chat-composer footer .chat-context-meter { min-width: 44px; }
-  .chat-operator-updates { max-height: 30%; }
+  .chat-operator-updates { max-height: min(200px, 30dvh); width: calc(100% - 12px); }
   .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
 .chat-panel > .chat-composer:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
+
+/* Recovery and composition form one scrollable surface in short app windows. */
+.chat-panel:has(> .chat-resolved-approval) { overflow-y: auto; overscroll-behavior: contain; }
+.chat-panel:has(> .chat-resolved-approval) > .chat-composer { flex: 0 0 auto; max-height: none; overflow: visible; }
 
 .chat-settings-popover { bottom: var(--composer-anchor, 132px); max-height: min(500px, calc(100% - var(--composer-anchor, 132px) - 6px)); }
 

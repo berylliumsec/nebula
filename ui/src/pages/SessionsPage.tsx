@@ -5,6 +5,7 @@ import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
+import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
@@ -372,6 +373,7 @@ function harnessPhaseLabel(phase: string): string {
     case "running": return "Harness is working";
     case "tool": return "Harness is using a tool";
     case "waiting_approval": return "Harness needs approval";
+    case "decision_recorded": return "Decision recorded";
     case "finalizing": return "Saving harness response";
     case "complete": return "Harness turn complete";
     case "interrupted": return "Harness turn interrupted";
@@ -558,6 +560,8 @@ export function SessionsPage() {
   const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [approvalDecisionBusy, setApprovalDecisionBusy] = useState(false);
+  const [resolvedApproval, setResolvedApproval] = useState<{ id: string; status: string; turnId: string; harnessTurnId?: string }>();
+  const [resolvedApprovalIds, setResolvedApprovalIds] = useState<string[]>([]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
@@ -931,18 +935,25 @@ export function SessionsPage() {
   }, [api, coreState, harnessSessionId, runtimeKind]);
 
   useEffect(() => {
-    if (!harnessActivity || harnessActivity.live) return;
+    if (!harnessActivity) return;
+    if (resolvedApproval?.harnessTurnId === harnessActivity.turnId && harnessActivity.turnStatus
+      && ["running", "finalizing", "complete", "failed", "cancelled", "interrupted"].includes(harnessActivity.turnStatus)) {
+      setResolvedApproval(undefined);
+      setHarnessProgress(current => current?.phase === "decision_recorded" ? undefined : current);
+    }
+    if (harnessActivity.live) return;
     const terminal = harnessActivity.turnStatus
       ? ["complete", "failed", "cancelled", "interrupted"].includes(harnessActivity.turnStatus)
       : !harnessActivity.busy;
     if (!terminal) return;
+    setResolvedApproval(undefined);
     detachActiveChatStream();
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     setHarnessProgress(undefined);
     setPendingResponse(undefined);
     setSending(false);
-  }, [harnessActivity]);
+  }, [harnessActivity, resolvedApproval]);
 
   useEffect(() => {
     let active = true;
@@ -1260,6 +1271,8 @@ export function SessionsPage() {
   };
 
   const newConversation = () => {
+    setResolvedApproval(undefined);
+    setResolvedApprovalIds([]);
     // URL navigation and state updates are committed on separate React turns.
     // Suppress the old URL session during that gap so it cannot immediately
     // re-select the conversation the operator just detached from.
@@ -1534,6 +1547,8 @@ export function SessionsPage() {
     detachActiveChatStream();
     setSending(false);
     setSessionId(id);
+    setResolvedApproval(undefined);
+    setResolvedApprovalIds([]);
     setConversationOpen(true);
     if (updateUrl) {
       pendingSessionNavigationRef.current = id;
@@ -1588,13 +1603,14 @@ export function SessionsPage() {
         : []);
       setToolCards(restoredToolCards);
       // Restore the exact durable request, independently of the workspace catalog cache.
-      const approval = pendingTurn?.approvalId
+      const approvalRecord = pendingTurn?.approvalId
         ? await api.getApproval(pendingTurn.approvalId, loadController.signal)
         : undefined;
       if (!selectionIsCurrent()) return;
-      if (approval && approval.status !== "pending") {
-        throw new Error("This approval was already resolved. Reload the conversation to see its current state.");
-      }
+      const approval = approvalRecord?.status === "pending" ? approvalRecord : undefined;
+      if (approvalRecord && !approval && pendingTurn) setResolvedApprovalIds([approvalRecord.id, pendingTurn.id]);
+      const decisionRecorded = approvalRecord && !approval && pendingTurn?.status === "waiting_approval";
+      if (decisionRecorded) setResolvedApproval({ id: approvalRecord.id, status: approvalRecord.status, turnId: pendingTurn.id, harnessTurnId: pendingTurn.harnessTurnId });
       setLoadingHistory(false);
       if (pendingTurn && summary?.backend === "provider") {
         const assistantId = makeId("assistant-pending");
@@ -1624,7 +1640,10 @@ export function SessionsPage() {
           evidenceIds: [],
           artifacts: [],
         }))]);
-        if (pendingTurn.status === "waiting_approval") {
+        if (decisionRecorded) {
+          activeProviderTurnIdRef.current = pendingTurn.id;
+          setSending(true);
+        } else if (pendingTurn.status === "waiting_approval") {
           setPendingResponse({
             turnId: pendingTurn.id,
             assistantId,
@@ -1671,8 +1690,8 @@ export function SessionsPage() {
           harnessTurnId: turnId,
         }]);
         setHarnessProgress({
-          phase: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
-          detail: pendingTurn.status === "waiting_approval" ? "Harness input or approval is required." : "Reconnected to the active harness turn.",
+          phase: decisionRecorded ? "decision_recorded" : pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
+          detail: decisionRecorded ? "Decision recorded; waiting for the harness to continue." : pendingTurn.status === "waiting_approval" ? "Harness input or approval is required." : "Reconnected to the active harness turn.",
           sessionId: summary.harnessSessionId,
           turnId,
         });
@@ -1701,6 +1720,8 @@ export function SessionsPage() {
             }
           },
           () => {
+            if (!selectionIsCurrent()) return;
+            setResolvedApproval(undefined);
             harnessFollowDetachRef.current = undefined;
             void api.listChatMessages(id).then(async (authoritative) => {
               setMessages(await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
@@ -2983,6 +3004,7 @@ export function SessionsPage() {
   ), [executionCapabilities]);
   const pendingHarnessRequests = harnessInteractions.filter((item) => item.status === "pending").length;
   const showHarnessStatusRail = runtimeKind === "harness"
+    && (!resolvedApproval || pendingHarnessRequests > 0)
     && Boolean(harnessActivity)
     && Boolean(harnessActivity?.busy || pendingHarnessRequests);
   const assistantSource = runtimeKind === "harness"
@@ -3148,8 +3170,13 @@ export function SessionsPage() {
                   </ThreadPrimitive.Viewport>
                 </ThreadPrimitive.Root>
               </AssistantRuntimeProvider>
+              {resolvedApproval && <ResolvedApprovalNotice status={resolvedApproval.status}
+                busy={reloadingConversation || harnessControlBusy}
+                canStop={runtimeKind !== "harness" || selectedHarness?.capabilities?.interruption !== false}
+                onCheck={() => void reloadActiveConversation()}
+                onStop={() => { if (harnessControlBusy) return; setHarnessControlBusy(true); void stopCurrentResponse().then(stopped => { if (stopped) setResolvedApproval(undefined); }).finally(() => setHarnessControlBusy(false)); }} />}
               <div className="chat-operator-updates">
-              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
+              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} resolvedApprovalIds={resolvedApprovalIds} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}

@@ -74,6 +74,21 @@ def catchup_projection(store, session, cursor):
                 "at": turn.updated_at.isoformat(),
             }
             if turn.status.value == "waiting_approval":
+                approval = (
+                    database.get(EntityRow, turn.approval_id)
+                    if turn.approval_id
+                    else None
+                )
+                # The decision is authoritative even while the worker has not
+                # advanced its turn. Reading catch-up must never replay work.
+                if (
+                    approval is not None
+                    and approval.kind == "approvals"
+                    and approval.engagement_id == session.engagement_id
+                    and approval.payload.get("status")
+                    in {"approved", "edited", "rejected", "expired", "cancelled"}
+                ):
+                    continue
                 pending.append(
                     {
                         **entry,

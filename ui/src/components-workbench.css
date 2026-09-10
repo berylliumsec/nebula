@@ -2474,3 +2474,14 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.chat-resolved-approval { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; width: min(var(--chat-reading-track), calc(100% - 24px)); margin: 6px auto 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface); font-size: 13px; }
+.chat-resolved-approval > svg { flex: 0 0 auto; color: var(--muted); }
+.chat-resolved-approval > div:first-of-type { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.chat-resolved-approval p { margin: 4px 0 0; color: var(--muted); }
+.chat-resolved-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.chat-resolved-actions button { min-width: 44px; min-height: 44px; }
+@media (max-width: 600px) {
+  .chat-resolved-approval { width: calc(100% - 12px); flex-wrap: wrap; }
+  .chat-resolved-actions { margin-left: auto; }
+}

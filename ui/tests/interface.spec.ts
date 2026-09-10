@@ -5715,16 +5715,18 @@ test("browser Assistant uploads a selected device file only after inline approva
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });
-for (const scenario of ["stale catalog", "request failure", "reconnected approval"] as const) {
+for (const scenario of ["stale catalog", "request failure", "reconnected approval", "resolved approved", "resolved rejected"] as const) {
   test(`assistant upgrade pending approval restores and reviews ${scenario}`, async ({ page }, testInfo) => {
     let waiting = scenario !== "reconnected approval";
     let failRequest = scenario === "request failure";
     let decision: string | undefined;
+    const resolved = scenario.startsWith("resolved ");
+    let stopped = false;
     let approvalReads = 0;
     let notifyApproval: (() => void) | undefined;
     const approval = {
       ...entity, id: "approval-review", engagement_id: "scratch-project", run_id: "",
-      origin: "chat", status: "pending", risk_class: "passive", requested_by: "harness",
+      origin: "chat", status: resolved ? scenario.split(" ")[1] : "pending", risk_class: "passive", requested_by: "harness",
       requested_at: entity.created_at, policy_rationale: "Review the file read",
       exact_request: { tool_name: "read_file", arguments: { path: `/workspace/${"nested/".repeat(30)}notes.txt` }, cwd: "/workspace" },
     };
@@ -5739,7 +5741,8 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
       if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: "chat-review", engagement_id: "scratch-project", title: "Review pending approval", backend: "harness", harness_profile_id: "harness-ready", harness_session_id: "session-review", model: "gpt-5-codex", metadata: {} }]);
       if (path.endsWith("/chat/sessions/chat-review/messages")) return json([]);
-      if (path.endsWith("/chat/sessions/chat-review/pending-turn")) return json({ ...entity, id: "chat-turn-review", session_id: "chat-review", status: decision ? "routing" : waiting ? "waiting_approval" : "routing", harness_turn_id: "turn-review", approval_id: waiting && !decision ? approval.id : null, tool_call_ids: [] });
+      if (path.endsWith("/chat/sessions/chat-review/pending-turn")) return json(stopped ? null : { ...entity, id: "chat-turn-review", session_id: "chat-review", status: decision ? "routing" : waiting ? "waiting_approval" : "routing", harness_turn_id: "turn-review", approval_id: waiting && !decision ? approval.id : null, tool_call_ids: [] });
+      if (path.endsWith("/harness-turns/turn-review/stop")) { stopped = true; return json({}); }
       // The workspace catalog deliberately never contains this approval.
       if (path.endsWith("/approvals")) return json([]);
       if (path.endsWith(`/approvals/${approval.id}`)) {
@@ -5752,11 +5755,55 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       }
       if (path.endsWith("/harness-turns/turn-review/events")) return json({ events: [], next_sequence: 1 });
       if (path.endsWith("/harness-turns/turn-review/interactions")) return json([]);
-      if (path.endsWith("/harness-sessions/session-review/activity")) return json({ session_id: "session-review", session_status: "active", busy: true, live: true, turn_id: "turn-review", turn_status: waiting ? "waiting_approval" : "running", detail: "Harness input or approval is required." });
-      if (path.endsWith("/chat/sessions/chat-review/catch-up")) return json({ initialized: true, revision: 1, through_at: entity.updated_at, items: [], pending: decision ? [] : [{ id: approval.id, kind: "approval", text: "Review file read" }], truncated: false });
+      if (path.endsWith("/harness-sessions/session-review/activity")) return json({ session_id: "session-review", session_status: "active", busy: !stopped, live: !stopped, turn_id: "turn-review", turn_status: stopped ? "cancelled" : waiting ? "waiting_approval" : "running", detail: "Harness input or approval is required." });
+      if (path.endsWith("/chat/sessions/chat-review/catch-up")) return json({ initialized: true, revision: 1, through_at: entity.updated_at, items: [], pending: decision || stopped ? [] : [{ id: approval.id, kind: "approval", text: "Review file read" }], truncated: false });
       await route.fallback();
     });
     await openWorkspace(page, "/?view=chat&session=chat-review", "Workbench");
+    if (resolved) {
+      const notice = page.getByRole("status", { name: "Recorded approval decision" });
+      await expect(notice).toBeVisible();
+      await expect(notice).toContainText(`Decision recorded: ${approval.status}`);
+      await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+      await expect(page.getByText("Action required", { exact: true })).toHaveCount(0);
+      await notice.getByRole("button", { name: "Check response status" }).click();
+      await expect(notice).toBeVisible();
+      await expect(page.getByText(/This approval was already resolved/)).toHaveCount(0);
+      await page.reload();
+      await expect(notice).toBeVisible();
+      waiting = false;
+      await expect(notice).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+      waiting = true;
+      await page.reload();
+      await expect(notice).toBeVisible();
+      const original = page.viewportSize()!;
+      await page.setViewportSize({ width: 844, height: 430 });
+      await notice.scrollIntoViewIfNeeded();
+      for (const button of await notice.getByRole("button").all()) {
+        await expect(button).toBeInViewport();
+        // Browser zoom/scroll transforms can report 43.99998 for a 44px target.
+        expect(Math.round((await button.boundingBox())!.height * 100) / 100).toBeGreaterThanOrEqual(44);
+      }
+      const bounds = await notice.boundingBox();
+      const composer = await page.locator(".chat-composer").boundingBox();
+      expect(Math.abs(bounds!.x - composer!.x)).toBeLessThanOrEqual(2);
+      expect(Math.abs(bounds!.width - composer!.width)).toBeLessThanOrEqual(2);
+      expect((await new AxeBuilder({ page }).include(".chat-resolved-approval").analyze()).violations).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("resolved-approval-short.png") });
+      const settings = page.locator(".chat-composer").getByRole("button", { name: "Assistant settings", exact: true });
+      await settings.scrollIntoViewIfNeeded();
+      await expect(settings).toBeInViewport();
+      await notice.scrollIntoViewIfNeeded();
+      await expect(notice.getByRole("button", { name: "Stop waiting" })).toBeInViewport();
+      await page.setViewportSize(original);
+      expect(decision).toBeUndefined(); expect(stopped).toBe(false);
+      await notice.getByRole("button", { name: "Stop waiting" }).click();
+      await expect(notice).toHaveCount(0);
+      expect(stopped).toBe(true); expect(decision).toBeUndefined();
+      return;
+    }
     if (scenario === "request failure") {
       await expect(page.getByText("Approval details temporarily unavailable", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);

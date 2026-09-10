@@ -1,26 +1,23 @@
 {
-  "reviewed_by": "Codex, approval review branch correction",
-  "reason": "Restore exact pending approvals without stale catalog dependence, handle reconnect events, focus the review control, and clear the notice after decisions. Collection: 46 focused frontend cases, 2 exact API cases, 24 exact browser regressions. Preserve branch-specific catch-up interactions. The selected browser run exposed loss of selector argv in workers; preserve and revalidate parent selection, with two collected guard checks. No scope widening.",
-  "exclusions": "No full suites, native changes, application-model changes, live approval decisions or physical-device tests. Browser API/WebSocket fixtures test UI only; live harness continuation remains unverified. Local exact browser selection is used because catalog area selectors include unrelated journeys. No CI push in this task.",
-  "baseline": "937db70",
+  "reviewed_by": "Codex, resolved approval recovery and unclipped controls",
+  "reason": "Durable resolved approvals must not reappear as pending or abort history restoration. Test read-only Core projection, scoped UI fallback, explicit stop, reload and short-window layouts.",
+  "exclusions": "No full suites, live approval decisions, replay, provider calls, native deployment or physical devices. Production LAN browser tests use API/WebSocket fixtures; Core persistence separately uses disposable SQLite HTTP tests. Full live harness continuation remains unverified.",
+  "baseline": "2a4e79b",
   "python_versions": [
     "3.11"
   ],
   "expected_tests": {
-    "python": 4,
-    "frontend": 46,
+    "python": 11,
+    "frontend": 6,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py::test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision",
-    "tests/v3/test_api.py::test_chat_origin_approval_decision_does_not_require_an_agent_run",
-    "tests/test_test_selection.py::test_local_guard_without_starting_any_test_runtime",
-    "tests/test_test_selection.py::test_playwright_workers_revalidate_the_parent_selection"
+    "tests/v3/test_chat_catchup.py"
   ],
   "frontend": [
-    "ui/src/api/client.test.ts",
-    "ui/src/components/ChatCatchUp.test.tsx"
+    "ui/src/components/ChatCatchUp.test.tsx",
+    "ui/src/components/ResolvedApprovalNotice.test.tsx"
   ],
   "native": [],
   "playwright": [],
@@ -29,7 +26,7 @@
     "files": [
       "tests/interface.spec.ts"
     ],
-    "grep": "pending approval restores",
+    "grep": "pending approval restores and reviews (resolved|stale catalog)",
     "expected_tests": 24,
     "projects": [
       "desktop",
@@ -42,6 +39,6 @@
       "mobile-webkit-wide"
     ]
   },
-  "change_digest": "eb109463b90042bf0f7a9fa9ec4896872a8f49f81bb59996e71f2ab9cdfad6fa",
-  "python_node": true
+  "change_digest": "f2ab766a7f376e67879eb2146bbf78305703749b0d4da948fdbef6ffeb3c2cdb",
+  "python_node": false
 }
