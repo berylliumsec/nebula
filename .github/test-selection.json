@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Reviewed 66 Python, 79 frontend and 86 catalog browser cases. L3-L5 add resource create/failure/discovery and finding draft ownership regressions. Four real-Core journeys passed all eight production LAN profiles (32 cases, zero skips/flaky), including explicit discard, focus return, conflict preservation and late save/navigation. All 79 frontend cases passed. Prior 96 approval failure cases and native candidate 1b621b7 remain evidence for earlier layers. Screenshot review found N8 inspector translucency; S1 settings health recovery and final artifact/native gates remain open. No release approval is inferred from these interaction passes.",
+  "reason": "Reviewed 66 Python, 81 frontend and 88 catalog browser cases (64 mocked plus 24 real Core). N8 uses opaque inspector surfaces and S1 separates durable harness saves from recoverable health/catalog checks. All 81 frontend tests and 48 real-Core resource/draft/settings journeys passed across all eight production LAN profiles, zero skips/flaky. Light/dark mobile screenshots reviewed. Prior 96 approval failure cases and native candidate 1b621b7 remain earlier evidence. Outage monitoring and final artifact/native gates are still open. No release approval is inferred from these passes.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,9 +8,9 @@
   ],
   "expected_tests": {
     "python": 66,
-    "frontend": 79,
+    "frontend": 81,
     "native": 0,
-    "playwright": 86
+    "playwright": 88
   },
   "python": [
     "tests/test_stabilization_acp.py",
@@ -30,7 +30,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -44,6 +44,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "16af79b73f7f7e2973854ccf7664d6a50f2b5039cf08a83c44a2a2debd4dd799",
+  "change_digest": "8485e4e235a82ef936b695da711bbdf7aa2f5e5b7f62762f42757dcb22f7db30",
   "python_node": false
 }

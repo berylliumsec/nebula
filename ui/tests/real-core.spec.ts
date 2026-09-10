@@ -2304,6 +2304,39 @@ for (const area of ["asset", "evidence", "finding"] as const) {
       await inspect.focus(); await inspect.press("Enter");
       const inspector = page.getByRole("complementary", {name, exact: true});
       await expect(inspector).toBeVisible();
+      await expect(inspector).toBeInViewport({ratio: 1});
+      const originalTheme = await page.locator("html").getAttribute("data-theme");
+      const applyTheme = async (theme: string) => {
+        // Use ThemeProvider's real cross-tab preference path: changing only a
+        // DOM attribute leaves native controls under the old inline color scheme.
+        await page.evaluate(theme => {
+          localStorage.setItem("nebula.theme", theme);
+          window.dispatchEvent(new StorageEvent("storage", {key: "nebula.theme", newValue: theme}));
+        }, theme);
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        await inspector.evaluate(async element => {
+          const finite = element.getAnimations({subtree: true}).filter(animation => Number.isFinite(Number(animation.effect?.getComputedTiming().endTime)));
+          await Promise.all(finite.map(animation => animation.finished.catch(() => {})));
+        });
+      };
+      // Palette setup, not a substitute for the existing theme-picker journey.
+      for (const theme of ["zero-dark", "zero-light", "dark", "light"]) {
+        await applyTheme(theme);
+        const surfaces = await inspector.evaluate(element => {
+          const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d")!;
+          return [element, element.querySelector(".finding-edit-footer")].filter(Boolean).map(node => {
+            const color = getComputedStyle(node!).backgroundColor;
+            context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+            return {color, alpha: context.getImageData(0, 0, 1, 1).data[3]};
+          });
+        });
+        expect(surfaces.every(surface => surface.alpha === 255), `${theme} overlapping content needs opaque surfaces: ${JSON.stringify(surfaces)}`).toBe(true);
+        if (area === "finding") await testInfo.attach(`finding-inspector-${theme}`, {body: await page.screenshot({animations: "disabled"}), contentType: "image/png"});
+      }
+      await applyTheme(originalTheme ?? "zero-dark");
+      const accessibility = await new AxeBuilder({page}).include(".resource-inspector").withTags(["wcag2a", "wcag2aa"]).analyze();
+      expect(accessibility.violations).toEqual([]);
       if (area === "finding") await inspector.getByRole("textbox", {name: "Title", exact: true}).fill(`${name} discard me`);
       await page.getByRole("button", {name: `Close ${area} details`, exact: true}).click();
       if (area === "finding") await page.getByRole("dialog", {name: "Discard finding changes?"}).getByRole("button", {name: "Discard changes", exact: true}).click();
@@ -2402,6 +2435,127 @@ test("stabilization real Core finding drafts stay bound to their record through 
     await testInfo.attach("finding-draft-saved", {body: await page.screenshot(), contentType: "image/png"});
   } finally {releaseSave(); await api.dispose(); await stopRealCore(core);}
 });
+
+for (const runtime of ["provider", "harness"] as const) {
+  test(`stabilization real Core ${runtime} settings separate saving from health recovery`, async ({page}, testInfo) => {
+    test.setTimeout(100_000);
+    page.setDefaultTimeout(10_000);
+    const stub = runtime === "provider" ? await startLocalModelStub() : undefined;
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const name = `Local ${runtime} acceptance`;
+    const collection = runtime === "harness" ? "harnesses" : "providers";
+    const navigate = async (name: "Settings" | "Workbench") => {
+      const link = page.getByRole("link", {name, exact: true});
+      if (!await link.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click({timeout: 10_000});
+      await link.click({timeout: 10_000});
+    };
+    try {
+      const fixture = path.join(core.dataDir, "stabilization_acp.py");
+      if (runtime === "harness") await writeFile(fixture, await readFile(path.resolve(import.meta.dirname, "../../scripts/fixtures/stabilization_acp.py")), {mode: 0o700});
+      const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name}});
+      const pair = await pairing.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill(name);
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await navigate("Settings");
+      await page.getByRole("link", {name: "Advanced settings", exact: true}).click();
+      if (runtime === "harness") await page.locator("#automation-settings > summary").click();
+      await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
+      const dialog = page.getByRole("dialog");
+      const profileName = dialog.getByRole("textbox", {name: runtime === "provider" ? "Profile name" : "Name", exact: true});
+      if (runtime === "provider") {
+        await dialog.getByRole("combobox", {name: "Provider type", exact: true}).selectOption("vllm");
+        await dialog.getByRole("textbox", {name: "Endpoint", exact: true}).fill(`${stub!.origin}/v1`);
+      } else await dialog.getByRole("textbox", {name: "Absolute Grok executable path", exact: true}).fill(fixture);
+      await profileName.fill(name);
+      let failedSave = false;
+      let failedHealth = false;
+      await page.route(`**/api/v1/${collection}`, async route => {
+        if (route.request().method() === "POST" && !failedSave) {
+          failedSave = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic profile save failure"})});
+        } else await route.continue();
+      });
+      await page.route(`**/api/v1/${collection}/*/health`, async route => {
+        if (!failedHealth) {
+          failedHealth = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic health response failure"})});
+        } else await route.continue();
+      });
+      const save = dialog.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Save harness", exact: true});
+      await save.click();
+      await expect(dialog).toContainText("Synthetic profile save failure");
+      await expect(profileName).toHaveValue(name);
+      const persisted = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(`/api/v1/${collection}`));
+      await save.click();
+      const saved = await (await persisted).json();
+      await expect.poll(() => failedHealth).toBe(true);
+      await expect(dialog).toHaveCount(0);
+      const card = page.locator("article.provider-card").filter({has: page.getByRole("heading", {name, exact: true})});
+      await expect(card).toBeVisible();
+      if ((page.viewportSize()?.width ?? 1440) <= 430) {
+        for (const button of await card.getByRole("button").all()) {
+          const box = await button.boundingBox();
+          if (box) {expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);}
+        }
+      }
+      const check = card.getByRole("button", {name: runtime === "provider" ? `Refresh ${name} health` : "Check", exact: true});
+      await check.click();
+      await expect(card.locator(runtime === "provider" ? ".health-label" : ".status-dot")).toHaveClass(/healthy/);
+      const profiles = await (await api.get(collection)).json();
+      expect(profiles.filter((p: {name: string}) => p.name === name)).toHaveLength(1);
+      expect(profiles.find((p: {name: string}) => p.name === name).id).toBe(saved.id);
+      await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
+      const models = dialog.getByRole("combobox", {name: "Default model", exact: true});
+      const available = await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean));
+      const model = available.find(value => value !== "grok-build");
+      expect(model, "Health must expose the fixture's discovered model").toBeTruthy();
+      await models.selectOption(model!);
+      await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
+      await expect(dialog).toHaveCount(0);
+      await page.reload();
+      await expect(card).toBeVisible();
+      await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
+      await expect(models).toHaveValue(model!);
+      await dialog.getByRole("button", {name: runtime === "provider" ? "Close provider dialog" : "Close harness dialog", exact: true}).click();
+      await card.getByRole("button", {name: runtime === "provider" ? `Disable ${name}` : "Disable", exact: true}).click();
+      await expect(card.getByRole("button", {name: runtime === "provider" ? `Enable ${name}` : "Enable", exact: true})).toBeVisible();
+      await card.getByRole("button", {name: runtime === "provider" ? `Enable ${name}` : "Enable", exact: true}).click();
+      await expect(card.getByRole("button", {name: runtime === "provider" ? `Disable ${name}` : "Disable", exact: true})).toBeVisible();
+      const durable = (await (await api.get(collection)).json()).find((p: {id: string}) => p.id === saved.id);
+      expect(durable.enabled).toBe(true);
+      expect(runtime === "provider" ? durable.metadata.default_model : durable.default_model).toBe(model);
+      await testInfo.attach("runtime-settings-durable", {body: JSON.stringify({origin: core.origin, runtime, model, durable}), contentType: "application/json"});
+      await testInfo.attach("runtime-settings-saved", {body: await page.screenshot(), contentType: "image/png"});
+      await navigate("Workbench");
+      const chatTab = page.getByRole("tab", {name: "Analyst chat", exact: true});
+      if ((page.viewportSize()?.width ?? 1440) > 760) await chatTab.click();
+      else await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat", exact: true}).click();
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption(runtime);
+      await page.getByRole("combobox", {name: runtime === "provider" ? "Chat provider" : "Chat harness", exact: true}).selectOption(saved.id);
+      const chatModel = page.getByRole("combobox", {name: runtime === "provider" ? "Chat model" : "Chat harness model", exact: true});
+      await expect(chatModel).toHaveValue(model!);
+      await page.getByRole("button", {name: "Close assistant settings", exact: true}).click();
+      await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Disposable unsent setup acceptance draft. No tool runs.", {timeout: 10_000});
+      await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
+      await testInfo.attach("runtime-settings-selectable", {body: await page.screenshot(), contentType: "image/png"});
+      if (stub) {
+        // Selecting a provider may negotiate its existing inert nonce capability
+        // probe. No conversation draft or executable tool may be submitted.
+        expect(stub.requests.length).toBeLessThanOrEqual(1);
+        for (const request of stub.requests) {
+          expect(request.tools).toEqual([expect.objectContaining({function: expect.objectContaining({name: "nebula_capability_probe"})})]);
+          expect(request.max_tokens).toBe(128);
+          expect(JSON.stringify(request.messages)).not.toContain("Disposable unsent");
+        }
+      }
+    } finally {await api.dispose(); await stopRealCore(core); if (stub) await stopLocalModelStub(stub);}
+  });
+}
 
 test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
   test.setTimeout(90_000);

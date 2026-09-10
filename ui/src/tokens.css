@@ -46,6 +46,8 @@
   --surface: #11151a;
   --surface-muted: #151a20;
   --surface-raised: #1a2027;
+  /* Overlapping text needs an opaque plane even in translucent themes. */
+  --surface-overlay: var(--surface-raised);
   --surface-hover: #1c232b;
   --text: #dfe5ec;
   --text-strong: #f4f7fa;

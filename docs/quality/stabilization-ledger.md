@@ -477,6 +477,17 @@ short viewport scrolling and the existing focus journey on the production bundle
 Add a failing computed-surface regression before the CSS repair and inspect the
 resulting screenshots. Evidence image:
 `/tmp/nebula-resource-review-UO6hqF/77196d61fdd38c32f44195afd5599d7cba0048b9`.
+The permanent WebKit 320 regression measured the original background alpha at
+0.829804 and failed before repair. Inspectors and their sticky finding actions
+now use a theme-matched opaque overlay token. The six-case production LAN check
+passed in **54.85s**, zero skips/flaky: findings plus provider/harness Settings,
+at desktop 1440 and WebKit 320. Includes opacity in all four palettes, inspector
+accessibility, focus/discard and mobile runtime-card touch targets. Theme tests
+must use ThemeProvider's storage event path, not just change the DOM attribute:
+the latter leaves native controls under the previous inline color scheme. Wait
+for the inspector to be fully in view and finish animation before screenshots.
+Evidence: `/tmp/nebula-stabilization-inspector-opacity-red` and
+`/tmp/nebula-stabilization-settings-inspector-six4`. Broader matrix pending.
 
 ### Runtime settings acceptance contract
 
@@ -497,6 +508,46 @@ dialog open, without exposing the saved profile or a distinct Check retry.
 Record the saved identity immediately; make catalog refresh and health failures
 recoverable independently, never retry a create because a health check failed.
 Evidence: `/tmp/nebula-stabilization-runtime-settings-red2` (one pass/one fail).
+S1 component regressions failed for both post-save health and catalog errors,
+then passed after separating these phases (2 passed, 1.82s). The saved response
+is immediately catalogued by ID; Check retries only health/discovery and no
+longer depends on the unrelated MCP catalog. The six-case LAN pass verifies one
+durable profile, discovered defaults, reload, disable/enable and the actual
+Settings → Workbench → chat selector handoff, with an enabled unsent composer.
+The provider's existing local nonce capability probe is asserted explicitly;
+no conversation is sent, executable tool invoked or external runtime contacted.
+Refreshed frontend selection: **81 passed in 30.72s** at
+`/tmp/nebula-stabilization-frontend81.log` (selection adjacent). Earlier browser
+attempts exposed test setup issues (plural endpoint, desktop/mobile navigation,
+unsent-input name and expected nonce negotiation); retained failed attempts are
+not counted as product acceptance. Required eight-profile matrix and native/
+same-artifact acceptance remain pending.
+
+N8/S1 expanded production LAN matrix: **48 passed in 351.86s**, zero skips,
+unexpected or flaky results, in desktop Chromium 1440/1024 and emulated
+Chromium/WebKit 320/390/430. Covers three resource creation/retry/inspection
+journeys, revision-bound finding drafts, and provider/harness settings lifecycle.
+Reviewed retained WebKit 320 light/dark screenshots: underlying list text no
+longer bleeds through the inspector or sticky save actions. Evidence:
+`/tmp/nebula-stabilization-resources-settings48-v2` and
+`/tmp/nebula-inspector-final-review-NrvbCn`. The first expanded run caught a
+test measurement during a finite theme transition (15 pass/1 fail/1 interrupted);
+the test now waits for that transition before contrast measurement. This does
+not waive contrast failures. One focused evidence case then passed, followed
+by the entire reviewed 48-case selection above. Final packaged gate remains open.
+
+### Core outage/recovery contract
+
+The browser-to-Core connection is distinct from a turn's harness transport.
+From a disposable conversation with an inert pending approval, terminate only
+its fixture Core and keep the UI open. The global connection chip must stop
+claiming Core is ready, explain uncertainty and expose a valid reconnect action.
+Retain the selected project/session URL, transcript and unsent input; do not
+reinterpret connection loss as approval or completion. Reopen the same disposable
+database, reconnect through the visible control and show its reconciled interrupted
+turn without replay or a receipt. Add a production LAN regression first, then
+component health/timeout/stale-response tests if repair is required. Repeat this
+through the native supervisor using its isolated profile before release.
 
 ### Native graph and identity completion contract
 

@@ -56,6 +56,27 @@ export function HarnessSettings() {
     setServers(nextServers);
   };
 
+  const checkSavedHarness = async (profile: HarnessProfile) => {
+    if (!api) return false;
+    setError(undefined);
+    const failures: string[] = [];
+    try {
+      await api.checkHarness(profile.id);
+    } catch (checkError) {
+      void logCaughtDiagnostic("interface.harness_settings.health_failed", "A saved harness could not be checked.", checkError, "harness_settings");
+      failures.push(`Health check failed: ${checkError instanceof Error ? checkError.message : "runtime unavailable"}`);
+    }
+    try {
+      // An unrelated MCP catalog failure must not hide a saved harness.
+      setHarnesses(await api.listHarnesses());
+    } catch (catalogError) {
+      void logCaughtDiagnostic("interface.harness_settings.catalog_failed", "The harness catalog could not be refreshed.", catalogError, "harness_settings");
+      failures.push(`Catalog refresh failed: ${catalogError instanceof Error ? catalogError.message : "catalog unavailable"}`);
+    }
+    if (failures.length) setError(`The profile is saved. ${failures.join(". ")}. Use Check to retry.`);
+    return failures.length === 0;
+  };
+
   useEffect(() => {
     let active = true;
     if (!api || coreState !== "online") return () => { active = false; };
@@ -140,10 +161,13 @@ export function HarnessSettings() {
       const saved = editingHarness
         ? await api.updateHarness(editingHarness.id, payload, editingHarness.revision)
         : await api.createHarness(payload);
-      await api.checkHarness(saved.id);
-      await reload();
+      // Saving and checking are different operations. Publish the saved identity
+      // immediately so a failed check can never send the operator through Create.
+      setEditingHarness(saved);
+      setHarnesses(current => [...current.filter(profile => profile.id !== saved.id), saved]);
       setHarnessDialog(false);
-      announceSettingsSaved("Harness profile saved and checked.");
+      setBusy(saved.id);
+      if (await checkSavedHarness(saved)) announceSettingsSaved("Harness profile saved and checked.");
     } catch (saveError) {
       void logCaughtDiagnostic("interface.harness_settings.caught_failure_02", "A handled interface operation failed.", saveError, "harness_settings");
       setError(saveError instanceof Error ? saveError.message : "Could not save the harness profile.");
@@ -278,7 +302,7 @@ export function HarnessSettings() {
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.subagents} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { subagents: event.target.checked })} /><span><strong>Subagents</strong><small>Delegated analysis in the bounded session.</small></span></label>
         </details>
-        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.checkHarness(profile.id).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_06", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Health check failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
+        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings">

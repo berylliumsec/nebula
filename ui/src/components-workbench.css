@@ -1550,7 +1550,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   padding-bottom: 24px;
   overflow: auto;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  background: var(--surface-overlay);
   box-shadow: none;
   backdrop-filter: saturate(130%) blur(28px);
   -webkit-backdrop-filter: saturate(130%) blur(28px);

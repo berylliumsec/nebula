@@ -5,6 +5,7 @@
   --canvas: #020203;
   --surface: rgb(12 13 16 / 76%);
   --surface-raised: rgb(20 21 25 / 90%);
+  --surface-overlay: #141519;
   --surface-muted: rgb(8 9 12 / 82%);
   --surface-hover: rgb(42 45 52 / 72%);
   --border: rgb(222 233 255 / 20%);
@@ -37,6 +38,7 @@
   --canvas: #edf3f8;
   --surface: rgb(250 252 254 / 88%);
   --surface-raised: rgb(255 255 255 / 96%);
+  --surface-overlay: #ffffff;
   --surface-muted: rgb(232 239 246 / 90%);
   --surface-hover: rgb(218 229 239 / 88%);
   --border: rgb(48 75 101 / 24%);
