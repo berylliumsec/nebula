@@ -51,6 +51,20 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("reconnects after a browser network transition without discarding the selected workspace", async () => {
+    window.history.replaceState({}, "", "/?mission=run-1");
+    fixture.methods.listLibraryItems.mockResolvedValue({items: [{id: "retained"}]});
+    await mount();
+    act(() => window.dispatchEvent(new Event("offline")));
+    await waitFor(() => expect(state().workspace).toBe("failed"));
+    expect(state().library).toEqual([{id: "retained"}]);
+    act(() => window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(state().run.id).toBe("run-1");
+    expect(new URLSearchParams(location.search).get("mission")).toBe("run-1");
+    expect(fixture.methods.health).toHaveBeenCalledTimes(3);
+  });
+
   it("retries the global Library even without a selected project", async () => {
     fixture.methods.listEngagements.mockResolvedValue({ items: [] });
     fixture.methods.listLibraryItems.mockRejectedValueOnce(new Error("temporary"));

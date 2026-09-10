@@ -53,6 +53,7 @@ import type {
   SetupStatus,
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useCoreConnectionMonitor } from "./useCoreConnectionMonitor";
 
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
@@ -186,6 +187,14 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   ));
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
+  const connectionLost = useRef(false);
+
+  const loseConnection = useCallback((message: string) => {
+    connectionLost.current = true;
+    setCoreError(message);
+    setWorkspaceState("failed");
+    setStreamState("closed");
+  }, []);
 
   useEffect(() => {
     if (workspaceState !== "ready" && workspaceState !== "degraded") return;
@@ -196,12 +205,26 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, [health, resourceStatus, setupStatus, workspaceState]);
 
   const reconnect = useCallback(() => {
+    connectionLost.current = false;
     setWorkspaceState("starting");
     setCoreError(undefined);
     setResourceStatus((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value.state === "failed" ? { state: "loading" } : value])) as Record<WorkspaceResource, ResourceStatus>);
     runtimeResolution.current = undefined;
     setAttempt((value) => value + 1);
   }, []);
+
+  const observeHealth = useCallback((nextHealth: HealthResponse) => {
+    setHealth(nextHealth);
+    setDiagnosticsAvailability(nextHealth.diagnosticsDegraded !== true,
+      nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined);
+    setBrowserDiagnosticIngress(nextHealth.browserDiagnosticIngress === "enabled");
+    // Successful reachability restores saved state, never execution. A browser
+    // online event alone is not proof that this Core is reachable again.
+    if (connectionLost.current) reconnect();
+  }, [reconnect]);
+  useCoreConnectionMonitor(api,
+    workspaceState === "ready" || workspaceState === "degraded" || (workspaceState === "failed" && connectionLost.current),
+    observeHealth, loseConnection);
 
   useEffect(() => {
     let active = true;

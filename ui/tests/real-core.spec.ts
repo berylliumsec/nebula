@@ -1737,6 +1737,49 @@ for (const decision of ["Approve", "Reject"] as const) {
   });
 }
 
+test("stabilization real Core outage retains the conversation and exposes reconnect", async ({page}, testInfo) => {
+  test.setTimeout(70_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "single");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Core outage acceptance"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Core outage acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    const connection = page.locator(".connection-chip");
+    await expect(connection).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    const prompt = "Local outage fixture. Do not execute a command.";
+    await composer.fill(prompt);
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await page.getByRole("button", {name: "Review pending actions", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Approval required", exact: true})).toBeVisible();
+    await composer.fill("Retain this unsent draft through reconnection.");
+    const url = page.url();
+    const session = new URL(url).searchParams.get("session");
+    await core.disconnect();
+    await expect(connection).toHaveAccessibleName(/Nebula Core (failed|offline|disconnected|unavailable)/, {timeout: 15_000});
+    await expect(connection).toBeEnabled();
+    await expect(page.locator(".chat-message.operator")).toContainText(prompt);
+    await expect(composer).toHaveValue("Retain this unsent draft through reconnection.");
+    expect(page.url()).toBe(url);
+    await testInfo.attach("core-outage-visible", {body: await page.screenshot(), contentType: "image/png"});
+    await core.restart();
+    await connection.click();
+    await expect(connection).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await expect(page.getByRole("region", {name: "Approval required", exact: true})).toHaveCount(0);
+    await expect(composer).toHaveValue("Retain this unsent draft through reconnection.");
+    expect(page.url()).toBe(url);
+    const durable = await (await core.api.get(`chat/sessions/${session}/state`)).json();
+    expect(durable.execution).toBe("interrupted");
+    expect(durable.pending).toEqual([]);
+    expect(await core.receipts()).toEqual([]);
+    await testInfo.attach("core-outage-recovered", {body: JSON.stringify({origin: core.origin, durable}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
+
 for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
   test(`assistant upgrade stabilization failure ${scenario} does not replay work`, async ({page}, testInfo) => {
     test.setTimeout(120_000);

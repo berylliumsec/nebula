@@ -239,7 +239,8 @@ describe("Nebula workspace", () => {
 
   it("shows a truthful Core failure without fabricated workspace records", async () => {
     renderApp();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Nebula Core could not start");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Nebula Core is unavailable");
+    expect(screen.getByRole("button", {name: "Reconnect"})).toBeEnabled();
     expect(screen.queryByRole("button", { name: /Show activity inspector/ })).not.toBeInTheDocument();
     expect(screen.queryByText(/Acme|Jordan|Gateway applicability/i)).not.toBeInTheDocument();
   });

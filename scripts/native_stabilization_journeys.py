@@ -175,6 +175,119 @@ async def exercise(
         await named_click("Exit full screen workbench")
         await wait_for("return !document.querySelector('.sessions-page.full-screen');")
 
+        objects = [
+            {
+                "op": "put_object",
+                "id": f"native-mechanism-{i}",
+                "label": f"Local mechanism {i:02d}",
+                "classification": {"value": "Page", "status": "hypothesized"},
+                "authentication_context": "anonymous",
+                "properties": {
+                    "purpose": {
+                        "value": "Synthetic local workflow responsibility; no external site involved."
+                    }
+                },
+            }
+            for i in range(12)
+        ]
+        edges = [
+            {
+                "op": "put_relationship",
+                "id": f"native-edge-{i}",
+                "type": "contains",
+                "source": "native-mechanism-0",
+                "target": f"native-mechanism-{i}",
+                "claim": {"value": True, "status": "hypothesized"},
+            }
+            for i in range(1, 12)
+        ]
+        seeded = await core.post(
+            f"engagements/{project['id']}/application-model/transactions",
+            json={
+                "expected_revision": 0,
+                "idempotency_key": "native-model-fixture",
+                "operations": objects + edges,
+            },
+        )
+        seeded.raise_for_status()
+        await named_click("Application model")
+        await wait_for(
+            "return Boolean(document.querySelector('.am-category summary'));"
+        )
+        await click(".am-category summary")
+        await wait_for(
+            "return document.querySelectorAll('.am-outline .am-object').length===12;"
+        )
+        await click(".am-outline .am-object")
+        await named_click("Expand relationships")
+        await wait_for(
+            "return Boolean(document.querySelector('.am-map.am-fullscreen'));"
+        )
+        graph_measure = """
+          const panel=document.querySelector('.am-map.am-fullscreen'); if(!panel)return null;
+          const r=panel.getBoundingClientRect(),s=panel.querySelector('.am-graph-scroll').getBoundingClientRect();
+          const nodes=[...panel.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());
+          return {top:r.top,left:r.left,width:r.width,height:r.height,viewportWidth:innerWidth,viewportHeight:innerHeight,
+            spread:(Math.max(...nodes.map(n=>n.right))-Math.min(...nodes.map(n=>n.left)))/s.width,
+            count:nodes.length,selected:panel.querySelector('.am-node.selected')?.getAttribute('data-node-id')};
+        """
+        await wait_for(
+            "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return n.length===12 && (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
+        )
+        graph_bounds = await execute(graph_measure)
+        assert graph_bounds["selected"] == "native-mechanism-0", graph_bounds
+        assert graph_bounds["spread"] > 0.7 and graph_bounds["count"] == 12, (
+            graph_bounds
+        )
+        assert abs(graph_bounds["top"]) <= 1 and abs(graph_bounds["left"]) <= 1, (
+            graph_bounds
+        )
+        assert abs(graph_bounds["width"] - graph_bounds["viewportWidth"]) <= 1, (
+            graph_bounds
+        )
+        assert abs(graph_bounds["height"] - graph_bounds["viewportHeight"]) <= 1, (
+            graph_bounds
+        )
+        original_window = (await webdriver.get(prefix + "/window/rect")).json()["value"]
+        resized = await webdriver.post(
+            prefix + "/window/rect",
+            json={
+                "width": 1024 if graph_bounds["viewportWidth"] > 1200 else 1440,
+                "height": 768,
+            },
+        )
+        resized.raise_for_status()
+        await wait_for(f"return innerWidth!=={graph_bounds['viewportWidth']};")
+        await wait_for(
+            "const e=document.querySelector('.am-fullscreen .am-graph-scroll');const n=[...e.querySelectorAll('.am-node')].map(n=>n.getBoundingClientRect());return (Math.max(...n.map(n=>n.right))-Math.min(...n.map(n=>n.left)))/e.clientWidth>.7;"
+        )
+        graph_resized = await execute(graph_measure)
+        assert graph_resized["selected"] == graph_bounds["selected"], graph_resized
+        assert abs(graph_resized["width"] - graph_resized["viewportWidth"]) <= 1, (
+            graph_resized
+        )
+        assert abs(graph_resized["height"] - graph_resized["viewportHeight"]) <= 1, (
+            graph_resized
+        )
+        screenshot = await webdriver.get(prefix + "/screenshot")
+        screenshot.raise_for_status()
+        (evidence_root / "native-model-fullscreen-resized.png").write_bytes(
+            base64.b64decode(screenshot.json()["value"])
+        )
+        (
+            await webdriver.post(prefix + "/window/rect", json=original_window)
+        ).raise_for_status()
+        await named_click("Restore relationships")
+        await wait_for(
+            "return !document.querySelector('.am-fullscreen') && document.activeElement?.getAttribute('aria-label')==='Expand relationships';"
+        )
+        assert (
+            await execute(
+                "return document.querySelector('.am-node.selected')?.getAttribute('data-node-id');"
+            )
+            == graph_bounds["selected"]
+        )
+
         # Close and launch the actual native application, retaining only this
         # disposable profile. Rediscover the completed chat through its list.
         prefix, backend = await relaunch()
@@ -256,6 +369,76 @@ async def exercise(
         (evidence_root / "native-relaunch-scroll.png").write_bytes(
             base64.b64decode(screenshot.json()["value"])
         )
+
+        # Inject an outage only into this disposable native supervisor. The
+        # recovery itself uses the visible connection control, never an API
+        # substitute. Retain draft/URL and prove completed work is not replayed.
+        outage_url = await execute("return location.href;")
+        composer = await element("#analyst-message")
+        (
+            await webdriver.post(
+                prefix + f"/element/{composer}/value",
+                json={"text": "Unsent native reconnect draft. Do not send."},
+            )
+        ).raise_for_status()
+        stopped = await webdriver.post(
+            prefix + "/execute/async",
+            json={
+                "script": "const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('stop_local_backend').then(()=>done({stopped:true})).catch(e=>done({error:String(e)}));",
+                "args": [],
+            },
+        )
+        stopped.raise_for_status()
+        assert stopped.json()["value"] == {"stopped": True}, stopped.text
+        await wait_for(
+            "return document.querySelector('.connection-chip')?.getAttribute('aria-label')==='Nebula Core failed. Retry connection';"
+        )
+        assert await execute("return location.href;") == outage_url
+        assert (
+            await execute("return document.querySelector('#analyst-message')?.value;")
+            == "Unsent native reconnect draft. Do not send."
+        )
+        await click(".connection-chip")
+        await wait_for(
+            "return /Nebula Core (ready|degraded)/.test(document.querySelector('.connection-chip')?.getAttribute('aria-label')||'');"
+        )
+        assert await execute("return location.href;") == outage_url
+        assert (
+            await execute("return document.querySelector('#analyst-message')?.value;")
+            == "Unsent native reconnect draft. Do not send."
+        )
+        assert await execute(
+            "return [...document.querySelectorAll('.assistant-markdown')].filter(e=>e.textContent.includes('NATIVE_APPROVAL_ACCEPTED_ONCE')).length===1;"
+        )
+        screenshot = await webdriver.get(prefix + "/screenshot")
+        screenshot.raise_for_status()
+        (evidence_root / "native-core-reconnected.png").write_bytes(
+            base64.b64decode(screenshot.json()["value"])
+        )
+        if not await execute(
+            "const e=document.querySelector('a[href=\"/settings\"]');return Boolean(e?.getClientRects().length && e.getBoundingClientRect().width);"
+        ):
+            await named_click("Show sidebar")
+        await click('a[href="/settings"]')
+        await wait_for(
+            "return Boolean(document.querySelector('a[aria-label=\"Diagnostics settings and recent errors\"]'));"
+        )
+        await click('a[aria-label="Diagnostics settings and recent errors"]')
+        await wait_for(
+            "return document.querySelector('.build-identity strong')?.textContent==='Builds match';"
+        )
+        identity = await execute(
+            "const e=document.querySelector('.build-identity');return {text:e.textContent,commits:[...e.querySelectorAll('code')].map(n=>n.title)};"
+        )
+        assert len(identity["commits"]) == 3 and len(set(identity["commits"])) == 1, (
+            identity
+        )
+        assert len(identity["commits"][0]) == 40, identity
+        screenshot = await webdriver.get(prefix + "/screenshot")
+        screenshot.raise_for_status()
+        (evidence_root / "native-build-identity.png").write_bytes(
+            base64.b64decode(screenshot.json()["value"])
+        )
         receipts = [
             json.loads(line)
             for line in fixture.with_suffix(".receipts.jsonl").read_text().splitlines()
@@ -281,7 +464,12 @@ async def exercise(
             "actual_app_relaunch": True,
             "saved_chat_rediscovered": True,
             "native_transcript_scroll": True,
+            "native_core_outage_recovery": True,
+            "native_reconnect_draft_retained": True,
             "fullscreen_workbench": fullscreen,
+            "fullscreen_model": graph_bounds,
+            "resized_model": graph_resized,
+            "displayed_build_identity": identity,
         }
         (evidence_root / "native-approval-evidence.json").write_text(
             json.dumps(result, indent=2)

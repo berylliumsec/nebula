@@ -549,6 +549,40 @@ turn without replay or a receipt. Add a production LAN regression first, then
 component health/timeout/stale-response tests if repair is required. Repeat this
 through the native supervisor using its isolated profile before release.
 
+A9 reproduced: after its Core process exits, the global chip continues showing
+degraded/online because workspace health is read only during bootstrap. Added
+bounded read-only health probes, offline/visibility handling and generation-safe
+cancellation. Unreachable Core now exposes reconnect while retaining draft/URL.
+The production LAN outage journey passed **8 profiles in 59.95s**, zero skips/
+flaky, with durable interrupted state and zero adapter receipts. Ten focused
+connection/recovery unit tests passed in 0.95s. Compatibility checking then caught
+a network-online regression: marking the workspace offline suspends session
+polling, so the online event must re-bootstrap after an observed connection loss.
+It must not retry an authentication/setup failure or replay a mutation. Added a
+workspace integration regression; the three-case approval compatibility repeat
+and native supervisor outage gate remain pending. Evidence:
+`/tmp/nebula-stabilization-core-outage-red`,
+`/tmp/nebula-stabilization-core-outage8`,
+`/tmp/nebula-stabilization-connection-approval3`.
+
+A9 compatibility repair uses successful read-only Core reachability, not just a
+browser online event, to re-bootstrap saved state after loss. Probes are bounded,
+coalesced, cancelled on binding changes and ignored after their deadline. They
+continue after loss without repeating the error; no command or approval is
+replayed. The existing disconnect/restart-waiting/crash-after-record cases now
+pass (**3 in 33.2s**), plus **11 focused connection/recovery tests in 0.98s**.
+The refreshed frontend selection passed **92 tests in 37.74s**. The Core failure
+copy assertion was updated to the new accurate unavailable/reconnect wording.
+A test-only unsupported locator option initially blocked the production build;
+two prematurely started old-bundle browser runs were terminated and are not
+acceptance. Successful rebuild: `/tmp/nebula-stabilization-connection-build4.log`.
+Compatibility evidence: `/tmp/nebula-stabilization-connection-approval3-v4`;
+frontend: `/tmp/nebula-stabilization-frontend92-v2.log`.
+Final A9 outage repeat after the compatibility repair: **8 passed in 68.37s**,
+zero skips/unexpected/flaky, all permanent real-Core desktop/mobile profiles.
+Evidence: `/tmp/nebula-stabilization-core-outage8-v4`. The native supervisor
+outage, graph and identity journeys still require the next clean package.
+
 ### Native graph and identity completion contract
 
 Extend the permanent extracted-package journey, not an ad hoc browser script.
