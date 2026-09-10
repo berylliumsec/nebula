@@ -2242,6 +2242,167 @@ test("stabilization real Core Library makes uploads visible and retains original
   } finally {await api.dispose(); await stopRealCore(core);}
 });
 
+for (const area of ["asset", "evidence", "finding"] as const) {
+  test(`stabilization real Core ${area} creation survives failure and remains discoverable`, async ({page}, testInfo) => {
+    test.setTimeout(100_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const name = `Synthetic ${area} fixture`;
+    const bytes = Buffer.from("Local fixture observation only. No external target or script execution.\n");
+    const collection = area === "evidence" ? "evidence" : `${area}s`;
+    const endpoint = area === "evidence" ? "evidence/upload" : collection;
+    try {
+      const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Resource acceptance"}});
+      const pair = await pairing.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Resource acceptance");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${core.origin}/${area === "finding" ? "findings" : "project"}`);
+      if (area !== "finding") await page.getByRole("button", {name: area === "asset" ? "Assets" : "Evidence", exact: true}).click();
+      const search = page.getByRole("searchbox", {name: `Search ${collection}`, exact: true});
+      await search.fill("unrelated stale filter");
+      if (area === "asset") {
+        await page.getByLabel("Filter assets by kind").selectOption("cloud");
+        await page.getByLabel("Filter assets by exposure").selectOption("external");
+      } else if (area === "finding") {
+        await page.getByLabel("Filter findings by severity").selectOption("critical");
+        await page.getByLabel("Filter findings by status").selectOption("remediated");
+      }
+      await page.getByRole("button", {name: area === "finding" ? "New finding" : `Add ${area}`, exact: true}).click();
+      const dialog = page.getByRole("dialog", {name: area === "finding" ? "Create candidate finding" : `Add ${area}`, exact: true});
+      const title = dialog.getByRole("textbox", {name: area === "asset" ? "Name" : "Title", exact: true});
+      await title.fill(name);
+      if (area === "evidence") await dialog.getByLabel("File", {exact: true}).setInputFiles({name: "local-fixture.txt", mimeType: "text/plain", buffer: bytes});
+      if (area === "finding") {
+        await dialog.getByRole("combobox", {name: "Severity", exact: true}).selectOption("info");
+        await dialog.getByLabel("Description", {exact: true}).fill("Synthetic unverified observation for interface acceptance.");
+      }
+      let failed = false;
+      await page.route(`**/api/v1/${endpoint}`, async route => {
+        if (route.request().method() === "POST" && !failed) {
+          failed = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic pre-save failure"})});
+        } else await route.continue();
+      });
+      const save = dialog.getByRole("button", {name: area === "asset" ? "Add asset" : area === "evidence" ? "Store evidence" : "Create candidate", exact: true});
+      await save.click();
+      await expect(dialog).toContainText("Synthetic pre-save failure");
+      await expect(title).toHaveValue(name);
+      await expect(save).toBeEnabled();
+      if (area === "evidence") expect(await dialog.getByLabel("File", {exact: true}).evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("local-fixture.txt");
+      const savedResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith(`/api/v1/${endpoint}`));
+      await save.click();
+      const response = await savedResponse;
+      expect(response.ok(), await response.text()).toBe(true);
+      const saved = await response.json();
+      await expect(dialog).toHaveCount(0);
+      const row = area === "evidence" ? page.locator(".artifact-card").filter({hasText: name}) : page.getByRole("row").filter({hasText: name});
+      await expect(row).toBeVisible();
+      await expect(search).toHaveValue("");
+      const inspect = row.getByRole("button", {name: area === "finding" ? `Edit ${name}` : "Inspect", exact: true});
+      await inspect.focus(); await inspect.press("Enter");
+      const inspector = page.getByRole("complementary", {name, exact: true});
+      await expect(inspector).toBeVisible();
+      if (area === "finding") await inspector.getByRole("textbox", {name: "Title", exact: true}).fill(`${name} discard me`);
+      await page.getByRole("button", {name: `Close ${area} details`, exact: true}).click();
+      if (area === "finding") await page.getByRole("dialog", {name: "Discard finding changes?"}).getByRole("button", {name: "Discard changes", exact: true}).click();
+      await expect(inspector).toHaveCount(0);
+      await expect(inspect).toBeFocused();
+      await inspect.click(); await page.reload();
+      await expect(inspector).toBeVisible();
+      const durable = await (await api.get(`${collection}/${saved.id}`)).json();
+      expect(durable.id).toBe(saved.id);
+      expect(durable.engagement_id).toBe(saved.engagement_id);
+      if (area === "evidence") {
+        const artifact = await api.get(`artifacts/${durable.artifact_id}/content`);
+        expect(await artifact.body()).toEqual(bytes);
+        expect(durable.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      }
+      await testInfo.attach("resource-durable", {body: JSON.stringify({origin: core.origin, area, durable}), contentType: "application/json"});
+      await testInfo.attach("resource-inspector", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await api.dispose(); await stopRealCore(core);}
+  });
+}
+
+test("stabilization real Core finding drafts stay bound to their record through history", async ({page}, testInfo) => {
+  test.setTimeout(100_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  let releaseSave = () => {};
+  try {
+    const project = (await (await api.get("engagements")).json())[0];
+    const records = [];
+    for (const title of ["Synthetic first observation", "Synthetic second observation"]) {
+      const response = await api.post("findings", {data: {engagement_id: project.id, title, description: "Local interface fixture only", severity: "info", status: "candidate"}});
+      expect(response.ok(), await response.text()).toBe(true);
+      records.push(await response.json());
+    }
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Finding draft acceptance"}});
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Finding draft acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/findings`);
+    const inspector = page.locator(".finding-dialog");
+    const input = inspector.getByRole("textbox", {name: "Title", exact: true});
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await input.fill("First unsaved draft");
+    await page.goBack();
+    await expect(inspector).toHaveCount(0);
+    await page.getByRole("button", {name: `Edit ${records[1].title}`, exact: true}).click();
+    await expect(input).toHaveValue(records[1].title);
+    await input.fill("Second unsaved draft");
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await expect(input).toHaveValue("First unsaved draft");
+    // Another operator changes the durable record. History must not silently
+    // rebase the first draft onto this new revision and overwrite that work.
+    const changed = await api.patch(`findings/${records[0].id}`, {data: {expected_revision: records[0].revision, changes: {description: "Concurrent synthetic edit"}}});
+    expect(changed.ok(), await changed.text()).toBe(true);
+    const save = inspector.getByRole("button", {name: "Save finding", exact: true});
+    const conflict = page.waitForResponse(r => r.request().method() === "PATCH" && r.url().endsWith(`/findings/${records[0].id}`));
+    await save.click();
+    expect((await conflict).status()).toBe(409);
+    await expect(input).toHaveValue("First unsaved draft");
+    await expect(inspector.getByRole("alert")).toBeVisible();
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[1].title}`, exact: true}).click();
+    await expect(input).toHaveValue("Second unsaved draft");
+    await expect(inspector.getByRole("alert")).toHaveCount(0);
+    const release = new Promise<void>(resolve => {releaseSave = resolve;});
+    await page.route(`**/api/v1/findings/${records[1].id}`, async route => {
+      if (route.request().method() !== "PATCH") {await route.continue(); return;}
+      const response = await route.fetch();
+      await release;
+      await route.fulfill({response});
+    });
+    await save.click();
+    await expect.poll(async () => (await (await api.get(`findings/${records[1].id}`)).json()).title).toBe("Second unsaved draft");
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await expect(input).toHaveValue("First unsaved draft");
+    releaseSave();
+    await expect(page.getByRole("button", {name: "Edit Second unsaved draft", exact: true})).toBeVisible();
+    await expect(input).toHaveValue("First unsaved draft");
+    expect(page.url()).toContain(records[0].id);
+    await page.goBack();
+    await page.getByRole("button", {name: "Edit Second unsaved draft", exact: true}).click();
+    await expect(inspector).toContainText("Saved · revision");
+    const first = await (await api.get(`findings/${records[0].id}`)).json();
+    const second = await (await api.get(`findings/${records[1].id}`)).json();
+    expect(first.title).toBe(records[0].title);
+    expect(first.description).toBe("Concurrent synthetic edit");
+    expect(second.title).toBe("Second unsaved draft");
+    await page.reload();
+    await expect(input).toHaveValue(second.title);
+    await expect(save).toBeDisabled();
+    await testInfo.attach("finding-draft-authority", {body: JSON.stringify({origin: core.origin, first, second}), contentType: "application/json"});
+    await testInfo.attach("finding-draft-saved", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {releaseSave(); await api.dispose(); await stopRealCore(core);}
+});
+
 test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });

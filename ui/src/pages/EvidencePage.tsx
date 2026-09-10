@@ -85,6 +85,7 @@ export function EvidencePage() {
       const contentBase64 = encodeBase64(await file.arrayBuffer());
       setMessage(`Hashing and storing ${file.name}…`);
       await uploadEvidence({ engagementId: engagement.id, filename: file.name, title, evidenceType, contentBase64, mediaType: file.type || undefined, description, source: "operator_upload", findingId: findingId || undefined, assetIds, capturedBy: activeOperator?.id });
+      setQuery("");
       setMessage(`${file.name} was stored and verified.`);
       closeUpload();
     } catch (uploadError) {

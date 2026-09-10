@@ -1183,7 +1183,8 @@ describe("Nebula workspace", () => {
     await user.click(within(secondInspector).getByRole("button", { name: "Close finding details" }));
     discardDialog = screen.getByRole("dialog", { name: "Discard finding changes?" });
     await user.click(within(discardDialog).getByRole("button", { name: "Discard changes" }));
-    expect(screen.queryByRole("complementary", { name: "Second finding" })).not.toBeInTheDocument();
+    // Confirmation and canonical route selection settle asynchronously.
+    await waitFor(() => expect(screen.queryByRole("complementary", { name: "Second finding" })).not.toBeInTheDocument());
   });
 
   it("retains a finding draft after a revision conflict and validates confirmed evidence locally", async () => {

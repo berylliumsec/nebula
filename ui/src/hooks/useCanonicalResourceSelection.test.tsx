@@ -1,4 +1,4 @@
-import {render, screen} from "@testing-library/react";
+import {render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {useState} from "react";
 import {MemoryRouter, Route, Routes, useNavigate} from "react-router-dom";
@@ -10,12 +10,13 @@ const initialItems = [{id: "a", label: "Saved revision one"}];
 
 function Inspector({items = initialItems}: {items?: typeof initialItems}) {
   const [selected, setSelected] = useState<(typeof items)[number]>();
-  const {closeResource, missingResourceId} = useCanonicalResourceSelection("library_item", items, selected, setSelected);
+  const {closeResource, missingResourceId, openResource} = useCanonicalResourceSelection("library_item", items, selected, setSelected);
   const navigate = useNavigate();
   return <>
     <output data-testid="selected">{selected?.label ?? "none"}</output>
     <output data-testid="missing">{missingResourceId}</output>
     <button onClick={closeResource}>Close</button>
+    <button onClick={() => openResource(items[0])}>Inspect item</button>
     <button onClick={() => navigate(-1)}>Back</button>
     <button onClick={() => navigate(1)}>Forward</button>
     <button onClick={() => navigate("/library/missing")}>Invalid link</button>
@@ -29,6 +30,14 @@ function Harness({items = initialItems}: {items?: typeof initialItems}) {
 }
 
 describe("canonical resource selection", () => {
+  it("returns keyboard focus to the initiating item when details close", async () => {
+    const user = userEvent.setup(); render(<Harness />);
+    await user.click(screen.getByRole("button", {name: "Close"}));
+    const opener = screen.getByRole("button", {name: "Inspect item"});
+    opener.focus(); await user.keyboard("{Enter}");
+    await user.click(screen.getByRole("button", {name: "Close"}));
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
   it("closes the inspector with its canonical list route", async () => {
     const user = userEvent.setup(); render(<Harness />);
     expect(screen.getByTestId("selected")).toHaveTextContent("Saved revision one");

@@ -63,6 +63,9 @@ export function AssetsPage() {
         exposure: assetExposure,
         tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
+      setQuery("");
+      setKind("all");
+      setExposure("all");
       setAdding(false);
       setName("");
       setAddress("");

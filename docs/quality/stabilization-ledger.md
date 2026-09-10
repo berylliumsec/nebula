@@ -445,6 +445,59 @@ another; no vulnerability reproduction or external target is involved. Layers:
 real-Core production LAN desktop baseline, component ownership regressions,
 desktop and mobile engines, final same-artifact/native handoffs as applicable.
 
+L3/L4 desktop production: asset and evidence passed; the finding case also passed
+after correcting the test's Inspect locator to its existing named Edit action.
+All three preserve failed input, reveal the saved record and return keyboard
+focus. Evidence: `/tmp/nebula-stabilization-resource-reveal-green` (two pass,
+one test-locator timeout) and `/tmp/nebula-stabilization-finding-history-red`
+(finding creation pass, history regression fail).
+L5 reproduced: Back to the list, edit another finding, reopen the first silently
+loses the first unsaved draft. Bind transient edit snapshots to project + record,
+including the original revision, error and in-flight mutation. History may retain
+these drafts during the page's lifetime; explicit confirmed discard removes only
+that record's draft. A late save must update only its owning record. Do not persist
+these drafts across app restarts or silently rebase over another operator's save.
+Add deterministic hook regressions and repeat the real-Core history/conflict
+journey across permanent desktop/mobile profiles before the packaged gate.
+L3–L5 interaction verification: **32 passed in 166.61s**, zero skips/flaky,
+across Chromium desktop 1440/1024 and emulated Chromium/WebKit 320/390/430.
+The history case includes a delayed saved response while viewing another draft;
+only its owning record changes. Explicit discard and focus return also passed.
+The original App assertion required awaiting asynchronous confirmation/navigation;
+42 focused hook/application tests then passed. Refreshed frontend selection:
+**79 passed in 26.45s**. Evidence: `/tmp/nebula-stabilization-resource-matrix`,
+adjacent selection/log, and `/tmp/nebula-stabilization-frontend79.log`.
+
+N8 visual review of a successful WebKit 320 trace found the shared inspector and
+sticky finding footer are too translucent: underlying list text visibly overlaps
+the editable content. Resource interaction success does not waive this defect.
+Use the existing theme's opaque overlay surface, retaining its palette and
+geometry; verify all resource inspectors, footer readability, long content,
+short viewport scrolling and the existing focus journey on the production bundle.
+Add a failing computed-surface regression before the CSS repair and inspect the
+resulting screenshots. Evidence image:
+`/tmp/nebula-resource-review-UO6hqF/77196d61fdd38c32f44195afd5599d7cba0048b9`.
+
+### Runtime settings acceptance contract
+
+From Settings → Advanced, add one disposable provider backed by the existing
+loopback model stub and one harness backed by the inert ACP fixture. Inject a
+pre-write save failure, then a failed health-check response after persistence.
+Failed input must remain editable; after persistence the saved profile must be
+discoverable, with a Check/Refresh recovery action that cannot create duplicates.
+Retry health, rediscover reported models, save a selected default, reload and
+verify the same durable ID/revision and model. Exercise disabled/enabled state
+and downstream chat selector visibility without executing a tool or sending any
+external request. Core owns profiles and health; the form owns only unsaved input.
+Health failure is not save failure. Collect the two desktop cases, then repeat
+applicable permanent browser profiles and the final production/native candidate.
+S1 reproduced after correcting the test's plural endpoint: provider save/health
+recovery passes, but harness persistence followed by failed health keeps the Add
+dialog open, without exposing the saved profile or a distinct Check retry.
+Record the saved identity immediately; make catalog refresh and health failures
+recoverable independently, never retry a create because a health check failed.
+Evidence: `/tmp/nebula-stabilization-runtime-settings-red2` (one pass/one fail).
+
 ### Native graph and identity completion contract
 
 Extend the permanent extracted-package journey, not an ad hoc browser script.
