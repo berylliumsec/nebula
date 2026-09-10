@@ -16,7 +16,9 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -133,6 +135,18 @@ class EntityRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+
+class SessionProjectionRow(Base):
+    """Derived display watermark, separate from authoritative execution records."""
+
+    __tablename__ = "session_projections"
+
+    session_id: Mapped[str] = mapped_column(
+        String(200), ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 class ResourceRelationRow(Base):

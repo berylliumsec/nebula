@@ -2061,6 +2061,7 @@ export interface KnowledgeIndexStatus {
 export interface HealthResponse {
   status: "ok" | "degraded";
   version: string;
+  commit?: string;
   mode: "local" | "team";
   runner: "ready" | "unavailable" | "degraded";
   containerTerminal: "configured" | "unavailable";

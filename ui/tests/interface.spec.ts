@@ -2030,6 +2030,110 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
+reloadTest("stabilization empty project offers the existing project picker after reload", async ({ page }, testInfo) => {
+  await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({json: []}));
+  await page.goto("/?view=chat");
+  await expect(page.getByRole("heading", {name: "Choose a project"})).toBeVisible();
+  await expect(page.getByText("Opening project…", {exact: true})).toHaveCount(0);
+  await page.reload();
+  const choose = page.getByRole("button", {name: "Choose project", exact: true});
+  await expect(choose).toBeVisible();
+  await choose.focus();
+  await page.keyboard.press("Enter");
+  const picker = page.getByRole("dialog", {name: "Project switcher"});
+  await expect(picker).toBeVisible();
+  await picker.getByRole("button", {name: "New project"}).click();
+  await expect(picker.getByLabel("Name", {exact: true})).toBeFocused();
+  await picker.getByLabel("Name", {exact: true}).fill("Disposable workspace");
+  await expect(picker.getByRole("button", {name: "Create", exact: true})).toBeInViewport();
+  await expect(page.locator("body")).toHaveJSProperty("scrollWidth", await page.locator("body").evaluate(el => el.clientWidth));
+  await testInfo.attach("empty-project-recovery", {body: await page.screenshot(), contentType: "image/png"});
+});
+
+test("stabilization workspace notices leave the composer reachable", async ({page}, testInfo) => {
+  test.setTimeout(75_000);
+  let healthReads = 0;
+  await page.route(/\/api\/v1\/health(?:\?|$)/, route => {
+    healthReads += 1;
+    return route.fulfill({json: {status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured", diagnostics: {writable: true, degraded: false, browser_event_ingress: "disabled"}}});
+  });
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
+    ...entity, id: "notice-fixture", name: "Configured fixture", kind: "grok_acp",
+    connection_mode: "spawn", transport: "stdio", executable: "/bin/true", auth_mode: "existing_session",
+    enabled: true, default_model: "fixture", privacy: {local_only: true, permits_sensitive_data: true},
+    capabilities: {models: ["fixture"], checked_at: entity.updated_at},
+  }]}));
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await page.goto("/?view=chat");
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+  await expect(composer).toBeVisible();
+  for (const landscape of [false, true]) {
+    if (landscape) await page.setViewportSize({width: 844, height: 390});
+    for (const detail of ["Browser event capture is disabled for this binding.", "Local diagnostic storage is temporarily unavailable. ".repeat(8)]) {
+      await page.evaluate(reason => window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {detail: {available: false, reason}})), detail);
+      await expect(page.locator(".diagnostics-unavailable")).toBeVisible();
+      await composer.fill("Keep my draft and primary actions visible.");
+      const send = page.getByRole("button", {name: "Send message", exact: true});
+      await expect(send).toBeEnabled();
+      const geometry = await send.evaluate(button => {
+        const rect = button.getBoundingClientRect();
+        const panel = button.closest('.chat-panel')!;
+        const box = button.closest('.chat-composer')!.getBoundingClientRect();
+        const search = panel.querySelector('.assistant-search')!;
+        const summary = search.querySelector('summary')!.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+        return {
+          bottom: rect.bottom, height: rect.height, width: rect.width, hit: button.contains(hit),
+          boundary: document.querySelector("main")!.getBoundingClientRect().bottom,
+          composerBottom: box.bottom, panelBottom: panel.getBoundingClientRect().bottom,
+          searchBottom: search.getBoundingClientRect().bottom,
+          summaryBottom: summary.bottom, summaryHeight: summary.height,
+        };
+      });
+      await testInfo.attach(`workspace-notices-${landscape ? "landscape" : "portrait"}`, {body: await page.screenshot(), contentType: "image/png"});
+      expect(geometry.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.boundary);
+      expect(geometry.composerBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.panelBottom);
+      expect(geometry.summaryBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.searchBottom);
+      expect(geometry.height).toBeGreaterThanOrEqual(44);
+      expect(geometry.width).toBeGreaterThanOrEqual(44);
+      expect(geometry.summaryHeight).toBeGreaterThanOrEqual(44);
+      expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
+      await send.focus();
+      await expect(send).toBeFocused();
+      await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
+      expect((await new AxeBuilder({page}).include("main").analyze()).violations).toEqual([]);
+      const details = page.getByRole("button", {name: "Diagnostics notice details", exact: true});
+      const noticeBounds = await details.evaluate(button => {
+        const row = button.closest('.workspace-notices')!.getBoundingClientRect();
+        const controls = [...button.closest('.diagnostics-unavailable')!.querySelectorAll('button, strong')];
+        return controls.map(control => {
+          const r = control.getBoundingClientRect();
+          return {label: control.textContent || control.getAttribute('aria-label'), top: r.top, bottom: r.bottom, rowTop: row.top, rowBottom: row.bottom, transform: getComputedStyle(control).transform, fits: r.top >= row.top && r.bottom <= row.bottom && r.left >= row.left && r.right <= row.right};
+        });
+      });
+      expect(noticeBounds.every(control => control.fits), JSON.stringify(noticeBounds)).toBe(true);
+      await details.click();
+      const dialog = page.getByRole("dialog", {name: /(?:Local diagnostics|Browser event capture) (?:are|is) unavailable/});
+      await expect(dialog).toBeVisible();
+      if (!landscape && detail.startsWith("Browser event capture")) {
+        const beforePoll = healthReads;
+        await expect.poll(() => healthReads, {timeout: 8_000}).toBeGreaterThan(beforePoll);
+        await expect(dialog, "An unchanged health sample must not close diagnostics being read").toBeVisible();
+      }
+      await expect(dialog.getByRole("button", {name: "Close", exact: true})).toBeInViewport();
+      expect((await new AxeBuilder({page}).include(".diagnostics-notice-dialog").analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(details).toBeFocused();
+      await expect(composer).toHaveValue("Keep my draft and primary actions visible.");
+    }
+  }
+  await testInfo.attach("workspace-notices", {body: await page.screenshot(), contentType: "image/png"});
+  await page.getByRole("button", {name: "Dismiss diagnostics notice", exact: true}).click();
+  await expect(page.locator(".diagnostics-unavailable")).toHaveCount(0);
+});
+
 test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
   let durableScope = {
     ...entity,
@@ -3713,7 +3817,7 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
   await expect(restoredLedger.getByText("Search evidence", { exact: true })).toBeVisible();
 });
 
-test("completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
+test("stabilization completed harness output keeps one continuous transcript scroll", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by the permanent desktop and mobile harness projects.");
   const harnessSessionId = "c9745e80-3333-4444-8555-666677778888";
   const harnessTurnId = "c9745e80-4444-4555-8666-777788889999";
@@ -3874,10 +3978,11 @@ test("completed harness output keeps one continuous transcript scroll", async ({
     viewportWidth: innerWidth,
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
+    overflow: [...element.querySelectorAll<HTMLElement>("*")].filter(child => child.getBoundingClientRect().right > element.getBoundingClientRect().right + 1).map(child => ({tag: child.tagName, className: child.className, width: child.getBoundingClientRect().width, right: child.getBoundingClientRect().right, margin: getComputedStyle(child).margin, padding: getComputedStyle(child).padding})),
   }));
   expect(planGeometry.left).toBeGreaterThanOrEqual(0);
   expect(planGeometry.right).toBeLessThanOrEqual(planGeometry.viewportWidth + 1);
-  expect(planGeometry.scrollWidth).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
+  expect(planGeometry.scrollWidth, JSON.stringify(planGeometry)).toBeLessThanOrEqual(planGeometry.clientWidth + 1);
   if ((page.viewportSize()?.width ?? 0) >= 1024) expect(planGeometry.width).toBeLessThanOrEqual(841);
   if (testInfo.project.name.startsWith("mobile-")) {
     const planToggleBounds = await collapsePlan.boundingBox();
@@ -3885,6 +3990,8 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   }
   const planAccessibility = await new AxeBuilder({ page }).include(".harness-status-rail").analyze();
   expect(planAccessibility.violations).toEqual([]);
+  await planSteps.focus();
+  await expect(planSteps).toBeFocused();
   await collapsePlan.click();
   await expect(page.getByRole("list", { name: "Plan steps" })).toHaveCount(0);
   const ledger = page.getByRole("region", { name: "Work summary" });
@@ -3926,8 +4033,12 @@ test("completed harness output keeps one continuous transcript scroll", async ({
   const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
   await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);
-  await completedMessage.hover();
+  // A long article's center can lie behind fixed chrome even after scrolling.
+  // Exercise the visible end of the answer where the operator reaches actions.
+  await completedMessage.locator(".assistant-markdown p").last().hover();
   await expect(completedMessage.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
+  await forkAction.scrollIntoViewIfNeeded();
+  await expect(forkAction).toBeInViewport();
   if (testInfo.project.name.startsWith("mobile-")) {
     const bounds = await forkAction.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
@@ -5032,14 +5143,10 @@ test("Light preserves each critical workspace hierarchy", async ({ page }) => {
   }
 });
 
-test("audit every primary workspace view", async ({ page }, testInfo) => {
+test("stabilization audit every primary workspace view", async ({ page }, testInfo) => {
   // This journey renders 24 full-page captures; software WebKit needs a larger
   // total budget while each interaction and geometry assertion stays unchanged.
   test.setTimeout(testInfo.project.name.includes("webkit") ? 300_000 : 150_000);
-  if (testInfo.project.name === "desktop") {
-    await page.setViewportSize({ width: 1756, height: 1194 });
-  }
-
   const capture = async (name: string) => {
     await page.waitForTimeout(120);
     const overflow = await page.locator("body").evaluate(() => {
@@ -5068,6 +5175,38 @@ test("audit every primary workspace view", async ({ page }, testInfo) => {
         .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.clientWidth}/${element.scrollWidth}`);
     });
     expect(overflow, `${name} contains horizontally clipped UI`).toEqual([]);
+    const croppedActions = await page.locator(".toolbar-page-actions .button.primary").evaluateAll(buttons => buttons.flatMap(button => {
+      const bounds = button.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return [];
+      const label = button.getAttribute("aria-label") || button.textContent?.trim() || "unnamed";
+      const issues: string[] = [];
+      const host = button.closest(".top-bar-page-actions")!.getBoundingClientRect();
+      if (bounds.left < host.left - 1 || bounds.right > host.right + 1) issues.push(`${label}: cropped button ${bounds.left}..${bounds.right}, host ${host.left}..${host.right}`);
+      const inside = (box: DOMRect) => box.left >= bounds.left - 1 && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1;
+      const icon = button.querySelector("svg")?.getBoundingClientRect();
+      if (!icon || icon.width < 12 || icon.height < 12 || !inside(icon)) issues.push(`${label}: cropped icon`);
+      if (bounds.width < 44 || bounds.height < 44) issues.push(`${label}: undersized target`);
+      const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects()) if (rect.width && rect.height && !inside(rect)) issues.push(`${label}: cropped label`);
+      }
+      return issues;
+    }));
+    expect(croppedActions, `${name} has incomplete primary toolbar actions`).toEqual([]);
+    if (name === "workbench-assistant") {
+      const network = page.getByRole("button", {name: /Terminal container public IP.*Show details/});
+      await network.click();
+      const dialog = page.getByRole("dialog", {name: "Terminal network address"});
+      await expect(dialog.getByRole("textbox", {name: "Public IP address"})).not.toHaveValue("");
+      await dialog.getByRole("button", {name: "Copy address", exact: true}).click();
+      await expect(dialog.locator('[role="status"], [role="alert"]')).toBeVisible();
+      expect((await new AxeBuilder({page}).include('[role="dialog"]').analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(network).toBeFocused();
+    }
     expect(await findPathologicalText(page), `${name} renders prose in a pathologically narrow column`).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
     // Optional, inert design snapshots use fixture data and never ship in the app.
@@ -5246,7 +5385,7 @@ test("Assistant session details use reloadable drawer navigation", async ({ page
   await expect.poll(() => new URL(page.url()).searchParams.get("drawer")).toBeNull();
 });
 
-test("audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
+test("stabilization audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const captureDialog = async (name: string, opener: ReturnType<Page["getByRole"]>, dialogName: string) => {
     await opener.scrollIntoViewIfNeeded();
@@ -5471,7 +5610,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
 
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   const browserToolbar = page.locator(".managed-browser-toolbar");
-  for (const name of ["New tab", "Close tab", "Go", "Reconnect view", "Ask about page", "Ask about selected text", "Pick element", "Select region"]) {
+  for (const name of ["Reconnect view", "Ask about page"]) {
     const action = browserToolbar.getByRole("button", { name, exact: true });
     await expect(action.locator("svg")).toBeVisible();
     await expect(action).toHaveText("");
@@ -5489,25 +5628,20 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   const browserBounds = await page.locator(".integrated-browser-page").boundingBox();
   expect(expandedPage!.height).toBeGreaterThanOrEqual(160);
   expect(expandedPage!.y - browserBounds!.y).toBeLessThan(205);
-  await page.getByLabel("Browser address").fill("https://draft.example/");
+  await expect(page.getByLabel("Browser address")).toHaveAttribute("readonly", "");
   await page.getByRole("button", { name: "Hide browser controls", exact: true }).click();
   await expect(page.getByLabel("Browser address")).toBeHidden();
   const collapsedPage = await pageSurface.boundingBox();
   expect(expandedPage!.y - collapsedPage!.y).toBeGreaterThan(70);
   expect(collapsedPage!.height).toBeGreaterThanOrEqual(expandedPage!.height);
   await page.getByRole("button", { name: "Show browser controls", exact: true }).click();
-  await expect(page.getByLabel("Browser address")).toHaveValue("https://draft.example/");
-  await page.locator(".managed-browser-view-options summary").click();
-  await expect(page.getByLabel("Page viewport")).toBeVisible();
-  expect((await pageSurface.boundingBox())!.height).toBeCloseTo(expandedPage!.height, 0);
-  await page.locator(".managed-browser-view-options summary").click();
-  await expect(page.getByLabel("Page viewport")).toBeHidden();
+  await expect(page.getByLabel("Browser address")).toHaveAttribute("readonly", "");
+  await expect(page.getByLabel("Page viewport")).toHaveCount(0);
   await page.screenshot({ path: test.info().outputPath("quiet-browser.png") });
   await page.keyboard.press("Escape");
-  await page.getByLabel("Browser address").fill("https://example.test/");
   await page.getByRole("button", { name: "Resume assistant control", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Go", exact: true }).click();
+  await page.getByRole("button", { name: "Ask about page", exact: true }).click();
   await expect(page.getByRole("button", { name: "Stop assistant control", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Stop assistant control", exact: true }).click();
   await expect(page.getByRole("button", { name: "Resume assistant control", exact: true })).toBeEnabled();
@@ -5654,7 +5788,7 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
 });
 
-test("browser Assistant uploads a selected device file only after inline approval", async ({ page }) => {
+test("browser Assistant approves its requested upload after a device file is staged", async ({ page }) => {
   test.setTimeout(60000);
   const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
   const actions: Array<Record<string, any>> = [];
@@ -5669,6 +5803,7 @@ test("browser Assistant uploads a selected device file only after inline approva
         const body = route.request().postDataJSON();
         expect(body.filename).toBe("sample.txt");
         files.push({ reference: "file-ref", filename: body.filename, size: 12, media_type: "text/plain" });
+        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: false, request: {operation: "upload", file_ref: "file-ref", tab_id: "file-tab", page_revision: "file-page", element_id: "file-input"} });
       }
       await route.fulfill({ json: files });
     } else if (path.endsWith("/file-browser/files/file-ref")) {
@@ -5681,12 +5816,7 @@ test("browser Assistant uploads a selected device file only after inline approva
       expect(route.request().postDataJSON().operation).toBe("capture");
       await route.fulfill({ json: { url: "https://example.test/", title: "Upload form", text: "Choose a document", page_revision: "file-page", captured_at: entity.updated_at, elements: [{ id: "file-input", tag: "input", type: "file", label: "Document", sensitive: false }] } });
     } else if (path.endsWith("/file-browser/actions")) {
-      if (method === "POST") {
-        const body = route.request().postDataJSON();
-        expect(body).toMatchObject({ operation: "upload", file_ref: "file-ref", page_revision: "file-page", element_id: "file-input" });
-        expect(body).not.toHaveProperty("content_base64");
-        actions.push({ id: "upload-action", status: "pending", expires_at: "2099-01-01T00:00:00Z", operator_requested: true, request: body });
-      }
+      expect(method).toBe("GET");
       await route.fulfill({ json: method === "POST" ? actions[0] : actions });
     } else if (path.endsWith("/file-browser/actions/upload-action")) {
       decisions += 1; actions[0].status = "complete"; await route.fulfill({ json: actions[0] });
@@ -5698,11 +5828,10 @@ test("browser Assistant uploads a selected device file only after inline approva
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await page.getByLabel("Files for this page (0)", { exact: true }).click();
   await page.getByLabel("Attach file for page upload").setInputFiles({ name: "sample.txt", mimeType: "text/plain", buffer: Buffer.from("file fixture") });
-  await expect(page.getByLabel("File to upload")).toHaveValue("file-ref");
+  await expect(page.getByText("sample.txt · 12 bytes", {exact: true})).toBeVisible();
   await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Ask about page", exact: true }).click();
-  await page.locator("summary", { hasText: "Accessible page controls (1)" }).click();
-  await page.getByRole("button", { name: "Upload selected file", exact: true }).click();
+  await expect(page.getByRole("button", {name: "Upload selected file", exact: true})).toHaveCount(0);
   const approval = page.getByRole("region", { name: "Browser action approval" });
   await expect(approval).toContainText("sample.txt");
   expect(decisions).toBe(0);
@@ -5711,7 +5840,139 @@ test("browser Assistant uploads a selected device file only after inline approva
   expect(decisions).toBe(1);
   await page.getByLabel("Files for this page (1)", { exact: true }).click();
   await page.getByRole("button", { name: "Remove sample.txt", exact: true }).click();
-  await expect(page.getByLabel("File to upload")).toHaveValue("");
+  await expect(page.getByText("sample.txt · 12 bytes", {exact: true})).toHaveCount(0);
   expect(new URL(page.url()).searchParams.get("view")).toBe("browser");
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });
+for (const scenario of ["stale catalog", "request failure", "reconnected approval", "resolved approved", "resolved rejected"] as const) {
+  reloadTest(`assistant upgrade pending approval restores and reviews ${scenario}`, async ({ page }, testInfo) => {
+    let waiting = scenario !== "reconnected approval";
+    let failRequest = scenario === "request failure";
+    let decision: string | undefined;
+    const resolved = scenario.startsWith("resolved ");
+    let stopped = false;
+    let approvalReads = 0;
+    let stateRevision = 0;
+    let notifyApproval: (() => void) | undefined;
+    const approval = {
+      ...entity, id: "approval-review", engagement_id: "scratch-project", run_id: "",
+      origin: "chat", status: resolved ? scenario.split(" ")[1] : "pending", risk_class: "passive", requested_by: "harness",
+      requested_at: entity.created_at, policy_rationale: "Review the file read",
+      exact_request: { tool_name: "read_file", arguments: { path: `/workspace/${"nested/".repeat(30)}notes.txt` }, cwd: "/workspace" },
+    };
+    await page.routeWebSocket("**/harness-turns/turn-review/events/ws**", socket => {
+      notifyApproval = () => {
+        waiting = true;
+        socket.send(JSON.stringify({ kind: "event", event: { type: "approval_required", sequence: 1, harness_turn_id: "turn-review", approval_id: approval.id } }));
+      };
+    });
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      const json = (body: unknown, status = 200) => route.fulfill({ status, json: body });
+      if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: "chat-review", engagement_id: "scratch-project", title: "Review pending approval", backend: "harness", harness_profile_id: "harness-ready", harness_session_id: "session-review", model: "gpt-5-codex", metadata: {} }]);
+      if (path.endsWith("/chat/sessions/chat-review/messages")) return json([]);
+      if (path.endsWith("/chat/sessions/chat-review/state")) return json({
+        schema: "nebula.session-state/v1", session_id: "chat-review", revision: ++stateRevision,
+        turn_id: "chat-turn-review", harness_turn_id: "turn-review",
+        execution: stopped ? "cancelled" : waiting && !decision ? resolved ? "continuing" : "waiting_approval" : "running",
+        busy: !stopped, connection: stopped ? "disconnected" : "connected",
+        detail: stopped ? "Response stopped." : resolved && waiting ? "Decision recorded; waiting for execution progress." : "Review the pending action to continue.",
+        actions: stopped ? ["check_status"] : ["check_status", "stop"],
+        pending: !stopped && waiting && !decision && !resolved ? [{id: approval.id, turn_id: "chat-turn-review", kind: "approval", text: "Review file read"}] : [],
+        decisions: resolved || decision ? [{approval_id: approval.id, status: decision === "reject" ? "rejected" : resolved ? approval.status : "approved", continuation: null}] : [],
+      });
+      if (path.endsWith("/chat/sessions/chat-review/pending-turn")) return json(stopped ? null : { ...entity, id: "chat-turn-review", session_id: "chat-review", status: decision ? "routing" : waiting ? "waiting_approval" : "routing", harness_turn_id: "turn-review", approval_id: waiting && !decision ? approval.id : null, tool_call_ids: [] });
+      if (path.endsWith("/harness-turns/turn-review/stop")) { stopped = true; return json({}); }
+      // The workspace catalog deliberately never contains this approval.
+      if (path.endsWith("/approvals")) return json([]);
+      if (path.endsWith(`/approvals/${approval.id}`)) {
+        approvalReads++;
+        return failRequest ? json({ detail: "Approval details temporarily unavailable" }, 503) : json(approval);
+      }
+      if (path.endsWith(`/approvals/${approval.id}/decision`)) {
+        decision = route.request().postDataJSON().decision;
+        return json({ ...approval, status: "approved" });
+      }
+      if (path.endsWith("/harness-turns/turn-review/events")) return json({ events: [], next_sequence: 1 });
+      if (path.endsWith("/harness-turns/turn-review/interactions")) return json([]);
+      if (path.endsWith("/harness-sessions/session-review/activity")) return json({ session_id: "session-review", session_status: "active", busy: !stopped, live: !stopped, turn_id: "turn-review", turn_status: stopped ? "cancelled" : waiting ? "waiting_approval" : "running", detail: "Harness input or approval is required." });
+      if (path.endsWith("/chat/sessions/chat-review/catch-up")) return json({ initialized: true, revision: 1, through_at: entity.updated_at, items: [], pending: decision || stopped ? [] : [{ id: approval.id, kind: "approval", text: "Review file read" }], truncated: false });
+      await route.fallback();
+    });
+    await openWorkspace(page, "/?view=chat&session=chat-review", "Workbench");
+    if (resolved) {
+      const notice = page.getByRole("status", { name: "Recorded approval decision" });
+      await expect(notice).toBeVisible();
+      await expect(notice).toContainText(`Decision recorded: ${approval.status}`);
+      await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+      await expect(page.getByText("Action required", { exact: true })).toHaveCount(0);
+      await notice.getByRole("button", { name: "Check response status" }).click();
+      await expect(notice).toBeVisible();
+      await expect(page.getByText(/This approval was already resolved/)).toHaveCount(0);
+      await page.reload();
+      await expect(notice).toBeVisible();
+      waiting = false;
+      await expect(notice).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+      waiting = true;
+      await page.reload();
+      await expect(notice).toBeVisible();
+      const original = page.viewportSize()!;
+      await page.setViewportSize({ width: 844, height: 430 });
+      await notice.scrollIntoViewIfNeeded();
+      for (const button of await notice.getByRole("button").all()) {
+        await expect(button).toBeInViewport();
+        // Browser zoom/scroll transforms can report 43.99998 for a 44px target.
+        expect(Math.round((await button.boundingBox())!.height * 100) / 100).toBeGreaterThanOrEqual(44);
+      }
+      const bounds = await notice.boundingBox();
+      const composer = await page.locator(".chat-composer").boundingBox();
+      expect(Math.abs(bounds!.x - composer!.x)).toBeLessThanOrEqual(2);
+      expect(Math.abs(bounds!.width - composer!.width)).toBeLessThanOrEqual(2);
+      expect((await new AxeBuilder({ page }).include(".chat-resolved-approval").analyze()).violations).toEqual([]);
+      await page.screenshot({ path: testInfo.outputPath("resolved-approval-short.png") });
+      const settings = page.locator(".chat-composer").getByRole("button", { name: "Assistant settings", exact: true });
+      await settings.scrollIntoViewIfNeeded();
+      await expect(settings).toBeInViewport();
+      await notice.scrollIntoViewIfNeeded();
+      await expect(notice.getByRole("button", { name: "Stop waiting" })).toBeInViewport();
+      await page.setViewportSize(original);
+      expect(decision).toBeUndefined(); expect(stopped).toBe(false);
+      await notice.getByRole("button", { name: "Stop waiting" }).click();
+      await expect(notice).toHaveCount(0);
+      expect(stopped).toBe(true); expect(decision).toBeUndefined();
+      return;
+    }
+    if (scenario === "request failure") {
+      await expect(page.getByText("Approval details temporarily unavailable", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
+      failRequest = false;
+    }
+    if (scenario === "reconnected approval") {
+      await expect.poll(() => Boolean(notifyApproval)).toBe(true);
+      notifyApproval!();
+      await expect(page.getByRole("region", { name: "Approval required", exact: true })).toBeVisible();
+    }
+    await page.getByRole("button", { name: "Review pending actions", exact: true }).click();
+    const card = page.getByRole("region", { name: "Approval required", exact: true });
+    await expect(card).toBeVisible();
+    await expect(card).toBeFocused();
+    await expect(card.getByText("read_file", { exact: true })).toBeVisible();
+    if (scenario === "stale catalog") await page.screenshot({ path: testInfo.outputPath("pending-approval.png") });
+    await card.getByText("Exact request", { exact: true }).click();
+    await expect(card.locator("pre")).toContainText('"cwd": "/workspace"');
+    expect(approvalReads).toBeGreaterThan(0);
+    const bounds = await card.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+    const accessibility = await new AxeBuilder({ page }).include(".chat-approval-card").include(".chat-pending-actions").analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.reload();
+    await expect(card).toBeVisible();
+    await card.getByRole("button", { name: "Approve", exact: true }).click();
+    await expect.poll(() => decision).toBe("approve");
+    await expect(card).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
+  });
+}

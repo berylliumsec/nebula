@@ -6,6 +6,13 @@ records contain only normalized, bounded events and credential-free snapshots.
 
 from __future__ import annotations
 
+from .application_model.workflow import BROWSER_MODEL_WORKFLOW
+from .approval_delivery import (
+    approval_harness_turn,
+    pending_deliveries,
+    record_adapter_handoff,
+    record_delivery,
+)
 from .diagnostics import (
     create_diagnostic_task,
     current_operation_id,
@@ -108,7 +115,7 @@ from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .redaction import redact_text, sanitize_display_text
-from .storage import NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError
 from .mcp import (
     MAX_MCP_MESSAGE_BYTES,
     McpGatewaySession,
@@ -125,6 +132,7 @@ from .tools import (
     ApprovalRequired,
     PolicyDenied,
     StoreToolEvidenceRecorder,
+    StoreToolLedger,
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
@@ -253,7 +261,10 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "minLength": 1, "maxLength": 512},
-            "path": {"type": "string"},
+            "path": {
+                "description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.",
+                "type": "string",
+            },
             "mode": {"type": "string", "enum": ["literal", "regex"]},
             "case_sensitive": {"type": "boolean"},
             "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -371,10 +382,11 @@ def _native_tool_risk(tool_name: str) -> RiskClass:
 
 
 def _portable_gateway_tool_name(name: str) -> str:
-    """Preserve valid names and give punctuation-bearing names stable aliases."""
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name):
+    """Keep the qualified Grok name (``nebula__`` + alias) within 64 chars."""
+    max_length = 64 - len("nebula__")
+    if re.fullmatch(r"[A-Za-z0-9_-]+", name) and len(name) <= max_length:
         return name
-    readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[:40]
+    readable = re.sub(r"[^A-Za-z0-9_-]", "_", name)[: max_length - 17]
     return readable + "_" + hashlib.sha256(name.encode()).hexdigest()[:16]
 
 
@@ -474,6 +486,7 @@ def _harness_developer_instructions(
         "BEGIN TRUSTED ASSIGNED NEBULA CAPABILITIES (JSON)\n"
         + trusted_inventory
         + "\nEND TRUSTED ASSIGNED NEBULA CAPABILITIES"
+        + BROWSER_MODEL_WORKFLOW
     )
 
 
@@ -835,6 +848,24 @@ class PermissionTicket:
     approval_id: str | None
     tool_call_id: str | None
     decision: asyncio.Future[HarnessPermissionDecision]
+    handoff_receipt: Callable[[Literal["sent", "failed"]], None] | None = None
+
+    def acknowledge_handoff(self, status: Literal["sent", "failed"]) -> None:
+        if self.handoff_receipt is not None:
+            self.handoff_receipt(status)
+
+
+async def _respond_permission(
+    rpc, ticket: PermissionTicket, request_id, result
+) -> None:
+    try:
+        await rpc.respond(request_id, result)
+    except BaseException:
+        # Record uncertainty even on cancellation; never resend a partially
+        # written response. A receipt failure propagates, leaving startup intent.
+        ticket.acknowledge_handoff("failed")
+        raise
+    ticket.acknowledge_handoff("sent")
 
 
 PermissionHandler = Callable[[HarnessPermissionRequest], Awaitable[PermissionTicket]]
@@ -867,6 +898,11 @@ class AdapterOpenRequest:
 class HarnessConnection(ABC):
     external_session_id: str | None
     adapter_version: str
+
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        """Adapters without a transport probe must not invent connectivity."""
+        return "unknown"
 
     @abstractmethod
     def run_turn(
@@ -1211,6 +1247,16 @@ class _CodexRpc:
         self.stderr_tail = ""
         self._closing = False
 
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        if self._closing or (
+            self.process is not None and self.process.returncode is not None
+        ):
+            return "disconnected"
+        if self._reader_task is None:
+            return "unknown"
+        return "disconnected" if self._reader_task.done() else "connected"
+
     async def start(self) -> None:
         self._reader_task = create_diagnostic_task(
             self._reader(),
@@ -1446,6 +1492,10 @@ def _discard_queued_session_replay(events: asyncio.Queue[Any]) -> None:
 
 class CodexAppServerConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/codex-v2"
+
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        return self.rpc.connection_state
 
     def __init__(
         self,
@@ -2233,7 +2283,7 @@ class CodexAppServerConnection(HarnessConnection):
             }
         else:
             response = {"decision": "approved" if allowed else "denied"}
-        await self.rpc.respond(raw.get("id"), response)
+        await _respond_permission(self.rpc, ticket, raw.get("id"), response)
 
     async def steer(self, text: str) -> None:
         if not self.active_turn_id:
@@ -3720,6 +3770,87 @@ class _AcpRpc(_CodexRpc):
         await super()._write({"jsonrpc": "2.0", **value})
 
 
+def _grok_tool_details(
+    update: dict[str, Any], previous: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Normalize ACP metadata without treating tool output as instructions."""
+    previous = previous or {}
+    raw = update.get("rawOutput")
+    raw = raw if isinstance(raw, dict) else {}
+    raw_input = update.get("rawInput")
+    raw_input = raw_input if isinstance(raw_input, dict) else {}
+    tool = (
+        raw.get("tool_name")
+        or raw_input.get("tool_name")
+        or update.get("tool")
+        or previous.get("tool_name")
+        or update.get("title")
+        or "tool"
+    )
+    server = raw.get("server_name") or previous.get("server_id") or "grok"
+    status = str(update.get("status") or "running").lower()
+    if status not in {"completed", "failed", "cancelled"}:
+        status = "running"
+    if previous.get("item_status") in {
+        "completed",
+        "failed",
+        "cancelled",
+    } and status not in {"completed", "failed", "cancelled"}:
+        status = previous["item_status"]
+    output = raw.get("output")
+    output = output if isinstance(output, dict) else {}
+    detail = raw.get("message") or raw.get("error") or output.get("Error")
+    if isinstance(detail, str):
+        try:
+            receipt = json.loads(detail)
+        except (ValueError, TypeError):
+            # diagnostic-expected: non-JSON error text is retained as the visible detail.
+            receipt = None
+        if isinstance(receipt, dict):
+            detail = receipt.get("summary") or receipt.get("error")
+    content = update.get("content")
+    if not detail and status == "failed" and isinstance(content, list):
+        detail = " ".join(
+            _acp_text(x.get("content") or x) for x in content if isinstance(x, dict)
+        )
+    # Errors sometimes omit metadata entirely; recover the canonical advertised
+    # tool name from the bounded ACP error envelope, never from page content.
+    if tool in {"tool", "use_tool"} and isinstance(content, list):
+        text = " ".join(
+            _acp_text(x.get("content") or x) for x in content if isinstance(x, dict)
+        )
+        match = re.search(r"Tool `([^`]+)`", text)
+        if match:
+            tool = match.group(1)
+    tool = str(tool)[:1_000]
+    label = re.sub(r"_[0-9a-f]{10,}$", "", tool.removeprefix("nebula__"))
+    label = (
+        re.sub(r"^runtime_[0-9a-f]+_", "", label).replace("_", " ").replace(".", " ")
+    )
+    label = label[:1].upper() + label[1:]
+    outcome = {
+        "completed": "succeeded",
+        "failed": "failed",
+        "cancelled": "cancelled",
+    }.get(status, "running")
+    summary = (
+        previous.get("summary", f"{label} {outcome}")
+        if not detail
+        and previous.get("item_status") == status
+        and status in {"failed", "cancelled"}
+        else f"{label} {outcome}"
+    )
+    if status == "failed" and detail:
+        summary += " — " + str(detail).removeprefix("Mcp error: -32603: ")[:500]
+    return {
+        "tool_name": tool,
+        "server_id": str(server),
+        "item_status": status,
+        "title": label[:1_000],
+        "summary": summary[:4_000],
+    }
+
+
 def _acp_text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -3835,6 +3966,10 @@ def _goal_item_status(goal: HarnessGoalSnapshot) -> HarnessItemStatus:
 class GrokAcpConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/grok-acp-v1"
 
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        return self.rpc.connection_state
+
     def __init__(
         self,
         rpc: _AcpRpc,
@@ -3889,24 +4024,34 @@ class GrokAcpConnection(HarnessConnection):
         message_parts: list[str] = []
         pending_agent_parts: list[str] = []
         commentary_sequence = 0
+        thinking_sequence = 0
+        thinking_id: str | None = None
+        event_task: asyncio.Task | None = None
+        tool_calls: dict[str, dict[str, Any]] = {}
         yield HarnessEvent(
             type="started",
             vendor=HarnessKind.GROK_ACP,
             external_session_id=self.external_session_id,
         )
         try:
-            while not request.done():
-                # diagnostic-expected: the losing event task is cancelled and drained below.
-                event_task = asyncio.create_task(self.rpc.events.get())
-                done, _ = await asyncio.wait(
-                    {request, event_task}, return_when=asyncio.FIRST_COMPLETED
-                )
-                if request in done:
-                    event_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await event_task
-                    break
-                raw = event_task.result()
+            while True:
+                if request.done():
+                    if self.rpc.events.empty():
+                        break
+                    raw = self.rpc.events.get_nowait()
+                else:
+                    # Completion and the last queued update can become ready together.
+                    # diagnostic-expected: event_task is consumed here or cancelled/drained in finally.
+                    event_task = asyncio.create_task(self.rpc.events.get())
+                    await asyncio.wait(
+                        {request, event_task}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if not event_task.done():
+                        event_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await event_task
+                        continue
+                    raw = event_task.result()
                 if isinstance(raw, BaseException):
                     raise raw
                 method = str(raw.get("method") or "")
@@ -3935,6 +4080,16 @@ class GrokAcpConnection(HarnessConnection):
                 item_id = str(
                     update.get("toolCallId") or update.get("id") or kind or "activity"
                 )
+                if thinking_id and kind in {"agent_message_chunk", "tool_call"}:
+                    yield HarnessEvent(
+                        type="item_upsert",
+                        vendor=HarnessKind.GROK_ACP,
+                        item_id=thinking_id,
+                        item_kind="reasoning",
+                        item_status="completed",
+                        title="Thinking",
+                    )
+                    thinking_id = None
                 if kind == "agent_message_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
@@ -3958,10 +4113,13 @@ class GrokAcpConnection(HarnessConnection):
                 if kind == "agent_thought_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
+                        if thinking_id is None:
+                            thinking_sequence += 1
+                            thinking_id = f"thinking-{thinking_sequence}"
                         yield HarnessEvent(
                             type="output_delta",
                             vendor=HarnessKind.GROK_ACP,
-                            item_id="reasoning",
+                            item_id=thinking_id,
                             item_kind="reasoning",
                             item_status="streaming",
                             title="Reasoning",
@@ -4019,40 +4177,24 @@ class GrokAcpConnection(HarnessConnection):
                             goal=goal,
                             payload={"goal": goal.model_dump(mode="json")},
                         )
-                elif kind == "tool_call":
-                    tool_name = str(
-                        update.get("tool") or update.get("title") or "tool"
-                    )[:1_000]
+                elif kind in {"tool_call", "tool_call_update"}:
+                    details = _grok_tool_details(update, tool_calls.get(item_id))
+                    tool_calls[item_id] = details
+                    terminal = details["item_status"] in {
+                        "completed",
+                        "failed",
+                        "cancelled",
+                    }
                     yield HarnessEvent(
-                        type="tool_started",
+                        type="tool_completed"
+                        if terminal
+                        else "tool_started"
+                        if kind == "tool_call"
+                        else "item_upsert",
                         vendor=HarnessKind.GROK_ACP,
                         item_id=item_id,
                         item_kind="tool",
-                        item_status="running",
-                        title=tool_name,
-                        server_id="grok",
-                        tool_name=tool_name,
-                        payload=_bounded(update, limit=MAX_TOOL_RESULT_TEXT),
-                    )
-                elif kind == "tool_call_update":
-                    raw_status = str(update.get("status") or "running").lower()
-                    terminal = raw_status in {"completed", "failed", "cancelled"}
-                    item_status = cast(
-                        Literal["running", "completed", "failed", "cancelled"],
-                        raw_status if terminal else "running",
-                    )
-                    tool_name = str(
-                        update.get("tool") or update.get("title") or "tool"
-                    )[:1_000]
-                    yield HarnessEvent(
-                        type="tool_completed" if terminal else "item_upsert",
-                        vendor=HarnessKind.GROK_ACP,
-                        item_id=item_id,
-                        item_kind="tool",
-                        item_status=item_status,
-                        title=tool_name,
-                        server_id="grok",
-                        tool_name=tool_name,
+                        **details,
                         payload=_bounded(update, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 else:
@@ -4065,6 +4207,18 @@ class GrokAcpConnection(HarnessConnection):
                         payload=_bounded(update, limit=8_000),
                     )
             result = await request
+            if thinking_id:
+                yield HarnessEvent(
+                    type="item_upsert",
+                    vendor=HarnessKind.GROK_ACP,
+                    item_id=thinking_id,
+                    item_kind="reasoning",
+                    item_status="cancelled"
+                    if isinstance(result, dict)
+                    and result.get("stopReason") in {"cancelled", "canceled"}
+                    else "completed",
+                    title="Thinking",
+                )
             for delta in pending_agent_parts:
                 message_parts.append(delta)
                 yield HarnessEvent(
@@ -4093,8 +4247,14 @@ class GrokAcpConnection(HarnessConnection):
             )
         finally:
             self.active = False
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await event_task
             if not request.done():
                 request.cancel()
+                with suppress(asyncio.CancelledError):
+                    await request
 
     async def _permission(
         self, raw: dict[str, Any], params: dict[str, Any]
@@ -4166,7 +4326,7 @@ class GrokAcpConnection(HarnessConnection):
             if option_id
             else {"outcome": {"outcome": "cancelled"}}
         )
-        await self.rpc.respond(raw.get("id"), result)
+        await _respond_permission(self.rpc, ticket, raw.get("id"), result)
 
     async def steer(self, text: str) -> None:
         del text
@@ -4673,20 +4833,23 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             decision = await ticket.decision
             if decision.allowed:
                 allow = getattr(sdk, "PermissionResultAllow", None)
-                return (
+                result = (
                     allow(updated_input=input_data)
                     if allow
                     else {"behavior": "allow", "updatedInput": input_data}
                 )
-            deny = getattr(sdk, "PermissionResultDeny", None)
-            return (
-                deny(message=decision.reason or "Denied by Nebula policy")
-                if deny
-                else {
-                    "behavior": "deny",
-                    "message": decision.reason or "Denied by Nebula policy",
-                }
-            )
+            else:
+                deny = getattr(sdk, "PermissionResultDeny", None)
+                result = (
+                    deny(message=decision.reason or "Denied by Nebula policy")
+                    if deny
+                    else {
+                        "behavior": "deny",
+                        "message": decision.reason or "Denied by Nebula policy",
+                    }
+                )
+            ticket.acknowledge_handoff("sent")
+            return result
 
         async def enforce_native_tool(
             hook_input: Any, _tool_use_id: str | None, _context: Any
@@ -5037,6 +5200,19 @@ class HarnessRuntimeService:
     async def startup(self) -> None:
         """Mark uncertain in-flight work interrupted; never replay objectives."""
 
+        for approval in pending_deliveries(self.store):
+            try:
+                turn = approval_harness_turn(self.store, approval)
+            except (NotFoundError, ConflictError):
+                # diagnostic-expected: retained decisions may outlive deleted
+                # request records. Retire only this delivery, never infer a new
+                # owner or prevent unrelated sessions from starting.
+                self._fail_unbound_approval(approval)
+                continue
+            if turn is not None:
+                self._fail_approval_delivery(approval, turn)
+            else:
+                self._fail_unbound_approval(approval)
         for turn in self.store.list_entities(HarnessTurn, limit=1_000):
             if turn.status not in {
                 HarnessTurnStatus.RUNNING,
@@ -5380,8 +5556,7 @@ class HarnessRuntimeService:
         include_browser = include_browser or bool(
             snapshot and snapshot.get("browser_runtime_enabled") is True
         )
-        if self.automation_tool_platform is None and not include_browser:
-            return None, None
+        application_model_available = False
         if snapshot is not None:
             if snapshot.get("schema") != "nebula.harness-command-runtime/v1":
                 raise HarnessConfigurationError(
@@ -5395,13 +5570,16 @@ class HarnessRuntimeService:
                     "harness command-runtime snapshot has invalid tool names"
                 )
         try:
-            components: RuntimeToolComponents | AutomationToolComponents | None = (
-                self.automation_tool_platform.chat_components(
-                    engagement_id=engagement_id,
-                )
-                if self.automation_tool_platform is not None
-                else None
-            )
+            components: RuntimeToolComponents | AutomationToolComponents | None = None
+            if self.automation_tool_platform is not None:
+                try:
+                    components = self.automation_tool_platform.chat_components(
+                        engagement_id=engagement_id
+                    )
+                except AutomationRuntimeUnavailable:
+                    # diagnostic-expected: unavailable optional commands do not disable graph-only tools.
+                    # Project graph access remains available without a command runtime.
+                    components = None
             if include_browser:
                 if self.browser_automation_platform is None:
                     raise HarnessConfigurationError(
@@ -5414,6 +5592,14 @@ class HarnessRuntimeService:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
+            from .application_model.tools import standalone_components
+
+            model_components = standalone_components(self.store, engagement_id)
+            if components is None:
+                components = model_components
+            else:
+                components = combine_tool_components(components, model_components)
+            application_model_available = True
         except AutomationRuntimeUnavailable as exc:
             if snapshot is None:
                 return None, None
@@ -5428,10 +5614,12 @@ class HarnessRuntimeService:
                 "could not resolve the harness command runtime: " + _safe_error(exc)
             ) from exc
         if components is None:
-            raise HarnessConfigurationError("harness command runtime is unavailable")
+            return None, None
         resolved = self._oci_snapshot(components)
         if include_browser:
             resolved["browser_runtime_enabled"] = True
+        if application_model_available:
+            resolved["application_model_runtime"] = "v2"
         if snapshot is not None and resolved != snapshot:
             raise HarnessCommandRuntimeSnapshotMismatch(
                 "the immutable harness command-runtime snapshot no longer matches"
@@ -5439,12 +5627,12 @@ class HarnessRuntimeService:
         return components, resolved
 
     def _ensure_oci_components(
-        self, session: HarnessSession
+        self, session: HarnessSession, *, validate_current: bool = False
     ) -> RuntimeToolComponents | AutomationToolComponents | None:
         if session.metadata.get("command_runtime_enabled") is False:
             return None
         cached = self._gateway_oci_components.get(session.id)
-        if cached is not None:
+        if cached is not None and not validate_current:
             return cached
         raw_snapshot = session.metadata.get("command_runtime_snapshot")
         snapshot = raw_snapshot if isinstance(raw_snapshot, dict) else None
@@ -6078,7 +6266,9 @@ class HarnessRuntimeService:
             forked_from_session_id = previous_session_id
             session_rollover_reason = "workspace_connection_changed"
         try:
-            oci_components = self._ensure_oci_components(session)
+            # The cached broker still has its frozen mode. Validate at the next
+            # turn boundary so an explicit project change gets a fresh session.
+            oci_components = self._ensure_oci_components(session, validate_current=True)
         except HarnessCommandRuntimeSnapshotMismatch:
             if not chat_session_id:
                 raise
@@ -6867,13 +7057,18 @@ class HarnessRuntimeService:
                     session.id,
                     {
                         "metadata": {
-                            **session.metadata,
+                            **{
+                                key: value
+                                for key, value in session.metadata.items()
+                                if key != "command_runtime_snapshot"
+                            },
                             "browser_runtime_enabled": True,
                             "command_runtime_enabled": True,
                         }
                     },
                     expected_revision=session.revision,
                 )
+                self._gateway_oci_components.pop(session.id, None)
         forked_from_session_id: str | None = None
         if self.session_activity(session.id).busy:
             forked_from_session_id = session.id
@@ -7466,12 +7661,49 @@ class HarnessRuntimeService:
         return latest
 
     async def resolve_approval(self, approval: Approval) -> None:
+        try:
+            related_turn = approval_harness_turn(self.store, approval)
+        except (NotFoundError, ConflictError):
+            # diagnostic-expected: a removed or changed request is not deliverable.
+            related_turn = None
         future = self._approval_futures.pop(approval.id, None)
+        if related_turn is None:
+            if future is not None and not future.done():
+                future.cancel()
+            self._broker_approval_ids.discard(approval.id)
+            self._fail_unbound_approval(approval)
+            raise HarnessStateError(
+                "The original approval binding is unavailable; no work was replayed"
+            )
         if future is None or future.done():
+            if related_turn is not None:
+                self._fail_approval_delivery(approval, related_turn)
+                return
             raise HarnessStateError("harness permission request is no longer active")
+        if related_turn is not None and related_turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            future.cancel()
+            self._fail_approval_delivery(approval, related_turn)
+            return
+        try:
+            self._deliver_approval(approval, related_turn, future)
+        except Exception:
+            # A failed activity/record write must not orphan the original waiter.
+            # Once the future is fulfilled, never claim that delivery failed or
+            # retry execution: the pending durable intent is reconciled at restart.
+            if not future.done():
+                future.cancel()
+                if related_turn is not None:
+                    self._fail_approval_delivery(approval, related_turn)
+            raise
+        finally:
+            self._broker_approval_ids.discard(approval.id)
+
+    def _deliver_approval(self, approval, related_turn, future) -> None:
         allowed = approval.status == ApprovalStatus.APPROVED
         broker_owned = approval.id in self._broker_approval_ids
-        self._broker_approval_ids.discard(approval.id)
         if approval.tool_call_id and not broker_owned:
             call = self.store.get(ToolCall, approval.tool_call_id)
             self.store.update(
@@ -7487,22 +7719,6 @@ class HarnessRuntimeService:
                 },
                 expected_revision=call.revision,
             )
-        related_turn = next(
-            (
-                item
-                for item in self.store.list_entities(
-                    HarnessTurn, engagement_id=approval.engagement_id, limit=1_000
-                )
-                if (
-                    approval.chat_turn_id and item.chat_turn_id == approval.chat_turn_id
-                )
-                or (
-                    approval.origin == ToolCallOrigin.MISSION
-                    and item.run_id == approval.run_id
-                )
-            ),
-            None,
-        )
         if related_turn is not None:
             related_session = self.store.get(
                 HarnessSession, related_turn.harness_session_id
@@ -7542,6 +7758,138 @@ class HarnessRuntimeService:
                 reason=approval.decision_note,
             )
         )
+        if related_turn is not None:
+            record_delivery(
+                self.store,
+                approval.id,
+                related_turn.id,
+                "delivered",
+                "Decision delivered to the active Core waiter; execution progress is tracked separately.",
+            )
+
+    def _fail_unbound_approval(self, approval: Approval) -> None:
+        """Retire uncertainty using only the saved owner, never conversation search."""
+        if approval.continuation is None:
+            return
+        turn_id = approval.continuation.harness_turn_id
+        try:
+            turn = self.store.get(HarnessTurn, turn_id)
+        except NotFoundError:
+            # diagnostic-expected: a retained delivery can outlive its owning turn.
+            turn = None
+        if (
+            turn is not None
+            and turn.engagement_id == approval.engagement_id
+            and (
+                not approval.chat_turn_id or turn.chat_turn_id == approval.chat_turn_id
+            )
+            and (
+                not approval.chat_session_id
+                or turn.chat_session_id == approval.chat_session_id
+            )
+        ):
+            self._fail_approval_delivery(approval, turn)
+        else:
+            record_delivery(
+                self.store,
+                approval.id,
+                turn_id,
+                "failed",
+                "The original request binding is unavailable. No work was replayed.",
+            )
+
+    def _fail_approval_delivery(self, approval: Approval, turn: HarnessTurn) -> None:
+        detail = "Decision recorded, but the original request is no longer connected. No work was replayed; start a new response."
+        record_delivery(self.store, approval.id, turn.id, "failed", detail)
+        if turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            return
+        turn = self.store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "status": HarnessTurnStatus.INTERRUPTED,
+                "completed_at": utc_now(),
+                "error": detail,
+            },
+            expected_revision=turn.revision,
+        )
+        self._interrupt_owner(turn)
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status in {
+            HarnessSessionStatus.RUNNING,
+            HarnessSessionStatus.WAITING_APPROVAL,
+        }:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.INTERRUPTED,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+
+    def _restore_approval_wait(self, turn: HarnessTurn, future) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return
+        latest = self.store.get(HarnessTurn, turn.id)
+        if latest.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            return
+        # One decision must not clear a second independent pending request.
+        for approval_id, waiter in self._approval_futures.items():
+            if waiter.done():
+                continue
+            try:
+                approval = self.store.get(Approval, approval_id)
+                owner = approval_harness_turn(self.store, approval)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: detached request during cleanup
+                continue
+            if owner is not None and owner.id == turn.id:
+                self._waiting_owner(turn, approval_id=approval_id)
+                return
+        from sqlalchemy import select
+        from .database import EntityRow
+
+        with self.store.database.session() as database:
+            pending_input = database.scalar(
+                select(EntityRow.id)
+                .where(
+                    EntityRow.kind == HarnessInteraction.entity_kind,
+                    EntityRow.payload["harness_turn_id"].as_string() == turn.id,
+                    EntityRow.payload["status"].as_string() == "pending",
+                )
+                .limit(1)
+            )
+        if pending_input:
+            self._waiting_owner(turn)
+            return
+        if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
+            self.store.update(
+                HarnessTurn,
+                latest.id,
+                {"status": HarnessTurnStatus.RUNNING},
+                expected_revision=latest.revision,
+            )
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status == HarnessSessionStatus.WAITING_APPROVAL:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.RUNNING,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+        self._start_owner(turn)
 
     async def cancel_turn(self, harness_turn_id: str, *, reason: str) -> HarnessTurn:
         turn = self.store.get(HarnessTurn, harness_turn_id)
@@ -7963,6 +8311,12 @@ class HarnessRuntimeService:
                 "harness knowledge transfer requires explicit operator confirmation"
             )
         return True
+
+    def connection_state(
+        self, session_id: str
+    ) -> Literal["connected", "disconnected", "unknown"]:
+        connection = self._connections.get(session_id)
+        return connection.connection_state if connection is not None else "disconnected"
 
     def session_activity(self, session_id: str) -> HarnessSessionActivity:
         """Return the authoritative reservation state without exposing turn content."""
@@ -8580,6 +8934,27 @@ class HarnessRuntimeService:
             ):  # diagnostic-expected: no provisional call exists before reservation
                 # Validation or budget reservation can fail before a call exists.
                 pass
+        if result.receipt is None:
+            # Trusted passive runtimes may return structured values directly.
+            # The MCP boundary still converts them into the same durable,
+            # bounded receipt contract as command output.
+            call = self.store.get(ToolCall, StoreToolLedger._call_id(invocation))
+            spec = components.specs[tool_name]
+            result = await self.evidence_recorder.record(call, invocation, spec, result)
+            if result.receipt is None:
+                raise HarnessTransportError(
+                    f"command-runtime gateway capability {gateway_name!r} returned no result receipt"
+                )
+            latest = self.store.get(ToolCall, call.id)
+            self.store.update(
+                ToolCall,
+                latest.id,
+                {
+                    "result": result.receipt.as_model_result(),
+                    "result_artifact_id": result.result_artifact_id,
+                },
+                expected_revision=latest.revision,
+            )
         receipt = result.receipt
         if receipt is None:
             raise HarnessTransportError(
@@ -8672,29 +9047,7 @@ class HarnessRuntimeService:
         )
         self._waiting_owner(turn, approval_id=approval.id)
 
-        def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
-            latest = self.store.get(HarnessTurn, turn.id)
-            if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessTurn,
-                    latest.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=latest.revision,
-                )
-            latest_session = self.store.get(HarnessSession, turn.harness_session_id)
-            if latest_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessSession,
-                    latest_session.id,
-                    {
-                        "status": HarnessSessionStatus.RUNNING,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=latest_session.revision,
-                )
-            self._start_owner(turn)
-
-        future.add_done_callback(restore)
+        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
         return await future
 
     async def _gateway_retrieval(
@@ -9130,7 +9483,13 @@ class HarnessRuntimeService:
                 )
                 return PermissionTicket(None, None, future)
             active_turn = self._active_gateway_turn(session.id)
-            return await self._request_permission(active_turn.id, request)
+            return await self._request_permission(
+                active_turn.id,
+                request,
+                adapter_handoff="sdk_callback"
+                if profile.kind == HarnessKind.CLAUDE_AGENT_SDK
+                else "transport_write",
+            )
 
         async def interaction_handler(
             request: HarnessInteractionRequest,
@@ -9232,7 +9591,11 @@ class HarnessRuntimeService:
         return connection
 
     async def _request_permission(
-        self, turn_id: str, request: HarnessPermissionRequest
+        self,
+        turn_id: str,
+        request: HarnessPermissionRequest,
+        *,
+        adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None,
     ) -> PermissionTicket:
         if request.category == "mcp" and request.server_name == "nebula":
             gateway_future: asyncio.Future[HarnessPermissionDecision] = (
@@ -9279,6 +9642,7 @@ class HarnessRuntimeService:
                 "category": request.category,
                 "budget_class": "execution",
                 "vendor_request_id": request.vendor_request_id,
+                "adapter_handoff": adapter_handoff,
                 "vendor_item_id": request.annotations.get("vendor_item_id"),
             },
         )
@@ -9357,29 +9721,7 @@ class HarnessRuntimeService:
         )
         self._waiting_owner(turn, approval_id=approval.id)
 
-        def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
-            latest_turn = self.store.get(HarnessTurn, turn.id)
-            if latest_turn.status == HarnessTurnStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessTurn,
-                    turn.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=latest_turn.revision,
-                )
-            latest_session = self.store.get(HarnessSession, session.id)
-            if latest_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessSession,
-                    session.id,
-                    {
-                        "status": HarnessSessionStatus.RUNNING,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=latest_session.revision,
-                )
-            self._start_owner(turn)
-
-        future.add_done_callback(restore)
+        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         if profile.kind == HarnessKind.CLAUDE_AGENT_SDK:
             self._persist_activity(
@@ -9414,7 +9756,18 @@ class HarnessRuntimeService:
                     },
                 ),
             )
-        return PermissionTicket(approval.id, call.id, future)
+        return PermissionTicket(
+            approval.id,
+            call.id,
+            future,
+            (
+                lambda status: record_adapter_handoff(
+                    self.store, approval.id, turn.id, status
+                )
+            )
+            if adapter_handoff
+            else None,
+        )
 
     async def _request_interaction(
         self, turn_id: str, request: HarnessInteractionRequest
@@ -10302,6 +10655,8 @@ class HarnessRuntimeService:
                 values["summary"] = values["summary"][:4_000]
             if isinstance(values.get("tool_name"), str):
                 values["tool_name"] = values["tool_name"][:1_000]
+            if values.get("vendor") == "grok_acp" and values.get("item_kind") == "tool":
+                values.update(_grok_tool_details(values.get("payload") or {}, values))
             events.append(HarnessEvent.model_validate(values))
             if len(events) >= limit:
                 break

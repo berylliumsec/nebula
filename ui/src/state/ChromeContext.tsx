@@ -18,6 +18,7 @@ export interface ChromeContextValue {
   toolbarHost: HTMLElement | null;
   contextualCommands?: ContextualCommand[];
   openPalette: () => void;
+  openProjectPicker?: () => void;
   setActivityOpen: Dispatch<SetStateAction<boolean>>;
   setPaletteOpen: Dispatch<SetStateAction<boolean>>;
   setToolbarHost: Dispatch<SetStateAction<HTMLElement | null>>;

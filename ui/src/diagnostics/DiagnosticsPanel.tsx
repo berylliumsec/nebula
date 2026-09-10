@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   CheckCircle2,
   CircleDashed,
@@ -7,11 +8,12 @@ import {
   ExternalLink,
   FileText,
   FolderOpen,
+  Info,
   RefreshCw,
   ShieldAlert,
 } from "lucide-react";
 import type { HealthResponse, SetupStatus } from "../api/types";
-import { useConfirmation } from "../components/DialogSystem";
+import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { announceSettingsSaved } from "../components/SettingsSaveFeedback";
 import { SurfaceNotice } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -49,6 +51,7 @@ import {
   type DiagnosticStatus,
 } from "./types";
 import { DiagnosticErrorNotice } from "./DiagnosticErrorNotice";
+import { BuildIdentity } from "../components/BuildIdentity";
 
 const levels: Array<{ value: DiagnosticLevel; label: string; description: string }> = [
   { value: "error", label: "Errors", description: "Operation failures and cleanup gaps only (recommended)." },
@@ -258,6 +261,7 @@ function FailureCard({
 export function DiagnosticsAvailabilityBanner() {
   const [available, setAvailable] = useState(isDiagnosticsAvailable);
   const [reason, setReason] = useState<string>();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const dismissalKey = useMemo(() => `nebula.notice.diagnostics-unavailable:${window.location.origin}`, []);
   const [dismissed, setDismissed] = useState(() => {
     try { return window.localStorage.getItem(dismissalKey) === "dismissed"; } catch { /* diagnostic-expected: private browsing may deny device-local notice storage. */ return false; }
@@ -267,6 +271,7 @@ export function DiagnosticsAvailabilityBanner() {
   const dismiss = () => {
     try { window.localStorage.setItem(dismissalKey, "dismissed"); } catch { /* diagnostic-expected: device storage may be unavailable. */ }
     setDismissed(true);
+    setDetailsOpen(false);
   };
 
   const clearDismissal = () => {
@@ -279,6 +284,7 @@ export function DiagnosticsAvailabilityBanner() {
       const detail = (event as CustomEvent<{ available: boolean; reason?: string; occurrence?: boolean }>).detail;
       const changedFailure = reasonRef.current !== undefined && detail.reason !== reasonRef.current;
       setAvailable(detail.available);
+      if (detail.available) setDetailsOpen(false);
       setReason(detail.reason);
       reasonRef.current = detail.reason;
       if (detail.available || detail.occurrence || changedFailure) clearDismissal();
@@ -289,18 +295,28 @@ export function DiagnosticsAvailabilityBanner() {
 
   if (available || dismissed) return null;
   const browserCaptureUnavailable = reason?.startsWith("Browser event capture");
+  const title = browserCaptureUnavailable ? "Browser event capture is unavailable." : "Local diagnostics are unavailable.";
+  const detail = browserCaptureUnavailable
+    ? "Interface failures stay in bounded browser memory; Core and the rest of the workspace remain usable."
+    : reason ?? "New failures are being retained in memory for this session.";
   return (
-    <SurfaceNotice
-      className="diagnostics-unavailable"
-      severity={browserCaptureUnavailable ? "informational" : "warning"}
-      title={browserCaptureUnavailable ? "Browser event capture is unavailable." : "Local diagnostics are unavailable."}
-      detail={browserCaptureUnavailable
-        ? "Interface failures stay in bounded browser memory; Core and the rest of the workspace remain usable."
-        : reason ?? "New failures are being retained in memory for this session."}
-      actions={<a href="/settings#diagnostics-settings">Diagnostics</a>}
-      dismissLabel="Dismiss diagnostics notice"
-      onDismiss={dismiss}
-    />
+    <>
+      <SurfaceNotice
+        className="diagnostics-unavailable diagnostics-compact"
+        severity={browserCaptureUnavailable ? "informational" : "warning"}
+        title={title}
+        actions={<button className="icon-button subtle" type="button" aria-label="Diagnostics notice details" title="Diagnostics notice details" aria-haspopup="dialog" onClick={() => setDetailsOpen(true)}><Info size={17} aria-hidden="true" /></button>}
+        dismissLabel="Dismiss diagnostics notice"
+        onDismiss={dismiss}
+      />
+      {detailsOpen && createPortal(
+        <ModalSurface as="section" className="diagnostics-notice-dialog" labelledBy="diagnostics-notice-title" onClose={() => setDetailsOpen(false)}>
+          <header role="presentation"><h2 id="diagnostics-notice-title">{title}</h2></header>
+          <div className="diagnostics-notice-detail" tabIndex={0} role="region" aria-label="Diagnostic limitation"><p>{detail}</p></div>
+          <footer role="presentation"><a className="button quiet" href="/settings#diagnostics-settings">Diagnostics</a><button className="button quiet" type="button" onClick={() => setDetailsOpen(false)}>Close</button></footer>
+        </ModalSurface>, document.body,
+      )}
+    </>
   );
 }
 
@@ -697,6 +713,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       )}
 
       <section className="diagnostics-current" aria-labelledby="diagnostics-current-title">
+        <BuildIdentity coreCommit={currentHealth?.commit} />
         <header className="panel-header compact"><div><h3 id="diagnostics-current-title">Current status</h3><p>Live checks only. Past failures are listed separately.</p></div></header>
         <div className="diagnostics-status-grid">
           <StatusCard label="Nebula Core" {...coreStatus} />

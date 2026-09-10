@@ -147,7 +147,7 @@ def test_companion_tool_has_no_script_or_security_testing_operations(tmp_path):
         companion_components(store, other.id, session.id)
 
 
-def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
+def test_real_chromium_capture_retains_fields_and_rejects_changed_document():
     from playwright.async_api import async_playwright
     from nebula.v3.browser_companion_runtime import capture, operate
     from types import SimpleNamespace
@@ -165,8 +165,9 @@ def test_real_chromium_capture_redacts_fields_and_rejects_changed_document():
                 )
                 request = CompanionRequest(operation="capture", tab_id="tab")
                 result = await capture(page, request)
-                assert "do-not-export" not in result["text"]
-                assert "private-draft" not in result["text"]
+                assert result["elements"][0]["value"] == "do-not-export"
+                assert result["elements"][1]["value"] == "private-draft"
+                assert "private-draft" in result["html"]
                 assert result["elements"][0]["sensitive"] is True
                 await page.locator("button").evaluate("el => el.textContent = 'Delete'")
 
@@ -373,6 +374,77 @@ def test_assistant_waits_for_inline_approval_and_receives_actual_result(
             await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(run())
+
+
+def test_project_never_policy_executes_scoped_companion_change_without_prompt(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.domain import (
+        AutomationProjectPolicy,
+        ChatTurn,
+        ScopePolicy,
+        ToolCallOrigin,
+    )
+    from nebula.v3.tools import ToolInvocation
+
+    store, project, _, session, service = setup(tmp_path)
+    store.create(
+        AutomationProjectPolicy(engagement_id=project.id, approval_policy="never")
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Browser",
+            model="fixture",
+            provider_profile_id="provider",
+        )
+    )
+    service.bind(session.id, chat.id)
+    turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=chat.id,
+            model="fixture",
+            provider_profile_id="provider",
+            tools_enabled=True,
+        )
+    )
+    broker = CompanionBroker(store, session.id)
+    operations = []
+
+    async def request(session_id, request, **kwargs):
+        operations.append(request.operation)
+        return {
+            "page_revision": "page-1",
+            "elements": [{"id": "0", "sensitive": False}],
+            "text": "Saved",
+        }
+
+    monkeypatch.setattr(broker.service, "request", request)
+    invocation = ToolInvocation(
+        engagement_id=project.id,
+        run_id=turn.id,
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id=chat.id,
+        chat_turn_id=turn.id,
+        tool_name="browser.companion",
+        arguments={
+            "operation": "click",
+            "tab_id": "tab",
+            "page_revision": "page-1",
+            "element_id": "0",
+            "url": "https://example.test/",
+        },
+        workspace=tmp_path,
+    )
+
+    result = asyncio.run(
+        broker.execute(invocation, ScopePolicy(engagement_id=project.id))
+    )
+    assert result.output["status"] == "complete"
+    assert operations == ["capture", "click"]
+    assert service.actions(session.id)[0].status == "complete"
 
 
 def test_manual_action_revokes_approvals_without_clearing_control_grant(tmp_path):
@@ -583,7 +655,7 @@ def test_harness_image_capability_follows_discovered_model_modalities():
     }
 
 
-def test_protected_reference_fills_only_after_approval_and_redacts_echo(
+def test_protected_reference_fills_only_after_approval_and_retains_capture(
     tmp_path, monkeypatch
 ):
     import json
@@ -659,8 +731,7 @@ def test_protected_reference_fills_only_after_approval_and_redacts_echo(
     assert payloads == []
     result = asyncio.run(service.decide(session.id, action.id, "approve"))
     assert result.status == "complete" and len(payloads) == 1
-    assert secret not in result.model_dump_json()
-    assert result.result["text"] == "[protected]"
+    assert result.result["text"] == secret
     with pytest.raises(ValueError):
         asyncio.run(
             service.request(
@@ -842,3 +913,110 @@ def test_host_failure_explains_recovery_without_replaying(
         asyncio.run(service.request(session.id, CompanionRequest(operation="tabs")))
     assert len(calls) == 1
     assert "private" not in str(error.value)
+
+
+def test_attached_browser_has_project_graph_capabilities(tmp_path):
+    from nebula.v3.domain import ScopePolicy
+    from nebula.v3.application_model.tools import INPUTS
+
+    store, project, _, session, _ = setup(tmp_path)
+    scope = store.create(ScopePolicy(engagement_id=project.id))
+    store.update(
+        Engagement,
+        project.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=project.revision,
+    )
+    runtime = companion_components(store, project.id, session.id)
+    assert set(runtime.specs) == {"browser.companion", *INPUTS}
+    assert "application-model-v2" in runtime.runtime_digest
+
+
+@pytest.mark.parametrize(
+    "operation,assistant,expected",
+    [
+        ("navigate", True, True),
+        ("capture", True, True),
+        ("click", True, True),
+        ("tabs", True, False),
+        ("navigate", False, False),
+    ],
+)
+def test_agent_browser_result_carries_durable_model_evidence(
+    tmp_path, operation, assistant, expected
+):
+    from nebula.v3.domain import Observation
+    from nebula.v3.application_model.service import ApplicationModelService
+    from nebula.v3.application_model.graph import GraphTransaction
+
+    store, project, identity, session, service = setup(tmp_path)
+    result = {
+        "url": "https://example.test/",
+        "title": "Example page",
+        "page_revision": "page-1",
+    }
+    service._record_interaction(
+        session,
+        CompanionRequest(operation=operation),
+        result,
+        assistant=assistant,
+        chat_turn_id=None,
+    )
+    assert ("model_evidence" in result) is expected
+    if not expected:
+        return
+    reference = result["model_evidence"]
+    assert result["model_authentication_context"] == identity.id
+    reopened = NebulaStore(tmp_path / "nebula.db")
+    observation = reopened.get(Observation, reference["id"])
+    assert observation.engagement_id == project.id
+    assert observation.revision == reference["revision"]
+    model = ApplicationModelService(reopened)
+    transaction = GraphTransaction.model_validate(
+        {
+            "expected_revision": 0,
+            "idempotency_key": "browser-observation-1",
+            "operations": [
+                {
+                    "op": "put_object",
+                    "id": "page-example",
+                    "label": "Example page",
+                    "authentication_context": result["model_authentication_context"],
+                    "classification": {
+                        "value": "Page",
+                        "status": "observed",
+                        "evidence": [reference],
+                    },
+                    "properties": {
+                        "purpose": {
+                            "value": "Identify the entry point into the captured application workflow."
+                        }
+                    },
+                }
+            ],
+        }
+    )
+    model.transact(project.id, transaction, producer="assistant")
+    model.transact(project.id, transaction, producer="assistant")
+    assert len(model.search(project.id)["objects"]) == 1
+
+
+def test_automatic_browser_model_workflow_reaches_provider_and_harness():
+    from types import SimpleNamespace
+    from nebula.v3.application_model.workflow import BROWSER_MODEL_WORKFLOW
+    from nebula.v3.chat import _CHAT_TOOL_INSTRUCTIONS
+    from nebula.v3.harnesses import _harness_developer_instructions
+    from nebula.v3.domain import HarnessNativeCapabilities
+
+    assert BROWSER_MODEL_WORKFLOW in _CHAT_TOOL_INSTRUCTIONS
+    assert BROWSER_MODEL_WORKFLOW in companion_spec().description
+    assert (
+        "No model edit is required after routine navigation" in BROWSER_MODEL_WORKFLOW
+    )
+    assert "Never collect credential values" in BROWSER_MODEL_WORKFLOW
+    instructions = _harness_developer_instructions(
+        SimpleNamespace(metadata={}, mcp_snapshot=[]),
+        HarnessNativeCapabilities(),
+        vendor="test",
+    )
+    assert BROWSER_MODEL_WORKFLOW in instructions

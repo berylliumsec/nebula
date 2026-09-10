@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError } from "./client";
 
 describe("ApiClient", () => {
+  it("loads the exact approval independently of the pending catalog", async () => {
+    const approval = { id: "approval/one", status: "pending", exact_request: { tool_name: "read_file", arguments: { path: "notes.txt" }, cwd: "/workspace", argv: ["read", "notes.txt"] } };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(approval), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const controller = new AbortController();
+    expect(await client.getApproval(approval.id, controller.signal)).toEqual(approval);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://127.0.0.1:8765/api/v1/approvals/approval%2Fone");
+    expect(fetchMock.mock.calls[0][1]?.signal).toBeDefined();
+  });
+
   it("pins requests to /api/v1 and authenticates with the configured token", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "ready" }), {

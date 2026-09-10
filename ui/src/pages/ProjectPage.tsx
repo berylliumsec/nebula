@@ -40,7 +40,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
 
   return (
     <div className="project-workspace">
-      <nav className="project-tabs" aria-label="Project sections">
+      <nav className="project-tabs project-sections" aria-label="Project sections">
         {projectViews.map(({ id, label, icon: Icon }) => (
           <button
             className={view === id ? "active" : undefined}

@@ -120,6 +120,7 @@ let fallback: DiagnosticRecord[] = [];
 let flushing = false;
 let globalHandlersInstalled = false;
 let diagnosticsAvailable = true;
+let coreUnavailableReason: string | undefined;
 let lastDropNotice = 0;
 const errorPresentations = new Map<string, DiagnosticErrorPresentation>();
 
@@ -263,6 +264,12 @@ export function normalizeDiagnosticSettings(value: unknown): DiagnosticSettings 
 }
 
 function setAvailability(available: boolean, reason?: string, occurrence = false): void {
+  // A completed event write is evidence about that sink, not recovery of the
+  // latest Core health snapshot (which may have changed while it was in flight).
+  if (available && coreUnavailableReason) {
+    available = false;
+    reason = coreUnavailableReason;
+  }
   diagnosticsAvailable = available;
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("nebula-diagnostics-health", {
@@ -513,6 +520,18 @@ export function setBrowserDiagnosticIngress(enabled: boolean): void {
   browserIngressEnabled = enabled;
   if (enabled) void flushFallback();
   else setAvailability(false, "Browser event capture is disabled for this Core binding; Core storage remains independently available.");
+}
+
+/** Publish one coherent result: storage health alone cannot recover ingress. */
+export function setCoreDiagnosticsHealth(health: {diagnosticsDegraded?: boolean; browserDiagnosticIngress?: string}): void {
+  browserIngressEnabled = health.browserDiagnosticIngress === "enabled";
+  coreUnavailableReason = health.diagnosticsDegraded
+    ? "Nebula Core reported degraded local diagnostics."
+    : !browserIngressEnabled
+      ? "Browser event capture is disabled for this Core binding; Core storage remains independently available."
+      : undefined;
+  setAvailability(coreUnavailableReason === undefined, coreUnavailableReason);
+  if (browserIngressEnabled) void flushFallback();
 }
 
 export function setDiagnosticSettings(next: DiagnosticSettings): void {

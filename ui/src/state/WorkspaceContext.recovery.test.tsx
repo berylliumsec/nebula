@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useLayoutEffect } from "react";
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceContext";
 
-const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any> }));
+const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined }));
 vi.mock("../api/runtime", () => ({ resolveApiRuntime: async () => ({ state: "ready", baseUrl: "http://core/api/v1" }) }));
 vi.mock("../api/client", () => ({ ApiClient: class {
   baseUrl = "http://core/api/v1";
@@ -14,11 +15,12 @@ vi.mock("../api/events", () => ({ NebulaEventStream: class {
   connect() { this.options.onStateChange("connecting"); }
   disconnect() { this.options.onStateChange("closed"); }
 } }));
-vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn(), setDiagnosticsAvailability: vi.fn(), setBrowserDiagnosticIngress: vi.fn() }));
+vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn(), setCoreDiagnosticsHealth: vi.fn() }));
 
 const run = (id = "run-1", completedTasks = 2) => ({ id, engagementId: "project", title: id, status: "running", completedTasks, totalTasks: 5, updatedAt: "2026-09-09T12:00:00Z" });
 function Probe() {
   const value = useWorkspace();
+  useLayoutEffect(() => { fixture.onCommit?.(); });
   return <><output data-testid="state">{JSON.stringify({
     workspace: value.workspaceState, status: value.resourceStatus,
     library: value.libraryItems, harnesses: value.harnesses,
@@ -33,6 +35,7 @@ const mount = async () => {
 };
 
 beforeEach(() => {
+  fixture.onCommit = undefined;
   fixture.streams.length = 0;
   localStorage.clear();
   window.history.replaceState({}, "", "/");
@@ -51,6 +54,35 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("does not let a queued catalog-health effect overwrite observed connection loss", async () => {
+    await mount();
+    fixture.methods.listLibraryItems.mockResolvedValue({items: [{id: "refreshed"}]});
+    fixture.onCommit = () => {
+      if (state().library[0]?.id !== "refreshed") return;
+      fixture.onCommit = undefined;
+      window.dispatchEvent(new Event("offline"));
+    };
+    fireEvent.click(screen.getByText("Retry library"));
+    await waitFor(() => expect(state().library).toEqual([{id: "refreshed"}]));
+    expect(state().workspace).toBe("failed");
+    act(() => window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+  });
+
+  it("reconnects after a browser network transition without discarding the selected workspace", async () => {
+    window.history.replaceState({}, "", "/?mission=run-1");
+    fixture.methods.listLibraryItems.mockResolvedValue({items: [{id: "retained"}]});
+    await mount();
+    act(() => window.dispatchEvent(new Event("offline")));
+    await waitFor(() => expect(state().workspace).toBe("failed"));
+    expect(state().library).toEqual([{id: "retained"}]);
+    act(() => window.dispatchEvent(new Event("online")));
+    await waitFor(() => expect(state().workspace).toBe("ready"));
+    expect(state().run.id).toBe("run-1");
+    expect(new URLSearchParams(location.search).get("mission")).toBe("run-1");
+    expect(fixture.methods.health).toHaveBeenCalledTimes(3);
+  });
+
   it("retries the global Library even without a selected project", async () => {
     fixture.methods.listEngagements.mockResolvedValue({ items: [] });
     fixture.methods.listLibraryItems.mockRejectedValueOnce(new Error("temporary"));

@@ -884,3 +884,56 @@ def test_chat_request_defaults_to_unlimited_artifact_queries():
     )
     assert request.max_artifact_queries is None
     assert request.model_dump()["max_artifact_queries"] is None
+
+
+def test_model_question_uses_graph_without_command_or_browser_runtime(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "model-chat.db")
+    project = store.create(Engagement(name="Model questions"))
+    payload = _profile(local=True).model_dump(mode="python")
+    payload["capabilities"]["tool_calling"] = True
+    payload["capability_verifications"] = {
+        "model-a": {"model": "model-a", "status": "verified"}
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = FakeProvider(profile.id, local=True)
+    provider.config.capabilities.tools = True
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            engagement_id=project.id,
+            provider_id=profile.id,
+            messages=[
+                {"role": "user", "content": "What evidence supports this relationship?"}
+            ],
+            context_attachments=[
+                {
+                    "source_kind": "application_model",
+                    "source_id": project.id,
+                    "source_label": "Application model",
+                    "text": "Inspect the project graph.",
+                    "sha256": hashlib.sha256(b"Inspect the project graph.").hexdigest(),
+                }
+            ],
+        )
+    )
+    assert prepared.tools_enabled
+    assert prepared.turn.request_snapshot["include_oci_tools"] is False
+    assert prepared.turn.request_snapshot["application_model_context"] is True
+    assert set(prepared.tool_components.specs) == {
+        "model.discover_schema",
+        "model.search",
+        "model.neighborhood",
+        "model.relationship_options",
+        "model.list_evidence",
+        "model.get_evidence",
+        "model.get_updates",
+        "model.transact",
+    }
+    resumed = service.prepare_resume(prepared.turn.id)
+    assert (
+        resumed.tool_components.runtime_digest
+        == prepared.tool_components.runtime_digest
+    )

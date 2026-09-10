@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
+import {startApprovalCore} from "./fixtures/approval-core";
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -29,12 +30,19 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
   const coreBinary = coreCandidates.find(existsSync);
   if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
   const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
-  const token = "playwright-real-core-token-2026";
+  let token = "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
+  const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
   const child = spawn(
     coreBinary,
-    [
+    embedded ? [
+      // `serve` is intentionally API-only unless a static directory is given.
+      // The packaged product's `ui` entry point resolves its embedded assets.
+      "ui", "--no-browser", "--host", bindHost, "--port", "0",
+      "--data-dir", dataDir,
+      ...(bindHost === "127.0.0.1" ? [] : ["--lan", "--allow-insecure-lan"]),
+    ] : [
       "serve",
       "--host", bindHost,
       "--port", "0",
@@ -50,6 +58,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
       env: {
         ...process.env,
         PYTHONUNBUFFERED: "1",
+        ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
         PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
       },
     },
@@ -60,7 +69,9 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
     const inspect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
       const match = output.match(/"url"\s*:\s*"http:\/\/[^:\"]+:(\d+)"/);
-      if (match) {
+      const generatedToken = output.match(/"token"\s*:\s*"([^"]+)"/);
+      if (match && (!embedded || generatedToken)) {
+        if (embedded) token = generatedToken![1];
         clearTimeout(timeout);
         resolve(`http://${browserHost}:${match[1]}`);
       }
@@ -729,6 +740,77 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
   } finally {
     await api.dispose();
     await stopRealCore(core);
+  }
+});
+
+test("stabilization real Core device-browser handoff opens an isolated local tab without a false failure", async ({page}, testInfo) => {
+  test.setTimeout(65_000);
+  page.setDefaultTimeout(10_000);
+  const fixture = createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end("<!doctype html><html lang='en'><title>Local handoff fixture</title><h1>Local browser handoff</h1><p>Harmless fixture content.</p></html>");
+  });
+  await new Promise<void>(resolve => fixture.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}/fixture`;
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const project = (await (await api.get("engagements")).json())[0];
+    const scope = await (await api.get(`engagements/${project.id}/scope`)).json();
+    const saved = await api.put(`engagements/${project.id}/scope`, {data: {
+      expected_revision: scope.revision, allowed_urls: [url], allowed_ports: [Number(new URL(url).port)],
+    }});
+    expect(saved.ok(), await saved.text()).toBe(true);
+    await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
+    await expect(page.locator(".connection-chip")).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await page.getByLabel("Browser engine").selectOption("native");
+    await expect(page.getByText("Browse from this device", {exact: true})).toBeVisible();
+    const address = page.getByRole("textbox", {name: "Web address", exact: true});
+    await address.fill(url);
+    const popupPromise = page.context().waitForEvent("page", {timeout: 10_000});
+    await page.getByRole("button", {name: "Open", exact: true}).click();
+    const popup = await popupPromise;
+    await expect(popup.getByRole("heading", {name: "Local browser handoff"})).toBeVisible();
+    expect(await popup.evaluate(() => window.opener === null)).toBe(true);
+    await popup.close();
+    await expect(page.getByRole("alert").filter({hasText: "blocked the new tab"})).toHaveCount(0);
+    await expect(address).toHaveValue(url);
+    await expect(page.getByText(/The isolated embedded webview is a desktop-app capability/)).toBeVisible();
+    await expect(page.getByRole("button", {name: "Ask Nebula about the live page"})).toHaveCount(0);
+    await expect(page.getByText(/In scope · Matches Project scope/)).toBeVisible();
+    await page.evaluate(async () => { await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))); });
+    const accessibility = await new AxeBuilder({page}).include(".web-browser-fallback").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(accessibility.violations).toEqual([]);
+    const geometry = await page.locator(".web-browser-fallback").evaluate(element => ({
+      overflow: element.scrollWidth - element.clientWidth,
+      controls: [...element.querySelectorAll("button,input")].filter(node => node.getBoundingClientRect().width > 0).map(node => {
+        const rect = node.getBoundingClientRect();
+        return {name: node.getAttribute("aria-label") ?? node.textContent, width: rect.width, height: rect.height};
+      }),
+    }));
+    expect(geometry.overflow).toBeLessThanOrEqual(1);
+    for (const control of geometry.controls) {
+      expect(control.width, JSON.stringify(control)).toBeGreaterThanOrEqual(44);
+      expect(control.height, JSON.stringify(control)).toBeGreaterThanOrEqual(44);
+    }
+    await address.focus();
+    await address.press("Tab");
+    await expect(page.getByRole("button", {name: "Open", exact: true})).toBeFocused();
+    await testInfo.attach("device-browser-handoff", {body: await page.screenshot(), contentType: "image/png"});
+    await page.setViewportSize({width: 844, height: 390});
+    await address.focus();
+    await address.scrollIntoViewIfNeeded();
+    const visibleAddress = await address.boundingBox();
+    expect(visibleAddress!.y).toBeGreaterThanOrEqual(0);
+    expect(visibleAddress!.y + visibleAddress!.height).toBeLessThanOrEqual(390);
+    await page.getByRole("button", {name: "Add to Sources", exact: true}).scrollIntoViewIfNeeded();
+    const addBox = await page.getByRole("button", {name: "Add to Sources", exact: true}).boundingBox();
+    expect(addBox!.y).toBeGreaterThanOrEqual(0);
+    expect(addBox!.y + addBox!.height).toBeLessThanOrEqual(390);
+    await testInfo.attach("device-browser-short-window", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {
+    await api.dispose(); await stopRealCore(core);
+    await new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()));
   }
 });
 
@@ -1615,6 +1697,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await composer.fill("Queue second task");
     await page.getByRole("button", {name: "Queue for later", exact: true}).click();
     await expect(queue.locator("li")).toHaveCount(2);
+    await queue.locator("summary").click();
     await queue.getByRole("button", {name: "Edit queued message 1", exact: true}).click();
     await queue.getByRole("textbox", {name: "Edit queued text"}).fill("Edited queued first task");
     await queue.getByRole("button", {name: "Save queued edit"}).click();
@@ -1668,21 +1751,275 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+for (const decision of ["Approve", "Reject"] as const) {
+  test(`assistant upgrade stabilization real Core ${decision.toLowerCase()} continues exactly once`, async ({page}, testInfo) => {
+    test.setTimeout(90_000);
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-stabilization-core-"));
+    const reservation = createServer();
+    await new Promise<void>(resolve => reservation.listen(0, "0.0.0.0", resolve));
+    const port = (reservation.address() as AddressInfo).port;
+    await new Promise<void>((resolve, reject) => reservation.close(error => error ? reject(error) : resolve()));
+    const origin = `http://${localNetworkIpv4()}:${port}`;
+    const processHandle = spawn(python, [path.join(repository, "ui/tests/fixtures/approval_core.py"), "--root", dataDir, "--static-dir", path.join(repository, "ui/dist"), "--port", String(port)], {cwd: repository, env: {...process.env, PYTHONPATH: path.join(repository, "src")}});
+    let logs = "";
+    processHandle.stdout.on("data", chunk => {logs += chunk.toString();});
+    processHandle.stderr.on("data", chunk => {logs += chunk.toString();});
+    const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: "Bearer stabilization-fixture"}});
+    try {
+      await expect.poll(async () => {
+        if (processHandle.exitCode !== null) throw new Error(logs);
+        try {return (await api.get("health")).ok();} catch {return false;}
+      }, {timeout: 30_000}).toBe(true);
+      expect((await api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+      const pairingResponse = await api.post(`http://127.0.0.1:${port}/api/v1/auth/pairings`, {data: {name: "Stabilization browser"}});
+      expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+      const pairing = await pairingResponse.json();
+      await page.goto(`${origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Stabilization browser");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${origin}/?view=chat`);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await expect(composer).toBeEnabled();
+      await composer.fill("Review the inert fixture request. No commands execute.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await page.getByRole("button", {name: "Review pending actions", exact: true}).click({timeout: 30_000});
+      const card = page.getByRole("region", {name: "Approval required", exact: true});
+      await expect(card).toBeVisible();
+      await page.reload();
+      await expect(card).toBeVisible();
+      await card.getByRole("button", {name: decision, exact: true}).click();
+      const answer = decision === "Approve" ? "APPROVAL_ACCEPTED_ONCE" : "APPROVAL_DECLINED";
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText(answer);
+      await expect(page.getByRole("button", {name: "Review pending actions", exact: true})).toHaveCount(0);
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0);
+      const id = new URL(page.url()).searchParams.get("session"); expect(id).toBeTruthy();
+      const state = await (await api.get(`chat/sessions/${id}/state`)).json();
+      expect(state.execution).toBe("complete"); expect(state.pending).toEqual([]);
+      expect(state.decisions[0].continuation.status).toBe("delivered");
+      expect(state.decisions[0].continuation.adapter_status).toBe("not_required");
+      expect(state.decisions[0].progress).toBe("observed");
+      expect(state.decisions[0].progress_sequence).toBeGreaterThan(state.decisions[0].continuation.progress_after_sequence);
+      const approval = state.decisions[0];
+      const repeated = await api.post(`approvals/${approval.approval_id}/decision`, {data: {decision: decision.toLowerCase()}});
+      expect(repeated.ok()).toBe(true);
+      await page.reload();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText(answer);
+      await testInfo.attach("real-core-approval", {body: JSON.stringify({origin, state, runtime: "inert adapter; real Core/persistence/UI"}), contentType: "application/json"});
+      await testInfo.attach("real-core-approval-screen", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {
+      await api.dispose();
+      await stopRealCore({process: processHandle, dataDir, origin, token: "stabilization-fixture"});
+    }
+  });
+}
+
+test("stabilization real Core outage retains the conversation and exposes reconnect", async ({page}, testInfo) => {
+  test.setTimeout(70_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "single");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Core outage acceptance"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Core outage acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    const connection = page.locator(".connection-chip");
+    await expect(connection).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    const prompt = "Local outage fixture. Do not execute a command.";
+    await composer.fill(prompt);
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await page.getByRole("button", {name: "Review pending actions", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Approval required", exact: true})).toBeVisible();
+    await composer.fill("Retain this unsent draft through reconnection.");
+    const url = page.url();
+    const session = new URL(url).searchParams.get("session");
+    await core.disconnect();
+    await expect(connection).toHaveAccessibleName(/Nebula Core (failed|offline|disconnected|unavailable)/, {timeout: 15_000});
+    await expect(connection).toBeEnabled();
+    await expect(page.locator(".chat-message.operator")).toContainText(prompt);
+    await expect(composer).toHaveValue("Retain this unsent draft through reconnection.");
+    expect(page.url()).toBe(url);
+    await testInfo.attach("core-outage-visible", {body: await page.screenshot(), contentType: "image/png"});
+    await core.restart();
+    await connection.click();
+    await expect(connection).toHaveAccessibleName(/Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await expect(page.getByRole("region", {name: "Approval required", exact: true})).toHaveCount(0);
+    await expect(composer).toHaveValue("Retain this unsent draft through reconnection.");
+    expect(page.url()).toBe(url);
+    const durable = await (await core.api.get(`chat/sessions/${session}/state`)).json();
+    expect(durable.execution).toBe("interrupted");
+    expect(durable.pending).toEqual([]);
+    expect(await core.receipts()).toEqual([]);
+    await testInfo.attach("core-outage-recovered", {body: JSON.stringify({origin: core.origin, durable}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
+
+for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
+  test(`assistant upgrade stabilization failure ${scenario} does not replay work`, async ({page}, testInfo) => {
+    test.setTimeout(120_000);
+    const fixtureMode = ["two_requests", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress"].includes(scenario) ? scenario : "single";
+    const core = await startApprovalCore(localNetworkIpv4(), fixtureMode);
+    const api = core.api;
+    try {
+      expect((await api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+      const pairResponse = await api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Approval failure acceptance"}});
+      expect(pairResponse.ok()).toBe(true);
+      const pair = await pairResponse.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Approval failure acceptance");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${core.origin}/?view=chat`);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await composer.fill("Review the inert fixture. Never execute a command.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await page.getByRole("button", {name: "Review pending actions", exact: true}).click({timeout: 30_000});
+      const cards = page.getByRole("region", {name: "Approval required", exact: true});
+      await expect(cards.first()).toBeVisible();
+      const url = page.url();
+      const session = new URL(url).searchParams.get("session");
+      expect(session).toBeTruthy();
+      // Intentional process replacement can reset an idle keep-alive socket in
+      // this diagnostic client. Retry only that read-only transport failure;
+      // decision submissions and all durable/visible assertions stay exact.
+      const state = async () => (await api.get(`chat/sessions/${session}/state`, {
+        maxRetries: scenario.startsWith("crash_") || scenario === "restart_waiting" ? 2 : 0,
+      })).json();
+      const initial = await state();
+      expect(initial.pending).toHaveLength(scenario === "two_requests" ? 2 : 1);
+      const approve = cards.first().getByRole("button", {name: "Approve", exact: true});
+      if (scenario === "late_response_switch") {
+        let release = () => {}; let recorded = () => {}; let delivered = () => {};
+        const gate = new Promise<void>(resolve => {release = resolve;});
+        const savedResponse = new Promise<void>(resolve => {recorded = resolve;});
+        const deliveredResponse = new Promise<void>(resolve => {delivered = resolve;});
+        await page.route("**/approvals/*/decision", async route => {
+          const response = await route.fetch();
+          expect(response.ok()).toBe(true);
+          recorded(); await gate; await route.fulfill({response}); delivered();
+        }, {times: 1});
+        try {
+          await approve.click(); await savedResponse;
+          await expect.poll(async () => (await state()).execution).toBe("complete");
+          await page.getByRole("button", {name: "New chat", exact: true}).click();
+          await composer.fill("A second independent inert conversation. No command executes.");
+          await page.getByRole("button", {name: "Send message", exact: true}).click();
+          await page.getByRole("button", {name: "Review pending actions", exact: true}).click();
+          const nextSession = new URL(page.url()).searchParams.get("session");
+          expect(nextSession).not.toBe(session);
+          await expect(cards.getByRole("button", {name: "Approve", exact: true})).toBeEnabled();
+          release(); await deliveredResponse;
+          await expect(cards).toHaveCount(1);
+          await cards.getByRole("button", {name: "Approve", exact: true}).click();
+          await expect.poll(async () => (await (await api.get(`chat/sessions/${nextSession}/state`)).json()).execution).toBe("complete");
+          await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+          expect(new URL(page.url()).searchParams.get("session")).toBe(nextSession);
+          const receipts = await core.receipts();
+          expect(receipts).toHaveLength(2);
+          expect(new Set(receipts.map(item => item.turn_id)).size).toBe(2);
+          await testInfo.attach("late-response-independent-turns", {body: JSON.stringify({session, nextSession, receipts}), contentType: "application/json"});
+          return;
+        } finally {release();}
+      }
+      let expected = "complete";
+      if (scenario === "stop") {
+        await page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true}).click();
+        expected = "cancelled";
+      } else if (scenario === "restart_waiting") {
+        await core.restart();
+        expected = "interrupted";
+      } else {
+        if (scenario === "lost_response" || scenario === "disconnect") {
+          await page.route("**/approvals/*/decision", async route => {
+            const response = await route.fetch();
+            expect(response.ok()).toBe(true);
+            if (scenario === "disconnect") await page.context().setOffline(true);
+            await route.abort("connectionfailed");
+          }, {times: 1});
+        }
+        if (scenario === "double_click") await approve.dblclick();
+        else await approve.click();
+        if (scenario.startsWith("crash_")) {
+          await expect.poll(core.exited, {timeout: 15_000}).toBe(true);
+          await core.restart();
+          expected = "interrupted";
+        } else if (scenario === "adapter_exit") expected = "interrupted";
+        else if (scenario === "two_requests") {
+          await expect.poll(async () => (await state()).pending.length).toBe(1);
+          await expect(cards).toHaveCount(1);
+          await expect(page.getByText("1 action needs review", {exact: true})).toBeVisible();
+          expect((await core.receipts())).toHaveLength(1);
+          expect((await state()).execution).toBe("waiting_approval");
+          await page.reload();
+          await expect(cards).toHaveCount(1);
+          await cards.getByRole("button", {name: "Approve", exact: true}).click();
+        }
+      }
+      await expect.poll(async () => (await state()).execution, {timeout: 20_000}).toBe(expected);
+      if (scenario === "disconnect") await page.context().setOffline(false);
+      // Reconnect must reconcile the existing screen; refresh is a second gate.
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0, {timeout: 20_000});
+      await expect(page.getByRole("button", {name: "Review pending actions", exact: true})).toHaveCount(0);
+      await expect(page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0);
+      if (expected === "complete") await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE");
+      else await expect(composer).toBeEnabled();
+      await page.reload();
+      await expect(cards).toHaveCount(0);
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0);
+      expect(new URL(page.url()).searchParams.get("session")).toBe(session);
+      const saved = await state();
+      expect(saved.pending).toEqual([]);
+      expect(saved.execution).toBe(expected);
+      const receipts = await core.receipts();
+      const expectedReceipts = ["stop", "restart_waiting", "crash_after_record", "crash_after_delivery"].includes(scenario) ? 0 : scenario === "two_requests" ? 2 : 1;
+      expect(receipts).toHaveLength(expectedReceipts);
+      expect(new Set(receipts.map(item => item.approval_id)).size).toBe(receipts.length);
+      expect(receipts.every(item => item.turn_id === saved.harness_turn_id)).toBe(true);
+      if (scenario === "crash_after_record") expect(saved.decisions[0].continuation.status).toBe("failed");
+      if (scenario.startsWith("crash_") && scenario !== "crash_after_progress") expect(saved.decisions[0].progress).toBe("not_observed");
+      if (scenario === "crash_after_progress") expect(saved.decisions[0].progress).toBe("observed");
+      if (expected === "complete") await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+      await testInfo.attach("approval-failure-durable", {body: JSON.stringify({origin: core.origin, scenario, initial, saved, receipts, dataDir: core.dataDir}), contentType: "application/json"});
+      await testInfo.attach("approval-failure-screen", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await page.context().setOffline(false); await core.stop();}
+  });
+}
+
 for (const runtime of [
-  {name: "codex", kind: "codex_app_server", executable: process.env.NEBULA_ASSISTANT_CODEX_EXECUTABLE ?? "/home/agent/.local/bin/codex", model: "gpt-5.6-luna"},
-  {name: "grok", kind: "grok_acp", executable: "/home/agent/.local/bin/grok", model: "grok-4.6"},
+  {name: "codex", kind: "codex_app_server"},
+  {name: "grok", kind: "grok_acp"},
 ]) {
   test(`assistant upgrade native ${runtime.name} production LAN conversation`, async ({page}, testInfo) => {
     test.skip(process.env.NEBULA_ASSISTANT_NATIVE_ACCEPTANCE !== "1", "Requires an explicitly enabled local CLI login; fixture coverage runs separately.");
     test.setTimeout(180_000);
+    const database = process.env.NEBULA_ASSISTANT_PROFILE_DB;
+    if (!database) throw new Error("Set NEBULA_ASSISTANT_PROFILE_DB to discover an existing runtime; no hardcoded model fallback is used.");
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const configured = spawnSync(process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python"),
+      [path.join(import.meta.dirname, "fixtures/configured_harness.py"), database, runtime.kind], {encoding: "utf8"});
+    if (configured.status !== 0) throw new Error(`Runtime discovery failed: ${configured.stderr}`);
+    const configuration = JSON.parse(configured.stdout);
     const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
     const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
     try {
-      const response = await api.post("harnesses", {data: {name: `Assistant acceptance ${runtime.name}`, kind: runtime.kind, executable: runtime.executable, connection_mode: "spawn", transport: "stdio", auth_mode: "existing_session", default_model: runtime.model, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
+      const response = await api.post("harnesses", {data: {...configuration, name: `Assistant acceptance ${runtime.name}`, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
       expect(response.ok(), await response.text()).toBe(true);
       const profile = await response.json() as {id: string};
       const health = await api.post(`harnesses/${profile.id}/health`);
       expect(health.ok(), await health.text()).toBe(true);
+      const discovered = await (await api.get(`harnesses/${profile.id}`)).json();
+      const model = discovered.default_model || discovered.capabilities?.models?.[0];
+      expect(typeof model === "string" && model.length > 0, "Health discovery must advertise a model").toBe(true);
       const url = `${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`;
       await page.goto(url);
       await page.getByRole("button", {name: "New chat", exact: true}).click();
@@ -1699,7 +2036,7 @@ for (const runtime of [
       await expect(page.getByText("Connection unavailable", {exact: true})).toHaveCount(0);
       await page.locator(".chat-evidence").last().locator("summary").first().click();
       await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
-      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model: runtime.model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
+      await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
       await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
     } finally {await api.dispose(); await stopRealCore(core);}
   });
@@ -1884,13 +2221,487 @@ test("project removal archives, retries, restores and clears the last selection 
   }
 });
 
-test("project execution mode saves host consent and executes against a host folder on production LAN", async ({ page }) => {
+test("stabilization real Core preserves note drafts and reuses saved notes in reports", async ({page}, testInfo) => {
   test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as {id: string}[];
+    const project = projects[0];
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Output acceptance"}});
+    expect(pairing.ok()).toBe(true);
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Output acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
+    await page.getByRole("button", {name: "New note", exact: true}).click();
+    await page.getByLabel("Note title", {exact: true}).fill("Local fixture mechanism");
+    await page.getByLabel("Note body", {exact: true}).fill("The local fixture button changes Ready to Saved. No external site was contacted.");
+    let failSave = true;
+    await page.route("**/api/v1/observations", async route => {
+      if (failSave && route.request().method() === "POST") {
+        failSave = false;
+        await route.fulfill({status: 503, json: {detail: "Injected fixture save failure"}});
+      } else await route.continue();
+    });
+    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await expect(page.getByText("Injected fixture save failure", {exact: false}).first()).toBeVisible();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    await page.getByRole("button", {name: "Save", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Edit Local fixture mechanism", exact: true})).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", {name: /Local fixture mechanism/}).click();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    const notes = await (await api.get(`observations?engagement_id=${project.id}`)).json() as {id: string; title: string}[];
+    expect(notes.filter(note => note.title === "Local fixture mechanism")).toHaveLength(1);
+    await page.goto(`${core.origin}/projects/${project.id}/reports`);
+    await page.getByRole("button", {name: "New report", exact: true}).click();
+    const dialog = page.getByRole("dialog", {name: "New report", exact: true});
+    await dialog.getByLabel("Title", {exact: true}).fill("Disposable mechanism report");
+    await dialog.getByRole("button", {name: "Create report", exact: true}).click();
+    await expect(dialog).toBeHidden();
+    await page.getByLabel("Report title", {exact: true}).fill("Reviewed local mechanism");
+    await page.getByRole("checkbox", {name: /Local fixture mechanism/}).check();
+    await page.getByRole("button", {name: "Save report", exact: true}).click();
+    await expect(page.getByRole("button", {name: "Save report", exact: true})).toBeDisabled();
+    await page.reload();
+    await expect(page.getByLabel("Report title", {exact: true})).toHaveValue("Reviewed local mechanism");
+    await expect(page.getByRole("checkbox", {name: /Local fixture mechanism/})).toBeChecked();
+    const reports = await (await api.get(`reports?engagement_id=${project.id}`)).json() as {observation_ids: string[]}[];
+    expect(reports).toHaveLength(1);
+    expect(reports[0].observation_ids).toContain(notes.find(note => note.title === "Local fixture mechanism")!.id);
+    const rendering = page.waitForResponse(response => /\/reports\/[^/]+\/renders$/.test(response.url()) && response.request().method() === "POST");
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("button", {name: "Export PDF", exact: true}).click();
+    const renderResponse = await rendering;
+    expect(renderResponse.ok(), await renderResponse.text()).toBe(true);
+    const rendered = await renderResponse.json();
+    const download = await downloading;
+    const pdfPath = await download.path();
+    expect(pdfPath).toBeTruthy();
+    const pdf = await readFile(pdfPath!);
+    expect(pdf.subarray(0, 5).toString()).toBe("%PDF-");
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const extracted = spawnSync(process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python"), ["-c", "import sys; from pypdf import PdfReader; print('\\n'.join(p.extract_text() for p in PdfReader(sys.argv[1]).pages))", pdfPath!], {encoding: "utf8", timeout: 15_000});
+    expect(extracted.status, extracted.stderr).toBe(0);
+    expect(extracted.stdout).toContain("Reviewed local mechanism");
+    expect(extracted.stdout).toContain("Ready to Saved");
+    const durableRender = await (await api.get(`report-renders/${rendered.id}`)).json();
+    expect(durableRender.status).toBe("completed");
+    expect(durableRender.report_revision).toBe(rendered.report_revision);
+    await testInfo.attach("saved-report.pdf", {body: pdf, contentType: "application/pdf"});
+    await testInfo.attach("saved-render", {body: JSON.stringify(durableRender), contentType: "application/json"});
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=notes`);
+    await page.getByRole("button", {name: /Local fixture mechanism/}).click();
+    await page.getByRole("button", {name: "Delete", exact: true}).click();
+    await expect(page.getByText("This note is retained by a report", {exact: true})).toBeVisible();
+    await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
+    await testInfo.attach("saved-output-lineage", {body: JSON.stringify({origin: core.origin, notes, reports}), contentType: "application/json"});
+    await testInfo.attach("note-retention", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose(); await stopRealCore(core);}
+});
+
+test("stabilization real Core Library makes uploads visible and retains originals through removal", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  const filename = "mechanism-fixture.md";
+  const content = Buffer.from("# Local mechanism fixture\n\nThe local button changes Ready to Saved. This document is synthetic and no script executes.\n");
+  try {
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Library acceptance"}});
+    expect(pairing.ok()).toBe(true);
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Library acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/library`);
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    await page.getByRole("searchbox", {name: "Search Library", exact: true}).fill("a-stale-filter");
+    const chooser = page.waitForEvent("filechooser");
+    await page.getByRole("button", {name: "Add document or script", exact: true}).click();
+    await (await chooser).setFiles({name: filename, mimeType: "text/markdown", buffer: content});
+    await expect(page.getByText(`${filename} is available to every project.`, {exact: true})).toBeVisible({timeout: 60_000});
+    const row = page.locator(".source-list > article").filter({hasText: filename});
+    await expect(row).toBeVisible();
+    await expect(page.getByRole("searchbox", {name: "Search Library", exact: true})).toHaveValue("");
+    const items = await (await api.get("library/items")).json();
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    expect(item.status).toBe("ready");
+    expect(item.document_count).toBeGreaterThan(0);
+    await row.getByRole("button", {name: "Inspect", exact: true}).click();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.reload();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Close Library details", exact: true}).click();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toHaveCount(0);
+    await page.goBack();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toBeVisible();
+    await page.goForward();
+    await expect(page.getByRole("complementary", {name: filename, exact: true})).toHaveCount(0);
+    const downloading = page.waitForEvent("download");
+    await row.getByRole("button", {name: `Download ${filename}`, exact: true}).click();
+    const downloaded = await downloading;
+    expect(await readFile((await downloaded.path())!)).toEqual(content);
+    let failReindex = true;
+    await page.route(`**/library/items/${item.id}/reindex`, async route => {
+      if (failReindex) {failReindex = false; await route.fulfill({status: 503, json: {detail: "Injected local index failure"}});}
+      else await route.continue();
+    });
+    const reindex = row.getByRole("button", {name: `Reindex ${filename}`, exact: true});
+    await reindex.click();
+    await expect(page.getByText("Injected local index failure", {exact: false}).first()).toBeVisible();
+    await expect(reindex).toBeEnabled();
+    await reindex.click();
+    await expect(page.getByText(`${filename} was reindexed.`, {exact: true})).toBeVisible();
+    await expect(row.locator(".source-state")).toHaveText("ready");
+    await row.getByRole("button", {name: `Remove ${filename}`, exact: true}).click();
+    await page.getByRole("dialog", {name: `Remove ${filename}?`}).getByRole("button", {name: "Remove item", exact: true}).click();
+    await expect(row).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByText("Your Library is empty", {exact: true})).toBeVisible();
+    const retained = await api.get(`artifacts/${item.artifact_id}/content`);
+    expect(retained.ok()).toBe(true);
+    expect(await retained.body()).toEqual(content);
+    await testInfo.attach("library-durable-item", {body: JSON.stringify({origin: core.origin, item, original_retained: true, index_removed: true}), contentType: "application/json"});
+    await testInfo.attach("library-removed", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await api.dispose(); await stopRealCore(core);}
+});
+
+for (const area of ["asset", "evidence", "finding"] as const) {
+  test(`stabilization real Core ${area} creation survives failure and remains discoverable`, async ({page}, testInfo) => {
+    test.setTimeout(100_000);
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const name = `Synthetic ${area} fixture`;
+    const bytes = Buffer.from("Local fixture observation only. No external target or script execution.\n");
+    const collection = area === "evidence" ? "evidence" : `${area}s`;
+    const endpoint = area === "evidence" ? "evidence/upload" : collection;
+    try {
+      const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Resource acceptance"}});
+      const pair = await pairing.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Resource acceptance");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${core.origin}/${area === "finding" ? "findings" : "project"}`);
+      if (area !== "finding") await page.getByRole("button", {name: area === "asset" ? "Assets" : "Evidence", exact: true}).click();
+      const search = page.getByRole("searchbox", {name: `Search ${collection}`, exact: true});
+      await search.fill("unrelated stale filter");
+      if (area === "asset") {
+        await page.getByLabel("Filter assets by kind").selectOption("cloud");
+        await page.getByLabel("Filter assets by exposure").selectOption("external");
+      } else if (area === "finding") {
+        await page.getByLabel("Filter findings by severity").selectOption("critical");
+        await page.getByLabel("Filter findings by status").selectOption("remediated");
+      }
+      await page.getByRole("button", {name: area === "finding" ? "New finding" : `Add ${area}`, exact: true}).click();
+      const dialog = page.getByRole("dialog", {name: area === "finding" ? "Create candidate finding" : `Add ${area}`, exact: true});
+      const title = dialog.getByRole("textbox", {name: area === "asset" ? "Name" : "Title", exact: true});
+      await title.fill(name);
+      if (area === "evidence") await dialog.getByLabel("File", {exact: true}).setInputFiles({name: "local-fixture.txt", mimeType: "text/plain", buffer: bytes});
+      if (area === "finding") {
+        await dialog.getByRole("combobox", {name: "Severity", exact: true}).selectOption("info");
+        await dialog.getByLabel("Description", {exact: true}).fill("Synthetic unverified observation for interface acceptance.");
+      }
+      let failed = false;
+      await page.route(`**/api/v1/${endpoint}`, async route => {
+        if (route.request().method() === "POST" && !failed) {
+          failed = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic pre-save failure"})});
+        } else await route.continue();
+      });
+      const save = dialog.getByRole("button", {name: area === "asset" ? "Add asset" : area === "evidence" ? "Store evidence" : "Create candidate", exact: true});
+      await save.click();
+      await expect(dialog).toContainText("Synthetic pre-save failure");
+      await expect(title).toHaveValue(name);
+      await expect(save).toBeEnabled();
+      if (area === "evidence") expect(await dialog.getByLabel("File", {exact: true}).evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("local-fixture.txt");
+      const savedResponse = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname.endsWith(`/api/v1/${endpoint}`));
+      await save.click();
+      const response = await savedResponse;
+      expect(response.ok(), await response.text()).toBe(true);
+      const saved = await response.json();
+      await expect(dialog).toHaveCount(0);
+      const row = area === "evidence" ? page.locator(".artifact-card").filter({hasText: name}) : page.getByRole("row").filter({hasText: name});
+      await expect(row).toBeVisible();
+      await expect(search).toHaveValue("");
+      const inspect = row.getByRole("button", {name: area === "finding" ? `Edit ${name}` : "Inspect", exact: true});
+      await inspect.focus(); await inspect.press("Enter");
+      const inspector = page.getByRole("complementary", {name, exact: true});
+      await expect(inspector).toBeVisible();
+      await expect(inspector).toBeInViewport({ratio: 1});
+      const originalTheme = await page.locator("html").getAttribute("data-theme");
+      const applyTheme = async (theme: string) => {
+        // Use ThemeProvider's real cross-tab preference path: changing only a
+        // DOM attribute leaves native controls under the old inline color scheme.
+        await page.evaluate(theme => {
+          localStorage.setItem("nebula.theme", theme);
+          window.dispatchEvent(new StorageEvent("storage", {key: "nebula.theme", newValue: theme}));
+        }, theme);
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        await inspector.evaluate(async element => {
+          const finite = element.getAnimations({subtree: true}).filter(animation => Number.isFinite(Number(animation.effect?.getComputedTiming().endTime)));
+          await Promise.all(finite.map(animation => animation.finished.catch(() => {})));
+        });
+      };
+      // Palette setup, not a substitute for the existing theme-picker journey.
+      for (const theme of ["zero-dark", "zero-light", "dark", "light"]) {
+        await applyTheme(theme);
+        const surfaces = await inspector.evaluate(element => {
+          const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+          const context = canvas.getContext("2d")!;
+          return [element, element.querySelector(".finding-edit-footer")].filter(Boolean).map(node => {
+            const color = getComputedStyle(node!).backgroundColor;
+            context.clearRect(0, 0, 1, 1); context.fillStyle = color; context.fillRect(0, 0, 1, 1);
+            return {color, alpha: context.getImageData(0, 0, 1, 1).data[3]};
+          });
+        });
+        expect(surfaces.every(surface => surface.alpha === 255), `${theme} overlapping content needs opaque surfaces: ${JSON.stringify(surfaces)}`).toBe(true);
+        if (area === "finding") await testInfo.attach(`finding-inspector-${theme}`, {body: await page.screenshot({animations: "disabled"}), contentType: "image/png"});
+      }
+      await applyTheme(originalTheme ?? "zero-dark");
+      const accessibility = await new AxeBuilder({page}).include(".resource-inspector").withTags(["wcag2a", "wcag2aa"]).analyze();
+      expect(accessibility.violations).toEqual([]);
+      if (area === "finding") await inspector.getByRole("textbox", {name: "Title", exact: true}).fill(`${name} discard me`);
+      await page.getByRole("button", {name: `Close ${area} details`, exact: true}).click();
+      if (area === "finding") await page.getByRole("dialog", {name: "Discard finding changes?"}).getByRole("button", {name: "Discard changes", exact: true}).click();
+      await expect(inspector).toHaveCount(0);
+      await expect(inspect).toBeFocused();
+      await inspect.click(); await page.reload();
+      await expect(inspector).toBeVisible();
+      const durable = await (await api.get(`${collection}/${saved.id}`)).json();
+      expect(durable.id).toBe(saved.id);
+      expect(durable.engagement_id).toBe(saved.engagement_id);
+      if (area === "evidence") {
+        const artifact = await api.get(`artifacts/${durable.artifact_id}/content`);
+        expect(await artifact.body()).toEqual(bytes);
+        expect(durable.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+      }
+      await testInfo.attach("resource-durable", {body: JSON.stringify({origin: core.origin, area, durable}), contentType: "application/json"});
+      await testInfo.attach("resource-inspector", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await api.dispose(); await stopRealCore(core);}
+  });
+}
+
+test("stabilization real Core finding drafts stay bound to their record through history", async ({page}, testInfo) => {
+  test.setTimeout(100_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  let releaseSave = () => {};
+  try {
+    const project = (await (await api.get("engagements")).json())[0];
+    const records = [];
+    for (const title of ["Synthetic first observation", "Synthetic second observation"]) {
+      const response = await api.post("findings", {data: {engagement_id: project.id, title, description: "Local interface fixture only", severity: "info", status: "candidate"}});
+      expect(response.ok(), await response.text()).toBe(true);
+      records.push(await response.json());
+    }
+    const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Finding draft acceptance"}});
+    const pair = await pairing.json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Finding draft acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/findings`);
+    const inspector = page.locator(".finding-dialog");
+    const input = inspector.getByRole("textbox", {name: "Title", exact: true});
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await input.fill("First unsaved draft");
+    await page.goBack();
+    await expect(inspector).toHaveCount(0);
+    await page.getByRole("button", {name: `Edit ${records[1].title}`, exact: true}).click();
+    await expect(input).toHaveValue(records[1].title);
+    await input.fill("Second unsaved draft");
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await expect(input).toHaveValue("First unsaved draft");
+    // Another operator changes the durable record. History must not silently
+    // rebase the first draft onto this new revision and overwrite that work.
+    const changed = await api.patch(`findings/${records[0].id}`, {data: {expected_revision: records[0].revision, changes: {description: "Concurrent synthetic edit"}}});
+    expect(changed.ok(), await changed.text()).toBe(true);
+    const save = inspector.getByRole("button", {name: "Save finding", exact: true});
+    const conflict = page.waitForResponse(r => r.request().method() === "PATCH" && r.url().endsWith(`/findings/${records[0].id}`));
+    await save.click();
+    expect((await conflict).status()).toBe(409);
+    await expect(input).toHaveValue("First unsaved draft");
+    await expect(inspector.getByRole("alert")).toBeVisible();
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[1].title}`, exact: true}).click();
+    await expect(input).toHaveValue("Second unsaved draft");
+    await expect(inspector.getByRole("alert")).toHaveCount(0);
+    const release = new Promise<void>(resolve => {releaseSave = resolve;});
+    await page.route(`**/api/v1/findings/${records[1].id}`, async route => {
+      if (route.request().method() !== "PATCH") {await route.continue(); return;}
+      const response = await route.fetch();
+      await release;
+      await route.fulfill({response});
+    });
+    await save.click();
+    await expect.poll(async () => (await (await api.get(`findings/${records[1].id}`)).json()).title).toBe("Second unsaved draft");
+    await page.goBack();
+    await page.getByRole("button", {name: `Edit ${records[0].title}`, exact: true}).click();
+    await expect(input).toHaveValue("First unsaved draft");
+    releaseSave();
+    await expect(page.getByRole("button", {name: "Edit Second unsaved draft", exact: true})).toBeVisible();
+    await expect(input).toHaveValue("First unsaved draft");
+    expect(page.url()).toContain(records[0].id);
+    await page.goBack();
+    await page.getByRole("button", {name: "Edit Second unsaved draft", exact: true}).click();
+    await expect(inspector).toContainText("Saved · revision");
+    const first = await (await api.get(`findings/${records[0].id}`)).json();
+    const second = await (await api.get(`findings/${records[1].id}`)).json();
+    expect(first.title).toBe(records[0].title);
+    expect(first.description).toBe("Concurrent synthetic edit");
+    expect(second.title).toBe("Second unsaved draft");
+    await page.reload();
+    await expect(input).toHaveValue(second.title);
+    await expect(save).toBeDisabled();
+    await testInfo.attach("finding-draft-authority", {body: JSON.stringify({origin: core.origin, first, second}), contentType: "application/json"});
+    await testInfo.attach("finding-draft-saved", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {releaseSave(); await api.dispose(); await stopRealCore(core);}
+});
+
+for (const runtime of ["provider", "harness"] as const) {
+  test(`stabilization real Core ${runtime} settings separate saving from health recovery`, async ({page}, testInfo) => {
+    test.setTimeout(100_000);
+    page.setDefaultTimeout(10_000);
+    const stub = runtime === "provider" ? await startLocalModelStub() : undefined;
+    const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+    const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const name = `Local ${runtime} acceptance`;
+    const collection = runtime === "harness" ? "harnesses" : "providers";
+    const navigate = async (name: "Settings" | "Workbench") => {
+      const link = page.getByRole("link", {name, exact: true});
+      if (!await link.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click({timeout: 10_000});
+      await link.click({timeout: 10_000});
+    };
+    try {
+      const fixture = path.join(core.dataDir, "stabilization_acp.py");
+      if (runtime === "harness") await writeFile(fixture, await readFile(path.resolve(import.meta.dirname, "../../scripts/fixtures/stabilization_acp.py")), {mode: 0o700});
+      const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name}});
+      const pair = await pairing.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill(name);
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await navigate("Settings");
+      await page.getByRole("link", {name: "Advanced settings", exact: true}).click();
+      if (runtime === "harness") await page.locator("#automation-settings > summary").click();
+      await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
+      const dialog = page.getByRole("dialog");
+      const profileName = dialog.getByRole("textbox", {name: runtime === "provider" ? "Profile name" : "Name", exact: true});
+      if (runtime === "provider") {
+        await dialog.getByRole("combobox", {name: "Provider type", exact: true}).selectOption("vllm");
+        await dialog.getByRole("textbox", {name: "Endpoint", exact: true}).fill(`${stub!.origin}/v1`);
+      } else await dialog.getByRole("textbox", {name: "Absolute Grok executable path", exact: true}).fill(fixture);
+      await profileName.fill(name);
+      let failedSave = false;
+      let failedHealth = false;
+      await page.route(`**/api/v1/${collection}`, async route => {
+        if (route.request().method() === "POST" && !failedSave) {
+          failedSave = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic profile save failure"})});
+        } else await route.continue();
+      });
+      await page.route(`**/api/v1/${collection}/*/health`, async route => {
+        if (!failedHealth) {
+          failedHealth = true;
+          await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic health response failure"})});
+        } else await route.continue();
+      });
+      const save = dialog.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Save harness", exact: true});
+      await save.click();
+      await expect(dialog).toContainText("Synthetic profile save failure");
+      await expect(profileName).toHaveValue(name);
+      const persisted = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(`/api/v1/${collection}`));
+      await save.click();
+      const saved = await (await persisted).json();
+      await expect.poll(() => failedHealth).toBe(true);
+      await expect(dialog).toHaveCount(0);
+      const card = page.locator("article.provider-card").filter({has: page.getByRole("heading", {name, exact: true})});
+      await expect(card).toBeVisible();
+      if ((page.viewportSize()?.width ?? 1440) <= 430) {
+        for (const button of await card.getByRole("button").all()) {
+          const box = await button.boundingBox();
+          if (box) {expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);}
+        }
+      }
+      const check = card.getByRole("button", {name: runtime === "provider" ? `Refresh ${name} health` : "Check", exact: true});
+      await check.click();
+      await expect(card.locator(runtime === "provider" ? ".health-label" : ".status-dot")).toHaveClass(/healthy/);
+      const profiles = await (await api.get(collection)).json();
+      expect(profiles.filter((p: {name: string}) => p.name === name)).toHaveLength(1);
+      expect(profiles.find((p: {name: string}) => p.name === name).id).toBe(saved.id);
+      await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
+      const models = dialog.getByRole("combobox", {name: "Default model", exact: true});
+      const available = await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean));
+      const model = available.find(value => value !== "grok-build");
+      expect(model, "Health must expose the fixture's discovered model").toBeTruthy();
+      await models.selectOption(model!);
+      await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
+      await expect(dialog).toHaveCount(0);
+      await page.reload();
+      await expect(card).toBeVisible();
+      await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
+      await expect(models).toHaveValue(model!);
+      await dialog.getByRole("button", {name: runtime === "provider" ? "Close provider dialog" : "Close harness dialog", exact: true}).click();
+      await card.getByRole("button", {name: runtime === "provider" ? `Disable ${name}` : "Disable", exact: true}).click();
+      await expect(card.getByRole("button", {name: runtime === "provider" ? `Enable ${name}` : "Enable", exact: true})).toBeVisible();
+      await card.getByRole("button", {name: runtime === "provider" ? `Enable ${name}` : "Enable", exact: true}).click();
+      await expect(card.getByRole("button", {name: runtime === "provider" ? `Disable ${name}` : "Disable", exact: true})).toBeVisible();
+      const durable = (await (await api.get(collection)).json()).find((p: {id: string}) => p.id === saved.id);
+      expect(durable.enabled).toBe(true);
+      expect(runtime === "provider" ? durable.metadata.default_model : durable.default_model).toBe(model);
+      await testInfo.attach("runtime-settings-durable", {body: JSON.stringify({origin: core.origin, runtime, model, durable}), contentType: "application/json"});
+      await testInfo.attach("runtime-settings-saved", {body: await page.screenshot(), contentType: "image/png"});
+      await navigate("Workbench");
+      const chatTab = page.getByRole("tab", {name: "Analyst chat", exact: true});
+      if ((page.viewportSize()?.width ?? 1440) > 760) await chatTab.click();
+      else await page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Chat", exact: true}).click();
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await page.getByRole("combobox", {name: "Chat runtime", exact: true}).selectOption(runtime);
+      await page.getByRole("combobox", {name: runtime === "provider" ? "Chat provider" : "Chat harness", exact: true}).selectOption(saved.id);
+      const chatModel = page.getByRole("combobox", {name: runtime === "provider" ? "Chat model" : "Chat harness model", exact: true});
+      await expect(chatModel).toHaveValue(model!);
+      await page.getByRole("button", {name: "Close assistant settings", exact: true}).click();
+      await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Disposable unsent setup acceptance draft. No tool runs.", {timeout: 10_000});
+      await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
+      await testInfo.attach("runtime-settings-selectable", {body: await page.screenshot(), contentType: "image/png"});
+      if (stub) {
+        // Selecting a provider may negotiate its existing inert nonce capability
+        // probe. No conversation draft or executable tool may be submitted.
+        expect(stub.requests.length).toBeLessThanOrEqual(1);
+        for (const request of stub.requests) {
+          expect(request.tools).toEqual([expect.objectContaining({function: expect.objectContaining({name: "nebula_capability_probe"})})]);
+          expect(request.max_tokens).toBe(128);
+          expect(JSON.stringify(request.messages)).not.toContain("Disposable unsent");
+        }
+      }
+    } finally {await api.dispose(); await stopRealCore(core); if (stub) await stopLocalModelStub(stub);}
+  });
+}
+
+test("stabilization real Core runtime policy explains approvals and preserves frozen sessions", async ({ page }, info) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const backup = await mkdtemp(path.join(tmpdir(), "nebula-host-mode-backup-"));
   await writeFile(path.join(backup, "marker.txt"), "HOST_MODE_BACKUP_MARKER");
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
+    let failPolicyLoad = true;
+    await page.route("**/automation-policy", route => {
+      if (route.request().method() === "GET" && failPolicyLoad) {
+        return route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic initial policy outage"})});
+      }
+      return route.continue();
+    });
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
     const openPolicy = async () => {
@@ -1899,6 +2710,33 @@ test("project execution mode saves host consent and executes against a host fold
       await page.getByRole("option", { name: /Project policy and network scope/ }).click();
     };
     await openPolicy();
+    const approvalPolicy = page.getByRole("combobox", {name: "Approval policy", exact: true});
+    const retryLoad = page.getByRole("button", {name: "Retry loading project policy"});
+    await expect(retryLoad).toBeVisible();
+    await expect(approvalPolicy).toBeDisabled();
+    failPolicyLoad = false;
+    await retryLoad.click();
+    await expect(approvalPolicy).toBeEnabled();
+    const originalTheme = await page.locator("html").getAttribute("data-theme");
+    for (const theme of ["zero-dark", "zero-light", "dark", "light", originalTheme ?? "zero-dark"]) {
+      await page.evaluate(theme => {
+        localStorage.setItem("nebula.theme", theme);
+        window.dispatchEvent(new StorageEvent("storage", {key: "nebula.theme", newValue: theme}));
+      }, theme);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      expect(await page.locator(".settings-lens").evaluate(element => {
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d")!;
+        context.fillStyle = getComputedStyle(element).backgroundColor;
+        context.fillRect(0, 0, 1, 1);
+        return context.getImageData(0, 0, 1, 1).data[3];
+      }), `${theme}: settings must not show the underlying page through their content`).toBe(255);
+    }
+    await expect(approvalPolicy).toHaveAccessibleDescription(/Harness, MCP and browser permissions are separate/);
+    await approvalPolicy.selectOption("never");
+    await expect(page.getByText("Commands run without per-command approval; scope and other permission checks still apply.", {exact: true})).toBeVisible();
+    await approvalPolicy.selectOption("on_boundary");
+    await expect(page.getByText("Existing sessions keep their frozen policy revision.", {exact: true})).toBeVisible();
     const mode = page.getByRole("combobox", { name: "Project execution mode" });
     await expect(mode).toHaveValue("docker");
     await mode.selectOption("host");
@@ -1906,6 +2744,18 @@ test("project execution mode saves host consent and executes against a host fold
     await expect(save).toBeDisabled();
     await page.getByRole("checkbox", { name: /Allow host filesystem and network access/ }).check();
     await expect(save).toBeEnabled();
+    let failedSave = false;
+    await page.route("**/automation-policy", route => {
+      if (route.request().method() === "PUT" && !failedSave) {
+        failedSave = true;
+        return route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic policy save outage; retry this form."})});
+      }
+      return route.continue();
+    });
+    await save.click();
+    await expect(page.getByRole("alert").filter({hasText: "Synthetic policy save outage"})).toBeVisible();
+    await expect(mode).toHaveValue("host");
+    await expect(page.getByRole("checkbox", { name: /Allow host filesystem and network access/ })).toBeChecked();
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
@@ -1916,7 +2766,11 @@ test("project execution mode saves host consent and executes against a host fold
     expect(await ready.json()).toMatchObject({ ready: true, runner_profile_id: "host" });
     const command = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, { data: { command: "cat marker.txt", cwd: backup } });
     expect(command.ok(), await command.text()).toBe(true);
-    expect(await command.json()).toMatchObject({ exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER" });
+    const result = await command.json();
+    expect(result).toMatchObject({ exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER" });
+    const firstReceipts = await (await api.get(`automation-sessions/${result.session_id}/processes`)).json();
+    expect(firstReceipts).toHaveLength(1);
+    expect(firstReceipts[0].policy_revision).toBe(policy.revision);
     await page.goto("about:blank");
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
@@ -1927,6 +2781,20 @@ test("project execution mode saves host consent and executes against a host fold
     await save.click();
     await expect(page.getByRole("status").filter({ hasText: "Runtime policy updated" })).toBeVisible();
     expect(await (await api.get(`engagements/${projectId}/automation-policy`)).json()).toMatchObject({ execution_mode: "docker", host_access_acknowledged: false });
+    const stillFrozen = await api.post(`engagements/${projectId}/automation-sessions/api/host-mode-test/commands`, {data: {command: "cat marker.txt", cwd: backup}});
+    expect(stillFrozen.ok(), await stillFrozen.text()).toBe(true);
+    expect(await stillFrozen.json()).toMatchObject({session_id: result.session_id, exit_code: 0, stdout: "HOST_MODE_BACKUP_MARKER"});
+    const receipts = await (await api.get(`automation-sessions/${result.session_id}/processes`)).json();
+    expect(receipts).toHaveLength(2);
+    expect(receipts.map((receipt: {policy_revision: number}) => receipt.policy_revision)).toEqual([policy.revision, policy.revision]);
+    await page.evaluate(async () => { await Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))); });
+    const accessibility = await new AxeBuilder({page}).include("#engagement-policy-settings").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(accessibility.violations).toEqual([]);
+    expect(await page.locator("#engagement-policy-settings").evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+    await page.getByRole("button", {name: "Close setting", exact: true}).focus();
+    await expect(page.getByRole("button", {name: "Close setting", exact: true})).toBeFocused();
+    await info.attach("policy-scope-and-frozen-revision", {body: JSON.stringify({origin: core.origin, policy, receipts}), contentType: "application/json"});
+    await info.attach("policy-scope-screen", {body: await page.screenshot(), contentType: "image/png"});
   } finally {
     await api.dispose();
     await stopRealCore(core);

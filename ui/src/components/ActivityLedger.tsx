@@ -70,7 +70,7 @@ export function ActivityLedger({
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || entry.status === "failed");
   const receipt = receiptParts(model);
-  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || ["attention", "failed", "cancelled"].includes(entry.status));
+  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" && Boolean(entry.summary) || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
     <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}`} aria-label={model.title}>
@@ -95,7 +95,17 @@ export function ActivityLedger({
       </p>)}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
-        {attentionEntries.map((entry) => <div className={statusClass(entry.status)} key={`attention:${entry.id}`}>
+        {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>
+          <summary>
+            <span className="activity-ledger-phase-marker status-failed" aria-hidden="true" />
+            <strong>{entry.label}</strong>
+            {entry.brief && entry.brief !== entry.label && <small title={entry.brief}>{entry.brief.startsWith(`${entry.label} failed — `) ? entry.brief.slice(`${entry.label} failed — `.length) : entry.brief}</small>}
+            <em>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</em>
+            <ChevronDown size={14} aria-hidden="true" />
+          </summary>
+          {renderEntryDetails?.(entry) ?? <DefaultEntryDetails entry={entry} />}
+          {renderEntryActions && <div className="activity-ledger-entry-actions">{renderEntryActions(entry)}</div>}
+        </details> : <div className={statusClass(entry.status)} key={`attention:${entry.id}`}>
           <span className={`activity-ledger-phase-marker ${statusClass(entry.status)}`} aria-hidden="true" />
           <span><strong>{entry.label}</strong>{entry.brief && entry.brief !== entry.label && <small>{entry.brief}</small>}</span>
           <em>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</em>

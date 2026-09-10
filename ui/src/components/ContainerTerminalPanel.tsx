@@ -861,19 +861,16 @@ export function ContainerTerminalPanel({
   }
 
   if (terminalCapabilities && !terminalCapabilities.ready) {
-    const workspaceBlocked = terminalCapabilities.errorCode === "workspace_limit";
     return <div className="container-terminal-panel">
       <section className="container-terminal-intro">
         <span className="terminal-hero-icon"><SquareTerminal size={23} /></span>
-        <div><small>Kali shell</small><h2>Terminal unavailable</h2><p>{workspaceBlocked ? "This Project workspace is too large for a safe terminal mount." : "Terminal readiness needs attention."}</p></div>
+        <div><small>Kali shell</small><h2>Terminal unavailable</h2><p>Terminal readiness needs attention.</p></div>
       </section>
       <section className="terminal-auto-start terminal-blocked" role="alert">
         <AlertTriangle size={27} />
-        <strong>{workspaceBlocked ? "Choose a smaller Project workspace" : "Terminal is not ready"}</strong>
+        <strong>Terminal is not ready</strong>
         <p>{terminalCapabilities.detail ?? "Core could not prepare a terminal for this Project."}</p>
-        {workspaceBlocked && <p>The Docker runner and verified Kali image can still be healthy. Nebula stopped before creating a container because this workspace has at least {(terminalCapabilities.workspaceEntries ?? 0).toLocaleString()} entries; the limit is {(terminalCapabilities.workspaceMaxEntries ?? 50_000).toLocaleString()}.</p>}
         <div className="terminal-blocked-actions">
-          {workspaceBlocked && <button className="button primary" type="button" onClick={() => { window.location.assign("/project"); }}>Open Project workspace settings</button>}
           <button className="button secondary" type="button" onClick={() => setBootstrapAttempt((value) => value + 1)}><RotateCcw size={15} /> Check again</button>
         </div>
       </section>

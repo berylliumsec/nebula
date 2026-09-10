@@ -37,6 +37,7 @@ async def smoke(
     codex_home: Path | None = None,
     width: int = 1440,
     height: int = 900,
+    stabilization: bool = False,
 ) -> dict[str, object]:
     evidence_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nebula-packaged-profile-") as temporary:
@@ -284,12 +285,12 @@ async def smoke(
                                     base64.b64decode(screenshot.json()["value"])
                                 )
                             details = await execute(
-                                "return document.querySelector('.managed-assistant-browser')?.innerText;"
+                                "return document.querySelector('main')?.innerText;"
                             )
                             raise RuntimeError(
                                 "Packaged UI condition timed out: "
                                 + script
-                                + " Browser state: "
+                                + " Visible state: "
                                 + str(details)
                             )
 
@@ -369,23 +370,12 @@ async def smoke(
                         print(
                             "Packaged desktop: managed Chromium is visible", flush=True
                         )
-                        address = await element('[aria-label="Browser address"]')
-                        (
-                            await webdriver.post(
-                                prefix + f"/element/{address}/clear", json={}
-                            )
-                        ).raise_for_status()
-                        (
-                            await webdriver.post(
-                                prefix + f"/element/{address}/value",
-                                json={"text": target_url},
-                            )
-                        ).raise_for_status()
-                        await click(
-                            '.managed-browser-toolbar button[type="submit"], .managed-browser-toolbar button.button.primary'
+                        assert await execute(
+                            "return document.querySelector('[aria-label=\"Browser address\"]')?.readOnly && !document.querySelector('[aria-label=\"Go\"]');"
                         )
+                        await click('button[aria-label="Ask about page"]')
                         await wait_for(
-                            "return document.querySelector('.managed-browser-capture pre')?.textContent === 'Ready';"
+                            "return Boolean(document.querySelector('.managed-browser-capture'));"
                         )
                         await click(".managed-browser-capture button.button.primary")
                         await wait_for(
@@ -398,6 +388,72 @@ async def smoke(
                             "Packaged desktop: page context attached beside the live page",
                             flush=True,
                         )
+                        if stabilization:
+                            from native_stabilization_journeys import exercise
+
+                            async def relaunch():
+                                nonlocal prefix, session_id, backend
+                                (await webdriver.delete(prefix)).raise_for_status()
+                                session_id = None
+                                launched = await webdriver.post(
+                                    "/session",
+                                    json={
+                                        "capabilities": {
+                                            "alwaysMatch": {
+                                                "tauri:options": {
+                                                    "application": str(
+                                                        package_root
+                                                        / "usr/bin/nebula-ui"
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                )
+                                launched.raise_for_status()
+                                session_id = launched.json()["value"]["sessionId"]
+                                prefix = f"/session/{session_id}"
+                                await wait_for(
+                                    "return Boolean(window.__TAURI_INTERNALS__ && document.querySelector('main'));"
+                                )
+                                (
+                                    await webdriver.post(
+                                        prefix + "/window/rect", json=requested_rect
+                                    )
+                                ).raise_for_status()
+                                await wait_for(
+                                    f"return innerWidth==={width} && innerHeight==={height};"
+                                )
+                                resolved = await webdriver.post(
+                                    prefix + "/execute/async",
+                                    json={
+                                        "script": "const done=arguments[arguments.length-1];window.__TAURI_INTERNALS__.invoke('resolve_backend_connection').then(done).catch(e=>done({error:String(e)}));",
+                                        "args": [],
+                                    },
+                                )
+                                resolved.raise_for_status()
+                                backend = resolved.json()["value"]
+                                assert (
+                                    "error" not in backend
+                                    and backend["source"] == "local"
+                                ), (
+                                    "Isolated packaged Core did not reconnect after relaunch"
+                                )
+                                return prefix, backend
+
+                            await exercise(
+                                webdriver=webdriver,
+                                prefix=prefix,
+                                backend=backend,
+                                profile=profile,
+                                project=project,
+                                evidence_root=evidence_root,
+                                execute=execute,
+                                wait_for=wait_for,
+                                element=element,
+                                click=click,
+                                relaunch=relaunch,
+                            )
                         if conversation_id:
 
                             async def send_question(text: str) -> None:
@@ -427,14 +483,14 @@ async def smoke(
                             )
                             # Native element clicks target the same visible operator controls.
                             await execute(
-                                "const button = [...document.querySelectorAll('.managed-browser-toolbar button')].find(b => b.textContent === 'Resume assistant control'); if (button) button.setAttribute('data-validation-resume','true'); return true;"
+                                "const button = document.querySelector('.managed-browser-toolbar button[aria-label=\"Resume assistant control\"]'); if (button) button.setAttribute('data-validation-resume','true'); return true;"
                             )
                             if await execute(
                                 "return Boolean(document.querySelector('[data-validation-resume]'));"
                             ):
                                 await click("[data-validation-resume]")
                             await send_question(
-                                "Use browser.companion only to capture fresh context, click Ready once, wait for my approval, and report its new label."
+                                f"Use browser.companion only to open this local fixture {target_url}, capture fresh context, click Ready once, wait for my approval, and report its new label."
                             )
                             await wait_for(
                                 "return Boolean(document.querySelector('[aria-label=\"Browser action approval\"]'));",
@@ -446,7 +502,7 @@ async def smoke(
                                 180,
                             )
                             await execute(
-                                "[...document.querySelectorAll('.managed-browser-toolbar button')].find(b => b.textContent === 'Ask about page').setAttribute('data-validation-capture','true'); return true;"
+                                "document.querySelector('.managed-browser-toolbar button[aria-label=\"Ask about page\"]').setAttribute('data-validation-capture','true'); return true;"
                             )
                             await click("[data-validation-capture]")
                             await wait_for(
@@ -473,8 +529,9 @@ async def smoke(
                         "profile_isolated": True,
                         "viewport": viewport,
                         "managed_chromium_visible": True,
-                        "page_navigation_and_context_attachment": True,
+                        "read_only_page_observation_and_context_attachment": True,
                         "live_codex_inline_approval": bool(conversation_id),
+                        "inert_packaged_approval_journeys": stabilization,
                         "workflow_limit": "Physical input and full lifecycle matrix remain separate gates.",
                     }
                 finally:
@@ -500,6 +557,11 @@ if __name__ == "__main__":
     parser.add_argument("--codex-home", type=Path)
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=900)
+    parser.add_argument(
+        "--stabilization",
+        action="store_true",
+        help="Exercise approvals using an inert local ACP peer, no model calls or tools",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
@@ -513,6 +575,7 @@ if __name__ == "__main__":
                     args.codex_home,
                     args.width,
                     args.height,
+                    args.stabilization,
                 )
             ),
             sort_keys=True,

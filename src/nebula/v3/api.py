@@ -48,6 +48,7 @@ from starlette.types import Scope
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .approval_delivery import approval_harness_turn
 from .action_registry import ActionRegistry
 from .action_broker import (
     ActionBroker,
@@ -1543,6 +1544,10 @@ def create_app(
     if scope_imports is not None and scope_imports.store is not store:
         raise ValueError("scope_import_service must use the API store")
     setup = SetupService(store, tool_platform)
+    from .application_model.service import ApplicationModelService
+
+    application_model = ApplicationModelService(store, artifact_store)
+    store.application_model_service = application_model
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -1711,6 +1716,8 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.store = store
+    app.state.application_model = application_model
+    app.state.browser_companion = browser_companion
     app.state.artifact_store = artifact_store
     app.state.knowledge_index = knowledge_index
     app.state.auth_token = token
@@ -5941,7 +5948,26 @@ def create_app(
     ) -> Approval:
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
-            raise ConflictError("approval has already been resolved")
+            expected = {
+                "approve": "edited"
+                if request.edited_arguments is not None
+                else "approved",
+                "reject": "rejected",
+                "stop": "cancelled",
+            }[request.decision]
+            if approval.status.value == expected and (
+                request.edited_arguments is None
+                or approval.exact_request.get("arguments") == request.edited_arguments
+            ):
+                # A lost response must not redeliver or replay the original work.
+                return approval
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A different approval decision is already recorded.",
+                    "approval": approval.model_dump(mode="json"),
+                },
+            )
         automation_approval = approval.exact_request.get("tool_name") == "run_command"
         if automation_approval and request.edited_arguments is not None:
             raise HTTPException(
@@ -5953,12 +5979,7 @@ def create_app(
             if approval.origin == ToolCallOrigin.MISSION and not automation_approval
             else None
         )
-        harness_turn: HarnessTurn | None = None
-        if approval.tool_call_id:
-            approval_call = store.get(ToolCall, approval.tool_call_id)
-            harness_turn_id = approval_call.metadata.get("harness_turn_id")
-            if isinstance(harness_turn_id, str):
-                harness_turn = store.get(HarnessTurn, harness_turn_id)
+        harness_turn = approval_harness_turn(store, approval)
         if harness_turn is not None and request.edited_arguments is not None:
             raise HTTPException(
                 status_code=422,
@@ -6010,6 +6031,14 @@ def create_app(
             "decided_at": utc_now(),
             "decision_note": request.reason,
         }
+        if harness_turn is not None:
+            # Same durable row/transaction as the decision: a crash cannot lose
+            # the fact that delivery still needs reconciliation.
+            from .approval_delivery import decision_delivery_intent
+
+            changes["continuation"] = decision_delivery_intent(
+                store, approval, harness_turn
+            )
         if request.edited_arguments is not None:
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments
@@ -6041,7 +6070,7 @@ def create_app(
                 actor_id=operator_id,
                 idempotency_key=f"approval:{approval.id}:resolved",
             )
-        if automation_approval:
+        if automation_approval and harness_turn is None:
             return updated
         if harness_turn is not None:
             await harness_runtime.resolve_approval(updated)
@@ -6056,7 +6085,7 @@ def create_app(
                         reason=request.reason or "Stopped from an approval decision",
                         actor_id=operator_id,
                     )
-            return updated
+            return store.get(Approval, updated.id)
         if approval.origin == ToolCallOrigin.CHAT:
             if request.decision == "stop":
                 chat_service().cancel_turn(approval.run_id)
@@ -6544,10 +6573,11 @@ def create_app(
                 raise HTTPException(
                     status_code=409, detail="this VPN profile is already saved"
                 )
-            secret = credentials.create(
+            secret = await asyncio.to_thread(
+                credentials.create,
                 CredentialCreateRequest(
                     secret=SecretStr(parsed.config), persistence=request.persistence
-                )
+                ),
             )
             try:
                 profile = store.create(
@@ -6563,11 +6593,13 @@ def create_app(
                     )
                 )
             except Exception:
-                credentials.delete(secret.reference)
+                await asyncio.to_thread(credentials.delete, secret.reference)
                 raise
             return public_vpn_profile(profile)
         except VpnProfileError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except CredentialError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @app.delete(
         f"{API_PREFIX}/vpn-profiles/{{profile_id}}",
@@ -6604,10 +6636,20 @@ def create_app(
                 status_code=409,
                 detail="close active terminal sessions using this VPN profile first",
             )
+        if profile.revision != request.expected_revision:
+            raise HTTPException(
+                status_code=409, detail="VPN profile changed. Refresh and retry."
+            )
+        try:
+            await asyncio.to_thread(credentials.delete, profile.secret_ref)
+        except CredentialError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"VPN profile was not removed. {exc}",
+            ) from exc
         store.delete(
             VpnProfile, profile_id, expected_revision=request.expected_revision
         )
-        credentials.delete(profile.secret_ref)
         return Response(status_code=204)
 
     @app.get(
@@ -7444,7 +7486,11 @@ def create_app(
         return {
             "schema_version": store.database.current_schema_version(),
             "dialect": store.database.engine.dialect.name,
-            "resources": sorted(ENTITY_MODEL_BY_KIND),
+            "resources": sorted(
+                kind
+                for kind in ENTITY_MODEL_BY_KIND
+                if not kind.startswith("application_model_")
+            ),
         }
 
     @app.get(
@@ -7482,7 +7528,7 @@ def create_app(
         request: CredentialCreateRequest,
     ) -> CredentialStatus:
         try:
-            return credentials.create(request)
+            return await asyncio.to_thread(credentials.create, request)
         except CredentialUnavailableError as exc:
             record_caught_exception(
                 "api",
@@ -7520,7 +7566,7 @@ def create_app(
     )
     async def delete_provider_credential(reference: str) -> Response:
         try:
-            credentials.delete(reference)
+            await asyncio.to_thread(credentials.delete, reference)
         except CredentialError as exc:
             record_caught_exception(
                 "api",
@@ -8186,6 +8232,17 @@ def create_app(
         )
 
     @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/state",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_chat_session_state(session_id: str, response: Response) -> dict[str, Any]:
+        from .session_state import session_state
+
+        response.headers["Cache-Control"] = "no-store"
+        return session_state(store, store.get(ChatSession, session_id), harness_runtime)
+
+    @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/pending-turn",
         response_model=ChatTurnSummary | None,
         tags=["chat"],
@@ -8210,6 +8267,13 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    from .application_model.api import model_router
+
+    app.include_router(
+        model_router(application_model),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
     app.include_router(
         catchup_router(store, harness_runtime),
         prefix=API_PREFIX,
@@ -9550,6 +9614,11 @@ def create_app(
     async def operate_browser_companion(
         session_id: str, request: CompanionRequest
     ) -> dict[str, Any]:
+        if request.operation not in {"tabs", "capture"}:
+            raise HTTPException(
+                status_code=403,
+                detail="Assistant browser is read-only here. Give browsing directions in the Assistant.",
+            )
         try:
             return await browser_companion.request(session_id, request)
         except ValueError as exc:
@@ -9584,18 +9653,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def propose_browser_upload(session_id: str, request: CompanionRequest) -> Any:
-        if request.operation != "upload":
-            raise HTTPException(
-                status_code=422,
-                detail="Choose a file input and attached file to propose an upload.",
-            )
-        try:
-            browser_companion.takeover(session_id, True)
-            return browser_companion.propose(
-                session_id, request, operator_requested=True
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=403,
+            detail="Ask the Assistant to propose the upload. Attaching a file does not send it to the page.",
+        )
 
     @app.get(
         f"{API_PREFIX}/browser-companion/{{session_id}}/credentials",
@@ -9625,8 +9686,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def companion_select_tab(session_id: str, tab_id: str) -> dict[str, str]:
-        await browser_companion.select_tab(session_id, tab_id)
-        return {"active_tab_id": tab_id}
+        raise HTTPException(
+            status_code=403,
+            detail="Only the Assistant changes the active browser tab. Viewing a tab does not select it for the Assistant.",
+        )
 
     @app.get(
         f"{API_PREFIX}/browser-companion/{{session_id}}/actions",
@@ -9653,9 +9716,14 @@ def create_app(
         f"{API_PREFIX}/browser-companion/{{session_id}}/control",
         dependencies=[Depends(require_auth)],
     )
-    async def companion_control_status(session_id: str) -> dict[str, bool]:
+    async def companion_control_status(session_id: str) -> dict[str, Any]:
         session = browser_companion.session(session_id)
-        return {"paused": session.metadata.get("assistant_paused", True)}
+        return {
+            "paused": session.metadata.get("assistant_paused", True),
+            "approval_policy": browser_companion.approval_policy(
+                session.engagement_id
+            ).value,
+        }
 
     @app.put(
         f"{API_PREFIX}/browser-companion/{{session_id}}/control",
@@ -9720,29 +9788,15 @@ def create_app(
 
                 async def inputs() -> None:
                     while True:
-                        event = await websocket.receive_json()
+                        await websocket.receive_json()
                         browser_companion.session(session_id)
-                        if event.get("kind") not in {
-                            "mouse",
-                            "touch",
-                            "key",
-                            "text",
-                            "resize",
-                        }:
-                            continue
-                        if len(json.dumps(event)) > 8000:
-                            await websocket.close(code=4400, reason="input too large")
-                            return
-                        if not (
-                            event.get("kind") == "mouse"
-                            and event.get("type") == "mouseMoved"
-                        ):
-                            browser_companion.invalidate_pending_actions(session_id)
-                        async with browser_companion._locks.setdefault(
-                            session_id, asyncio.Lock()
-                        ):
-                            browser_companion.session(session_id)
-                            await upstream.send(json.dumps(event))
+                        # Old clients must not mutate the page or invalidate an
+                        # assistant approval through this passive viewing channel.
+                        await websocket.close(
+                            code=4403,
+                            reason="Assistant browser is read-only. Give directions in the Assistant.",
+                        )
+                        return
 
                 # diagnostic-expected: paired pumps are cancelled and drained in finally.
                 sender = asyncio.create_task(frames())
@@ -10010,8 +10064,24 @@ def create_app(
             )
         return browser_security.finish_handoff(handoff_id, request)
 
+    async def delete_archived_project(project: Engagement) -> None:
+        if container_terminals is not None:
+            async with container_terminals.guard_workspace_operation(project.id):
+                store.delete_archived_engagement(
+                    project.id, expected_revision=project.revision
+                )
+        elif executions is not None:
+            async with executions.engagement_lock(project.id):
+                store.delete_archived_engagement(
+                    project.id, expected_revision=project.revision
+                )
+        else:
+            store.delete_archived_engagement(
+                project.id, expected_revision=project.revision
+            )
+
     for resource, model in ENTITY_MODEL_BY_KIND.items():
-        if resource in CUSTOM_RESOURCES:
+        if resource in CUSTOM_RESOURCES or resource.startswith("application_model_"):
             continue
         _register_crud_routes(
             app,
@@ -10023,6 +10093,7 @@ def create_app(
             model,
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
+            delete_archived_project=delete_archived_project,
         )
     _assert_unique_api_operations(app)
 
@@ -10404,6 +10475,7 @@ def _register_crud_routes(
     read_only: bool = False,
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
+    delete_archived_project: Callable[[Engagement], Any] | None = None,
 ) -> None:
     """Register typed routes while preserving concrete OpenAPI schemas."""
 
@@ -10620,6 +10692,13 @@ def _register_crud_routes(
                 )
             if model is Engagement:
                 assert isinstance(current, Engagement)
+                if current.status == "archived" and delete_archived_project is not None:
+                    if if_match is None:
+                        raise ConflictError(
+                            "Refresh the project and supply its revision in If-Match before deleting."
+                        )
+                    await delete_archived_project(current)
+                    return Response(status_code=204)
                 owned_scope: ScopePolicy | None = None
                 if current.scope_policy_id:
                     candidate = store.get(ScopePolicy, current.scope_policy_id)

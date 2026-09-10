@@ -224,3 +224,124 @@ def test_linux_vault_reads_never_prompt(
     store = CredentialStore(Keyring())
     assert store._vault_value("vault:" + "a" * 32) == expected
     assert connection.closed
+
+
+@pytest.mark.parametrize("operation", ["write", "delete"])
+@pytest.mark.parametrize("state", ["locked", "prompt", "ready"])
+def test_linux_vault_mutations_never_prompt(monkeypatch, operation, state):
+    from types import SimpleNamespace
+    import secretstorage.collection
+    from keyring.backends.SecretService import Keyring
+
+    calls = []
+    connection = SimpleNamespace(close=lambda: calls.append("close"))
+
+    def call(method, *args):
+        calls.append(method)
+        if method == "CreateItem":
+            return ("/item" if state == "ready" else "/", "/prompt")
+        return ("/" if state == "ready" else "/prompt",)
+
+    item = SimpleNamespace(
+        ensure_not_locked=lambda: None, _item=SimpleNamespace(call=call)
+    )
+    collection = SimpleNamespace(
+        is_locked=lambda: state == "locked",
+        session=object(),
+        search_items=lambda _: [item],
+        _collection=SimpleNamespace(call=call),
+    )
+    monkeypatch.setattr(secretstorage, "dbus_init", lambda: connection)
+    monkeypatch.setattr(secretstorage, "get_collection_by_alias", lambda *_: collection)
+    monkeypatch.setattr(
+        secretstorage.collection, "format_secret", lambda *_: "encoded-secret"
+    )
+    monkeypatch.setattr(
+        Keyring, "set_password", lambda *_: pytest.fail("interactive write")
+    )
+    monkeypatch.setattr(
+        Keyring, "delete_password", lambda *_: pytest.fail("interactive delete")
+    )
+    monkeypatch.setattr(CredentialStore, "vault_available", property(lambda _: True))
+    store = CredentialStore(Keyring())
+
+    def mutate():
+        if operation == "write":
+            return store.create(CredentialCreateRequest(secret=SecretStr("fixture")))
+        return store.delete("vault:" + "a" * 32)
+
+    if state == "ready":
+        mutate()
+    else:
+        with pytest.raises(CredentialUnavailableError, match="host"):
+            mutate()
+    assert calls[-1] == "close"
+    assert (len(calls) == 1) == (state == "locked")
+
+
+def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
+    import asyncio
+    import threading
+    import httpx
+    from nebula.v3.domain import VpnProfile
+
+    store = NebulaStore(tmp_path / "core.db")
+    credentials = CredentialStore(MemoryKeyring())
+    profile = store.create(
+        VpnProfile(
+            name="Fixture",
+            filename="fixture.ovpn",
+            remote_host="vpn.example.test",
+            remote_port=1194,
+            protocol="udp",
+            fingerprint="a" * 64,
+            secret_ref="vault:" + "a" * 32,
+        )
+    )
+    entered, release = threading.Event(), threading.Event()
+
+    def blocked_delete(_):
+        entered.set()
+        release.wait(3)
+        raise CredentialUnavailableError(
+            "The host credential vault is locked. Unlock and retry."
+        )
+
+    credentials.delete = blocked_delete
+    app = create_app(store, credential_store=credentials, auth_token="fixture")
+
+    async def scenario():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://fixture",
+            headers={"Authorization": "Bearer fixture"},
+        ) as client:
+            path = f"/api/v1/vpn-profiles/{profile.id}"
+            stale = await client.request(
+                "DELETE", path, json={"expected_revision": profile.revision + 1}
+            )
+            assert stale.status_code == 409
+            assert not entered.is_set()
+            deletion = asyncio.create_task(
+                client.request(
+                    "DELETE", path, json={"expected_revision": profile.revision}
+                )
+            )
+            try:
+                assert await asyncio.to_thread(entered.wait, 2)
+                response = await asyncio.wait_for(client.get("/api/v1/engagements"), 1)
+                assert response.status_code == 200
+                assert not deletion.done()
+            finally:
+                release.set()
+            response = await deletion
+            assert response.status_code == 409
+            assert "not removed" in response.json()["detail"]
+            assert store.get(VpnProfile, profile.id).secret_ref == profile.secret_ref
+            credentials.delete = lambda _: None
+            retry = await client.request(
+                "DELETE", path, json={"expected_revision": profile.revision}
+            )
+            assert retry.status_code == 204
+
+    asyncio.run(scenario())

@@ -97,7 +97,7 @@ describe("ActivityLedger", () => {
     render(<ActivityLedger model={failed} />);
     const attention = screen.getByLabelText("Activity requiring attention");
     expect(within(attention).getByText("Verify TLS boundary")).toBeVisible();
-    expect(within(attention).getByText("The verification command exited with status 1.")).toBeVisible();
+    expect(within(attention).getByText("The verification command exited with status 1.", { selector: "small" })).toBeVisible();
     expect(screen.queryByText("Newest first")).toBeNull();
   });
 });
@@ -110,4 +110,30 @@ it("omits empty completed assistant work but keeps checkpoint controls discovera
   expect(screen.getByRole("button", {name: "Inspect saved work"})).toBeVisible();
   rerender(<ActivityLedger compact model={{...empty, entries: [{...model().entries[0], countsAsAction: false, status: "complete", kind: "checkpoint"}]}} />);
   expect(screen.getByRole("button", {name: "Show activity"})).toBeVisible();
+});
+
+it("collapses failed command details without hiding their status, and preserves expansion during updates", async () => {
+  const user = userEvent.setup();
+  const failed = model({ status: "attention", attentionCount: 1, entries: [{ ...model().entries[0], status: "failed", brief: "Save finding failed — Command timed out", outputs: [{ label: "stderr", content: "Detailed command failure output" }] }] });
+  const { rerender } = render(<ActivityLedger compact model={failed} />);
+  const attention = screen.getByLabelText("Activity requiring attention");
+  const summary = attention.querySelector("summary")!;
+  expect(within(attention).getByText("Failed")).toBeVisible();
+  expect(within(attention).getByText("Command timed out")).toBeVisible();
+  expect(within(attention).getByText("Detailed command failure output")).not.toBeVisible();
+  await user.click(summary);
+  expect(within(attention).getByText("Detailed command failure output")).toBeVisible();
+  rerender(<ActivityLedger compact model={{ ...failed, durationMs: 9000 }} />);
+  expect(within(attention).getByText("Detailed command failure output")).toBeVisible();
+  await user.click(summary);
+  expect(within(attention).getByText("Detailed command failure output")).not.toBeVisible();
+  expect(screen.getByRole("button", { name: "Show activity" })).toHaveAttribute("aria-expanded", "false");
+});
+
+it("keeps saved thinking discoverable even when a completed turn used no tools", async () => {
+  const user = userEvent.setup();
+  render(<ActivityLedger compact model={model({ status: "complete", actionCount: 0, entries: [{ ...model().entries[0], kind: "reasoning", status: "complete", countsAsAction: false, label: "Thinking", summary: "Saved thinking episode" }] })} />);
+  await user.click(screen.getByRole("button", { name: "Show activity" }));
+  await user.click(screen.getByText("Thinking"));
+  expect(screen.getByText("Saved thinking episode")).toBeVisible();
 });

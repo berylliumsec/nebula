@@ -8,11 +8,12 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary, ref
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
@@ -24,6 +25,9 @@ from .domain import (
     Artifact,
     BrowserIdentity,
     BrowserSession,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
+    Observation,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
@@ -90,6 +94,95 @@ class BrowserCompanion:
         self.artifact_store = self._store_artifacts.get(store)
         if managed_host is not None:
             self._store_hosts[store] = ref(managed_host)
+
+    @staticmethod
+    def _safe_url(value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            parsed = urlsplit(value)
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            if parsed.port is not None:
+                host += f":{parsed.port}"
+            return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+        except ValueError:
+            # diagnostic-expected: invalid URLs are omitted instead of exporting unsafe source text.
+            return None
+
+    def _record_interaction(
+        self,
+        session: BrowserSession,
+        request: CompanionRequest,
+        result: dict[str, Any],
+        *,
+        assistant: bool,
+        chat_turn_id: str | None,
+    ) -> None:
+        if request.operation == "tabs":
+            return
+        # Capture is independent of agent-composed project graph objects.
+        url = self._safe_url(result.get("url") or request.url)
+        metadata = {
+            "browser_session_id": session.id,
+            "identity_id": session.identity_id,
+            "tab_id": request.tab_id or result.get("active_tab_id"),
+            "chat_turn_id": chat_turn_id,
+            "operation": request.operation,
+            "capture_kind": request.capture_kind,
+            "status": "complete",
+            "url": url,
+            "page_revision": result.get("page_revision"),
+            "element_count": len(result.get("elements", [])),
+            "assistant": assistant,
+        }
+        if self.artifact_store is not None:
+            stored = self.artifact_store.put_bytes_with_status(
+                json.dumps(result, sort_keys=True).encode(),
+                engagement_id=session.engagement_id,
+                filename=f"shared-chromium-{request.operation}.json",
+                media_type="application/json",
+                source="browser_companion_capture",
+                metadata={
+                    "browser_session_id": session.id,
+                    "tab_id": request.tab_id or result.get("active_tab_id"),
+                    "operation": request.operation,
+                    "contains_unredacted_page_content": True,
+                },
+            )
+            artifact = self.store.create(stored.artifact)
+            metadata["artifact_id"] = artifact.id
+        observation = self.store.create(
+            Observation(
+                engagement_id=session.engagement_id,
+                observation_type="browser_companion_interaction",
+                title=f"Assistant browser {request.operation}",
+                source="browser_companion",
+                metadata={
+                    key: value for key, value in metadata.items() if value is not None
+                },
+            )
+        )
+
+        if assistant:
+            result["model_evidence"] = {
+                "kind": "observations",
+                "id": observation.id,
+                "revision": observation.revision,
+                "role": "supporting",
+            }
+            result["model_authentication_context"] = session.identity_id
+
+    def approval_policy(self, project_id: str) -> AutomationApprovalPolicy:
+        policies = self.store.list_entities(
+            AutomationProjectPolicy, engagement_id=project_id, limit=2
+        )
+        return (
+            policies[0].approval_policy
+            if policies
+            else AutomationApprovalPolicy.ON_BOUNDARY
+        )
 
     def file_catalog(self, session_id: str) -> list[dict[str, Any]]:
         session = self.session(session_id)
@@ -260,27 +353,6 @@ class BrowserCompanion:
                     entry["reference"]
                 ).get_secret_value()
         return values
-
-    @staticmethod
-    def redact_result(result: Any, values: list[str], key: str = "") -> Any:
-        if isinstance(result, dict):
-            return {
-                name: BrowserCompanion.redact_result(value, values, name)
-                for name, value in result.items()
-            }
-        if isinstance(result, list):
-            return [
-                BrowserCompanion.redact_result(value, values, key) for value in result
-            ]
-        if isinstance(result, str) and key not in {
-            "image",
-            "page_revision",
-            "id",
-            "reference",
-        }:
-            for value in sorted(values, key=len, reverse=True):
-                result = result.replace(value, "[protected]")
-        return result
 
     async def adapter(self) -> LocalBrowserdAdapter:
         adapter = await self.engines.adapter("managed-chromium")
@@ -485,7 +557,6 @@ class BrowserCompanion:
                         "Select an available credential attached to this browser; protected fills cannot contain plain text."
                     )
                 payload["text"] = protected[request.credential_ref]
-            payload["protected_values"] = list(protected.values())
             try:
                 response = await adapter._request(
                     "POST",
@@ -508,7 +579,14 @@ class BrowserCompanion:
                 raise ValueError(
                     "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
                 )
-            result = self.redact_result(response.json(), list(protected.values()))
+            result = response.json()
+            self._record_interaction(
+                session,
+                request,
+                result,
+                assistant=assistant,
+                chat_turn_id=chat_turn_id,
+            )
             result["credentials"] = self.credential_catalog(session_id)
             result["files"] = self.file_catalog(session_id)
             if "tabs" in result:

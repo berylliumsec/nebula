@@ -16,6 +16,39 @@
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
 
+/* The shell allocates notice height before the bounded workbench. A 100%-height
+   page plus a sibling banner clips the composer behind the navigation dock. */
+.workspace-notices:empty { display: none; }
+.diagnostics-unavailable.diagnostics-compact { display: flex; align-items: center; gap: 6px; min-height: 44px; margin: 0; padding: 0 8px; border: 0; border-radius: 0; }
+.diagnostics-compact > svg { flex: 0 0 17px; margin: 0; }
+.diagnostics-compact .surface-notice-copy { flex: 1; min-width: 0; }
+.diagnostics-compact .surface-notice-copy strong { font-size: 12px; line-height: 16px; }
+.diagnostics-compact .surface-notice-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 0; }
+.diagnostics-compact .surface-notice-actions .icon-button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; transform: none; }
+.diagnostics-notice-dialog { display: flex; flex-direction: column; overflow: hidden; }
+.diagnostics-notice-dialog > header, .diagnostics-notice-dialog > footer { flex: 0 0 auto; }
+.diagnostics-notice-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; }
+.diagnostics-notice-dialog > footer .button { min-height: 44px; }
+.diagnostics-notice-detail { min-height: 0; overflow: auto; padding: 0 16px; overflow-wrap: anywhere; }
+.app-shell .main-content:has(> .sessions-page.chat-active:not(.full-screen)) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(36%, 18rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.main-content > .sessions-page.chat-active:not(.full-screen) {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
+
+.chat-composer .chat-follow-up-queue { max-height: none; overflow: visible; }
 .chat-follow-up-queue:empty { display: none; }
 .chat-follow-up-queue { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
 .chat-follow-up-queue p { overflow-wrap: anywhere; white-space: pre-wrap; }
@@ -39,9 +72,9 @@
 
 /* Assistant controls share a bounded column; transcript and composer stay reachable. */
 .chat-panel > .chat-thread { flex: 1 1 0; min-height: 0; overflow: hidden; }
-.chat-operator-updates { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; overscroll-behavior: contain; }
+.chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30dvh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
 .chat-operator-updates:empty { display: none; }
-.chat-operator-updates > * { margin: 6px 12px; }
+.chat-operator-updates > * { margin: 6px 0; }
 .chat-operator-updates .chat-follow-up-queue, .chat-operator-updates .chat-catch-up { max-height: none; overflow: visible; }
 .chat-follow-up-queue > header { flex-wrap: wrap; }
 .chat-follow-up-queue > p, .chat-follow-up-queue > [role="alert"] { padding: 8px 12px; }
@@ -53,21 +86,41 @@
 .chat-follow-up-queue ol { max-height: none; overflow: visible; }
 .chat-message-actions { flex-wrap: wrap; }
 .chat-message-actions > button { flex: 0 0 auto; }
-.chat-panel > .chat-composer { max-height: 42%; overflow: auto; }
+.chat-panel > .chat-composer { display: flex; flex: 0 1 auto; flex-direction: column; min-height: 0; max-height: calc(100% - 48px); overflow: hidden; }
+.chat-composer-context { flex: 1 1 auto; min-height: 0; max-height: min(200px, 28cqh); overflow: auto; overscroll-behavior: contain; }
+.chat-composer-context:empty { display: none; }
+.chat-composer > .chat-composer-input { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }
+.chat-composer-input > textarea { display: block; }
+.chat-composer > footer { flex: 0 0 auto; }
 .chat-composer footer { flex-wrap: wrap; }
 .chat-composer footer > button { flex-shrink: 0; }
-.assistant-search { max-height: 28%; }
+.chat-composer footer > .chat-composer-submit { min-width: 44px; min-height: 44px; }
+.assistant-search { min-height: 45px; max-height: 28%; }
 .assistant-search input[type="search"] { max-width: 100%; min-width: 0; }
 .assistant-search label:first-child { min-width: 0; }
 @media (max-width: 600px) {
   .chat-message-actions > button { min-width: 44px; min-height: 44px; }
   .chat-composer footer .chat-runtime-summary { max-width: 120px; }
   .chat-composer footer .chat-context-meter { min-width: 44px; }
-  .chat-operator-updates { max-height: 30%; }
+  .chat-operator-updates { max-height: min(200px, 30dvh); width: calc(100% - 12px); }
   .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
-.chat-panel > .chat-composer:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
+.chat-panel > .chat-composer:has(.chat-skill-menu), .chat-composer-input:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
+
+/* Short windows spend less height on shell ornamentation. Do not reserve a
+   transcript strip by shrinking the input/actions below their usable height. */
+@media (max-height: 520px) {
+  :root { --shell-top-row: 48px; --shell-row-gap: 4px; --shell-inset: 4px; }
+  :root .main-content > .sessions-page.chat-active:not(.full-screen) { padding-block: 4px; }
+  .main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices { max-height: min(24%, 44px); }
+  .assistant-search { padding-block: 0; }
+  .chat-panel > .chat-composer { margin-block: 2px; max-height: calc(100% - 4px); }
+}
+
+/* Recovery and composition form one scrollable surface in short app windows. */
+.chat-panel:has(> .chat-resolved-approval) { overflow-y: auto; overscroll-behavior: contain; }
+.chat-panel:has(> .chat-resolved-approval) > .chat-composer { flex: 0 0 auto; max-height: none; overflow: visible; }
 
 .chat-settings-popover { bottom: var(--composer-anchor, 132px); max-height: min(500px, calc(100% - var(--composer-anchor, 132px) - 6px)); }
 
@@ -88,3 +141,25 @@
   .chat-settings-floating > .chat-context-bar { padding: 16px; }
   .chat-settings-floating .chat-settings-fields { grid-template-columns: minmax(0, 1fr); }
 }
+
+.chat-recovery-notice > .icon-button, .chat-catch-up header > .icon-button { flex: 0 0 44px; width: 44px; min-height: 44px; }
+
+.chat-catch-up-recovery { grid-template-columns: minmax(0, 1fr) 44px; align-items: center; gap: 8px; }
+.chat-catch-up-recovery > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+
+.chat-composer-context > .harness-status-rail { width: auto; max-width: calc(100% - 24px); justify-self: stretch; margin: 0 12px; border: 0; border-radius: 0; background: transparent; }
+.chat-composer-context > .harness-status-rail .harness-status-summary { min-height: 22px; gap: 6px; padding: 2px 0; flex-wrap: wrap; white-space: normal; }
+.chat-composer-context > .harness-status-rail .harness-status-summary strong { font-weight: 500; font-size: 11px; }
+.chat-composer-context > .harness-status-rail button.harness-status-summary { min-height: 44px; }
+.chat-composer-context > .harness-status-rail .harness-plan-steps { max-height: 30vh; overflow: auto; }
+
+.activity-ledger-failure { min-width: 0; border-radius: var(--radius-control); background: var(--red-muted); }
+.activity-ledger-failure > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 6px 9px; cursor: pointer; list-style: none; }
+.activity-ledger-failure > summary::-webkit-details-marker { display: none; }
+.activity-ledger-failure > summary > strong { flex: 0 1 auto; min-width: 0; font-size: 12px; overflow-wrap: anywhere; }
+.activity-ledger-failure > summary > small { flex: 1 1 0; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.activity-ledger-failure > summary > em { margin-left: auto; }
+.activity-ledger-failure > summary > svg, .activity-ledger-failure > summary > .activity-ledger-phase-marker { flex-shrink: 0; }
+.activity-ledger-failure[open] > summary > svg { transform: rotate(180deg); }
+.activity-ledger-failure > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: inherit; }
+.activity-ledger-failure > .activity-ledger-entry-body { padding: 0 12px 10px; }

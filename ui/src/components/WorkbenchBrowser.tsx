@@ -141,6 +141,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [deviceId, setDeviceId] = useState<string | undefined>(desktop ? undefined : "paired-browser");
   const [tabs, setTabs] = useState<BrowserTab[]>(() => [blankTab()]);
   const [activeId, setActiveId] = useState(() => tabs[0].id);
+  // A tab opened on this device is not Core's embedded desktop tab. In
+  // particular, restoring desktop history must never replace unsent input.
+  const [deviceAddressDraft, setDeviceAddressDraft] = useState<{ projectId: string; address: string; url?: string }>();
   const [capabilities, setCapabilities] = useState<BrowserCapabilities>();
   const [notice, setNotice] = useState<BrowserNotice>();
   const [error, setError] = useState<string>();
@@ -166,7 +169,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchView, setResearchView] = useState<ResearchView>(() => normalizedResearchView(searchParams.get("tool") ?? searchParams.get("browserTool")));
-  const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>([]);
+  const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>(() => searchParams.get("browserExchange") ? [searchParams.get("browserExchange")!] : []);
   const [identityName, setIdentityName] = useState("");
   const [identityBusy, setIdentityBusy] = useState(false);
   const [replayExchange, setReplayExchange] = useState<SecurityBrowserExchange>();
@@ -237,6 +240,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   }, [activeSession?.id]);
 
   const activeTab = tabs.find((tab) => tab.id === activeId) ?? tabs[0];
+  const deviceAddress = deviceAddressDraft?.projectId === projectId ? deviceAddressDraft : activeTab;
   const automationTargetOptions = useMemo(() => Array.from(new Set([
     ...(activeTab?.url && evaluateBrowserScope(activeTab.url, scope).state === "in_scope" ? [activeTab.url] : []),
     ...(scope?.allowedUrls ?? []),
@@ -250,7 +254,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const activeAutomationLease = automationStatus?.leases.find((lease) => lease.sessionId === activeSession?.id && lease.status === "active");
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
-    : evaluateBrowserScope(activeTab?.url, scope);
+    : evaluateBrowserScope(desktop ? activeTab?.url : deviceAddress?.url, scope);
   const browserVisible = desktop && active && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
@@ -676,6 +680,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     const next = blankTab();
     setTabs([next]);
     setActiveId(next.id);
+    setDeviceAddressDraft(undefined);
     setNotice(undefined);
     setError(undefined);
     captureRef.current = undefined;
@@ -1186,7 +1191,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   };
 
   const normalizedWebAddress = () => {
-    try { return normalizeBrowserInput(tabsRef.current.find((tab) => tab.id === activeId)?.address ?? ""); }
+    try { return normalizeBrowserInput(deviceAddress?.address ?? ""); }
     catch (caught) {
       // diagnostic-expected: local operator input validation is presented inline.
       setError(errorMessage(caught));
@@ -1200,13 +1205,16 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     setNotice(undefined);
     const url = normalizedWebAddress();
     if (!url) return;
-    updateTab(activeId, { address: url, url });
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
-    if (!opened) {
-      setError("The browser blocked the new tab. Allow pop-ups for Nebula and try again.");
-      return;
+    setDeviceAddressDraft({ projectId, address: url, url });
+    try {
+      // With noopener a successfully opened tab may have no returned handle.
+      // Keep isolation and report the request, not an unverifiable outcome.
+      window.open(url, "_blank", "noopener,noreferrer");
+      setNotice({ kind: "info", message: "New tab requested. If no tab appeared, allow pop-ups for Nebula and choose Open again." });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.workbench_browser.device_tab_failed", "A device-browser tab could not be requested.", caught, "workbench_browser");
+      setError("Could not request a new tab. Check this browser's pop-up settings and choose Open again.");
     }
-    setNotice({ kind: "info", message: "Opened the page in a separate browser tab." });
   };
 
   const addWebAddressToKnowledge = async () => {
@@ -1215,7 +1223,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     setNotice(undefined);
     const url = normalizedWebAddress();
     if (!url) return;
-    updateTab(activeId, { address: url, url });
+    setDeviceAddressDraft({ projectId, address: url, url });
     setAddingKnowledge(true);
     try {
       const created = await onAddKnowledgeUrl(url);
@@ -1689,7 +1697,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         </>}
       </section>
       {desktop && capabilities?.devtools && <button className="button secondary" type="button" disabled={!activeTab?.created} onClick={() => activeTab && void workbenchBrowser.openDevtools(activeTab.id, projectId).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.devtools_open_failed", "Browser DevTools could not be opened.", caught, "workbench_browser"); setError(errorMessage(caught)); })}><Bug size={14} /> Open DevTools</button>}
-      {!desktop && activeSession && activeTab?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: activeTab.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.handoff_create_failed", "A browser navigation handoff could not be queued for the desktop.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Send page to desktop</button>}
+      {!desktop && activeSession && deviceAddress?.url && <button className="button primary" type="button" onClick={() => void api.createSecurityBrowserHandoff(activeSession.id, { requestedByDeviceId: "paired-browser", command: "navigate", tabId: activeTab.id, url: deviceAddress.url }).then(() => { setNotice({ kind: "info", message: "Navigation queued for the desktop browser for five minutes." }); return refreshWorkspace(); }).catch((caught) => { void logCaughtDiagnostic("interface.security_browser.handoff_create_failed", "A browser navigation handoff could not be queued for the desktop.", caught, "workbench_browser"); setWorkspaceError(errorMessage(caught)); })}>Send page to desktop</button>}
     </div>}
   </SecurityBrowserWorkspacePanel> : null;
 
@@ -1710,10 +1718,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span>
         <form onSubmit={openWebAddress}>
           <Search size={16} />
-          <input aria-label="Web address" autoFocus={active} value={activeTab?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => activeTab && updateTab(activeTab.id, { address: event.target.value })} />
+          <input aria-label="Web address" autoFocus={active} value={deviceAddress?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => setDeviceAddressDraft({ projectId, address: event.target.value })} />
           <button className="button primary" type="submit">Open</button>
         </form>
-        <button className="button secondary" type="button" disabled={addingKnowledge || !activeTab?.address.trim()} onClick={() => void addWebAddressToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />} Add to Sources</button>
+        <button className="button secondary" type="button" disabled={addingKnowledge || !deviceAddress?.address.trim()} onClick={() => void addWebAddressToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />} Add to Sources</button>
       </div>
     </div>
     {researchPanel}

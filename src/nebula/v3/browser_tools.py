@@ -1027,7 +1027,7 @@ class BrowserActionProposalBroker:
                 "status": action.status.value,
                 "action_sha256": action.action_sha256,
                 "expires_at": action.expires_at.isoformat(),
-                "requires_operator_approval": True,
+                "requires_operator_approval": action.status.value == "proposed",
                 "browser_session_id": self.session.id,
             }
         except Exception as exc:
@@ -1060,12 +1060,17 @@ class BrowserToolPlatform:
             raise ValueError("Project scope is required for AI browser proposals")
         broker = BrowserActionProposalBroker(self.store, session)
         workspace = Path(engagement.workspace_path or ".").resolve()
-        return RuntimeToolComponents(
+        result = RuntimeToolComponents(
             broker=broker,
             scope=scope,
             workspace=workspace,
             specs={broker.spec.name: broker.spec},
             runtime_digest="browser-native-v1",
+        )
+        from .application_model.tools import components
+
+        return combine_tool_components(
+            result, components(self.store, session, scope, workspace)
         )
 
 

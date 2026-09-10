@@ -1,6 +1,11 @@
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useChrome } from "../state/ChromeContext";
+
+/** One contract for full desktop labels and named icon-only mobile actions. */
+export function PageHeaderAction({ label, icon, className = "button primary", title, ...props }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {label: string; icon: ReactNode}) {
+  return <button {...props} type={props.type ?? "button"} className={`${className} page-header-action`} aria-label={label} title={title ?? label}><span className="page-header-action-icon" aria-hidden="true">{icon}</span><span className="page-header-action-label">{label}</span></button>;
+}
 
 interface PageHeaderProps {
   eyebrow?: string;

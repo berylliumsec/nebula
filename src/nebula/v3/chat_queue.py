@@ -337,6 +337,31 @@ class ChatQueueService:
         return request
 
     async def step(self, queue, recovering=False):
+        # Older releases classified deliberate stops as failures needing review.
+        # Reconcile from the durable turn without re-dispatching its request.
+        stopped = {
+            item["id"]
+            for item in queue.items
+            if item["status"] == "needs_review"
+            and item.get("turn_id")
+            and self.store.get(ChatTurn, item["turn_id"]).status.value == "cancelled"
+        }
+        if stopped:
+            self.store.update(
+                ChatQueue,
+                queue.id,
+                {
+                    "items": [
+                        {**item, "status": "cancelled", "detail": "Stopped by operator"}
+                        if item["id"] in stopped
+                        else item
+                        for item in queue.items
+                    ],
+                    "paused": True,
+                },
+                expected_revision=queue.revision,
+            )
+            return
         sending = next(
             (item for item in queue.items if item["status"] in {"claiming", "sending"}),
             None,
@@ -352,7 +377,7 @@ class ChatQueueService:
                 return
             turn = self.store.get(ChatTurn, sending["turn_id"])
             if turn.status.value in TERMINAL:
-                if turn.status.value != "complete":
+                if turn.status.value not in {"complete", "cancelled"}:
                     self.review(
                         queue,
                         sending["id"],
@@ -362,11 +387,14 @@ class ChatQueueService:
                     items = [dict(item) for item in queue.items]
                     next(item for item in items if item["id"] == sending["id"])[
                         "status"
-                    ] = "complete"
+                    ] = turn.status.value
                     self.store.update(
                         ChatQueue,
                         queue.id,
-                        {"items": items},
+                        {
+                            "items": items,
+                            "paused": queue.paused or turn.status.value == "cancelled",
+                        },
                         expected_revision=queue.revision,
                     )
             elif turn.status.value == "waiting_approval":

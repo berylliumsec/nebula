@@ -306,7 +306,7 @@
 .finding-link-checklist input { width: 15px; min-width: 15px; min-height: 15px; margin-top: 1px; padding: 0; }
 .finding-link-checklist span { min-width: 0; overflow-wrap: anywhere; }
 .finding-edit-form > .diagnostic-error-notice { margin: 0; }
-.finding-edit-footer { position: sticky; z-index: 2; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border-soft); background: color-mix(in srgb, var(--surface-raised) 94%, transparent); backdrop-filter: blur(12px); }
+.finding-edit-footer { position: sticky; z-index: 2; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-top: 1px solid var(--border-soft); background: var(--surface-overlay); }
 .finding-edit-footer > span { color: var(--muted); font-size: 11px; }
 .finding-report-action { display: flex; align-items: center; gap: 7px; }
 .finding-report-action select { flex: 1; }
@@ -469,7 +469,7 @@
 .policy-revision { color: var(--muted); font-size: 11px; }
 .policy-editor-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .75fr); gap: 12px; }
 .policy-form { min-width: 0; max-width: 100%; overflow: hidden; }
-.policy-form-body { display: grid; min-width: 0; max-width: 100%; gap: 11px; padding: 13px; }
+.policy-form-body { display: grid; min-width: 0; max-width: 100%; gap: 11px; padding: 13px; margin: 0; border: 0; }
 .policy-form-body > label, .policy-form-body > .resource-form-grid, .policy-form-body > .inline-validation-notice { min-width: 0; max-width: 100%; }
 .scope-import-trigger { justify-self: start; }
 .scope-import-dialog { width: min(780px, calc(100vw - 32px)); }

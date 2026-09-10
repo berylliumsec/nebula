@@ -41,10 +41,7 @@ from .domain import (
 from .credentials import CredentialStore
 from .executions import (
     ExecutionService,
-    _WorkspaceLimitError,
-    _assert_workspace_limits,
     _digest_json,
-    inspect_workspace_limits,
 )
 from .sandbox import (
     SandboxContainerUser,
@@ -673,28 +670,17 @@ class ContainerTerminalService:
         else:
             try:
                 self.tool_platform.resolve_human_terminal_profile(engagement_id)
-                report = inspect_workspace_limits(
-                    self.tool_platform.workspace_for(engagement_id)
-                )
-                workspace_entries = report.entries
-                # Do not disclose host paths to remote clients. The limit and
-                # bounded count are enough to explain the recovery action.
-                workspace_max_entries = 50_000
-                if report.allowed:
-                    ready = True
-                    selected_vpn = self._selected_vpn(engagement_id)
-                    if selected_vpn is not None:
-                        profile, _config = selected_vpn
-                        network = ContainerTerminalNetworkSnapshot(
-                            mode="vpn",
-                            runtime_network="private_namespace",
-                            vpn_profile_id=profile.id,
-                            vpn_profile_revision=profile.revision,
-                            vpn_profile_name=profile.name,
-                        )
-                else:
-                    detail = report.detail
-                    error_code = report.error_code or "workspace_limit"
+                ready = True
+                selected_vpn = self._selected_vpn(engagement_id)
+                if selected_vpn is not None:
+                    profile, _config = selected_vpn
+                    network = ContainerTerminalNetworkSnapshot(
+                        mode="vpn",
+                        runtime_network="private_namespace",
+                        vpn_profile_id=profile.id,
+                        vpn_profile_revision=profile.revision,
+                        vpn_profile_name=profile.name,
+                    )
             except (RuntimePlatformError, ContainerTerminalError) as exc:
                 record_caught_exception(
                     "terminal",
@@ -1258,31 +1244,6 @@ class ContainerTerminalService:
                 return float("inf")
             return max(0.0, monotonic() - session.last_activity)
 
-    async def enforce_workspace_limits(self, session_id: str) -> None:
-        async with self._lock:
-            session = self._sessions.get(session_id)
-            if session is None:
-                return
-            engagement_id = session.request.engagement_id
-        if self.tool_platform is None:
-            raise ContainerTerminalError(
-                "runner_unavailable", "human terminal execution is not configured"
-            )
-        try:
-            await asyncio.to_thread(
-                _assert_workspace_limits,
-                self.tool_platform.workspace_for(engagement_id),
-            )
-        except _WorkspaceLimitError as exc:
-            record_caught_exception(
-                "terminal",
-                "terminal.container_terminal.caught_failure_005",
-                "A handled terminal operation raised an exception.",
-                exc,
-                stage="container_terminal",
-            )
-            raise ContainerTerminalError("workspace_limit", str(exc)) from exc
-
     async def finish(
         self,
         session_id: str,
@@ -1788,23 +1749,6 @@ class ContainerTerminalService:
         try:
             while True:
                 await asyncio.sleep(self.watchdog_interval_seconds)
-                try:
-                    await self.enforce_workspace_limits(session_id)
-                except ContainerTerminalError as exc:
-                    record_caught_exception(
-                        "terminal",
-                        "terminal.container_terminal.caught_failure_018",
-                        "A handled terminal operation raised an exception.",
-                        exc,
-                        stage="container_terminal",
-                    )
-                    await self.finish(
-                        session_id,
-                        outcome="workspace_limit",
-                        error_code=exc.code,
-                        detail=exc.detail,
-                    )
-                    return
                 if (
                     self.idle_timeout_seconds > 0
                     and await self.idle_seconds(session_id) >= self.idle_timeout_seconds
@@ -1968,19 +1912,6 @@ class ContainerTerminalService:
                 "human terminal container execution is not configured",
                 status_code=503,
             )
-        try:
-            _assert_workspace_limits(
-                self.tool_platform.workspace_for(request.engagement_id)
-            )
-        except _WorkspaceLimitError as exc:
-            record_caught_exception(
-                "terminal",
-                "terminal.container_terminal.caught_failure_022",
-                "A handled terminal operation raised an exception.",
-                exc,
-                stage="container_terminal",
-            )
-            raise ContainerTerminalError("workspace_limit", str(exc)) from exc
         try:
             self.tool_platform.resolve_human_terminal_profile(request.engagement_id)
         except RuntimePlatformError as exc:

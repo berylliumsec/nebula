@@ -4,11 +4,12 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Bug, CheckCircle2, FilePlus2, Link2, LoaderCircle, MessageSquareQuote, Paperclip, Plus, Save, Search, ShieldAlert, X } from "lucide-react";
 import type { FindingStatus, FindingSummary } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useCanonicalResourceSelection } from "../hooks/useCanonicalResourceSelection";
+import { useRevisionedResourceDraft } from "../hooks/useRevisionedResourceDraft";
 import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
 
 function parseIdentifiers(
@@ -123,8 +124,11 @@ export function FindingsPage() {
   const [query, setQuery] = useState("");
   const [severity, setSeverity] = useState<"all" | FindingSummary["severity"]>("all");
   const [status, setStatus] = useState<"all" | FindingStatus>("all");
-  const [selected, setSelected] = useState<FindingSummary>();
-  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("finding", findings, selected, setSelected);
+  const [routeSelected, setSelected] = useState<FindingSummary>();
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("finding", findings, routeSelected, setSelected);
+  const edit = useRevisionedResourceDraft(engagement?.id, routeSelected, findingEditDraft);
+  const selected = edit.snapshot;
+  const editDraft = edit.draft;
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -136,9 +140,9 @@ export function FindingsPage() {
   const [cweText, setCweText] = useState("");
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
-  const [findingActionSaving, setFindingActionSaving] = useState(false);
+  const [reportActionSaving, setFindingActionSaving] = useState(false);
+  const findingActionSaving = reportActionSaving || edit.saving;
   const [findingActionError, setFindingActionError] = useState<string>();
-  const [editDraft, setEditDraft] = useState<FindingEditDraft>();
   const [reportId, setReportId] = useState("");
   const visibleFindings = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -158,14 +162,12 @@ export function FindingsPage() {
   const findingDirty = Boolean(selected && editDraft && (
     !validatedEdit.value || !findingEditMatches(validatedEdit.value, selected)
   ));
-  const findingEditError = validatedEdit.error ?? findingActionError;
+  const findingEditError = validatedEdit.error ?? edit.error ?? findingActionError;
 
   useEffect(() => {
-    if (selected && !editDraft) {
-      setEditDraft(findingEditDraft(selected));
-      setReportId(reports.find((report) => report.status !== "final")?.id ?? "");
-    }
-  }, [editDraft, reports, selected]);
+    setReportId(reports.find((report) => report.status !== "final")?.id ?? "");
+    setFindingActionError(undefined);
+  }, [reports, selected?.id]);
 
   const openCandidate = () => {
     setTitle("");
@@ -232,6 +234,9 @@ export function FindingsPage() {
         cveIds: cves.values,
         cweIds: cwes.values,
       });
+      setQuery("");
+      setSeverity("all");
+      setStatus("all");
       setAdding(false);
     } catch (error) {
       void logCaughtDiagnostic("interface.findings_page.caught_failure_01", "A handled interface operation failed.", error, "findings_page");
@@ -241,38 +246,39 @@ export function FindingsPage() {
     }
   };
 
-  const allowDiscardFinding = async () => !findingDirty || confirm({
-    title: "Discard finding changes?",
-    message: "Changes to this finding have not been saved and cannot be recovered.",
-    confirmLabel: "Discard changes",
-    tone: "danger",
-  });
+  const allowDiscardFinding = async () => !findingActionSaving && (!findingDirty || confirm({
+      title: "Discard finding changes?",
+      message: "Changes to this finding have not been saved and cannot be recovered.",
+      confirmLabel: "Discard changes",
+      tone: "danger",
+  }));
 
   const inspectFinding = async (finding: FindingSummary) => {
     if (selected?.id === finding.id) return;
     if (!await allowDiscardFinding()) return;
+    edit.discard();
     openResource(finding);
     setSelected(finding);
-    setEditDraft(findingEditDraft(finding));
     setReportId(reports.find((report) => report.status !== "final")?.id ?? "");
     setFindingActionError(undefined);
   };
 
   const closeFinding = async () => {
     if (!await allowDiscardFinding()) return;
+    edit.discard();
     setSelected(undefined);
     closeResource();
-    setEditDraft(undefined);
     setFindingActionError(undefined);
   };
 
   const updateEditDraft = <K extends keyof FindingEditDraft,>(field: K, value: FindingEditDraft[K]) => {
-    setEditDraft((current) => current ? { ...current, [field]: value } : current);
+    edit.update((current) => ({ ...current, [field]: value }));
     setFindingActionError(undefined);
   };
 
   const askNebulaAboutFinding = async () => {
     if (!selected || !await allowDiscardFinding()) return;
+    edit.discard();
     requestNebulaDraft({
       text: `${selected.title}\n\n${selected.description || "No description recorded."}\n\nSeverity: ${selected.severity}\nStatus: ${selected.status.replaceAll("_", " ")}`,
       sourceKind: "finding",
@@ -284,29 +290,26 @@ export function FindingsPage() {
   const saveFinding = async () => {
     if (!selected || !validatedEdit.value || !findingDirty) return;
     const changes = validatedEdit.value;
-    setFindingActionSaving(true);
     setFindingActionError(undefined);
-    try {
-      const updated = await updateFinding(selected.id, {
-        title: changes.title,
-        description: changes.description,
-        severity: changes.severity,
-        severityRationale: changes.severityRationale,
-        assetIds: changes.assetIds,
-        cveIds: changes.cveIds,
-        cweIds: changes.cweIds,
-        status: changes.status,
-        evidenceIds: changes.evidenceIds,
-        expectedRevision: selected.revision,
-      });
-      setSelected(updated);
-      setEditDraft(findingEditDraft(updated));
-    } catch (error) {
-      void logCaughtDiagnostic("interface.findings_page.caught_failure_02", "A handled interface operation failed.", error, "findings_page");
-      setFindingActionError(error instanceof Error ? error.message : "Could not update the finding.");
-    } finally {
-      setFindingActionSaving(false);
-    }
+    await edit.save(async (base) => {
+      try {
+        return await updateFinding(base.id, {
+          title: changes.title,
+          description: changes.description,
+          severity: changes.severity,
+          severityRationale: changes.severityRationale,
+          assetIds: changes.assetIds,
+          cveIds: changes.cveIds,
+          cweIds: changes.cweIds,
+          status: changes.status,
+          evidenceIds: changes.evidenceIds,
+          expectedRevision: base.revision,
+        });
+      } catch (error) {
+        void logCaughtDiagnostic("interface.findings_page.caught_failure_02", "A handled interface operation failed.", error, "findings_page");
+        throw error;
+      }
+    });
   };
 
   const addFindingToReport = async () => {
@@ -330,7 +333,7 @@ export function FindingsPage() {
 
   return (
     <div className="page findings-page">
-      <PageHeader title="Findings" description="Validate, remediate, and retest evidence-backed risk." actions={<button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create a project first" : undefined} onClick={openCandidate}><Plus size={16} /> New finding</button>} />
+      <PageHeader title="Findings" description="Validate, remediate, and retest evidence-backed risk." actions={<PageHeaderAction label="New finding" icon={<Plus size={16} />} disabled={!engagement} title={!engagement ? "Create a project first" : undefined} onClick={openCandidate} />} />
       {(attention + awaitingVerification + remediated + advisoryLinked > 0) && <section className="finding-summary-grid" aria-label="Finding lifecycle summary">
         <article><span className="summary-icon red"><ShieldAlert size={18} /></span><div><strong>{attention}</strong><small>Priority</small></div></article>
         <article><span className="summary-icon violet"><Bug size={18} /></span><div><strong>{awaitingVerification}</strong><small>To verify</small></div></article>

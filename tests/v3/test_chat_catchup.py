@@ -1,9 +1,11 @@
 from datetime import timedelta
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.v3.test_chat_queue import setup_queue
 from nebula.v3.chat_catchup import catchup_router, catchup_projection
 from nebula.v3.domain import ChatMessage, ChatReadCursor, ChatSession, ChatTurn, utc_now
+from nebula.v3.domain import Approval
 
 
 def setup(tmp_path):
@@ -11,6 +13,42 @@ def setup(tmp_path):
     app = FastAPI()
     app.include_router(catchup_router(store, None))
     return store, TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(
+    "status", ["pending", "approved", "edited", "rejected", "expired", "cancelled"]
+)
+def test_pending_notice_uses_durable_decision_without_replaying_turn(tmp_path, status):
+    store, client = setup(tmp_path)
+    approval = store.create(
+        Approval(
+            engagement_id="p",
+            run_id="",
+            origin="chat",
+            status=status,
+            risk_class="passive",
+            requested_by="test",
+            policy_rationale="Review the file read",
+            exact_request={"tool_name": "read_file"},
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="paused",
+            model="fixture",
+            provider_profile_id=store.get(ChatSession, "s").provider_profile_id,
+            engagement_id="p",
+            session_id="s",
+            status="waiting_approval",
+            approval_id=approval.id,
+        )
+    )
+    for _ in range(2):
+        result = client.get("/chat/sessions/s/catch-up?device_id=test").json()
+        assert bool(result["pending"]) == (status == "pending")
+        assert store.get(ChatTurn, turn.id).revision == turn.revision
+        assert store.get(ChatTurn, turn.id).status.value == "waiting_approval"
+        assert store.get(Approval, approval.id).status.value == status
 
 
 def test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending(tmp_path):
@@ -45,6 +83,17 @@ def test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending(tmp_pat
             sequence=2,
         )
     )
+    pending_approval = store.create(
+        Approval(
+            engagement_id="p",
+            run_id="",
+            origin="chat",
+            requested_by="fixture",
+            risk_class="passive",
+            policy_rationale="Review the fixture read",
+            exact_request={"tool_name": "read_file"},
+        )
+    )
     store.create(
         ChatTurn(
             engagement_id="p",
@@ -52,6 +101,7 @@ def test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending(tmp_pat
             model="model-a",
             provider_profile_id="provider-a",
             status="waiting_approval",
+            approval_id=pending_approval.id,
         )
     )
     newer = client.get(path + "/catch-up?device_id=phone").json()

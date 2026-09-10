@@ -5,6 +5,7 @@
   --canvas: #020203;
   --surface: rgb(12 13 16 / 76%);
   --surface-raised: rgb(20 21 25 / 90%);
+  --surface-overlay: #141519;
   --surface-muted: rgb(8 9 12 / 82%);
   --surface-hover: rgb(42 45 52 / 72%);
   --border: rgb(222 233 255 / 20%);
@@ -37,6 +38,7 @@
   --canvas: #edf3f8;
   --surface: rgb(250 252 254 / 88%);
   --surface-raised: rgb(255 255 255 / 96%);
+  --surface-overlay: #ffffff;
   --surface-muted: rgb(232 239 246 / 90%);
   --surface-hover: rgb(218 229 239 / 88%);
   --border: rgb(48 75 101 / 24%);
@@ -104,9 +106,9 @@
   isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 64px minmax(0, 1fr) 78px;
-  gap: 10px;
-  padding: 12px;
+  grid-template-rows: var(--shell-top-row, 64px) minmax(0, 1fr) 78px;
+  gap: var(--shell-row-gap, 10px);
+  padding: var(--shell-inset, 12px);
   overflow: hidden;
   background: transparent;
   transition: none;
@@ -615,9 +617,9 @@
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.with-activity,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.sidebar-collapsed,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .app-shell.zero-layer-shell.sidebar-collapsed.with-activity {
-    grid-template-rows: 58px minmax(0, 1fr);
-    gap: 8px;
-    padding: 8px;
+    grid-template-rows: var(--shell-top-row, 58px) minmax(0, 1fr);
+    gap: var(--shell-row-gap, 8px);
+    padding: var(--shell-inset, 8px);
   }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band { padding-inline: 10px; border-radius: 21px; }
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band .top-bar-leading { min-width: 0; }

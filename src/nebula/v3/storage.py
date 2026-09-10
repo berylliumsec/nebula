@@ -7,8 +7,11 @@ from .diagnostics import record_caught_exception
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Sequence, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeVar, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .application_model.service import ApplicationModelService
 
 from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -35,6 +38,11 @@ from .domain import (
 )
 
 EntityT = TypeVar("EntityT", bound=Entity)
+
+
+def _check_model_update(model):
+    if model.entity_kind.startswith("application_model_"):
+        raise ValueError("Experimental application-model records are retired")
 
 
 class StorageError(RuntimeError):
@@ -155,6 +163,7 @@ class StoreTransaction:
     ) -> EntityT:
         """Apply an optimistic entity update inside this unit of work."""
 
+        _check_model_update(model)
         protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
@@ -307,6 +316,7 @@ class NebulaStore:
     """Persistence boundary for typed Nebula entities and run events."""
 
     def __init__(self, database: Database | str | Path) -> None:
+        self.application_model_service: ApplicationModelService | None = None
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )
@@ -722,6 +732,7 @@ class NebulaStore:
     ) -> tuple[EntityT, RunEvent]:
         """Atomically persist an entity transition and its audit event."""
 
+        _check_model_update(model)
         protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
         if protected:
             raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
@@ -852,6 +863,7 @@ class NebulaStore:
     ) -> tuple[EntityT, OperationEvent]:
         """Atomically persist an entity transition and its operation event."""
 
+        _check_model_update(model)
         if not all((operation_id, operation_kind, engagement_id, event_type)):
             raise ValueError("operation event identifiers and type are required")
         protected = {"id", "created_at", "updated_at", "revision"}.intersection(changes)
@@ -1124,6 +1136,108 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("mission changed while it was being deleted")
+
+    def delete_archived_engagement(
+        self, engagement_id: str, *, expected_revision: int
+    ) -> None:
+        """Remove an idle archive atomically, without touching filesystem or audit ledgers."""
+        from .application_model.persistence import graphs, edits
+        from .database import ResourceRelationRow
+        from .terminal_history import TerminalCommandRow, TerminalCommandPreferenceRow
+
+        with self.database.session() as session:
+            # Acquire the writer lock before inspecting children; a concurrent
+            # restore or new turn cannot interleave with the checked deletion.
+            session.execute(text("BEGIN IMMEDIATE"))
+            row = session.get(EntityRow, engagement_id)
+            if row is None or row.kind != "engagements":
+                raise NotFoundError(f"engagements entity not found: {engagement_id}")
+            if row.revision != expected_revision:
+                raise ConflictError(
+                    "Project changed. Refresh Archived projects and try again."
+                )
+            if row.payload.get("status") != "archived":
+                raise ConflictError(
+                    "Archive the project before permanently deleting it."
+                )
+            # Session envelopes can remain starting before their first turn or
+            # after restart. Only turn records establish unfinished harness work.
+            terminal_states = {
+                "runs": {"complete", "failed", "cancelled", "interrupted"},
+                "chat_turns": {"complete", "failed", "cancelled", "interrupted"},
+                "harness_turns": {"complete", "failed", "cancelled", "interrupted"},
+                "operator_executions": {
+                    "completed",
+                    "denied",
+                    "timed_out",
+                    "cancelled",
+                    "failed",
+                    "interrupted",
+                },
+                "command_executions": {
+                    "completed",
+                    "timed_out",
+                    "cancelled",
+                    "failed",
+                    "interrupted",
+                },
+                "browser_commands": {"complete", "failed", "cancelled", "expired"},
+                "automation_sessions": {"closed", "failed", "interrupted"},
+            }
+            for kind, allowed in terminal_states.items():
+                busy = session.scalar(
+                    select(EntityRow.id)
+                    .where(
+                        EntityRow.engagement_id == engagement_id,
+                        EntityRow.kind == kind,
+                        EntityRow.payload["status"].as_string().not_in(allowed),
+                    )
+                    .limit(1)
+                )
+                if busy:
+                    raise ConflictError(
+                        f"Project still has unfinished {kind.replace('_', ' ')}. "
+                        "Stop or finish its work and close command sessions before deleting; "
+                        "restore the project to access those controls."
+                    )
+            queues = session.scalars(
+                select(EntityRow).where(
+                    EntityRow.engagement_id == engagement_id,
+                    EntityRow.kind == "chat_queues",
+                )
+            )
+            if any(
+                item.get("status") not in {"complete", "cancelled", "failed"}
+                for queue in queues
+                for item in queue.payload.get("items", [])
+            ):
+                raise ConflictError(
+                    "Project has queued follow-ups. Restore it and clear the queue before deleting."
+                )
+            run_ids = select(EntityRow.id).where(
+                EntityRow.engagement_id == engagement_id,
+                EntityRow.kind == "runs",
+            )
+            session.execute(
+                delete(RunBudgetCounterRow).where(
+                    RunBudgetCounterRow.run_id.in_(run_ids)
+                )
+            )
+            for table, column in (
+                (graphs, graphs.c.project_id),
+                (edits, edits.c.project_id),
+                (ResourceRelationRow, ResourceRelationRow.project_id),
+                (SearchDocumentRow, SearchDocumentRow.project_id),
+                (TerminalCommandRow, TerminalCommandRow.engagement_id),
+                (
+                    TerminalCommandPreferenceRow,
+                    TerminalCommandPreferenceRow.engagement_id,
+                ),
+            ):
+                session.execute(delete(table).where(column == engagement_id))
+            session.execute(
+                delete(EntityRow).where(EntityRow.engagement_id == engagement_id)
+            )
 
     def engagement_has_dependents(
         self,

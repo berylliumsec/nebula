@@ -1,8 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
-import { assertFocused } from "../scripts/test_scope_guard.mjs";
+import { assertPlaywrightInvocation } from "../scripts/test_scope_guard.mjs";
 
 // Protect direct npx invocations as well as guarded npm scripts.
-assertFocused("e2e", process.argv.slice(2));
+assertPlaywrightInvocation(process.argv.slice(2));
 
 const testPort = process.env.NEBULA_UI_TEST_PORT ?? "1420";
 const testHost = process.env.NEBULA_UI_TEST_HOST ?? "127.0.0.1";
@@ -112,7 +112,12 @@ export default defineConfig({
       dependencies: isolatedMatrixEntry ? [] : ["desktop", "compact", "narrow"],
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } },
     },
-  ],
+  ].map(project => ({
+    ...project,
+    // Stabilization journeys must not silently disappear behind older per-screen
+    // filters. File/project boundaries still apply, including isolated real Core.
+    ...("grep" in project ? {grep: new RegExp(`stabilization|${project.grep.source}`)} : {}),
+  })),
   webServer: {
     command: testCommand,
     url: `http://${testHost}:${testPort}`,

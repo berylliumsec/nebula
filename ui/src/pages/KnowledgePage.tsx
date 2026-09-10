@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import type { KnowledgeIndexStatus, KnowledgeSource } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -296,8 +296,7 @@ export function KnowledgePage() {
         description="Sources available for cited retrieval."
         actions={<>
           <input ref={inputRef} className="sr-only" type="file" aria-label="Choose knowledge source" accept=".txt,.md,.markdown,.rst,.log,.csv,.json,.jsonl,.ndjson,.html,.htm,.pdf,.docx,.xlsx,text/plain,text/markdown,text/x-markdown,text/csv,application/csv,application/json,application/jsonl,application/x-jsonlines,application/x-ndjson,text/html,application/xhtml+xml,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => void uploadFile(event)} />
-          <button className="button secondary mobile-icon-action" type="button" aria-label="Add URL" disabled={!canMutate || uploading} onClick={() => { setError(undefined); setAddingUrl(true); }}><Link2 size={16} /><span>Add URL</span></button>
-          <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} {uploading ? "Adding source…" : "Upload file"}</button>
+          <PageHeaderAction label={uploading ? "Adding source…" : "Upload file"} icon={uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()} />
         </>}
       />
       {indexStatus && !["ready", "disabled"].includes(indexStatus.state) && <section className={`knowledge-model-status ${indexStatus.state}`} role="status" aria-live="polite">
@@ -320,6 +319,7 @@ export function KnowledgePage() {
         <section className="panel data-panel knowledge-sources">
           <header className="data-toolbar">
             <label className="search-field"><Search size={16} /><span className="sr-only">Search knowledge sources</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search sources…" /></label>
+            <IconAction icon={Link2} label="Add URL" disabled={!canMutate || uploading} onClick={() => { setError(undefined); setAddingUrl(true); }} />
             <button className="button quiet" type="button" disabled={!canMutate || visibleSources.length === 0 || busyIds.size > 0} onClick={() => void reindexAll()}><RefreshCw className={busyIds.size > 0 ? "spin" : undefined} size={15} /> Reindex {query ? "results" : "all"}</button>
           </header>
           <div className="source-list">

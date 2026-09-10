@@ -230,7 +230,7 @@ describe("WorkbenchBrowser", () => {
     fireEvent.change(address, { target: { value: "docs.example.com/guide" } });
     fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(open).toHaveBeenCalledWith("https://docs.example.com/guide", "_blank", "noopener,noreferrer");
-    expect(await screen.findByRole("status")).toHaveTextContent("Opened the page in a separate browser tab.");
+    expect(await screen.findByRole("status")).toHaveTextContent("New tab requested.");
     expect(screen.getByText(/In scope · Matches Project scope revision 4/)).toBeVisible();
 
     const addToSources = screen.getByRole("button", { name: "Add to Sources" });
@@ -238,6 +238,64 @@ describe("WorkbenchBrowser", () => {
     fireEvent.click(addToSources);
     await waitFor(() => expect(onAddKnowledgeUrl).toHaveBeenCalledWith("https://docs.example.com/guide"));
     expect(screen.getByRole("status")).toHaveTextContent("Guide is ready for cited retrieval.");
+  });
+
+  it("retains the device-browser address while durable desktop tabs finish loading", async () => {
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    let resolveWorkspace!: (value: typeof workspace) => void;
+    vi.mocked(api.getSecurityBrowserWorkspace).mockImplementation(() => new Promise(resolve => { resolveWorkspace = resolve; }));
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    const address = screen.getByRole("textbox", { name: "Web address" });
+    fireEvent.change(address, { target: { value: "docs.example.com/unsent" } });
+    await act(async () => { resolveWorkspace(workspace); });
+    expect(address).toHaveValue("docs.example.com/unsent");
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(open).toHaveBeenCalledWith("https://docs.example.com/unsent", "_blank", "noopener,noreferrer");
+    expect(address).toHaveValue("https://docs.example.com/unsent");
+  });
+
+  it("does not confuse an isolated popup's null handle with a blocked popup", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    renderBrowser();
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.change(screen.getByRole("textbox", { name: "Web address" }), { target: { value: "docs.example.com/guide" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(open).toHaveBeenCalledWith("https://docs.example.com/guide", "_blank", "noopener,noreferrer");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("If no tab appeared, allow pop-ups for Nebula and choose Open again.");
+  });
+
+  it("retains a requested device URL and scope when desktop history arrives later", async () => {
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    let resolveWorkspace!: (value: typeof workspace) => void;
+    vi.mocked(api.getSecurityBrowserWorkspace).mockImplementation(() => new Promise(resolve => { resolveWorkspace = resolve; }));
+    vi.spyOn(window, "open").mockReturnValue(null);
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    fireEvent.change(screen.getByRole("textbox", { name: "Web address" }), { target: { value: "docs.example.com/guide" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    await act(async () => { resolveWorkspace(workspace); });
+    expect(screen.getByRole("textbox", { name: "Web address" })).toHaveValue("https://docs.example.com/guide");
+    expect(screen.getByText(/In scope · Matches Project scope revision 4/)).toBeVisible();
+    expect(api.syncSecurityBrowserSession).not.toHaveBeenCalled();
+  });
+
+  it("retains the address and offers an explicit retry when requesting a tab throws", async () => {
+    const open = vi.spyOn(window, "open").mockImplementationOnce(() => { throw new Error("Local popup policy"); }).mockReturnValue(null);
+    renderBrowser();
+    await act(async () => { await Promise.resolve(); });
+    const address = screen.getByRole("textbox", { name: "Web address" });
+    fireEvent.change(address, { target: { value: "docs.example.com/guide" } });
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not request a new tab.");
+    expect(address).toHaveValue("https://docs.example.com/guide");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("New tab requested.");
   });
 
   it("hides and restores the native browser while a blocking application surface is open", async () => {

@@ -2432,6 +2432,23 @@ class ToolCall(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ApprovalContinuation(NebulaModel):
+    """Delivery to Core's exact request waiter, not proof of tool execution."""
+
+    harness_turn_id: str
+    status: Literal["pending", "delivered", "failed"] = "pending"
+    detail: str | None = Field(default=None, max_length=1_000)
+    adapter_handoff: Literal["transport_write", "sdk_callback"] | None = None
+    adapter_status: Literal["not_required", "pending", "sent", "failed", "unknown"] = (
+        "not_required"
+    )
+    adapter_detail: str | None = Field(default=None, max_length=1_000)
+    # Ordered activity after this boundary may demonstrate turn progress, not
+    # necessarily execution of the approved command. Wall-clock order is unsafe.
+    progress_after_sequence: int | None = Field(default=None, ge=0)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Approval(Entity):
     entity_kind: ClassVar[str] = "approvals"
     engagement_id: str
@@ -2454,6 +2471,7 @@ class Approval(Entity):
     decided_at: datetime | None = None
     expires_at: datetime | None = None
     decision_note: str | None = None
+    continuation: ApprovalContinuation | None = None
 
 
 class ModelCapabilities(NebulaModel):

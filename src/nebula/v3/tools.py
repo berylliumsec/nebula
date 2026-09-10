@@ -1323,12 +1323,16 @@ def register_artifact_retrieval_tools(
         ),
         (
             "workspace.search",
-            "Search authorized engagement workspace files with bounded, redacted output.",
+            "Search an authorized project file or directory. Bounded searches return partial results, incomplete status and narrowing guidance when time, byte, file or result limits are reached.",
             {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 512},
-                    "path": {"type": "string", "default": "."},
+                    "path": {
+                        "description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.",
+                        "type": "string",
+                        "default": ".",
+                    },
                     "mode": {
                         "type": "string",
                         "enum": ["literal", "regex"],

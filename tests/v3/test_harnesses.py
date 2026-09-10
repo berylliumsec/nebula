@@ -826,7 +826,9 @@ def test_harness_mission_freezes_browser_gateway_and_lease(tmp_path):
         assert set(run.metadata["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
         frozen = run.runtime_snapshot["command_runtime_snapshot"]
         assert frozen["browser_runtime_enabled"] is True
-        assert set(frozen["tool_names"]) == set(AUTONOMOUS_BROWSER_TOOLS)
+        assert set(AUTONOMOUS_BROWSER_TOOLS).issubset(frozen["tool_names"])
+        assert frozen["application_model_runtime"] == "v2"
+        assert any(name.endswith("model.get_updates") for name in frozen["tool_names"])
         status = platform.automation.status(engagement.id, run_id=run.id)
         assert status.leases[0].session_id == session.id
         assert status.leases[0].scope_policy_revision == scope.revision
@@ -880,7 +882,8 @@ def test_chat_harness_activity_is_durable_replayable_and_viewer_independent(tmp_
     asyncio.run(scenario())
 
 
-def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
+@pytest.mark.parametrize("vendor", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
+def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, vendor):
     class ReasoningConnection(FakeConnection):
         async def run_turn(
             self, prompt: str, *, model: str
@@ -894,7 +897,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
             )
             yield HarnessEvent(
                 type="output_delta",
-                vendor=HarnessKind.CODEX_APP_SERVER,
+                vendor=vendor,
                 item_id="reasoning-1",
                 item_kind="reasoning",
                 item_status="streaming",
@@ -908,7 +911,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path):
             )
             yield HarnessEvent(
                 type="item_upsert",
-                vendor=HarnessKind.CODEX_APP_SERVER,
+                vendor=vendor,
                 item_id="reasoning-1",
                 item_kind="reasoning",
                 item_status="completed",
@@ -1360,12 +1363,16 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
         model=None,
     )
 
-    assert session.metadata["command_runtime_enabled"] is False
-    assert "command_runtime_snapshot" not in session.metadata
+    assert session.metadata["command_runtime_enabled"] is True
+    snapshot = session.metadata["command_runtime_snapshot"]
+    assert snapshot["application_model_runtime"] == "v2"
+    assert all(name.startswith("model.") for name in snapshot["tool_names"])
 
 
+@pytest.mark.parametrize("restart", [False, True])
 def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
     tmp_path,
+    restart,
 ):
     async def scenario() -> None:
         store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
@@ -1388,7 +1395,8 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
 
         old_digest = "sha256:" + "a" * 64
         new_digest = "sha256:" + "b" * 64
-        first_runtime.bind_automation_tool_platform(Commands(old_digest))  # type: ignore[arg-type]
+        commands = Commands(old_digest)
+        first_runtime.bind_automation_tool_platform(commands)  # type: ignore[arg-type]
         chat, _, first_turn = first_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -1403,16 +1411,22 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
         assert (
             store.get(HarnessTurn, first_turn.id).status == HarnessTurnStatus.COMPLETE
         )
-        await first_runtime.shutdown()
-
         adapter = FakeAdapter()
-        restarted_runtime = HarnessRuntimeService(
-            store,
-            credential_store=CredentialStore(),
-            workspace_resolver=lambda _: tmp_path,
-            adapter_factory=lambda _: adapter,
-        )
-        restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        if restart:
+            await first_runtime.shutdown()
+            restarted_runtime = HarnessRuntimeService(
+                store,
+                credential_store=CredentialStore(),
+                workspace_resolver=lambda _: tmp_path,
+                adapter_factory=lambda _: adapter,
+            )
+        else:
+            restarted_runtime = first_runtime
+            assert frozen_session.id in restarted_runtime._gateway_oci_components
+        if restart:
+            restarted_runtime.bind_automation_tool_platform(Commands(new_digest))  # type: ignore[arg-type]
+        else:
+            commands.digest = new_digest
         rebound_chat, owner, replacement_turn = restarted_runtime.prepare_chat(
             engagement_id=engagement.id,
             profile_id=profile.id,
@@ -1432,11 +1446,11 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             store.get(HarnessSession, frozen_session.id).metadata[
                 "command_runtime_snapshot"
             ]["runtime_digest"]
-            == old_digest
+            == old_digest + "+application-model-project-v2"
         )
         assert (
             replacement_session.metadata["command_runtime_snapshot"]["runtime_digest"]
-            == new_digest
+            == new_digest + "+application-model-project-v2"
         )
         assert rebound_chat.metadata["harness_session_rollovers"][-1]["reason"] == (
             "command_runtime_changed"
@@ -1554,6 +1568,98 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
         owner = store.get(ChatTurn, chat_turn.id)
         assert owner.execution_tool_calls == 1
         assert owner.artifact_queries == 0
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_harness_mcp_exposes_project_application_model(tmp_path):
+    async def scenario() -> None:
+        from nebula.v3.application_model.service import ApplicationModelService
+        from nebula.v3.domain import BrowserIdentity, BrowserSession
+
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        scope = store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Model identity")
+        )
+        store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Model browser",
+            )
+        )
+        service = ApplicationModelService(store, runtime.artifact_store)
+        store.application_model_service = service
+        from nebula.v3.application_model.graph import GraphTransaction
+
+        service.transact(
+            engagement.id,
+            GraphTransaction.model_validate(
+                {
+                    "expected_revision": 0,
+                    "idempotency_key": "fixture",
+                    "operations": [
+                        {
+                            "op": "put_object",
+                            "id": "site-model",
+                            "properties": {
+                                "purpose": {
+                                    "value": "Define the application boundary for its authentication workflow."
+                                }
+                            },
+                            "label": "Model site",
+                            "authentication_context": "anonymous",
+                            "classification": {"value": "Application"},
+                        }
+                    ],
+                }
+            ),
+        )
+        _, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect the application model",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        catalog = runtime._gateway_catalog(session)["tools"]
+        selected = next(
+            item["name"]
+            for item in catalog
+            if item["name"].startswith("runtime_")
+            and item["name"].endswith("model.search")
+        )
+        assert any(
+            item["name"].startswith("runtime_")
+            and item["name"].endswith("model.get_updates")
+            for item in catalog
+        )
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(session, selected, {})
+        receipt = response["structuredContent"]
+        assert receipt["schema"] == "nebula.tool-result/v2"
+        assert "site-model" not in json.dumps(receipt)
+        result = ToolOutputService(store, runtime.artifact_store).search(
+            engagement_id=engagement.id,
+            owner_id=chat_turn.id,
+            tool_call_id=receipt["tool_call_id"],
+            query="site-model",
+        )
+        assert result["matches"]
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
@@ -3158,6 +3264,33 @@ def test_supporting_evidence_reads_normalized_harness_events(tmp_path):
         assert "Source presence does not establish correctness" in evidence.text
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "workspace.read",
+        "runtime_76c95459a5_model.discover_schema",
+        "runtime_4f870d4683_model.relationship_options",
+        "a" * 56,
+        "a" * 57,
+        "a" * 64,
+        "a" * 100,
+    ],
+)
+def test_grok_gateway_alias_fits_qualified_name(name):
+    import re
+    from nebula.v3.harnesses import _portable_gateway_tool_name
+
+    alias = _portable_gateway_tool_name(name)
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", "nebula__" + alias)
+    assert alias == _portable_gateway_tool_name(name)
+    assert alias != _portable_gateway_tool_name(name + "x")
+    assert _portable_gateway_tool_name("a" * 56) == "a" * 56
+    assert (
+        _portable_gateway_tool_name("workspace.read")
+        == "workspace_read_7719d3f482d6d0a9"
+    )
+
+
 def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_path):
     from nebula.v3.harnesses import _portable_gateway_tool_name
 
@@ -3188,6 +3321,24 @@ def test_grok_project_gateway_alias_reads_linked_folder_and_rejects_unknown(tmp_
         client = GatewayClient(gateway.socket_path, gateway.token)
         try:
             catalog = await client.request("tools/list", {})
+            assert all(
+                len("nebula__" + tool["name"]) <= 64 for tool in catalog["tools"]
+            )
+            schema_alias = _portable_gateway_tool_name(
+                "runtime_76c95459a5_model.discover_schema"
+            )
+            assert schema_alias in {tool["name"] for tool in catalog["tools"]}
+            response = await client.request(
+                "tools/call", {"name": schema_alias, "arguments": {}}
+            )
+            assert response.get("isError") is not True
+            schema_calls = [
+                call
+                for call in store.list_entities(ToolCall)
+                if call.tool_name == "model.discover_schema"
+            ]
+            assert len(schema_calls) == 1
+            assert schema_calls[0].status == ToolCallStatus.COMPLETE
             alias = _portable_gateway_tool_name("workspace.read")
             assert alias in {tool["name"] for tool in catalog["tools"]}
             assert alias != _portable_gateway_tool_name("workspace_read")

@@ -11,6 +11,7 @@ from nebula.v3.domain import (
     BrowserSession,
     BrowserTrafficExchange,
     BrowserWebSocketFrame,
+    AutomationProjectPolicy,
     Engagement,
     ScopePolicy,
 )
@@ -212,6 +213,38 @@ def test_action_requires_approval_and_rechecks_scope_revision(tmp_path):
     assert stale.status_code == 422
     assert "scope changed" in stale.json()["detail"]
     assert store.get(BrowserAction, action["id"]).status.value == "approved"
+
+
+def test_project_never_policy_auto_approves_native_browser_actions(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+        )
+    )
+    project, _ = _project(client, store)
+    store.create(
+        AutomationProjectPolicy(engagement_id=project.id, approval_policy="never")
+    )
+    _, session = _synced_session(client, project)
+    proposal = client.post(
+        f"/api/v1/browser-sessions/{session['id']}/actions",
+        headers=_auth(),
+        json={
+            "tab_id": "tab-1",
+            "kind": "click",
+            "locator": {"role": "button", "name": "Open account"},
+            "arguments": {},
+            "proposal": "Open the account details panel.",
+            "proposed_by": "assistant:turn-1",
+            "page_url": "https://app.example.test/account",
+        },
+    )
+    assert proposal.status_code == 201, proposal.text
+    assert proposal.json()["status"] == "approved"
+    assert proposal.json()["approved_by"] == "project-policy"
 
 
 def test_mobile_handoff_is_expiring_claimed_and_single_owner(tmp_path):

@@ -4742,6 +4742,7 @@ export class ApiClient {
     >("health", { signal }).then((health) => ({
       status: health.status === "degraded" ? "degraded" : "ok",
       version: health.version ?? health.api_version ?? "unknown",
+      commit: health.commit,
       mode:
         health.mode ??
         (health.dialect?.startsWith("postgres") ? "team" : "local"),
@@ -4847,6 +4848,18 @@ export class ApiClient {
     return this.listAll<WireEngagement>("engagements", signal).then((items) =>
       page(items.map(mapEngagement)),
     );
+  }
+
+  async deleteArchivedEngagement(id: string): Promise<void> {
+    const path = `engagements/${encodeURIComponent(id)}`;
+    try {
+      const current = await this.request<WireEngagement>(path);
+      if (current.status !== "archived") throw new Error("Archive the project before deleting it.");
+      await this.request<void>(path, { method: "DELETE", headers: { "If-Match": String(current.revision) } });
+    } catch (error) {
+      // Another device, or a saved delete whose response was lost, already removed it.
+      if (!(error instanceof ApiError && error.status === 404)) throw error;
+    }
   }
 
   async setEngagementArchived(id: string, archived: boolean): Promise<EngagementSummary> {
@@ -5706,6 +5719,10 @@ export class ApiClient {
     await this.request<void>(`runs/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  }
+
+  getApproval(id: string, signal?: AbortSignal): Promise<WireApproval> {
+    return this.request<WireApproval>(`approvals/${encodeURIComponent(id)}`, { signal });
   }
 
   listApprovals(

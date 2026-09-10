@@ -1,0 +1,42 @@
+import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+
+test("saved workspace failure retains identity and queue stays inside composer", async ({ page, request }, info) => {
+  const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
+  const pairing = await (await request.post(`${origin}/api/v1/auth/pairings`, { headers: { Authorization: "Bearer model-test-token" }, data: { name: "Workspace recovery test" } })).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("Workspace recovery test");
+  await page.getByRole("button", { name: "Pair device", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20000 });
+  await page.goto("/projects/recovery-project/workbench?view=chat&session=recovery-chat");
+  await expect(page.getByText("Saved response after partial workspace searches.")).toBeVisible();
+  const queue = page.locator(".chat-composer .chat-follow-up-queue");
+  await expect(queue).toBeVisible();
+  await expect(queue.locator("details")).not.toHaveAttribute("open");
+  expect((await queue.boundingBox())!.height).toBeLessThanOrEqual(52);
+  await queue.locator("summary").click();
+  await expect(queue.getByRole("button", { name: "Edit queued message 1" })).toBeVisible();
+  await queue.locator("summary").click();
+  await page.getByRole("button", { name: "Show activity", exact: true }).click();
+  await expect(page.getByLabel("Activity requiring attention").getByText("Workspace search", { exact: true })).toBeVisible();
+  await expect(page.locator(".activity-ledger-failure > summary")).toContainText("search deadline exceeded");
+  await expect(page.locator(".activity-ledger li")).toHaveCount(1);
+  const failure = page.locator(".activity-ledger-failure");
+  await expect(failure).not.toHaveAttribute("open");
+  const toggle = failure.locator(":scope > summary");
+  expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  if (info.project.use.hasTouch) await toggle.tap();
+  else { await toggle.focus(); await toggle.press("Enter"); }
+  await expect(failure).toHaveAttribute("open", "");
+  await toggle.click();
+  await expect(failure).not.toHaveAttribute("open");
+  expect((await new AxeBuilder({ page }).include(".activity-ledger-attention").analyze()).violations).toEqual([]);
+  await page.reload();
+  await expect(queue).toBeVisible();
+  await expect(queue.locator("details")).not.toHaveAttribute("open");
+  await page.getByRole("button", { name: "Show activity", exact: true }).click();
+  await expect(page.locator(".activity-ledger li")).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".chat-composer").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath("compact-queue-and-error.png"), fullPage: true });
+});

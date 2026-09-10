@@ -12,7 +12,7 @@ import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
-import { setBrowserDiagnosticIngress, setDiagnosticsAvailability } from "../diagnostics";
+import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
 import type {
   AgentRunSummary,
@@ -53,6 +53,7 @@ import type {
   SetupStatus,
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useCoreConnectionMonitor } from "./useCoreConnectionMonitor";
 
 type CoreState = "checking" | "online" | "offline";
 export type WorkspaceState = "starting" | "bootstrapping" | "ready" | "degraded" | "failed";
@@ -90,6 +91,7 @@ interface WorkspaceContextValue {
   resourceStatus: Record<WorkspaceResource, ResourceStatus>;
   engagements: EngagementSummary[];
   archivedEngagements: EngagementSummary[];
+  deleteArchivedEngagement: (id: string) => Promise<void>;
   setEngagementArchived: (id: string, archived: boolean) => Promise<string | undefined>;
   operatorProfiles: OperatorProfile[];
   activeOperator?: OperatorProfile;
@@ -185,8 +187,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   ));
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
+  const connectionLost = useRef(false);
+
+  const loseConnection = useCallback((message: string) => {
+    connectionLost.current = true;
+    setCoreError(message);
+    setWorkspaceState("failed");
+    setStreamState("closed");
+  }, []);
 
   useEffect(() => {
+    if (connectionLost.current) return;
     if (workspaceState !== "ready" && workspaceState !== "degraded") return;
     const degraded = health?.status === "degraded"
       || setupStatus?.core.status !== "ready"
@@ -195,12 +206,24 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, [health, resourceStatus, setupStatus, workspaceState]);
 
   const reconnect = useCallback(() => {
+    connectionLost.current = false;
     setWorkspaceState("starting");
     setCoreError(undefined);
     setResourceStatus((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key, value.state === "failed" ? { state: "loading" } : value])) as Record<WorkspaceResource, ResourceStatus>);
     runtimeResolution.current = undefined;
     setAttempt((value) => value + 1);
   }, []);
+
+  const observeHealth = useCallback((nextHealth: HealthResponse) => {
+    setHealth(nextHealth);
+    setCoreDiagnosticsHealth(nextHealth);
+    // Successful reachability restores saved state, never execution. A browser
+    // online event alone is not proof that this Core is reachable again.
+    if (connectionLost.current) reconnect();
+  }, [reconnect]);
+  useCoreConnectionMonitor(api,
+    workspaceState === "ready" || workspaceState === "degraded" || (workspaceState === "failed" && connectionLost.current),
+    observeHealth, loseConnection);
 
   useEffect(() => {
     let active = true;
@@ -223,11 +246,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const nextHealth = await nextApi.health(controller.signal);
         if (!active) return;
-        setDiagnosticsAvailability(
-          nextHealth.diagnosticsDegraded !== true,
-          nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined,
-        );
-        setBrowserDiagnosticIngress(nextHealth.browserDiagnosticIngress === "enabled");
+        setCoreDiagnosticsHealth(nextHealth);
         setHealth(nextHealth);
         setWorkspaceState("bootstrapping");
 
@@ -549,6 +568,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     setSelectedEngagementId(created.id);
     setWorkspaceState("starting");
     return created;
+  }, [api, coreState]);
+
+  const deleteArchivedEngagement = useCallback(async (id: string) => {
+    if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to delete a project.");
+    await api.deleteArchivedEngagement(id);
+    const refreshed = await api.listEngagements();
+    setEngagements(refreshed.items);
   }, [api, coreState]);
 
   const setEngagementArchived = useCallback(async (id: string, archived: boolean) => {
@@ -987,6 +1013,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       setEngagementArchived,
+      deleteArchivedEngagement,
       addAsset,
       createFinding,
       updateFinding,
@@ -1047,6 +1074,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       selectEngagement,
       createEngagement,
       setEngagementArchived,
+      deleteArchivedEngagement,
       addAsset,
       createFinding,
       updateFinding,
