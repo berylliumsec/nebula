@@ -13,7 +13,6 @@ from .domain import (
     ChatMessage,
     ChatSession,
     ChatTurn,
-    HarnessInteraction,
     utc_now,
 )
 from .chat_naming import substantive_prompt
@@ -50,7 +49,7 @@ def source_message(database, session, turn):
 
 def catchup_projection(store, session, cursor):
     through = utc_now()
-    items, pending = [], []
+    items = []
     truncated = False
     with store.database.session() as database:
         turns = [
@@ -73,30 +72,7 @@ def catchup_projection(store, session, cursor):
                 "message_id": message.id if message else None,
                 "at": turn.updated_at.isoformat(),
             }
-            if turn.status.value == "waiting_approval":
-                approval = (
-                    database.get(EntityRow, turn.approval_id)
-                    if turn.approval_id
-                    else None
-                )
-                # The decision is authoritative even while the worker has not
-                # advanced its turn. Reading catch-up must never replay work.
-                if (
-                    approval is not None
-                    and approval.kind == "approvals"
-                    and approval.engagement_id == session.engagement_id
-                    and approval.payload.get("status")
-                    in {"approved", "edited", "rejected", "expired", "cancelled"}
-                ):
-                    continue
-                pending.append(
-                    {
-                        **entry,
-                        "kind": "pending",
-                        "text": "This response needs approval or input",
-                    }
-                )
-            elif (
+            if (
                 cursor
                 and turn.updated_at > cursor.through_at
                 and turn.status.value in {"failed", "interrupted", "cancelled"}
@@ -108,38 +84,6 @@ def catchup_projection(store, session, cursor):
                         "text": f"Response {turn.status.value}: {turn.error or 'Inspect the recorded response'}",
                     }
                 )
-        questions = database.scalars(
-            select(EntityRow)
-            .where(
-                EntityRow.kind == "harness_interactions",
-                EntityRow.payload["chat_session_id"].as_string() == session.id,
-                EntityRow.payload["status"].as_string() == "pending",
-            )
-            .limit(100)
-        )
-        for row in questions:
-            question = HarnessInteraction.model_validate(row.payload)
-            turn = next(
-                (
-                    turn
-                    for turn in turns
-                    if turn.harness_turn_id == question.harness_turn_id
-                ),
-                None,
-            )
-            message = source_message(database, session, turn) if turn else None
-            pending.append(
-                {
-                    "id": question.id,
-                    "turn_id": turn.id if turn else None,
-                    "message_id": message.id if message else None,
-                    "at": question.updated_at.isoformat(),
-                    "kind": "pending",
-                    "text": "A secret answer is required"
-                    if question.contains_secret
-                    else question.prompt,
-                }
-            )
         if cursor:
             candidates = [
                 ChatMessage.model_validate(row.payload)
@@ -192,6 +136,13 @@ def catchup_projection(store, session, cursor):
                     }
                 )
     items.sort(key=lambda item: item["at"], reverse=True)
+    from .session_state import session_state
+
+    # The read cursor owns what is unseen, not whether an action is pending.
+    pending = [
+        {**item, "kind": "pending", "message_id": None}
+        for item in session_state(store, session)["pending"]
+    ]
     unseen_pending = [
         entry
         for entry in pending

@@ -7,6 +7,11 @@ records contain only normalized, bounded events and credential-free snapshots.
 from __future__ import annotations
 
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
+from .approval_delivery import (
+    approval_harness_turn,
+    pending_deliveries,
+    record_delivery,
+)
 from .diagnostics import (
     create_diagnostic_task,
     current_operation_id,
@@ -5111,6 +5116,10 @@ class HarnessRuntimeService:
     async def startup(self) -> None:
         """Mark uncertain in-flight work interrupted; never replay objectives."""
 
+        for approval in pending_deliveries(self.store):
+            turn = approval_harness_turn(self.store, approval)
+            if turn is not None:
+                self._fail_approval_delivery(approval, turn)
         for turn in self.store.list_entities(HarnessTurn, limit=1_000):
             if turn.status not in {
                 HarnessTurnStatus.RUNNING,
@@ -7558,12 +7567,37 @@ class HarnessRuntimeService:
         return latest
 
     async def resolve_approval(self, approval: Approval) -> None:
+        related_turn = approval_harness_turn(self.store, approval)
         future = self._approval_futures.pop(approval.id, None)
         if future is None or future.done():
+            if related_turn is not None:
+                self._fail_approval_delivery(approval, related_turn)
+                return
             raise HarnessStateError("harness permission request is no longer active")
+        if related_turn is not None and related_turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            future.cancel()
+            self._fail_approval_delivery(approval, related_turn)
+            return
+        try:
+            self._deliver_approval(approval, related_turn, future)
+        except Exception:
+            # A failed activity/record write must not orphan the original waiter.
+            # Once the future is fulfilled, never claim that delivery failed or
+            # retry execution: the pending durable intent is reconciled at restart.
+            if not future.done():
+                future.cancel()
+                if related_turn is not None:
+                    self._fail_approval_delivery(approval, related_turn)
+            raise
+        finally:
+            self._broker_approval_ids.discard(approval.id)
+
+    def _deliver_approval(self, approval, related_turn, future) -> None:
         allowed = approval.status == ApprovalStatus.APPROVED
         broker_owned = approval.id in self._broker_approval_ids
-        self._broker_approval_ids.discard(approval.id)
         if approval.tool_call_id and not broker_owned:
             call = self.store.get(ToolCall, approval.tool_call_id)
             self.store.update(
@@ -7579,7 +7613,7 @@ class HarnessRuntimeService:
                 },
                 expected_revision=call.revision,
             )
-        related_turn = next(
+        related_turn = related_turn or next(
             (
                 item
                 for item in self.store.list_entities(
@@ -7634,6 +7668,107 @@ class HarnessRuntimeService:
                 reason=approval.decision_note,
             )
         )
+        if related_turn is not None:
+            record_delivery(
+                self.store,
+                approval.id,
+                related_turn.id,
+                "delivered",
+                "Decision delivered to the active Core waiter; execution progress is tracked separately.",
+            )
+
+    def _fail_approval_delivery(self, approval: Approval, turn: HarnessTurn) -> None:
+        detail = "Decision recorded, but the original request is no longer connected. No work was replayed; start a new response."
+        record_delivery(self.store, approval.id, turn.id, "failed", detail)
+        if turn.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            return
+        turn = self.store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "status": HarnessTurnStatus.INTERRUPTED,
+                "completed_at": utc_now(),
+                "error": detail,
+            },
+            expected_revision=turn.revision,
+        )
+        self._interrupt_owner(turn)
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status in {
+            HarnessSessionStatus.RUNNING,
+            HarnessSessionStatus.WAITING_APPROVAL,
+        }:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.INTERRUPTED,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+
+    def _restore_approval_wait(self, turn: HarnessTurn, future) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return
+        latest = self.store.get(HarnessTurn, turn.id)
+        if latest.status not in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            return
+        # One decision must not clear a second independent pending request.
+        for approval_id, waiter in self._approval_futures.items():
+            if waiter.done():
+                continue
+            try:
+                approval = self.store.get(Approval, approval_id)
+                owner = approval_harness_turn(self.store, approval)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: detached request during cleanup
+                continue
+            if owner is not None and owner.id == turn.id:
+                self._waiting_owner(turn, approval_id=approval_id)
+                return
+        from sqlalchemy import select
+        from .database import EntityRow
+
+        with self.store.database.session() as database:
+            pending_input = database.scalar(
+                select(EntityRow.id)
+                .where(
+                    EntityRow.kind == HarnessInteraction.entity_kind,
+                    EntityRow.payload["harness_turn_id"].as_string() == turn.id,
+                    EntityRow.payload["status"].as_string() == "pending",
+                )
+                .limit(1)
+            )
+        if pending_input:
+            self._waiting_owner(turn)
+            return
+        if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
+            self.store.update(
+                HarnessTurn,
+                latest.id,
+                {"status": HarnessTurnStatus.RUNNING},
+                expected_revision=latest.revision,
+            )
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status == HarnessSessionStatus.WAITING_APPROVAL:
+            self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.RUNNING,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+        self._start_owner(turn)
 
     async def cancel_turn(self, harness_turn_id: str, *, reason: str) -> HarnessTurn:
         turn = self.store.get(HarnessTurn, harness_turn_id)
@@ -8781,29 +8916,7 @@ class HarnessRuntimeService:
         )
         self._waiting_owner(turn, approval_id=approval.id)
 
-        def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
-            latest = self.store.get(HarnessTurn, turn.id)
-            if latest.status == HarnessTurnStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessTurn,
-                    latest.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=latest.revision,
-                )
-            latest_session = self.store.get(HarnessSession, turn.harness_session_id)
-            if latest_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessSession,
-                    latest_session.id,
-                    {
-                        "status": HarnessSessionStatus.RUNNING,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=latest_session.revision,
-                )
-            self._start_owner(turn)
-
-        future.add_done_callback(restore)
+        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
         return await future
 
     async def _gateway_retrieval(
@@ -9466,29 +9579,7 @@ class HarnessRuntimeService:
         )
         self._waiting_owner(turn, approval_id=approval.id)
 
-        def restore(_: asyncio.Future[HarnessPermissionDecision]) -> None:
-            latest_turn = self.store.get(HarnessTurn, turn.id)
-            if latest_turn.status == HarnessTurnStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessTurn,
-                    turn.id,
-                    {"status": HarnessTurnStatus.RUNNING},
-                    expected_revision=latest_turn.revision,
-                )
-            latest_session = self.store.get(HarnessSession, session.id)
-            if latest_session.status == HarnessSessionStatus.WAITING_APPROVAL:
-                self.store.update(
-                    HarnessSession,
-                    session.id,
-                    {
-                        "status": HarnessSessionStatus.RUNNING,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=latest_session.revision,
-                )
-            self._start_owner(turn)
-
-        future.add_done_callback(restore)
+        future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         if profile.kind == HarnessKind.CLAUDE_AGENT_SDK:
             self._persist_activity(

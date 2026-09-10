@@ -2432,6 +2432,15 @@ class ToolCall(Entity):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ApprovalContinuation(NebulaModel):
+    """Delivery to Core's exact request waiter, not proof of tool execution."""
+
+    harness_turn_id: str
+    status: Literal["pending", "delivered", "failed"] = "pending"
+    detail: str | None = Field(default=None, max_length=1_000)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Approval(Entity):
     entity_kind: ClassVar[str] = "approvals"
     engagement_id: str
@@ -2454,6 +2463,7 @@ class Approval(Entity):
     decided_at: datetime | None = None
     expires_at: datetime | None = None
     decision_note: str | None = None
+    continuation: ApprovalContinuation | None = None
 
 
 class ModelCapabilities(NebulaModel):

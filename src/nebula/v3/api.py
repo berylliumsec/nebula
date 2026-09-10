@@ -48,6 +48,7 @@ from starlette.types import Scope
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
+from .approval_delivery import approval_harness_turn
 from .action_registry import ActionRegistry
 from .action_broker import (
     ActionBroker,
@@ -5945,7 +5946,26 @@ def create_app(
     ) -> Approval:
         approval = store.get(Approval, approval_id)
         if approval.status != ApprovalStatus.PENDING:
-            raise ConflictError("approval has already been resolved")
+            expected = {
+                "approve": "edited"
+                if request.edited_arguments is not None
+                else "approved",
+                "reject": "rejected",
+                "stop": "cancelled",
+            }[request.decision]
+            if approval.status.value == expected and (
+                request.edited_arguments is None
+                or approval.exact_request.get("arguments") == request.edited_arguments
+            ):
+                # A lost response must not redeliver or replay the original work.
+                return approval
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": "A different approval decision is already recorded.",
+                    "approval": approval.model_dump(mode="json"),
+                },
+            )
         automation_approval = approval.exact_request.get("tool_name") == "run_command"
         if automation_approval and request.edited_arguments is not None:
             raise HTTPException(
@@ -5957,12 +5977,7 @@ def create_app(
             if approval.origin == ToolCallOrigin.MISSION and not automation_approval
             else None
         )
-        harness_turn: HarnessTurn | None = None
-        if approval.tool_call_id:
-            approval_call = store.get(ToolCall, approval.tool_call_id)
-            harness_turn_id = approval_call.metadata.get("harness_turn_id")
-            if isinstance(harness_turn_id, str):
-                harness_turn = store.get(HarnessTurn, harness_turn_id)
+        harness_turn = approval_harness_turn(store, approval)
         if harness_turn is not None and request.edited_arguments is not None:
             raise HTTPException(
                 status_code=422,
@@ -6014,6 +6029,14 @@ def create_app(
             "decided_at": utc_now(),
             "decision_note": request.reason,
         }
+        if harness_turn is not None:
+            # Same durable row/transaction as the decision: a crash cannot lose
+            # the fact that delivery still needs reconciliation.
+            changes["continuation"] = {
+                "harness_turn_id": harness_turn.id,
+                "status": "pending",
+                "updated_at": utc_now().isoformat(),
+            }
         if request.edited_arguments is not None:
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments
@@ -6045,7 +6068,7 @@ def create_app(
                 actor_id=operator_id,
                 idempotency_key=f"approval:{approval.id}:resolved",
             )
-        if automation_approval:
+        if automation_approval and harness_turn is None:
             return updated
         if harness_turn is not None:
             await harness_runtime.resolve_approval(updated)
@@ -6060,7 +6083,7 @@ def create_app(
                         reason=request.reason or "Stopped from an approval decision",
                         actor_id=operator_id,
                     )
-            return updated
+            return store.get(Approval, updated.id)
         if approval.origin == ToolCallOrigin.CHAT:
             if request.decision == "stop":
                 chat_service().cancel_turn(approval.run_id)
@@ -8199,6 +8222,19 @@ def create_app(
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/state",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_chat_session_state(
+        session_id: str, response: Response
+    ) -> dict[str, Any]:
+        from .session_state import session_state
+
+        response.headers["Cache-Control"] = "no-store"
+        return session_state(store, store.get(ChatSession, session_id), harness_runtime)
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/pending-turn",

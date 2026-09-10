@@ -83,6 +83,17 @@ def test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending(tmp_pat
             sequence=2,
         )
     )
+    pending_approval = store.create(
+        Approval(
+            engagement_id="p",
+            run_id="",
+            origin="chat",
+            requested_by="fixture",
+            risk_class="passive",
+            policy_rationale="Review the fixture read",
+            exact_request={"tool_name": "read_file"},
+        )
+    )
     store.create(
         ChatTurn(
             engagement_id="p",
@@ -90,6 +101,7 @@ def test_device_cursor_is_durable_monotonic_and_does_not_dismiss_pending(tmp_pat
             model="model-a",
             provider_profile_id="provider-a",
             status="waiting_approval",
+            approval_id=pending_approval.id,
         )
     )
     newer = client.get(path + "/catch-up?device_id=phone").json()
