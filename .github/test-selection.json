@@ -114,7 +114,7 @@
       "reason": "Real Core with production LAN UI, fixed local fixture; no target supplied by clients, no scans. New knowledge survives retired links/reload; read-only image, HTTP and WS rejection, reconnect, unchanged page, pause/resume and axe. Distinct from compiled/installed package acceptance."
     }
   ],
-  "change_digest": "34548dd642a4c59b6aa8c94c9b39510e61683bfb380e23ba1563c6fca3221565",
+  "change_digest": "55ade5ad19d7469d28b099ec8d086b6d18c60e19976db37b97469bf9b124db83",
   "python_browser": true,
   "python_node": true
 }

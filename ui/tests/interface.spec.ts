@@ -5845,13 +5845,14 @@ test("browser Assistant approves its requested upload after a device file is sta
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)).toBe(false);
 });
 for (const scenario of ["stale catalog", "request failure", "reconnected approval", "resolved approved", "resolved rejected"] as const) {
-  test(`assistant upgrade pending approval restores and reviews ${scenario}`, async ({ page }, testInfo) => {
+  reloadTest(`assistant upgrade pending approval restores and reviews ${scenario}`, async ({ page }, testInfo) => {
     let waiting = scenario !== "reconnected approval";
     let failRequest = scenario === "request failure";
     let decision: string | undefined;
     const resolved = scenario.startsWith("resolved ");
     let stopped = false;
     let approvalReads = 0;
+    let stateRevision = 0;
     let notifyApproval: (() => void) | undefined;
     const approval = {
       ...entity, id: "approval-review", engagement_id: "scratch-project", run_id: "",
@@ -5871,7 +5872,7 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: "chat-review", engagement_id: "scratch-project", title: "Review pending approval", backend: "harness", harness_profile_id: "harness-ready", harness_session_id: "session-review", model: "gpt-5-codex", metadata: {} }]);
       if (path.endsWith("/chat/sessions/chat-review/messages")) return json([]);
       if (path.endsWith("/chat/sessions/chat-review/state")) return json({
-        schema: "nebula.session-state/v1", session_id: "chat-review", revision: Date.now(),
+        schema: "nebula.session-state/v1", session_id: "chat-review", revision: ++stateRevision,
         turn_id: "chat-turn-review", harness_turn_id: "turn-review",
         execution: stopped ? "cancelled" : waiting && !decision ? resolved ? "continuing" : "waiting_approval" : "running",
         busy: !stopped, connection: stopped ? "disconnected" : "connected",

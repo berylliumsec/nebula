@@ -51,3 +51,12 @@ repairs normalize the 13 reported files, document expected recovery paths alread
 surfaced through receipts/UI, add precise internal typing and a missing-receipt
 guard, and use the selector's required `entry:` prefix. No diagnostic auditor,
 type checker, branch protection or workflow gate is disabled.
+
+The expanded mobile WebKit job then exposed a fixture boundary on full reload:
+its service worker bypassed mocked Core routes, so the application correctly
+showed `Browser session expired` rather than loading the approval. The five
+approval reload scenarios now use the existing service-worker-blocked fixture
+for mocked durable state, while real-Core reload coverage remains separate.
+Their focused WebKit 320px repeat passed **5/5** without retries in
+`/tmp/nebula-pr270-webkit-approval-v2.log`. Revisions in the fixture are also
+strictly monotonic instead of depending on millisecond wall-clock changes.
