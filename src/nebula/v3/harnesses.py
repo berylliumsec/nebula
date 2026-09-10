@@ -5117,7 +5117,17 @@ class HarnessRuntimeService:
         """Mark uncertain in-flight work interrupted; never replay objectives."""
 
         for approval in pending_deliveries(self.store):
-            turn = approval_harness_turn(self.store, approval)
+            try:
+                turn = approval_harness_turn(self.store, approval)
+            except NotFoundError:
+                # diagnostic-expected: retained decisions may outlive deleted
+                # request records. Retire only this delivery, never infer a new
+                # owner or prevent unrelated sessions from starting.
+                record_delivery(
+                    self.store, approval.id, approval.continuation.harness_turn_id,
+                    "failed", "The original request record was removed. No work was replayed.",
+                )
+                continue
             if turn is not None:
                 self._fail_approval_delivery(approval, turn)
         for turn in self.store.list_entities(HarnessTurn, limit=1_000):

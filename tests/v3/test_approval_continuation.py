@@ -268,3 +268,31 @@ def test_activity_write_failure_reconciles_waiter_without_execution(
         assert store.get(ChatTurn, owner.id).status.value == "interrupted"
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing", ["call", "turn"])
+def test_restart_survives_a_removed_delivery_owner_without_replay(tmp_path, missing):
+    async def scenario():
+        _, store, runtime, approval, turn, _ = fixture(tmp_path)
+        store.update(
+            Approval,
+            approval.id,
+            {
+                "status": "approved",
+                "continuation": {"harness_turn_id": turn.id, "status": "pending"},
+            },
+            expected_revision=approval.revision,
+        )
+        store.delete(
+            ToolCall if missing == "call" else HarnessTurn,
+            approval.tool_call_id if missing == "call" else turn.id,
+        )
+        await runtime.startup()
+        saved = store.get(Approval, approval.id)
+        assert saved.status.value == "approved"
+        assert saved.continuation.status == "failed"
+        assert saved.continuation.harness_turn_id == turn.id
+        assert not runtime._approval_futures
+        assert not runtime._connections
+
+    asyncio.run(scenario())
