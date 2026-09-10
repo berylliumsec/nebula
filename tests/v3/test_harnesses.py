@@ -1371,7 +1371,8 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
 
 @pytest.mark.parametrize("restart", [False, True])
 def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
-    tmp_path, restart,
+    tmp_path,
+    restart,
 ):
     async def scenario() -> None:
         store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
@@ -1610,7 +1611,11 @@ def test_harness_mcp_exposes_project_application_model(tmp_path):
                         {
                             "op": "put_object",
                             "id": "site-model",
-                            "properties": {"purpose": {"value": "Define the application boundary for its authentication workflow."}},
+                            "properties": {
+                                "purpose": {
+                                    "value": "Define the application boundary for its authentication workflow."
+                                }
+                            },
                             "label": "Model site",
                             "authentication_context": "anonymous",
                             "classification": {"value": "Application"},
@@ -3281,7 +3286,8 @@ def test_grok_gateway_alias_fits_qualified_name(name):
     assert alias != _portable_gateway_tool_name(name + "x")
     assert _portable_gateway_tool_name("a" * 56) == "a" * 56
     assert (
-        _portable_gateway_tool_name("workspace.read") == "workspace_read_7719d3f482d6d0a9"
+        _portable_gateway_tool_name("workspace.read")
+        == "workspace_read_7719d3f482d6d0a9"
     )
 
 

@@ -42,3 +42,12 @@ complete reversible chain through 0013, then upgrades to head, asserts that the
 0014 downgrade guard fails explicitly, checks retained tables, and restores head.
 The guard itself is not weakened. The targeted repeat passed 3 cases locally;
 PostgreSQL remains a separate required service-backed CI check.
+
+The first expanded CI run passed all 453 non-PostgreSQL Python cases on Python
+3.13, plus the dedicated PostgreSQL migration job; its later formatting gate
+failed. Local full-Chromium launch timed out before the DOM fixture, while that
+same test passed on CI. It is not omitted from the selection. Follow-up gate
+repairs normalize the 13 reported files, document expected recovery paths already
+surfaced through receipts/UI, add precise internal typing and a missing-receipt
+guard, and use the selector's required `entry:` prefix. No diagnostic auditor,
+type checker, branch protection or workflow gate is disabled.

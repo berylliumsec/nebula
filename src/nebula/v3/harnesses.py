@@ -261,7 +261,10 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
         "type": "object",
         "properties": {
             "query": {"type": "string", "minLength": 1, "maxLength": 512},
-            "path": {"description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.", "type": "string"},
+            "path": {
+                "description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.",
+                "type": "string",
+            },
             "mode": {"type": "string", "enum": ["literal", "regex"]},
             "case_sensitive": {"type": "boolean"},
             "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
@@ -852,7 +855,9 @@ class PermissionTicket:
             self.handoff_receipt(status)
 
 
-async def _respond_permission(rpc, ticket: PermissionTicket, request_id, result) -> None:
+async def _respond_permission(
+    rpc, ticket: PermissionTicket, request_id, result
+) -> None:
     try:
         await rpc.respond(request_id, result)
     except BaseException:
@@ -3765,19 +3770,32 @@ class _AcpRpc(_CodexRpc):
         await super()._write({"jsonrpc": "2.0", **value})
 
 
-def _grok_tool_details(update: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+def _grok_tool_details(
+    update: dict[str, Any], previous: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Normalize ACP metadata without treating tool output as instructions."""
     previous = previous or {}
     raw = update.get("rawOutput")
     raw = raw if isinstance(raw, dict) else {}
     raw_input = update.get("rawInput")
     raw_input = raw_input if isinstance(raw_input, dict) else {}
-    tool = raw.get("tool_name") or raw_input.get("tool_name") or update.get("tool") or previous.get("tool_name") or update.get("title") or "tool"
+    tool = (
+        raw.get("tool_name")
+        or raw_input.get("tool_name")
+        or update.get("tool")
+        or previous.get("tool_name")
+        or update.get("title")
+        or "tool"
+    )
     server = raw.get("server_name") or previous.get("server_id") or "grok"
     status = str(update.get("status") or "running").lower()
     if status not in {"completed", "failed", "cancelled"}:
         status = "running"
-    if previous.get("item_status") in {"completed", "failed", "cancelled"} and status not in {"completed", "failed", "cancelled"}:
+    if previous.get("item_status") in {
+        "completed",
+        "failed",
+        "cancelled",
+    } and status not in {"completed", "failed", "cancelled"}:
         status = previous["item_status"]
     output = raw.get("output")
     output = output if isinstance(output, dict) else {}
@@ -3786,29 +3804,51 @@ def _grok_tool_details(update: dict[str, Any], previous: dict[str, Any] | None =
         try:
             receipt = json.loads(detail)
         except (ValueError, TypeError):
+            # diagnostic-expected: non-JSON error text is retained as the visible detail.
             receipt = None
         if isinstance(receipt, dict):
             detail = receipt.get("summary") or receipt.get("error")
     content = update.get("content")
     if not detail and status == "failed" and isinstance(content, list):
-        detail = " ".join(_acp_text(x.get("content") or x) for x in content if isinstance(x, dict))
+        detail = " ".join(
+            _acp_text(x.get("content") or x) for x in content if isinstance(x, dict)
+        )
     # Errors sometimes omit metadata entirely; recover the canonical advertised
     # tool name from the bounded ACP error envelope, never from page content.
     if tool in {"tool", "use_tool"} and isinstance(content, list):
-        text = " ".join(_acp_text(x.get("content") or x) for x in content if isinstance(x, dict))
+        text = " ".join(
+            _acp_text(x.get("content") or x) for x in content if isinstance(x, dict)
+        )
         match = re.search(r"Tool `([^`]+)`", text)
         if match:
             tool = match.group(1)
     tool = str(tool)[:1_000]
     label = re.sub(r"_[0-9a-f]{10,}$", "", tool.removeprefix("nebula__"))
-    label = re.sub(r"^runtime_[0-9a-f]+_", "", label).replace("_", " ").replace(".", " ")
+    label = (
+        re.sub(r"^runtime_[0-9a-f]+_", "", label).replace("_", " ").replace(".", " ")
+    )
     label = label[:1].upper() + label[1:]
-    outcome = {"completed": "succeeded", "failed": "failed", "cancelled": "cancelled"}.get(status, "running")
-    summary = previous.get("summary", f"{label} {outcome}") if not detail and previous.get("item_status") == status and status in {"failed", "cancelled"} else f"{label} {outcome}"
+    outcome = {
+        "completed": "succeeded",
+        "failed": "failed",
+        "cancelled": "cancelled",
+    }.get(status, "running")
+    summary = (
+        previous.get("summary", f"{label} {outcome}")
+        if not detail
+        and previous.get("item_status") == status
+        and status in {"failed", "cancelled"}
+        else f"{label} {outcome}"
+    )
     if status == "failed" and detail:
         summary += " — " + str(detail).removeprefix("Mcp error: -32603: ")[:500]
-    return {"tool_name": tool, "server_id": str(server), "item_status": status,
-            "title": label[:1_000], "summary": summary[:4_000]}
+    return {
+        "tool_name": tool,
+        "server_id": str(server),
+        "item_status": status,
+        "title": label[:1_000],
+        "summary": summary[:4_000],
+    }
 
 
 def _acp_text(content: Any) -> str:
@@ -4001,6 +4041,7 @@ class GrokAcpConnection(HarnessConnection):
                     raw = self.rpc.events.get_nowait()
                 else:
                     # Completion and the last queued update can become ready together.
+                    # diagnostic-expected: event_task is consumed here or cancelled/drained in finally.
                     event_task = asyncio.create_task(self.rpc.events.get())
                     await asyncio.wait(
                         {request, event_task}, return_when=asyncio.FIRST_COMPLETED
@@ -5536,6 +5577,7 @@ class HarnessRuntimeService:
                         engagement_id=engagement_id
                     )
                 except AutomationRuntimeUnavailable:
+                    # diagnostic-expected: unavailable optional commands do not disable graph-only tools.
                     # Project graph access remains available without a command runtime.
                     components = None
             if include_browser:
@@ -8899,6 +8941,10 @@ class HarnessRuntimeService:
             call = self.store.get(ToolCall, StoreToolLedger._call_id(invocation))
             spec = components.specs[tool_name]
             result = await self.evidence_recorder.record(call, invocation, spec, result)
+            if result.receipt is None:
+                raise HarnessTransportError(
+                    f"command-runtime gateway capability {gateway_name!r} returned no result receipt"
+                )
             latest = self.store.get(ToolCall, call.id)
             self.store.update(
                 ToolCall,

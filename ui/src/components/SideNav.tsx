@@ -100,6 +100,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       await deleteArchivedEngagement(id);
       setNotice("Project deleted. Workspace files were kept.");
     } catch (failure) {
+      // diagnostic-expected: the failed deletion remains visible in the project switcher.
       setProjectError(`Could not delete the project. ${failure instanceof Error ? failure.message : "Reconnect to Core and try again."}`);
     } finally {
       setUpdating(false);

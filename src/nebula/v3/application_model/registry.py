@@ -225,7 +225,10 @@ class SchemaRegistry:
             self.project_id and self.project_id != project_id
         ):
             raise ValueError("Custom schema belongs to one project")
-        for item in (*types, *relationships, *categories):
+        definitions: tuple[
+            TypeDefinition | RelationshipDefinition | CategoryDefinition, ...
+        ] = (*types, *relationships, *categories)
+        for item in definitions:
             if not item.name.startswith("custom."):
                 raise ValueError("Custom definitions require the custom. namespace")
         return SchemaRegistry(

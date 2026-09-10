@@ -1328,7 +1328,11 @@ def register_artifact_retrieval_tools(
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "minLength": 1, "maxLength": 512},
-                    "path": {"description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.", "type": "string", "default": "."},
+                    "path": {
+                        "description": "Relative file or directory within the project; no symlinks or parent traversal. Generated directories are skipped recursively; select their explicit path to search them.",
+                        "type": "string",
+                        "default": ".",
+                    },
                     "mode": {
                         "type": "string",
                         "enum": ["literal", "regex"],

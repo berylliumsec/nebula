@@ -52,8 +52,10 @@ async def test_large_workspace_preflight_does_not_walk_tree(tmp_path, monkeypatc
     workspace = service.tool_platform.workspace_for(engagement.id)
     with (workspace / "large.bin").open("wb") as stream:
         stream.truncate(6 * 1024**3)
+
     def no_walk(*args, **kwargs):
         raise AssertionError("preflight must not scan the project")
+
     monkeypatch.setattr("os.walk", no_walk)
     preview = await service.preflight(request)
     assert preview.allowed

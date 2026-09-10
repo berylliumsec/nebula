@@ -42,6 +42,7 @@ export function useRevisionedResourceDraft<T extends {id: string}, D>(
         setEdits(current => ({...current, [key]: {base: saved, draft: createDraft(saved)}}));
         return saved;
       } catch (error) {
+        // diagnostic-expected: retain the draft and expose this save failure on its owning record.
         setEdits(current => ({...current, [key]: {...edit, busy: false, error: error instanceof Error ? error.message : "The record could not be saved."}}));
       } finally {
         locks.current.delete(key);

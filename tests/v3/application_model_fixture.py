@@ -173,15 +173,21 @@ oninput="document.querySelector('output').textContent=this.value">
 <script>window.clicks=0</script></body></html>""")
 
         app.router.routes.insert(0, app.router.routes.pop())
+
         @app.post("/fixture-site/prepare-viewer/{project_id}")
         async def prepare_viewer(project_id: str):
             # Fixture-only setup: fixed local page, no target supplied by clients.
             from nebula.v3.browser_companion import CompanionRequest
+
             browser = app.state.browser_companion
             session = await browser.open(project_id)
             url = f"http://127.0.0.1:{int(os.environ.get('NEBULA_MODEL_TEST_PORT', '19420'))}/fixture-site/manual-input"
-            await browser.request(session["session_id"], CompanionRequest(
-                operation="navigate", tab_id=session["active_tab_id"], url=url))
+            await browser.request(
+                session["session_id"],
+                CompanionRequest(
+                    operation="navigate", tab_id=session["active_tab_id"], url=url
+                ),
+            )
             return session
 
         app.router.routes.insert(0, app.router.routes.pop())

@@ -79,19 +79,19 @@
   ],
   "native": [],
   "playwright": [
-    "branch-review/desktop",
-    "branch-review/compact",
-    "branch-review/mobile-chromium-small",
-    "branch-review/mobile-chromium-ledger-390",
-    "branch-review/mobile-chromium-wide",
-    "branch-review/mobile-webkit-small",
-    "branch-review/mobile-webkit",
-    "branch-review/mobile-webkit-wide",
-    "branch-review/browser-chromium-landscape",
-    "branch-review/browser-webkit-landscape",
-    "branch-review/assistant-real-desktop",
-    "branch-review/assistant-real-chromium-390",
-    "branch-review/assistant-real-webkit-390"
+    "entry:branch-review/desktop",
+    "entry:branch-review/compact",
+    "entry:branch-review/mobile-chromium-small",
+    "entry:branch-review/mobile-chromium-ledger-390",
+    "entry:branch-review/mobile-chromium-wide",
+    "entry:branch-review/mobile-webkit-small",
+    "entry:branch-review/mobile-webkit",
+    "entry:branch-review/mobile-webkit-wide",
+    "entry:branch-review/browser-chromium-landscape",
+    "entry:branch-review/browser-webkit-landscape",
+    "entry:branch-review/assistant-real-desktop",
+    "entry:branch-review/assistant-real-chromium-390",
+    "entry:branch-review/assistant-real-webkit-390"
   ],
   "supplemental_local_playwright": [
     {
@@ -114,7 +114,7 @@
       "reason": "Real Core with production LAN UI, fixed local fixture; no target supplied by clients, no scans. New knowledge survives retired links/reload; read-only image, HTTP and WS rejection, reconnect, unchanged page, pause/resume and axe. Distinct from compiled/installed package acceptance."
     }
   ],
-  "change_digest": "04beae72bbeefdf1927b0976fa1b1a51868ac2d3b8d1607368329a4bba5f572a",
+  "change_digest": "34548dd642a4c59b6aa8c94c9b39510e61683bfb380e23ba1563c6fca3221565",
   "python_browser": true,
   "python_node": true
 }

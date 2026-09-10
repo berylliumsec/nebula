@@ -7,8 +7,11 @@ from .diagnostics import record_caught_exception
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Sequence, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeVar, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from .application_model.service import ApplicationModelService
 
 from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -313,6 +316,7 @@ class NebulaStore:
     """Persistence boundary for typed Nebula entities and run events."""
 
     def __init__(self, database: Database | str | Path) -> None:
+        self.application_model_service: ApplicationModelService | None = None
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )

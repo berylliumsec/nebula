@@ -143,6 +143,7 @@ class ModelBroker:
             )
             return ToolExecutionResult(output=output)
         except (ValueError, HTTPException) as exc:
+            # diagnostic-expected: validation is persisted as a failed tool receipt below.
             message = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
             recovery = {
                 "schema_tool": "model.discover_schema",
@@ -161,6 +162,7 @@ class ModelBroker:
                                 )
                             )
                         except (ValueError, HTTPException):
+                            # diagnostic-expected: unsaved endpoints use the schema recovery above.
                             pass  # New transaction-local endpoints require schema discovery.
                         break
             output = {"status": "failed", "error": message, "recovery": recovery}

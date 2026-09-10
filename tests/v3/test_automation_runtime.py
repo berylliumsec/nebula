@@ -1371,18 +1371,40 @@ def test_host_scope_expiry_closes_running_commands(tmp_path):
 
 def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_path):
     from types import SimpleNamespace
+
     manager, store, artifacts, engagement, _ = runtime(tmp_path)
-    out = store.create(artifacts.put_bytes(b"useful result\n", engagement_id=engagement.id, filename="stdout"))
-    err = store.create(artifacts.put_bytes(b"rg: private.txt: Permission denied (os error 13)\n", engagement_id=engagement.id, filename="stderr"))
-    execution = store.create(CommandExecution(
-        engagement_id=engagement.id, session_id="session", process_id="process",
-        command="synthetic fixture only", command_sha256="a" * 64,
-        runtime_digest="sha256:" + "b" * 64, policy_revision=1,
-        status=CommandExecutionStatus.FAILED, exit_code=2,
-        stdout_artifact_id=out.id, stderr_artifact_id=err.id,
-        observed_stdout_bytes=out.size, observed_stderr_bytes=err.size,
-    ))
-    receipt = AutomationBroker(manager=manager, store=store, output_service=ToolOutputService(store, artifacts))._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
+    out = store.create(
+        artifacts.put_bytes(
+            b"useful result\n", engagement_id=engagement.id, filename="stdout"
+        )
+    )
+    err = store.create(
+        artifacts.put_bytes(
+            b"rg: private.txt: Permission denied (os error 13)\n",
+            engagement_id=engagement.id,
+            filename="stderr",
+        )
+    )
+    execution = store.create(
+        CommandExecution(
+            engagement_id=engagement.id,
+            session_id="session",
+            process_id="process",
+            command="synthetic fixture only",
+            command_sha256="a" * 64,
+            runtime_digest="sha256:" + "b" * 64,
+            policy_revision=1,
+            status=CommandExecutionStatus.FAILED,
+            exit_code=2,
+            stdout_artifact_id=out.id,
+            stderr_artifact_id=err.id,
+            observed_stdout_bytes=out.size,
+            observed_stderr_bytes=err.size,
+        )
+    )
+    receipt = AutomationBroker(
+        manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
+    )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
     assert receipt.exit_code == 2
     assert receipt.status.value == "failed" and receipt.incomplete
     assert "unreadable" in receipt.summary and "workspace.search" in receipt.summary

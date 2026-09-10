@@ -112,6 +112,7 @@ def envelope(kind, payload, connection=None):
             url = urlsplit(route)
             port = url.port
         except ValueError:
+            # diagnostic-expected: malformed source URLs contribute no URL fact.
             url, port = urlsplit(""), None
         host = url.hostname or ""
         if ":" in host:

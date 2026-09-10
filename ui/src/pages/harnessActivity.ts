@@ -254,7 +254,7 @@ function grokToolPresentation(event: HarnessActivityEvent, previous?: HarnessAct
   const output = record(raw.output);
   let error = raw.message ?? output.Error ?? raw.error;
   if (typeof error === "string") {
-    try { const receipt = record(JSON.parse(error)); error = receipt.summary ?? receipt.error ?? error; } catch { /* Plain ACP error. */ }
+    try { const receipt = record(JSON.parse(error)); error = receipt.summary ?? receipt.error ?? error; } catch { /* diagnostic-expected: retain plain ACP error text for the visible failure summary. */ }
   }
   if (!error && status === "failed") error = content;
   const outcome = ({ completed: "succeeded", failed: "failed", cancelled: "cancelled" } as Record<string, string>)[status] ?? "running";

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, BinaryIO, Iterator, Literal, TypeAlias
+from typing import Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
 
 import regex  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field
@@ -540,6 +540,7 @@ class WorkspaceOutputService:
                         str(Path(error.filename or root).relative_to(self.workspace))
                     )
                 except ValueError:
+                    # diagnostic-expected: report the requested relative path without leaking host paths.
                     unreadable.append(path)
 
         def files() -> Iterator[Path]:
@@ -644,10 +645,12 @@ class WorkspaceOutputService:
                         ) from exc
                     inaccessible(exc)
                 except OSError as exc:
+                    # diagnostic-expected: retained in the bounded unreadable list and incomplete status.
                     inaccessible(exc)
                 if next_cursor is not None:
                     break
         except ToolOutputQueryError as exc:
+            # diagnostic-expected: budget exhaustion is returned as an explicit incomplete result.
             reason = str(exc)
         if not started:
             reason = "continuation path is no longer available; restart the search"
@@ -818,8 +821,12 @@ class _Matcher:
         return self.literal in haystack
 
 
+class _LineReader(Protocol):
+    def readline(self, size: int, /) -> bytes: ...
+
+
 def _iter_lines(
-    stream: BinaryIO, *, max_line_bytes: int = 64 * 1024
+    stream: _LineReader, *, max_line_bytes: int = 64 * 1024
 ) -> Iterator[tuple[int, bytes]]:
     line_no = 0
     while True:
@@ -837,7 +844,7 @@ def _iter_lines(
 
 
 def _matching_lines(
-    stream: BinaryIO,
+    stream: _LineReader,
     *,
     matcher: _Matcher,
     context_lines: int,

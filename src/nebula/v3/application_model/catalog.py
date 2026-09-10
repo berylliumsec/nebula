@@ -627,7 +627,7 @@ def builtin_registry() -> SchemaRegistry:
                 }
             )
             types.append(item)
-    names = {item.name for item in types}
+    mechanism_names = {item.name for item in types}
     relations = []
     for relation in _RELATIONSHIPS:
         if relation.name in {
@@ -646,7 +646,7 @@ def builtin_registry() -> SchemaRegistry:
                 dict.fromkeys(
                     "JavaScriptAsset" if value == "Asset" else value
                     for value in values
-                    if value in names or value in {"*", "Asset"}
+                    if value in mechanism_names or value in {"*", "Asset"}
                 )
             )
 

@@ -1545,6 +1545,7 @@ def create_app(
         raise ValueError("scope_import_service must use the API store")
     setup = SetupService(store, tool_platform)
     from .application_model.service import ApplicationModelService
+
     application_model = ApplicationModelService(store, artifact_store)
     store.application_model_service = application_model
 
@@ -6035,7 +6036,9 @@ def create_app(
             # the fact that delivery still needs reconciliation.
             from .approval_delivery import decision_delivery_intent
 
-            changes["continuation"] = decision_delivery_intent(store, approval, harness_turn)
+            changes["continuation"] = decision_delivery_intent(
+                store, approval, harness_turn
+            )
         if request.edited_arguments is not None:
             exact = dict(approval.exact_request)
             exact["arguments"] = request.edited_arguments
@@ -6574,7 +6577,7 @@ def create_app(
                 credentials.create,
                 CredentialCreateRequest(
                     secret=SecretStr(parsed.config), persistence=request.persistence
-                )
+                ),
             )
             try:
                 profile = store.create(
@@ -6634,7 +6637,9 @@ def create_app(
                 detail="close active terminal sessions using this VPN profile first",
             )
         if profile.revision != request.expected_revision:
-            raise HTTPException(status_code=409, detail="VPN profile changed. Refresh and retry.")
+            raise HTTPException(
+                status_code=409, detail="VPN profile changed. Refresh and retry."
+            )
         try:
             await asyncio.to_thread(credentials.delete, profile.secret_ref)
         except CredentialError as exc:
@@ -7481,7 +7486,11 @@ def create_app(
         return {
             "schema_version": store.database.current_schema_version(),
             "dialect": store.database.engine.dialect.name,
-            "resources": sorted(kind for kind in ENTITY_MODEL_BY_KIND if not kind.startswith("application_model_")),
+            "resources": sorted(
+                kind
+                for kind in ENTITY_MODEL_BY_KIND
+                if not kind.startswith("application_model_")
+            ),
         }
 
     @app.get(
@@ -8227,9 +8236,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_session_state(
-        session_id: str, response: Response
-    ) -> dict[str, Any]:
+    def get_chat_session_state(session_id: str, response: Response) -> dict[str, Any]:
         from .session_state import session_state
 
         response.headers["Cache-Control"] = "no-store"

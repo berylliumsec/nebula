@@ -5,6 +5,7 @@ from datetime import datetime
 import hashlib
 import json
 import re
+from typing import Any
 from urllib.parse import urlsplit
 
 from sqlalchemy import insert, select, update
@@ -531,7 +532,8 @@ class ApplicationModelService:
                     "producer": producer,
                     "updated_at": utc_now().isoformat(),
                 }
-                aliases, changes = {}, []
+                aliases: dict[str, str] = {}
+                changes: list[dict[str, Any]] = []
                 for operation in request.operations:
                     op = operation.model_dump(mode="json")
                     kind = op.pop("op")

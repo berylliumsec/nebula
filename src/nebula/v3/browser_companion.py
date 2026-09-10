@@ -108,6 +108,7 @@ class BrowserCompanion:
                 host += f":{parsed.port}"
             return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
         except ValueError:
+            # diagnostic-expected: invalid URLs are omitted instead of exporting unsafe source text.
             return None
 
     def _record_interaction(

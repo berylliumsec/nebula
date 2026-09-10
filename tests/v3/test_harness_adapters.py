@@ -2183,14 +2183,37 @@ def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
 
 def test_grok_tool_identity_failure_and_nested_command_receipt():
     from nebula.v3.harnesses import _grok_tool_details
-    start = _grok_tool_details({"title": "use_tool", "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff0011"}})
-    failed = _grok_tool_details({"status": "failed", "rawOutput": {"message": "Mcp error: -32603: search deadline exceeded"}}, start)
+
+    start = _grok_tool_details(
+        {
+            "title": "use_tool",
+            "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff0011"},
+        }
+    )
+    failed = _grok_tool_details(
+        {
+            "status": "failed",
+            "rawOutput": {"message": "Mcp error: -32603: search deadline exceeded"},
+        },
+        start,
+    )
     assert failed["tool_name"] == start["tool_name"]
     assert failed["summary"] == "Workspace search failed — search deadline exceeded"
     cancelled = _grok_tool_details({"status": "cancelled"}, start)
     assert cancelled["summary"] == "Workspace search cancelled"
     assert _grok_tool_details({"title": "use_tool"}, failed)["item_status"] == "failed"
-    nested = _grok_tool_details({"status": "failed", "rawOutput": {"tool_name": "runtime_aabbccdd_run_command", "server_name": "nebula", "output": {"Error": '{"exit_code":2,"summary":"Some files were unreadable; partial output retained"}'}}})
+    nested = _grok_tool_details(
+        {
+            "status": "failed",
+            "rawOutput": {
+                "tool_name": "runtime_aabbccdd_run_command",
+                "server_name": "nebula",
+                "output": {
+                    "Error": '{"exit_code":2,"summary":"Some files were unreadable; partial output retained"}'
+                },
+            },
+        }
+    )
     assert nested["server_id"] == "nebula"
     assert "unreadable" in nested["summary"]
     assert nested["item_status"] == "failed"
@@ -2200,24 +2223,46 @@ def test_grok_tool_identity_failure_and_nested_command_receipt():
             if method != "session/prompt":
                 return await super().request(method, params)
             for update in [
-                {"sessionUpdate": "tool_call", "toolCallId": "same-call", "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff"}},
-                {"sessionUpdate": "tool_call_update", "toolCallId": "same-call", "status": "failed", "rawOutput": {"message": "search deadline exceeded"}},
+                {
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": "same-call",
+                    "rawInput": {"tool_name": "nebula__workspace_search_aabbccddeeff"},
+                },
+                {
+                    "sessionUpdate": "tool_call_update",
+                    "toolCallId": "same-call",
+                    "status": "failed",
+                    "rawOutput": {"message": "search deadline exceeded"},
+                },
             ]:
-                await self.events.put({"method": "session/update", "params": {"update": update}})
+                await self.events.put(
+                    {"method": "session/update", "params": {"update": update}}
+                )
             await asyncio.sleep(0.02)
             return {"stopReason": "end_turn"}
 
     async def scenario():
         async def denied(_):
             raise AssertionError("No commands or approvals expected")
-        connection = GrokAcpConnection(RecoveryRpc(), external_session_id="saved-fixture", permission_handler=denied)
-        events = [event async for event in connection.run_turn("synthetic normalization", model="fixture")]
+
+        connection = GrokAcpConnection(
+            RecoveryRpc(),
+            external_session_id="saved-fixture",
+            permission_handler=denied,
+        )
+        events = [
+            event
+            async for event in connection.run_turn(
+                "synthetic normalization", model="fixture"
+            )
+        ]
         tools = [event for event in events if event.item_kind == "tool"]
         assert len(tools) == 2
         assert tools[0].item_id == tools[1].item_id == "same-call"
         assert tools[0].tool_name == tools[1].tool_name
         assert tools[1].item_status == "failed"
         assert "search deadline exceeded" in tools[1].summary
+
     asyncio.run(scenario())
 
 
@@ -2228,30 +2273,76 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
             if method != "session/prompt":
                 return await super().request(method, params)
             for update in [
-                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "First "}},
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "First "},
+                },
                 {"sessionUpdate": "current_mode_update", "currentModeId": "auto"},
-                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "episode"}},
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "episode"},
+                },
                 {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read"},
-                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Second episode"}},
-                {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Public answer"}},
-                {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Last episode"}},
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "Second episode"},
+                },
+                {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "Public answer"},
+                },
+                {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": {"type": "text", "text": "Last episode"},
+                },
             ]:
-                self.events.put_nowait({"method": "session/update", "params": {"update": update}})
+                self.events.put_nowait(
+                    {"method": "session/update", "params": {"update": update}}
+                )
             # Return immediately: completion races with the queue reader.
             return {"stopReason": stop_reason}
 
     async def scenario():
         async def denied(_request):
             raise AssertionError("No permission expected")
-        connection = GrokAcpConnection(ThinkingRpc(), external_session_id="thinking-test", permission_handler=denied)
+
+        connection = GrokAcpConnection(
+            ThinkingRpc(),
+            external_session_id="thinking-test",
+            permission_handler=denied,
+        )
         events = [event async for event in connection.run_turn("test", model="fixture")]
         thoughts = [event for event in events if event.stream == "reasoning_summary"]
-        assert [event.item_id for event in thoughts] == ["thinking-1", "thinking-1", "thinking-2", "thinking-3"]
-        assert "".join(event.delta for event in thoughts) == "First episodeSecond episodeLast episode"
-        closed = [event for event in events if event.type == "item_upsert" and event.item_kind == "reasoning"]
+        assert [event.item_id for event in thoughts] == [
+            "thinking-1",
+            "thinking-1",
+            "thinking-2",
+            "thinking-3",
+        ]
+        assert (
+            "".join(event.delta for event in thoughts)
+            == "First episodeSecond episodeLast episode"
+        )
+        closed = [
+            event
+            for event in events
+            if event.type == "item_upsert" and event.item_kind == "reasoning"
+        ]
         assert len(closed) == 3
-        assert closed[-1].item_status == ("cancelled" if stop_reason == "cancelled" else "completed")
-        assert events[-1].type == ("interrupted" if stop_reason == "cancelled" else "completed")
-        next_turn = [event async for event in connection.run_turn("next", model="fixture")]
-        assert next(event for event in next_turn if event.stream == "reasoning_summary").item_id == "thinking-1"
+        assert closed[-1].item_status == (
+            "cancelled" if stop_reason == "cancelled" else "completed"
+        )
+        assert events[-1].type == (
+            "interrupted" if stop_reason == "cancelled" else "completed"
+        )
+        next_turn = [
+            event async for event in connection.run_turn("next", model="fixture")
+        ]
+        assert (
+            next(
+                event for event in next_turn if event.stream == "reasoning_summary"
+            ).item_id
+            == "thinking-1"
+        )
+
     asyncio.run(scenario())

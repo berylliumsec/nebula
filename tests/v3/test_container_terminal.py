@@ -1726,10 +1726,14 @@ async def test_large_workspace_terminal_readiness_does_not_scan(tmp_path, monkey
         stream.truncate(6 * 1024**3)
     for index in range(50_001):
         (platform.workspace / f"entry-{index}").touch()
+
     def no_walk(*args, **kwargs):
         raise AssertionError("terminal readiness must not walk the project")
+
     monkeypatch.setattr("os.walk", no_walk)
     capabilities = service.capabilities(engagement.id)
     assert capabilities.ready and capabilities.workspace_max_entries is None
-    preview = await service.preflight(ContainerTerminalPreflightRequest(engagement_id=engagement.id))
+    preview = await service.preflight(
+        ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    )
     assert preview.allowed
