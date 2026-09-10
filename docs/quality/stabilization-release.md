@@ -77,6 +77,22 @@ the web manifest and the retained artifact identities. Verify the served asset
 hashes, not merely an HTTP 200 response. Perform a final disposable approval to
 completion, reconnect and relaunch check on the installed desktop and LAN UI.
 
+For the permanent local live check, collect exactly
+`tests/release-live.spec.ts --project=desktop --grep 'stabilization deployed approval'`
+before running it. Set explicit `NEBULA_RELEASE_ORIGIN`,
+`NEBULA_RELEASE_TOKEN_FILE` (private service environment file or staging token
+JSON), and `NEBULA_RELEASE_COMMIT`; never print the credential. Use
+`--workers=1 --retries=0 --trace=off --reporter=list,json` and retain the log's
+sanitized receipt and screenshot. Successful live traces must remain disabled:
+unlike disposable staging credentials, the existing service token must not enter
+a trace. The check pairs through the UI, uses a newly created inert harness and
+project, and retires only its own fixtures. Existing sessions are out of scope.
+
+An operator may explicitly decline a data backup for a local update. Record that
+exception and any partial copy prominently; never treat it as a verified backup.
+Preserve prior artifacts/configuration, and do not promise database rollback in
+the absence of a coherent backup or a separately verified compatibility path.
+
 If any gate fails, stop the candidate writers, restore the recorded previous
 package/artifacts and service configuration, and restore the coherent data backup
 if migration compatibility requires it. Never downgrade a database speculatively.

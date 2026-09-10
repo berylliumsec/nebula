@@ -5,12 +5,101 @@ partial fixes or mix web assets, Core and native packages. Existing live project
 sessions, approvals and data are not test fixtures. Use temporary local fixtures
 and disposable projects only; no scans or vulnerability reproduction.
 
-Current status: stabilization changes are locally committed in independently
-tested batches; no release has been pushed or installed. Candidate5 completed
-the compiled-Core lifecycle checks recorded below, but N11 prevents its release.
-N11's selected 152 frontend and 66 backend cases pass; a new clean candidate and
-its native/LAN walkthrough are still required. Older pending statements below
-are chronological findings, not waivers of the current release gates.
+Current status: application commit `9f080471c7f44d0ef10e80f262aea38c922d2296`
+is pushed and installed on both the desktop and LAN service. Its clean,
+same-identity Core/web/desktop candidate passed native 1440/1024, 27 selected Core
+workflows, 16 model/reset profiles and two configured-runtime smoke journeys.
+The installed desktop walkthrough and live paired-browser approval/reload/
+reconnect journey passed. The latest source selection passed 152 frontend, 66 backend and
+64 production UI cases. Older pending statements below are chronological findings,
+not waivers of the current release gates. Physical phones remain unverified.
+
+## Local installation receipt — 2026-09-10
+
+The operator explicitly requested the local LAN **and desktop** update, then
+cancelled the data-backup step. This is a local branch deployment, not public APT
+promotion or an unqualified completion of the original whole-product program.
+Broader candidate5 journeys below were not all repeated on candidate6; their
+coverage remains identified by artifact rather than silently promoted.
+
+- Desktop: Debian package `nebula`, installed version **`3.0.0-alpha.13`**.
+  `/usr/bin/nebula-ui` SHA-256:
+  `bc2a66464c34a0ec4680ffa0fef31f69fe26150b6c6c4178eca6846dbe94e8d1`.
+  Installed Core matches the candidate Core hash recorded below.
+- LAN: `http://192.168.1.155:8000`, `nebula-core.service`, immutable application
+  tree `/home/agent/nebula-live-9f08047`. Authenticated Core health and the web
+  manifest both identify full commit `9f080471c7f44d0ef10e80f262aea38c922d2296`,
+  build time `2026-09-10T21:55:00Z`; **all 81 HTTP-served asset hashes match**.
+  Service remained active with zero automatic restarts after installation.
+- No active turns, commands or desktop process were present at the maintenance
+  handoff. Existing policies, authentication flags, workspace links and user
+  records were not cleared. Core applied additive migration
+  `0015_session_projection`; the old queued/unowned harness records were untouched.
+- Live acceptance: **1/1 passed in 16.6s**, permanent
+  `ui/tests/release-live.spec.ts`, desktop Chromium on the actual LAN origin.
+  Actual UI pairing, reload while waiting, approve → complete → reconnect,
+  retained unsent draft/URL and exactly one independent inert adapter receipt.
+  Only the newly created test project/harness were archived/disabled and the new
+  paired device revoked. No tool command executed. Live traces were disabled to
+  keep credentials out; sanitized receipts and screenshot remain in the JSON log.
+- Installed native acceptance: **passed**, actual `/usr/bin/nebula-ui` and
+  supervised installed Core, 1440×900 WebKit under Xvfb, isolated XDG profile.
+  Browser capture, approve/reject/stop, fullscreen/resize, scoped model reset,
+  scrolling, relaunch and Core restart/reconnect passed. Installed screenshot
+  geometry and the fullscreen image were reviewed. The extracted identical DEB
+  also passed at 1024×768. `xvfb-run -a nebula --self-test` passed; the initial
+  headless invocation without a display failed GTK initialization and is not
+  counted as a product pass. Physical input/phones remain unverified.
+- Rollback artifacts/configuration:
+  `/home/agent/.local/share/nebula/deployment-backups/stabilization-9f08047-9wAuKG`.
+  Previous package `3.0.0~alpha.5` and server tree
+  `/home/agent/nebula-live-fdaca50` remain available. **No verified data backup**:
+  the operator cancelled copying; the retained partial `data-v3` is marked
+  incomplete and must not be restored. A database downgrade therefore requires
+  explicit compatibility review/operator direction, not an assumed rollback.
+- Final evidence is retained under
+  `/home/agent/.local/share/nebula/deployment-evidence/9f08047` in addition to the
+  candidate paths below. Follow-up commits contain acceptance scripts/docs only;
+  the installed application identity remains `9f08047`. No public release, tag,
+  APT channel or main-branch merge was performed. No GitHub Actions run was
+  available for this branch; local receipts are not described as CI results.
+
+## Candidate 9f08047 release checks
+
+Built `2026-09-10T21:55:00Z`, managed Linux amd64 `3.0.0-alpha.13`.
+All 81 web hashes match before/after native packaging. Core SHA-256:
+`6fe101efab5675a12f294da15dc9fdd8c36bf0a2107a3c4e7a6a1b0580454ab3`.
+DEB SHA-256:
+`bcc0e00fc31e21ce9a26ef73f881425b1c78199e9527136ae3aa9cf668f45698`.
+Evidence: `/tmp/nebula-stabilization-candidate6-w5rlew`.
+
+- Core selection: **27/27**, including actual storage, decisions, restart/crash
+  injection and output/settings mutation recovery. Ordinary Core journeys use
+  the frozen executable/embedded assets; crash barriers use the explicitly
+  identified source fixture. The first run had one diagnostic-client socket
+  reset after intentional Core replacement (15 pass, 1 fail, 11 not run).
+  Its saved interrupted state and one receipt proved no replay. Only read-only
+  state requests in restart cases now retry `ECONNRESET` twice; HTTP failures,
+  decisions and state assertions are not retried or weakened. Three isolated
+  crash-after-progress repetitions passed, then all 27 passed in the v2 run.
+- Model/reset: **16/16**, compiled Core across all eight permanent profiles.
+- Native: **1440 and 1024 passed** against the actual extracted DEB. At 1024 the
+  harness initially omitted the wheel gesture needed to reveal an offscreen
+  object; the journey now uses real native wheel input and verifies hit testing.
+  A second check read the draft at Core-ready before conversation hydration;
+  it now waits for the draft itself and preserves the exact URL/content checks.
+  Neither change modifies product layout or substitutes DOM clicks/scrollTop.
+- Deployed-service acceptance rehearsal: **1/1 in 12.0s**. The initial test
+  wrongly used an ephemeral bearer fragment across reload. It now performs the
+  real pairing flow; approval, completion, reload and browser reconnect pass,
+  with one independent ACP receipt. Only newly created fixtures are retired.
+  This permanent check requires explicit target/credentials and is not a CI
+  live-server test. Authentication settings remain unchanged.
+
+Follow-up changes after the artifact commit are acceptance scripts and evidence
+only; the application payload remains exactly `9f08047`. The source and package
+are not rebuilt merely to embed post-build documentation. The requested local
+deployment does not promote an APT channel, publish a release, or change a tag.
 
 ## Contract and walkthrough
 

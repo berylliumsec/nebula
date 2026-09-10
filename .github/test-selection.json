@@ -1,7 +1,7 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Reviewed 66 Python, 152 frontend and 91 catalog browser cases, plus 16 focused model/reset profiles in the supplemental local gate. N11 adds the diagnostics logger selection: coherent Core health, retained disclosure/dismissal and late sink-response ownership. The production notice journey waits through an unchanged health poll. Candidate5 native1440, resources48, outputs16, model16 and workspace3 passed, but N11 blocks that artifact. Device, policy and connection recovery remain selected. Final clean candidate and all same-artifact gates are required; this is not release approval.",
-  "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
+  "reason": "Reviewed 66 Python, 152 frontend and 91 catalog browser cases plus 16 focused model/reset profiles. Candidate9f08047 passed 27 Core workflows, model16, configured runtimes2, native1440/1024 and installed-native1440. Source frontend152, backend66 and production UI64 passed. Follow-up acceptance-only changes add read-only ECONNRESET recovery after deliberate process replacement (crash3 and Core27 passed), real native wheel input/hydration checks, and one explicit paired-browser post-install journey (staging and live passed). Installed Core/web/desktop identities and all 81 served assets match9f08047. Prior candidate5 broader evidence remains separately identified, not silently counted as a final-candidate rerun.",
+  "exclusions": "No full suites, scans, existing-session decisions, live-data clearing or tool replay. Private runtime smoke and installed/live acceptance run locally, not in CI; the explicit live case uses only newly created inert fixtures. No Rust application changes in this follow-up; native package verification is through WebDriver. Physical devices are outside the selected release bar and unverified. Local deployment was explicitly requested; this selection does not claim completion of every original whole-product gate or authorize public publication.",
   "baseline": "fdaca50",
   "python_versions": [
     "3.11"
@@ -44,7 +44,8 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "c7bf3e3442c1b8d017961fa12965515beda040a1cd60d611ad6c2182f38a57e9",
+  "change_digest": "89a641e36a9d4971de7ec412c42db58fb936d75af01ed6c37e3b88a98cf0e8b1",
   "python_node": false,
+  "supplemental_live_playwright": {"config":"ui/playwright.config.ts","files":["tests/release-live.spec.ts"],"projects":["desktop"],"expected_tests":1,"reason":"Explicit local deployment acceptance only: private origin/token/commit, newly created inert harness and project, actual pairing/approval/reload/reconnect, exactly one adapter receipt, then disable/archive/revoke only these fixtures. No commands execute. Traces are disabled to keep live credentials out; sanitized receipts and screenshots are retained. Not scheduled in CI."},
   "supplemental_local_playwright": [{"config":"ui/playwright.application-model.config.ts","files":["tests/application-model-responsive.spec.ts","tests/application-model-reset.spec.ts"],"projects":["model-desktop","model-compact","model-chromium-320","model-chromium-390","model-chromium-430","model-webkit-320","model-webkit-390","model-webkit-430"],"expected_tests":16,"reason":"Permanent production LAN model collision/resize and scoped reset gates; final acceptance uses the unmodified compiled Core launcher and embedded assets. Invoked separately from the default CI config."}]
 }

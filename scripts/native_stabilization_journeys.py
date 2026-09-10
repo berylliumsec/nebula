@@ -218,6 +218,37 @@ async def exercise(
         await wait_for(
             "return document.querySelectorAll('.am-outline .am-object').length===12;"
         )
+        # WebKitWebDriver does not reliably scroll nested main/outline owners
+        # when clicking. Exercise the operator's real wheel gesture, not a DOM
+        # scrollTop override or a synthetic click on an offscreen object.
+        reveal = await execute(
+            "const e=document.querySelector('.am-outline .am-object'),r=e.getBoundingClientRect(),m=document.querySelector('main').getBoundingClientRect();return r.bottom>m.bottom?{x:Math.round(m.right-24),y:Math.round((m.top+m.bottom)/2),deltaY:Math.ceil(r.bottom-m.bottom+64)}:null;"
+        )
+        if reveal:
+            scrolled = await webdriver.post(
+                prefix + "/actions",
+                json={
+                    "actions": [
+                        {
+                            "type": "wheel",
+                            "id": "native-model-reveal",
+                            "actions": [
+                                {
+                                    "type": "scroll",
+                                    "origin": "viewport",
+                                    "deltaX": 0,
+                                    "duration": 200,
+                                    **reveal,
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            scrolled.raise_for_status()
+        await wait_for(
+            "const e=document.querySelector('.am-outline .am-object'),r=e.getBoundingClientRect(),m=document.querySelector('main').getBoundingClientRect();return r.top>=m.top && r.bottom<=m.bottom && e.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));"
+        )
         await click(".am-outline .am-object")
         await named_click("Expand relationships")
         await wait_for(
@@ -327,7 +358,9 @@ async def exercise(
                 f"chat/sessions/{saved_session['session_id']}/messages"
             )
             history.raise_for_status()
-            assert history.json(), "Model reset must preserve the conversation's messages"
+            assert history.json(), (
+                "Model reset must preserve the conversation's messages"
+            )
             reset_result["chat_sessions_preserved"].append(saved_session["session_id"])
         (evidence_root / "native-model-reset.json").write_text(
             json.dumps(reset_result, indent=2)
@@ -451,6 +484,11 @@ async def exercise(
         await click(".connection-chip")
         await wait_for(
             "return /Nebula Core (ready|degraded)/.test(document.querySelector('.connection-chip')?.getAttribute('aria-label')||'');"
+        )
+        # Core reachability precedes restoration of the selected conversation.
+        # Wait for the operator's saved draft, not merely the health badge.
+        await wait_for(
+            "return document.querySelector('#analyst-message')?.value==='Unsent native reconnect draft. Do not send.';"
         )
         assert await execute("return location.href;") == outage_url
         assert (

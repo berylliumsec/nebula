@@ -1888,7 +1888,12 @@ for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "
       const url = page.url();
       const session = new URL(url).searchParams.get("session");
       expect(session).toBeTruthy();
-      const state = async () => (await api.get(`chat/sessions/${session}/state`)).json();
+      // Intentional process replacement can reset an idle keep-alive socket in
+      // this diagnostic client. Retry only that read-only transport failure;
+      // decision submissions and all durable/visible assertions stay exact.
+      const state = async () => (await api.get(`chat/sessions/${session}/state`, {
+        maxRetries: scenario.startsWith("crash_") || scenario === "restart_waiting" ? 2 : 0,
+      })).json();
       const initial = await state();
       expect(initial.pending).toHaveLength(scenario === "two_requests" ? 2 : 1);
       const approve = cards.first().getByRole("button", {name: "Approve", exact: true});
