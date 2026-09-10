@@ -8,6 +8,7 @@ import {
   ShieldAlert,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
@@ -16,6 +17,8 @@ import { navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ContainerTerminalPublicIpStatus } from "../api/types";
 import { copySelectionText } from "./selection";
+import { createPortal } from "react-dom";
+import { ModalSurface } from "./DialogSystem";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -44,7 +47,10 @@ export function TopBar({
   const [publicIp, setPublicIp] = useState<ContainerTerminalPublicIpStatus>();
   const [publicIpCopied, setPublicIpCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
+  const [addressOpen, setAddressOpen] = useState(false);
   const canRetry = workspaceState === "failed" || workspaceState === "degraded";
+
+  useEffect(() => { setAddressOpen(false); setCopyError(""); setPublicIpCopied(false); }, [engagement?.id]);
 
   useEffect(() => {
     if (!api || typeof api.engagementContainerTerminalPublicIp !== "function" || !engagement || !["ready", "degraded"].includes(workspaceState)) {
@@ -92,7 +98,7 @@ export function TopBar({
   };
 
   return (
-    <header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared">
+    <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared">
       <div className="top-bar-leading">
         <button
           className="icon-button toolbar-button"
@@ -129,10 +135,9 @@ export function TopBar({
           )}
           <span>{workspaceState === "degraded" ? "Limited" : workspaceState}</span>
         </button>
-        <button className={`top-bar-public-ip${publicIp?.stale ? " stale" : ""}`} type="button" disabled={!publicIp} onClick={() => void copyPublicIp()} title={publicIp ? `Terminal container public IP · observed ${new Date(publicIp.observedAt).toLocaleString()}` : "Start a terminal to observe its container public IP"} aria-label={publicIp ? `Terminal container public IP ${publicIp.address}. Copy address` : "Terminal container public IP unavailable"}>
+        <button className={`top-bar-public-ip${publicIp?.stale ? " stale" : ""}`} type="button" disabled={!publicIp} onClick={() => { setCopyError(""); setPublicIpCopied(false); setAddressOpen(true); }} aria-haspopup="dialog" title={publicIp ? `Terminal container public IP ${publicIp.address} · observed ${new Date(publicIp.observedAt).toLocaleString()}` : "Start a terminal to observe its container public IP"} aria-label={publicIp ? `Terminal container public IP ${publicIp.address}. Show details` : "Terminal container public IP unavailable"}>
           <span>IP</span><code>{publicIp?.address ?? "—"}</code>{publicIp && (publicIpCopied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />)}
         </button>
-        {copyError && <span role="alert">{copyError}</span>}
         <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />
           <span>Search</span>
@@ -152,5 +157,13 @@ export function TopBar({
         </button>}
       </div>
     </header>
+    {addressOpen && createPortal(<ModalSurface labelledBy="terminal-address-title" onClose={() => setAddressOpen(false)}>
+      <div className="dialog-heading"><h2 id="terminal-address-title">Terminal network address</h2><button className="icon-button subtle" type="button" aria-label="Close network address" onClick={() => setAddressOpen(false)}><X size={18} aria-hidden="true" /></button></div>
+      <p>The observed address belongs to the terminal container, not this browser device.</p>
+      {publicIp ? <><label>Public IP address<input readOnly value={publicIp.address} onFocus={event => event.currentTarget.select()} /></label><p>{publicIp.stale ? "Last known address" : "Observed"} · {new Date(publicIp.observedAt).toLocaleString()}</p><button className="button secondary" type="button" onClick={() => void copyPublicIp()}><Copy size={16} aria-hidden="true" /> Copy address</button></> : <p role="status">The address is no longer available. Saved work is unchanged.</p>}
+      {publicIpCopied && <p role="status">Address copied.</p>}
+      {copyError && <p role="alert">{copyError}. Select the address above and copy it manually.</p>}
+    </ModalSurface>, document.body)}
+    </>
   );
 }

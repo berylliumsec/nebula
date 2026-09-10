@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import type { LibraryItem } from "../api/types";
 import { useConfirmation } from "../components/DialogSystem";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -210,10 +210,7 @@ export function LibraryPage() {
             accept={ACCEPTED_FILES}
             onChange={(event) => void upload(event)}
           />
-          <button className="button primary" type="button" disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()}>
-            {uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
-            {uploading ? "Indexing…" : "Add document or script"}
-          </button>
+          <PageHeaderAction label={uploading ? "Indexing…" : "Add document or script"} icon={uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()} />
         </>}
       />
       <section className="knowledge-model-status" role="note">

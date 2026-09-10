@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Bug, CheckCircle2, FilePlus2, Link2, LoaderCircle, MessageSquareQuote, Paperclip, Plus, Save, Search, ShieldAlert, X } from "lucide-react";
 import type { FindingStatus, FindingSummary } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -330,7 +330,7 @@ export function FindingsPage() {
 
   return (
     <div className="page findings-page">
-      <PageHeader title="Findings" description="Validate, remediate, and retest evidence-backed risk." actions={<button className="button primary" type="button" disabled={!engagement} title={!engagement ? "Create a project first" : undefined} onClick={openCandidate}><Plus size={16} /> New finding</button>} />
+      <PageHeader title="Findings" description="Validate, remediate, and retest evidence-backed risk." actions={<PageHeaderAction label="New finding" icon={<Plus size={16} />} disabled={!engagement} title={!engagement ? "Create a project first" : undefined} onClick={openCandidate} />} />
       {(attention + awaitingVerification + remediated + advisoryLinked > 0) && <section className="finding-summary-grid" aria-label="Finding lifecycle summary">
         <article><span className="summary-icon red"><ShieldAlert size={18} /></span><div><strong>{attention}</strong><small>Priority</small></div></article>
         <article><span className="summary-icon violet"><Bug size={18} /></span><div><strong>{awaitingVerification}</strong><small>To verify</small></div></article>

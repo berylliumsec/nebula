@@ -3,7 +3,7 @@ import { Eye } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { Network, Plus, Search, Server, X } from "lucide-react";
 import type { AssetSummary } from "../api/types";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { ModalSurface } from "../components/DialogSystem";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -82,7 +82,7 @@ export function AssetsPage() {
       <PageHeader
         title="Assets"
         description="Assets in scope and their observed exposure."
-        actions={<button className="button primary" type="button" disabled={!engagement} onClick={() => { setError(undefined); setAdding(true); }}><Plus size={16} /> Add asset</button>}
+        actions={<PageHeaderAction label="Add asset" icon={<Plus size={16} />} disabled={!engagement} onClick={() => { setError(undefined); setAdding(true); }} />}
       />
       <section className="summary-strip" aria-label="Asset totals">
         <div><span className="summary-icon blue"><Network size={18} /></span><span><strong>{assets.length}</strong><small>Assets</small></span></div>

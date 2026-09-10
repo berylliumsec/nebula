@@ -313,6 +313,31 @@ fix, regression and verification here before being called resolved.
 
 ### Output completion contract
 
+- N7 visual review: the retained WebKit 320 Library screenshot shows its primary
+  toolbar action cropped to fragments of text. Shared mobile CSS assumes label
+  spans, but several page actions supply bare text; their icons can also shrink.
+  Journey: discover the primary action on every header, focus it, open its real
+  dialog/file chooser, and return. The header must show a complete icon or label,
+  keep an accessible name and 44px target, and never crop text into nonsense.
+  Use a shared typed action contract for these buttons; test icon/text bounds in
+  the permanent primary-view walk, then production real-Core Library on mobile.
+  Header presentation is transient; no saved state or runtime policy changes.
+  Further shared-header bounds testing found that a populated public-IP control
+  consumed all but 7px of the primary action's host at 320px. Keep this secondary
+  status compact on mobile, with an accessible disclosure for the full address,
+  copy/manual-copy recovery and focus return; never hide required approvals to
+  make room. Add disclosure success/failure regressions before changing it.
+- N7 verified on the production LAN bundle: 16 primary-screen/dialog journeys
+  passed in 195.38s, zero skips/flaky cases, at 1440/1024 desktop and all six
+  Chromium/WebKit mobile profiles. Tests now assert primary icon, text and host
+  bounds, 44px targets, IP disclosure/copy recovery, accessibility and focus
+  return. The desktop walk no longer silently resizes to 1756px. Sources keeps
+  its secondary Add URL action beside the source controls so its Upload action
+  remains reachable. Retained evidence: `/tmp/nebula-stabilization-header-matrix5`.
+  Reviewed WebKit 320 header screenshot. Library also passed both real-Core
+  320px engines after the typed header action change (`header-library`, 2 in
+  26.67s). Selected frontend tests: 71 passed in 25.43s (`header71.log` under the
+  same `/tmp/nebula-stabilization-` prefix). These changes are not yet packaged.
 - Library: from Add document or script, upload only a synthetic local document;
   verify failure/retry, indexing, saved-item discovery despite a stale filter,
   inspect/reload/download/reindex/remove and retained immutable artifact. Core's
@@ -390,6 +415,21 @@ Stabilization work has local commits, but no release has been pushed, installed
 or deployed. Live remains unchanged.
 
 ## Test and release policy
+
+### Next approval failure-injection contract
+
+Use only the disposable approval Core and inert local adapter. Start from New
+chat, send, review the actual card, then exercise Stop, double-click, a lost
+decision response, offline/reconnect, a second independent pending request,
+adapter exit and process termination before/after waiter delivery and progress.
+Core's saved approval/owning turns are authoritative; an append-only local
+fixture receipt independently counts delivery. The browser URL retains identity.
+Restart must reopen the same disposable database and reconcile interruption,
+never recreate the request or emit another receipt. Decisions, handoff and
+observed progress remain separate. No tool, model call or target interaction
+executes. First collect the desktop failure cases; repeat affected failures on
+permanent mobile profiles and the eventual packaged candidate. Approval policy
+is unchanged. These cases supplement, not replace, native adapter acceptance.
 
 Collect exact cases before each bounded batch; record count/filter/projects and
 exclusions in `.github/test-selection.json`. No full suites. Matrix: desktop

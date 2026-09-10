@@ -181,6 +181,11 @@ kbd,
   .settings-tabs a { min-height: var(--touch-target); padding-inline: 4px; }
   .toolbar-page-actions .button.mobile-icon-action { display: inline-flex; width: var(--touch-target); flex: 0 0 var(--touch-target); padding: 0; }
   .toolbar-page-actions .button.mobile-icon-action > span { display: none; }
+  .toolbar-page-actions .button.page-header-action { width: var(--touch-target); flex: 0 0 var(--touch-target); gap: 0; padding: 0; }
+  .toolbar-page-actions .page-header-action-label { display: none; }
+  .top-bar .top-bar-public-ip { width: 44px; min-width: 44px; padding: 0; justify-content: center; cursor: pointer; }
+  .top-bar .top-bar-public-ip > span { display: inline; }
+  .top-bar .top-bar-public-ip > code, .top-bar .top-bar-public-ip > svg { display: none; }
   .settings-group,
   .settings-section { scroll-margin-top: 72px; }
 

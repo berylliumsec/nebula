@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Approval decision/waiter/adapter/progress tracking, exact binding and no-replay recovery; monotonic session state; resize-aware composition and compact diagnostic disclosure; note/report/PDF retention, Library discovery, URL-authoritative inspector navigation and build identity. Reviewed 66 Python cases (including three inert native-peer contracts), 64 frontend cases and bounded production-browser selections. Native approve/reject/stop, focus mode, relaunch and scrolling passed at 1440/1024 on candidate 1b621b7; later resource fixes require a new final candidate. Six real-Core catalog journeys include Library lifecycle and saved PDF export, independently passed across eight profiles (16 output cases).",
+  "reason": "Reviewed 66 Python, 71 frontend and 70 catalog browser cases for approval continuation, projection, shared layout, diagnostics, output persistence and build identity. N7 adds a typed primary-header action and full-address disclosure; 16 production LAN primary-view/dialog journeys passed all eight profiles, including icon/text/host bounds, focus, clipboard recovery and accessibility. Library discovery and inspector navigation, saved notes/reports/PDF also have real-Core evidence. Native candidate 1b621b7 passed approve/reject/stop/focus mode/relaunch/scroll at 1440/1024; later UI changes require a new packaged candidate. Remaining failure and whole-product gates still block release.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,7 +8,7 @@
   ],
   "expected_tests": {
     "python": 66,
-    "frontend": 64,
+    "frontend": 71,
     "native": 0,
     "playwright": 70
   },
@@ -30,7 +30,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -44,6 +44,6 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "51a24eadcb743e64f7a68c58cde0fc69c1edca0bb1cc65d39cb90cac2e548fae",
+  "change_digest": "9f7f808bc8e07bf9a4aa3cffc7af39fa3a81d55bffcb4faa9e5a4ed55dc5dcf1",
   "python_node": false
 }

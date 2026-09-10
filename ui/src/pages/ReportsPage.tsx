@@ -4,7 +4,7 @@ import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
 import { AIWritingDialog } from "../components/AIWritingDialog";
 import { aiRuntimeOptions } from "../components/aiRuntimes";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -290,7 +290,7 @@ export function ReportsPage() {
 
   return (
     <div className="page reports-page">
-      <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={selected ? <button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={16} /> New report</button> : undefined} />
+      <PageHeader title="Reports" description="Build reports from verified findings and evidence." actions={selected ? <PageHeaderAction label="New report" icon={<Plus size={16} />} disabled={!engagement} onClick={() => void openCreate()} /> : undefined} />
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {missingResourceId && <div className="workspace-state-banner degraded" role="alert"><span><strong>Report unavailable</strong><small>The linked report was deleted, is inaccessible, or belongs to another project.</small></span><button className="button quiet" type="button" onClick={() => navigate(resourcePath(engagement?.id, "report"))}>Return to reports</button></div>}
       {!selected ? <StandardEmptyState className="report-empty-state" icon={<FileText size={28} />} title="Create your first report" explanation="Turn verified findings and evidence into a reviewable deliverable." primaryAction={<button className="button primary" type="button" disabled={!engagement} onClick={() => void openCreate()}><Plus size={15} /> New report</button>} /> : <div className="report-layout">

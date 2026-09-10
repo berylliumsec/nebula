@@ -3,7 +3,7 @@ import { Eye, Download } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { FileCode2, FileSearch, Image, LoaderCircle, LockKeyhole, Search, Upload, X } from "lucide-react";
 import type { EvidenceSummary } from "../api/types";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { ModalSurface } from "../components/DialogSystem";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -118,7 +118,7 @@ export function EvidencePage() {
 
   return (
     <div className="page evidence-page">
-      <PageHeader title="Evidence" description="Immutable artifacts with hashes and provenance." actions={<button className="button primary" type="button" disabled={!engagement} onClick={() => { setError(undefined); setAdding(true); }}><Upload size={16} /> Add evidence</button>} />
+      <PageHeader title="Evidence" description="Immutable artifacts with hashes and provenance." actions={<PageHeaderAction label="Add evidence" icon={<Upload size={16} />} disabled={!engagement} onClick={() => { setError(undefined); setAdding(true); }} />} />
       <div className="evidence-callout callout"><LockKeyhole size={18} /><div><strong>Immutable originals</strong><p>Stored by hash and never rendered inline.</p></div><span>SHA-256</span></div>
       {message && <div className="knowledge-status" role="status">{saving && <LoaderCircle className="spin" size={15} />}{message}</div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The evidence operation could not be completed." />}

@@ -8,6 +8,7 @@ import { useWorkspace } from "../state/WorkspaceContext";
 import { ModalSurface, useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
+import { PageHeaderAction } from "./PageHeader";
 
 interface NewMissionButtonProps {
   className?: string;
@@ -355,7 +356,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   };
 
   return <>
-    <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children ?? <><Play size={16} /> Automate task</>}</button>
+    {children ? <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children}</button> : <PageHeaderAction label="Automate task" icon={<Play size={16} />} className={className} disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission} />}
     {showSetupGuidance && harnessesLoaded && availableProviders.length === 0 && harnesses.length === 0 && <span className="mission-runtime-setup" role="status"><span>Missions need an enabled model provider or agent harness with a verified model.</span><a href="/settings#models-settings">Configure runtime</a></span>}
     {open && createPortal(
         <ModalSurface as="form" noValidate className="provider-dialog resource-dialog mission-dialog" labelledBy="mission-dialog-title" onClose={() => { if (!saving && !toolVerificationBusy && toolPreparation !== "preparing") setOpen(false); }} onSubmit={(event) => void submit(event)}>

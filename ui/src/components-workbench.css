@@ -155,7 +155,9 @@ body {
 .top-bar-page-actions { min-width: 0; flex: 1; justify-content: flex-end; overflow: hidden; }
 .top-bar-page-actions:empty { display: none; }
 .top-bar-actions { flex: 0 0 auto; }
-.toolbar-page-actions .button { flex: 0 0 auto; white-space: nowrap; }
+.toolbar-page-actions .button { flex: 0 0 auto; min-width: 44px; min-height: 44px; white-space: nowrap; }
+.page-header-action-icon { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; }
+.page-header-action-icon svg { flex: 0 0 auto; }
 
 .workspace-state-banner {
   display: flex;
@@ -2377,7 +2379,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 @media (max-width: 360px) {
   .top-bar-title { display: none; }
   .toolbar-page-actions .button.primary { width: 44px; flex: 0 0 44px; gap: 0; padding: 0; }
-  .toolbar-page-actions .button.primary > span { display: none; }
+  .toolbar-page-actions .button.primary > span:not(.page-header-action-icon) { display: none; }
   .mobile-more-sheet > div { grid-template-columns: 1fr; }
 }
 

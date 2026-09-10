@@ -101,7 +101,7 @@ import { ExecutionHistory } from "../components/ExecutionHistory";
 import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
 import { NewMissionButton } from "../components/MissionControls";
 import { NotesPanel } from "../components/NotesPanel";
-import { PageHeader } from "../components/PageHeader";
+import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { PostToolAssistant } from "../components/PostToolAssistant";
 import { TerminalCommandHistoryPanel } from "../components/TerminalCommandHistoryPanel";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
@@ -3218,7 +3218,7 @@ export function SessionsPage() {
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
         showIntroduction={false}
-        actions={view === "chat" ? <button className="button primary mobile-primary-action" type="button" aria-label="New chat" disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation}><Plus size={16} aria-hidden="true" /><span>New chat</span></button> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
+        actions={view === "chat" ? <PageHeaderAction label="New chat" icon={<Plus size={16} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation} /> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
       />
 
       <Toolbar className="session-toolbar" label="Workbench controls">

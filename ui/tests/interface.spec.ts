@@ -5136,10 +5136,6 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
   // This journey renders 24 full-page captures; software WebKit needs a larger
   // total budget while each interaction and geometry assertion stays unchanged.
   test.setTimeout(testInfo.project.name.includes("webkit") ? 300_000 : 150_000);
-  if (testInfo.project.name === "desktop") {
-    await page.setViewportSize({ width: 1756, height: 1194 });
-  }
-
   const capture = async (name: string) => {
     await page.waitForTimeout(120);
     const overflow = await page.locator("body").evaluate(() => {
@@ -5168,6 +5164,38 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
         .map((element) => `${element.tagName.toLowerCase()}.${element.className}: ${element.clientWidth}/${element.scrollWidth}`);
     });
     expect(overflow, `${name} contains horizontally clipped UI`).toEqual([]);
+    const croppedActions = await page.locator(".toolbar-page-actions .button.primary").evaluateAll(buttons => buttons.flatMap(button => {
+      const bounds = button.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return [];
+      const label = button.getAttribute("aria-label") || button.textContent?.trim() || "unnamed";
+      const issues: string[] = [];
+      const host = button.closest(".top-bar-page-actions")!.getBoundingClientRect();
+      if (bounds.left < host.left - 1 || bounds.right > host.right + 1) issues.push(`${label}: cropped button ${bounds.left}..${bounds.right}, host ${host.left}..${host.right}`);
+      const inside = (box: DOMRect) => box.left >= bounds.left - 1 && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1;
+      const icon = button.querySelector("svg")?.getBoundingClientRect();
+      if (!icon || icon.width < 12 || icon.height < 12 || !inside(icon)) issues.push(`${label}: cropped icon`);
+      if (bounds.width < 44 || bounds.height < 44) issues.push(`${label}: undersized target`);
+      const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent?.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+        for (const rect of range.getClientRects()) if (rect.width && rect.height && !inside(rect)) issues.push(`${label}: cropped label`);
+      }
+      return issues;
+    }));
+    expect(croppedActions, `${name} has incomplete primary toolbar actions`).toEqual([]);
+    if (name === "workbench-assistant") {
+      const network = page.getByRole("button", {name: /Terminal container public IP.*Show details/});
+      await network.click();
+      const dialog = page.getByRole("dialog", {name: "Terminal network address"});
+      await expect(dialog.getByRole("textbox", {name: "Public IP address"})).not.toHaveValue("");
+      await dialog.getByRole("button", {name: "Copy address", exact: true}).click();
+      await expect(dialog.locator('[role="status"], [role="alert"]')).toBeVisible();
+      expect((await new AxeBuilder({page}).include('[role="dialog"]').analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(network).toBeFocused();
+    }
     expect(await findPathologicalText(page), `${name} renders prose in a pathologically narrow column`).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
     // Optional, inert design snapshots use fixture data and never ship in the app.
