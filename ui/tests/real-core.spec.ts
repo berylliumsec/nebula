@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test } from "@playwright/test";
+import {startApprovalCore} from "./fixtures/approval-core";
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -1733,6 +1734,133 @@ for (const decision of ["Approve", "Reject"] as const) {
       await api.dispose();
       await stopRealCore({process: processHandle, dataDir, origin, token: "stabilization-fixture"});
     }
+  });
+}
+
+for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
+  test(`assistant upgrade stabilization failure ${scenario} does not replay work`, async ({page}, testInfo) => {
+    test.setTimeout(120_000);
+    const fixtureMode = ["two_requests", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress"].includes(scenario) ? scenario : "single";
+    const core = await startApprovalCore(localNetworkIpv4(), fixtureMode);
+    const api = core.api;
+    try {
+      expect((await api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+      const pairResponse = await api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Approval failure acceptance"}});
+      expect(pairResponse.ok()).toBe(true);
+      const pair = await pairResponse.json();
+      await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+      await page.getByLabel("Device name").fill("Approval failure acceptance");
+      await page.getByRole("button", {name: "Pair device", exact: true}).click();
+      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await page.goto(`${core.origin}/?view=chat`);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await composer.fill("Review the inert fixture. Never execute a command.");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await page.getByRole("button", {name: "Review pending actions", exact: true}).click({timeout: 30_000});
+      const cards = page.getByRole("region", {name: "Approval required", exact: true});
+      await expect(cards.first()).toBeVisible();
+      const url = page.url();
+      const session = new URL(url).searchParams.get("session");
+      expect(session).toBeTruthy();
+      const state = async () => (await api.get(`chat/sessions/${session}/state`)).json();
+      const initial = await state();
+      expect(initial.pending).toHaveLength(scenario === "two_requests" ? 2 : 1);
+      const approve = cards.first().getByRole("button", {name: "Approve", exact: true});
+      if (scenario === "late_response_switch") {
+        let release = () => {}; let recorded = () => {}; let delivered = () => {};
+        const gate = new Promise<void>(resolve => {release = resolve;});
+        const savedResponse = new Promise<void>(resolve => {recorded = resolve;});
+        const deliveredResponse = new Promise<void>(resolve => {delivered = resolve;});
+        await page.route("**/approvals/*/decision", async route => {
+          const response = await route.fetch();
+          expect(response.ok()).toBe(true);
+          recorded(); await gate; await route.fulfill({response}); delivered();
+        }, {times: 1});
+        try {
+          await approve.click(); await savedResponse;
+          await expect.poll(async () => (await state()).execution).toBe("complete");
+          await page.getByRole("button", {name: "New chat", exact: true}).click();
+          await composer.fill("A second independent inert conversation. No command executes.");
+          await page.getByRole("button", {name: "Send message", exact: true}).click();
+          await page.getByRole("button", {name: "Review pending actions", exact: true}).click();
+          const nextSession = new URL(page.url()).searchParams.get("session");
+          expect(nextSession).not.toBe(session);
+          await expect(cards.getByRole("button", {name: "Approve", exact: true})).toBeEnabled();
+          release(); await deliveredResponse;
+          await expect(cards).toHaveCount(1);
+          await cards.getByRole("button", {name: "Approve", exact: true}).click();
+          await expect.poll(async () => (await (await api.get(`chat/sessions/${nextSession}/state`)).json()).execution).toBe("complete");
+          await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+          expect(new URL(page.url()).searchParams.get("session")).toBe(nextSession);
+          const receipts = await core.receipts();
+          expect(receipts).toHaveLength(2);
+          expect(new Set(receipts.map(item => item.turn_id)).size).toBe(2);
+          await testInfo.attach("late-response-independent-turns", {body: JSON.stringify({session, nextSession, receipts}), contentType: "application/json"});
+          return;
+        } finally {release();}
+      }
+      let expected = "complete";
+      if (scenario === "stop") {
+        await page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true}).click();
+        expected = "cancelled";
+      } else if (scenario === "restart_waiting") {
+        await core.restart();
+        expected = "interrupted";
+      } else {
+        if (scenario === "lost_response" || scenario === "disconnect") {
+          await page.route("**/approvals/*/decision", async route => {
+            const response = await route.fetch();
+            expect(response.ok()).toBe(true);
+            if (scenario === "disconnect") await page.context().setOffline(true);
+            await route.abort("connectionfailed");
+          }, {times: 1});
+        }
+        if (scenario === "double_click") await approve.dblclick();
+        else await approve.click();
+        if (scenario.startsWith("crash_")) {
+          await expect.poll(core.exited, {timeout: 15_000}).toBe(true);
+          await core.restart();
+          expected = "interrupted";
+        } else if (scenario === "adapter_exit") expected = "interrupted";
+        else if (scenario === "two_requests") {
+          await expect.poll(async () => (await state()).pending.length).toBe(1);
+          await expect(cards).toHaveCount(1);
+          await expect(page.getByText("1 action needs review", {exact: true})).toBeVisible();
+          expect((await core.receipts())).toHaveLength(1);
+          expect((await state()).execution).toBe("waiting_approval");
+          await page.reload();
+          await expect(cards).toHaveCount(1);
+          await cards.getByRole("button", {name: "Approve", exact: true}).click();
+        }
+      }
+      await expect.poll(async () => (await state()).execution, {timeout: 20_000}).toBe(expected);
+      if (scenario === "disconnect") await page.context().setOffline(false);
+      // Reconnect must reconcile the existing screen; refresh is a second gate.
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0, {timeout: 20_000});
+      await expect(page.getByRole("button", {name: "Review pending actions", exact: true})).toHaveCount(0);
+      await expect(page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0);
+      if (expected === "complete") await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("APPROVAL_ACCEPTED_ONCE");
+      else await expect(composer).toBeEnabled();
+      await page.reload();
+      await expect(cards).toHaveCount(0);
+      await expect(page.getByText("Action required", {exact: true})).toHaveCount(0);
+      expect(new URL(page.url()).searchParams.get("session")).toBe(session);
+      const saved = await state();
+      expect(saved.pending).toEqual([]);
+      expect(saved.execution).toBe(expected);
+      const receipts = await core.receipts();
+      const expectedReceipts = ["stop", "restart_waiting", "crash_after_record", "crash_after_delivery"].includes(scenario) ? 0 : scenario === "two_requests" ? 2 : 1;
+      expect(receipts).toHaveLength(expectedReceipts);
+      expect(new Set(receipts.map(item => item.approval_id)).size).toBe(receipts.length);
+      expect(receipts.every(item => item.turn_id === saved.harness_turn_id)).toBe(true);
+      if (scenario === "crash_after_record") expect(saved.decisions[0].continuation.status).toBe("failed");
+      if (scenario.startsWith("crash_") && scenario !== "crash_after_progress") expect(saved.decisions[0].progress).toBe("not_observed");
+      if (scenario === "crash_after_progress") expect(saved.decisions[0].progress).toBe("observed");
+      if (expected === "complete") await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
+      await testInfo.attach("approval-failure-durable", {body: JSON.stringify({origin: core.origin, scenario, initial, saved, receipts, dataDir: core.dataDir}), contentType: "application/json"});
+      await testInfo.attach("approval-failure-screen", {body: await page.screenshot(), contentType: "image/png"});
+    } finally {await page.context().setOffline(false); await core.stop();}
   });
 }
 

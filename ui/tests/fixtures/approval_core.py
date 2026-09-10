@@ -5,6 +5,9 @@ targets are executed. HTTP, persistence, UI and approval continuation are real.
 """
 
 import argparse
+import asyncio
+import json
+import os
 from pathlib import Path
 
 import uvicorn
@@ -25,6 +28,7 @@ from nebula.v3.harnesses import (
     HarnessRuntimeService,
     HarnessEvent,
     HarnessHealth,
+    HarnessTransportError,
 )
 from nebula.v3.storage import NebulaStore
 from nebula.v3.setup import bootstrap_scratch_project
@@ -37,7 +41,7 @@ class InertConnection(HarnessConnection):
     def __init__(self, request, runtime):
         self.request, self.runtime = request, runtime
 
-    async def run_turn(self, prompt, **kwargs):
+    async def request_decision(self, ordinal):
         turn = self.runtime._active_gateway_turn(self.request.session.id)
         store = self.runtime.store
         call = store.create(
@@ -63,7 +67,7 @@ class InertConnection(HarnessConnection):
                 tool_call_id=call.id,
                 risk_class="passive",
                 requested_by="inert-fixture",
-                policy_rationale="Review an inert fixture; no command will execute",
+                policy_rationale=f"Review inert fixture {ordinal}; no command will execute",
                 exact_request={
                     "tool_name": "run_command",
                     "arguments": {"command": "inert fixture, never executed"},
@@ -73,8 +77,42 @@ class InertConnection(HarnessConnection):
         # This is the same Core waiter used by the command broker, not a mocked
         # HTTP response or manual mutation of the decision/progress transition.
         decision = await self.runtime._wait_for_broker_approval(turn, approval)
-        answer = "APPROVAL_ACCEPTED_ONCE" if decision.allowed else "APPROVAL_DECLINED"
+        with (self.runtime.fixture_root / "receipts.jsonl").open("a") as receipt:
+            receipt.write(
+                json.dumps(
+                    {
+                        "approval_id": approval.id,
+                        "turn_id": turn.id,
+                        "allowed": decision.allowed,
+                    }
+                )
+                + "\n"
+            )
+            receipt.flush()
+            os.fsync(receipt.fileno())
+        return decision
+
+    async def run_turn(self, prompt, **kwargs):
+        decisions = await asyncio.gather(
+            *(
+                self.request_decision(index + 1)
+                for index in range(2 if self.runtime.scenario == "two_requests" else 1)
+            )
+        )
+        if self.runtime.scenario == "adapter_exit":
+            raise HarnessTransportError(
+                "Inert adapter exited after its decision receipt"
+            )
+        if self.runtime.scenario == "crash_after_receipt":
+            os._exit(83)
+        answer = (
+            "APPROVAL_ACCEPTED_ONCE"
+            if all(decision.allowed for decision in decisions)
+            else "APPROVAL_DECLINED"
+        )
         yield HarnessEvent(type="message_delta", delta=answer)
+        if self.runtime.scenario == "crash_after_progress":
+            os._exit(84)
         yield HarnessEvent(type="completed", message=answer)
 
     async def interrupt(self):
@@ -102,34 +140,66 @@ class InertAdapter(HarnessAdapter):
         return InertConnection(request, self.runtime)
 
 
+class FailureInjectionRuntime(HarnessRuntimeService):
+    """Process barriers belong only to this inert acceptance executable."""
+
+    async def resolve_approval(self, approval):
+        if self.scenario == "crash_after_record":
+            os._exit(81)
+        await super().resolve_approval(approval)
+
+    def _deliver_approval(self, approval, related_turn, future):
+        super()._deliver_approval(approval, related_turn, future)
+        if self.scenario == "crash_after_delivery":
+            os._exit(82)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--static-dir", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument(
+        "--scenario",
+        choices=[
+            "single",
+            "two_requests",
+            "adapter_exit",
+            "crash_after_record",
+            "crash_after_delivery",
+            "crash_after_receipt",
+            "crash_after_progress",
+        ],
+        default="single",
+    )
     args = parser.parse_args()
     store = NebulaStore(args.root / "nebula.db")
     bootstrap_scratch_project(store)
     artifacts = ArtifactStore(args.root / "artifacts")
     adapter = InertAdapter()
-    runtime = HarnessRuntimeService(
+    runtime = FailureInjectionRuntime(
         store,
         credential_store=CredentialStore(),
         workspace_resolver=lambda _: args.root,
         artifact_store=artifacts,
         adapter_factory=lambda _: adapter,
     )
+    runtime.fixture_root = args.root
+    runtime.scenario = args.scenario
     adapter.runtime = runtime
-    store.create(
-        HarnessProfile(
-            id="inert-fixture",
-            name="Approval fixture",
-            kind="grok_acp",
-            executable="/bin/true",
-            default_model="fixture",
-            privacy={"local_only": True, "permits_sensitive_data": True},
+    if not any(
+        profile.id == "inert-fixture" for profile in store.list_entities(HarnessProfile)
+    ):
+        store.create(
+            HarnessProfile(
+                id="inert-fixture",
+                name="Approval fixture",
+                kind="grok_acp",
+                executable="/bin/true",
+                default_model="fixture",
+                privacy={"local_only": True, "permits_sensitive_data": True},
+            )
         )
-    )
     app = create_app(
         store,
         auth_token="stabilization-fixture",

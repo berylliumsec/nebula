@@ -6,7 +6,7 @@ import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
-import { isPendingRequest, useSessionState } from "./useSessionState";
+import { isPendingRequest, pendingApprovalId, useSessionState, type SessionState } from "./useSessionState";
 import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
@@ -566,6 +566,7 @@ export function SessionsPage() {
   const [resolvedApproval, setResolvedApproval] = useState<{ id: string; status: string; turnId: string; harnessTurnId?: string }>();
   const {state: authoritativeState, error: stateSyncError, refresh: refreshSessionState} = useSessionState(api ?? undefined, sessionId, coreState === "online");
   const pendingResponseActive = Boolean(pendingResponse && isPendingRequest(authoritativeState, pendingResponse.approval.id));
+  const approvalRestorationRef = useRef<string | undefined>(undefined);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
@@ -1219,10 +1220,11 @@ export function SessionsPage() {
   const refreshSessions = async (selectedId?: string) => {
     if (!api || !engagement) return;
     const requestedEngagementId = engagement.id;
+    const selectionGeneration = sessionSelectionGenerationRef.current;
     const page = await api.listChatSessions(requestedEngagementId);
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
-    if (selectedId) {
+    if (selectedId && sessionSelectionGenerationRef.current === selectionGeneration) {
       setSessionId(selectedId);
       openSessionChatView(selectedId, true);
     }
@@ -1230,6 +1232,7 @@ export function SessionsPage() {
 
   const resetConversation = (open: boolean) => {
     sessionSelectionGenerationRef.current += 1;
+    setApprovalDecisionBusy(false);
     pendingSessionNavigationRef.current = undefined;
     sessionLoadAbortRef.current?.abort();
     sessionLoadAbortRef.current = undefined;
@@ -1526,6 +1529,7 @@ export function SessionsPage() {
     if (!api) return;
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
+    setApprovalDecisionBusy(false);
     const selectionIsCurrent = () => sessionSelectionGenerationRef.current === selectionGeneration;
     sessionLoadAbortRef.current?.abort();
     historicalActivityAbortRef.current.forEach((controller) => controller.abort());
@@ -1565,11 +1569,15 @@ export function SessionsPage() {
       setModel(summary.model ?? "");
     }
     try {
-      const [history, pendingTurn] = await Promise.all([
+      const [history, pendingTurn, snapshot] = await Promise.all([
         api.listChatMessages(id, loadController.signal),
         api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
           if (loadController.signal.aborted) return undefined;
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
+          return undefined;
+        }),
+        api.request<SessionState>(`chat/sessions/${encodeURIComponent(id)}/state`, {signal: loadController.signal}).catch((error) => {
+          if (!loadController.signal.aborted) void logCaughtDiagnostic("interface.chat.approval_state_restore", "Pending action state could not be restored.", error, "sessions_page");
           return undefined;
         }),
       ]);
@@ -1592,8 +1600,9 @@ export function SessionsPage() {
         : []);
       setToolCards(restoredToolCards);
       // Restore the exact durable request, independently of the workspace catalog cache.
-      const approvalRecord = pendingTurn?.approvalId
-        ? await api.getApproval(pendingTurn.approvalId, loadController.signal)
+      const restoredApprovalId = pendingApprovalId(snapshot, pendingTurn?.id) ?? pendingTurn?.approvalId;
+      const approvalRecord = restoredApprovalId
+        ? await api.getApproval(restoredApprovalId, loadController.signal)
         : undefined;
       if (!selectionIsCurrent()) return;
       const approval = approvalRecord?.status === "pending" ? approvalRecord : undefined;
@@ -1700,7 +1709,7 @@ export function SessionsPage() {
               setActivityItems((current) => reduceHarnessActivity(current, event, assistantId));
             }
             if (event.type === "interaction") {
-              void api.listHarnessInteractions(turnId).then(setHarnessInteractions)
+              void api.listHarnessInteractions(turnId).then(items => { if (selectionIsCurrent()) setHarnessInteractions(items); })
                 .catch((caughtError) => void logCaughtDiagnostic("interface.sessions_page.interaction_follow", "Harness interactions could not be refreshed.", caughtError, "sessions_page"));
               if (event.itemStatus && event.itemStatus !== "waiting_input") {
                 setMessages((current) => current.map((message) => message.id === assistantId ? { ...message, state: "streaming" } : message));
@@ -1712,17 +1721,20 @@ export function SessionsPage() {
             setResolvedApproval(undefined);
             harnessFollowDetachRef.current = undefined;
             void api.listChatMessages(id).then(async (authoritative) => {
-              setMessages(await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
+              const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
+              if (!selectionIsCurrent()) return;
+              setMessages(recovered);
               const completedOwner = authoritative.find((message) => message.role === "assistant" && message.harnessTurnId === turnId);
               if (completedOwner) await loadHistoricalHarnessActivity(persistedMessage(completedOwner));
-              await refreshSessions(id);
+              if (selectionIsCurrent()) await refreshSessions(id);
             }).catch((error) => {
               void logCaughtDiagnostic("interface.sessions_page.harness_follow_complete", "A completed harness turn could not be restored.", error, "sessions_page");
-              setChatError(error instanceof Error ? error.message : "Could not restore the completed harness turn.");
+              if (selectionIsCurrent()) setChatError(error instanceof Error ? error.message : "Could not restore the completed harness turn.");
             })
-              .finally(() => setSending(false));
+              .finally(() => { if (selectionIsCurrent()) setSending(false); });
           },
           (error) => {
+            if (!selectionIsCurrent()) return;
             harnessFollowDetachRef.current?.();
             harnessFollowDetachRef.current = undefined;
             setHarnessProgress(undefined);
@@ -1796,6 +1808,19 @@ export function SessionsPage() {
       composerRef.current?.focus();
     } catch (error) { void logCaughtDiagnostic("interface.assistant_chat.branch_failed", "The edited branch could not be created.", error, "assistant_chat"); setChatError(error instanceof Error ? error.message : "Could not branch this message."); }
   };
+
+  const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
+  useEffect(() => {
+    if (!pendingApprovalToRestore) { approvalRestorationRef.current = undefined; return; }
+    if (runtimeKind !== "harness" || !sessionId || loadingHistory || approvalDecisionBusy
+      || pendingResponse?.approval.id === pendingApprovalToRestore) return;
+    const key = `${sessionId}:${authoritativeState?.revision}:${pendingApprovalToRestore}`;
+    if (approvalRestorationRef.current === key) return;
+    approvalRestorationRef.current = key;
+    // A snapshot can reveal another request after a decision, lost event or
+    // reconnect. Restore its exact saved card; this only reads/follows work.
+    void selectSession(sessionId, false, true);
+  }, [sessionId, runtimeKind, pendingApprovalToRestore, authoritativeState?.revision, pendingResponse?.approval.id, loadingHistory, approvalDecisionBusy]);
 
   const copyMessage = async (message: ConversationMessage) => {
     try {
@@ -2414,6 +2439,7 @@ export function SessionsPage() {
         applyChatEvent(streamEvent, assistantId, userId, chatRequest);
       }, controller.signal);
       requestCompleted = true;
+      if (controller.signal.aborted || detachedStreamsRef.current.has(controller)) return;
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
@@ -2473,6 +2499,8 @@ export function SessionsPage() {
 
   const decideInlineApproval = async (decision: "approve" | "edit" | "reject" | "stop") => {
     if (!pendingResponse || !api || approvalDecisionBusy) return;
+    const selectionGeneration = sessionSelectionGenerationRef.current;
+    const selectionIsCurrent = () => sessionSelectionGenerationRef.current === selectionGeneration;
     const approvalId = typeof pendingResponse.approval.id === "string"
       ? pendingResponse.approval.id
       : undefined;
@@ -2503,6 +2531,7 @@ export function SessionsPage() {
         decision: decision === "edit" ? "approve" : decision,
         editedArguments,
       });
+      if (!selectionIsCurrent()) return;
       refreshSessionState();
       if (pendingResponse.request.backend === "harness") {
         if (decision === "stop") {
@@ -2533,22 +2562,22 @@ export function SessionsPage() {
       const response = await api.resumeChatTurn(
         pendingResponse.turnId,
         pendingResponse.request,
-        (streamEvent) => applyChatEvent(
+        (streamEvent) => selectionIsCurrent() && applyChatEvent(
           streamEvent,
           pendingResponse.assistantId,
           pendingResponse.userId,
           pendingResponse.request,
         ),
       );
+      if (!selectionIsCurrent()) return;
       if (response?.sessionId) {
         await refreshSessions(response.sessionId);
       }
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_15", "A handled interface operation failed.", error, "sessions_page");
-      setChatError(error instanceof Error ? error.message : "Could not resume the response.");
+      if (selectionIsCurrent()) setChatError(error instanceof Error ? error.message : "Could not resume the response.");
     } finally {
-      setApprovalDecisionBusy(false);
-      setSending(false);
+      if (selectionIsCurrent()) { setApprovalDecisionBusy(false); setSending(false); }
     }
   };
 

@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
-import { acceptSessionState, isPendingRequest, useSessionState, type SessionState } from "./useSessionState";
+import { acceptSessionState, isPendingRequest, pendingApprovalId, useSessionState, type SessionState } from "./useSessionState";
 
 const state = (session_id = "s", revision = 2): SessionState => ({
   schema: "nebula.session-state/v1", session_id, revision, turn_id: "t", harness_turn_id: "h",
@@ -10,6 +10,15 @@ const state = (session_id = "s", revision = 2): SessionState => ({
 });
 
 describe("authoritative session state", () => {
+  it("selects the next exact approval on its owning turn, not a question or another turn", () => {
+    const snapshot = state();
+    snapshot.pending = [{id: "other", turn_id: "other-turn", kind: "approval", text: "Review"}, {id: "question", turn_id: "t", kind: "input", text: "Answer"}, {id: "first", turn_id: "t", kind: "approval", text: "Review"}, {id: "second", turn_id: "t", kind: "approval", text: "Review"}];
+    expect(pendingApprovalId(snapshot, "t")).toBe("first");
+    snapshot.pending = snapshot.pending.filter(item => item.id !== "first");
+    expect(pendingApprovalId(snapshot, "t")).toBe("second");
+    expect(pendingApprovalId(snapshot, "missing")).toBeUndefined();
+    expect(pendingApprovalId(undefined, "t")).toBeUndefined();
+  });
   it("uses the current request set rather than a cached approval or decision list", () => {
     const snapshot = state();
     expect(isPendingRequest(undefined, "request")).toBe(true);

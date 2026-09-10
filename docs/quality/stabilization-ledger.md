@@ -17,7 +17,7 @@ applicable. Not-applicable lifecycle steps require a reason in the evidence.
 | Area / entry | Observable invariant and lifecycle | State authorities | Regression layers | Baseline / candidate evidence |
 | --- | --- | --- | --- | --- |
 | Launch/navigation | Connect/pair, select/search, deep-link, back/forward, reload/relaunch preserve the correct identity | Core/device auth, URL | component, real Core LAN, native | Partial: pairing/reload, project isolation, resource Back/Forward and native relaunch passed; final artifact walkthrough pending |
-| Assistant | Select runtime, send/stream, approve/reject/stop, complete, queue/switch/reconnect/retry without duplicate work or contradictory status | approval, turn, harness request, canonical projection | service failure injection, real Core, UI, real harness, native | Partial: A1–A6 regressions, native approve/reject/stop and fresh configured runtime smoke passed; real-process failure matrix remains |
+| Assistant | Select runtime, send/stream, approve/reject/stop, complete, queue/switch/reconnect/retry without duplicate work or contradictory status | approval, turn, harness request, canonical projection | service failure injection, real Core, UI, real harness, native | Partial: A1–A8 regressions, 96-case process failure matrix, native approve/reject/stop and fresh configured runtime smoke passed; final artifact gates remain |
 | Browser | Navigate/input, control handoff, capture, reload/reconnect, explain unsupported devices | Core browser session and owning device | local fixture, UI, LAN/native | Partial: headed local input/reconnect and packaged managed capture passed; complete device/handoff matrix pending |
 | Model | Inspect mechanisms/evidence, select/filter/expand/resize, clear only model/captures | Core model/evidence, local viewport | component, real Core, LAN/native | Partial: 16 real-Core production browser cases passed; native graph and final candidate pending |
 | Workspace | Link/browse/upload/edit/save/recover, terminal, switch projects; one linked folder everywhere | Core workspace, filesystem, device drafts | service, real Core, native | Partial: real linked workspace/terminal and mobile Code conflict/draft journeys passed; final/native coverage pending |
@@ -416,7 +416,88 @@ or deployed. Live remains unchanged.
 
 ## Test and release policy
 
+### Asset/evidence/finding completion contract
+
+L3 reproduced in real Core: asset and evidence uploads persist successfully but
+their new rows remain hidden by stale search/filter state. Evidence's source file
+survives the injected pre-write failure; asset input does too. The candidate
+finding case is still running. L4 unit reproduction: closing a keyboard-opened
+inspector leaves focus on the disappearing Close control rather than its opener
+(1 failure/4 pass). Add cancellation-safe focus restoration to the shared
+canonical inspector hook; deep links use the list search as a fallback. Evidence:
+`/tmp/nebula-stabilization-resource-create-red` and
+`/tmp/nebula-stabilization-resource-focus-red.log`.
+The finding journey initially had an incorrect select locator; after changing it
+to the actual named combobox, it reproduced the same saved-but-hidden defect
+(`/tmp/nebula-stabilization-finding-create-red`). Clear only this list's filters
+after its successful save. The focus regression now passes all five hook cases;
+production verification is pending the approval matrix's completion so no
+running browser batch receives a changed asset bundle.
+
+From each actual create/upload action, submit a synthetic record with stale list
+filters already active. Inject one failure before persistence: preserve the
+chosen input/file, explain the error and permit retry. Success must reveal the
+saved record, reset incompatible filters, allow keyboard inspection/Close with
+focus return, and survive reload. Verify the real Core record; immutable evidence
+downloads must match their source bytes. Use disposable projects only. Follow with
+finding edit/history navigation to ensure one record's draft cannot be applied to
+another; no vulnerability reproduction or external target is involved. Layers:
+real-Core production LAN desktop baseline, component ownership regressions,
+desktop and mobile engines, final same-artifact/native handoffs as applicable.
+
+### Native graph and identity completion contract
+
+Extend the permanent extracted-package journey, not an ad hoc browser script.
+Seed a small synthetic mechanism graph in its disposable project; enter Model
+through the native tab, select an outline object, expand Relationships, resize
+the actual native window and restore with focus/selection preserved. Assert both
+the panel's viewport bounds and actual node spread. Then enter Settings through
+navigation and Diagnostics through its visible link; all three displayed
+Interface/Core/Desktop commits must agree. Core owns graph data, UI owns viewport
+and selection, build manifests own identity. No live model or installation is
+modified. Actual clean-package runs at 1440 and 1024 remain the required gate.
+
 ### Next approval failure-injection contract
+
+Baseline desktop: Stop, actual double-click, lost decision response and browser
+offline/reconnect passed. A7 reproduced: with two independent requests on one
+turn, deciding the displayed request leaves one durable pending request but zero
+review cards. `pendingResponse` is singular, gets cleared after every decision,
+and reload chooses the turn's last approval ID even if already decided. Restore
+the exact pending request from the canonical projection, including event gaps and
+reload; never replay a command or infer an ID from another turn. Evidence:
+`/tmp/nebula-stabilization-approval-failures-baseline` (4 pass/1 fail; six cases
+not run due to fail-fast, not waived). Add canonical selection and stale-session
+guards, then repeat the full eleven-case failure selection.
+The added twelfth case found A8: hold the first decision's HTTP response after
+Core completes it, switch to a fresh conversation, and request another inert
+approval. Its Approve button remains disabled by the previous conversation's
+mutation state. Reset presentation busy state on selection and guard late
+decision callbacks by the existing selection generation. The prior approved
+work remains approved; no cancellation or replay is inferred from navigation.
+Red evidence: `/tmp/nebula-stabilization-late-approval-red`.
+The combined run passed the first eleven scenarios, including A7 and reload,
+then exposed a second A8 path: an already-started history refresh from the old
+turn reselected the previous conversation. Guard asynchronous history and
+interaction results, catalog-driven selection, follow errors and detached
+stream completion—not only the decision response. Evidence:
+`/tmp/nebula-stabilization-approval-failures-isolated` (11 pass/1 fail).
+A7/A8 green: the delayed response/history case passed three independent desktop
+repetitions (21.92s). The complete twelve-case failure matrix then passed all
+eight production LAN profiles: **96 passed in 531.49s, zero skips/flaky cases**.
+Includes Stop, double-click, lost response, offline/reconnect, two independent
+requests plus reload, restart while waiting, adapter exit, four crash barriers
+and conversation switching with a delayed response. Durable records and independent
+receipt counts agree; no commands execute or replay. Retained selection/traces/
+screenshots/records: `/tmp/nebula-stabilization-approval-failure-matrix` and its
+adjacent `.log`/`-selection.log`. Five state-hook tests passed; the broader 72-case
+frontend selection passed in 28.26s before the final late-history guards. Repeat
+frontend coverage on the final diff. Native/extracted and final artifact gates
+remain required; this is not release approval.
+The refreshed frontend selection passed **73 tests in 24.66s**, including the
+final late-history guards and the separate inspector-focus regression. Collection
+and log: `/tmp/nebula-stabilization-frontend73-selection.log` and
+`/tmp/nebula-stabilization-frontend73.log`.
 
 Use only the disposable approval Core and inert local adapter. Start from New
 chat, send, review the actual card, then exercise Stop, double-click, a lost

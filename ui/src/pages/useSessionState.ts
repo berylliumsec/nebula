@@ -34,6 +34,11 @@ export function isPendingRequest(snapshot: SessionState | undefined, id: unknown
   return typeof id === "string" && (!snapshot || snapshot.pending.some(item => item.id === id));
 }
 
+export function pendingApprovalId(snapshot: SessionState | undefined, turnId: string | undefined): string | undefined {
+  if (snapshot?.schema !== "nebula.session-state/v1" || !turnId) return undefined;
+  return snapshot.pending.find(item => item.kind === "approval" && item.turn_id === turnId)?.id;
+}
+
 export function useSessionState(api: ApiClient | undefined, sessionId: string | undefined, ready: boolean) {
   const [snapshot, setSnapshot] = useState<SessionState>();
   const [failure, setFailure] = useState<{sessionId: string; text: string}>();
