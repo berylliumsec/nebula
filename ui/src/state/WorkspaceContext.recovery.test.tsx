@@ -15,7 +15,7 @@ vi.mock("../api/events", () => ({ NebulaEventStream: class {
   connect() { this.options.onStateChange("connecting"); }
   disconnect() { this.options.onStateChange("closed"); }
 } }));
-vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn(), setDiagnosticsAvailability: vi.fn(), setBrowserDiagnosticIngress: vi.fn() }));
+vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn(), setCoreDiagnosticsHealth: vi.fn() }));
 
 const run = (id = "run-1", completedTasks = 2) => ({ id, engagementId: "project", title: id, status: "running", completedTasks, totalTasks: 5, updatedAt: "2026-09-09T12:00:00Z" });
 function Probe() {

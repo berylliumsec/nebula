@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagnosticsAvailabilityBanner } from "./DiagnosticsPanel";
+import { setCoreDiagnosticsHealth } from "./logger";
 
 vi.mock("./logger", async (importOriginal) => ({
   ...await importOriginal<typeof import("./logger")>(),
@@ -10,6 +11,23 @@ vi.mock("./logger", async (importOriginal) => ({
 
 describe("DiagnosticsAvailabilityBanner", () => {
   beforeEach(() => window.localStorage.clear());
+
+  it("retains an open or dismissed notice across unchanged Core health samples", async () => {
+    const user = userEvent.setup();
+    render(<DiagnosticsAvailabilityBanner />);
+    const unavailable = {diagnosticsDegraded: false, browserDiagnosticIngress: "disabled"};
+    act(() => setCoreDiagnosticsHealth(unavailable));
+    await user.click(screen.getByRole("button", {name: "Diagnostics notice details"}));
+    act(() => setCoreDiagnosticsHealth(unavailable));
+    expect(screen.getByRole("dialog", {name: "Browser event capture is unavailable."})).toBeVisible();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", {name: "Dismiss diagnostics notice"}));
+    act(() => setCoreDiagnosticsHealth(unavailable));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    act(() => setCoreDiagnosticsHealth({diagnosticsDegraded: false, browserDiagnosticIngress: "enabled"}));
+    act(() => setCoreDiagnosticsHealth(unavailable));
+    expect(screen.getByRole("status")).toBeVisible();
+  });
 
   it("keeps verbose detail behind an in-place, focus-restoring disclosure", async () => {
     const user = userEvent.setup();

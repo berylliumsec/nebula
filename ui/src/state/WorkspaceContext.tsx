@@ -12,7 +12,7 @@ import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
-import { setBrowserDiagnosticIngress, setDiagnosticsAvailability } from "../diagnostics";
+import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
 import type {
   AgentRunSummary,
@@ -216,9 +216,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
   const observeHealth = useCallback((nextHealth: HealthResponse) => {
     setHealth(nextHealth);
-    setDiagnosticsAvailability(nextHealth.diagnosticsDegraded !== true,
-      nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined);
-    setBrowserDiagnosticIngress(nextHealth.browserDiagnosticIngress === "enabled");
+    setCoreDiagnosticsHealth(nextHealth);
     // Successful reachability restores saved state, never execution. A browser
     // online event alone is not proof that this Core is reachable again.
     if (connectionLost.current) reconnect();
@@ -248,11 +246,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       try {
         const nextHealth = await nextApi.health(controller.signal);
         if (!active) return;
-        setDiagnosticsAvailability(
-          nextHealth.diagnosticsDegraded !== true,
-          nextHealth.diagnosticsDegraded ? "Nebula Core reported degraded local diagnostics." : undefined,
-        );
-        setBrowserDiagnosticIngress(nextHealth.browserDiagnosticIngress === "enabled");
+        setCoreDiagnosticsHealth(nextHealth);
         setHealth(nextHealth);
         setWorkspaceState("bootstrapping");
 

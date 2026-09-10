@@ -5,6 +5,13 @@ partial fixes or mix web assets, Core and native packages. Existing live project
 sessions, approvals and data are not test fixtures. Use temporary local fixtures
 and disposable projects only; no scans or vulnerability reproduction.
 
+Current status: stabilization changes are locally committed in independently
+tested batches; no release has been pushed or installed. Candidate5 completed
+the compiled-Core lifecycle checks recorded below, but N11 prevents its release.
+N11's selected 152 frontend and 66 backend cases pass; a new clean candidate and
+its native/LAN walkthrough are still required. Older pending statements below
+are chronological findings, not waivers of the current release gates.
+
 ## Contract and walkthrough
 
 Core owns saved content, approval decisions and execution progress. Harnesses own
@@ -18,11 +25,11 @@ applicable. Not-applicable lifecycle steps require a reason in the evidence.
 | --- | --- | --- | --- | --- |
 | Launch/navigation | Connect/pair, select/search, deep-link, back/forward, reload/relaunch preserve the correct identity | Core/device auth, URL | component, real Core LAN, native | Partial: pairing/reload, project isolation, resource Back/Forward and native relaunch passed; final artifact walkthrough pending |
 | Assistant | Select runtime, send/stream, approve/reject/stop, complete, queue/switch/reconnect/retry without duplicate work or contradictory status | approval, turn, harness request, canonical projection | service failure injection, real Core, UI, real harness, native | Partial: A1–A8 regressions, 96-case process failure matrix, native approve/reject/stop and fresh configured runtime smoke passed; final artifact gates remain |
-| Browser | Navigate/input, control handoff, capture, reload/reconnect, explain unsupported devices | Core browser session and owning device | local fixture, UI, LAN/native | Partial: headed local input/reconnect and packaged managed capture passed; complete device/handoff matrix pending |
-| Model | Inspect mechanisms/evidence, select/filter/expand/resize, clear only model/captures | Core model/evidence, local viewport | component, real Core, LAN/native | Partial: 16 real-Core production browser cases passed; native graph and final candidate pending |
-| Workspace | Link/browse/upload/edit/save/recover, terminal, switch projects; one linked folder everywhere | Core workspace, filesystem, device drafts | service, real Core, native | Partial: real linked workspace/terminal and mobile Code conflict/draft journeys passed; final/native coverage pending |
-| Project/outputs | Create/update/archive/restore and discover/reuse notes, evidence, findings/reports/Library | Core durable entities | real Core, UI | Partial: project lifecycle, note/report/PDF and Library lifecycle passed; independent findings/evidence and upload failure coverage pending |
-| Settings/recovery | Save/rediscover runtimes and policies; retry failures; show accurate build/capability identity | Core catalog, frozen session policy, build manifest | component, real Core, native | Partial: component identity and configured runtime discovery passed; real setup/retry and native identity screen pending |
+| Browser | Navigate/input, control handoff, capture, reload/reconnect, explain unsupported devices | Core browser session and owning device | local fixture, UI, LAN/native | Candidate5: native managed capture and 8-profile isolated device handoff passed; final candidate pending |
+| Model | Inspect mechanisms/evidence, select/filter/expand/resize, clear only model/captures | Core model/evidence, local viewport | component, real Core, LAN/native | Candidate5: 16 compiled-Core cases and native graph/resize/scoped reset passed; final candidate pending |
+| Workspace | Link/browse/upload/edit/save/recover, terminal, switch projects; one linked folder everywhere | Core workspace, filesystem, device drafts | service, real Core, native | Candidate5: linked-folder/Code/terminal 3 cases and mobile Code draft/save 2 cases passed; final candidate pending |
+| Project/outputs | Create/update/archive/restore and discover/reuse notes, evidence, findings/reports/Library | Core durable entities | real Core, UI | Candidate5: lifecycle 6, resources/settings 48 and outputs 16 passed; final candidate pending |
+| Settings/recovery | Save/rediscover runtimes and policies; retry failures; show accurate build/capability identity | Core catalog, frozen session policy, build manifest | component, real Core, native | Candidate5: real setup/retry, 8-profile frozen-policy checks, configured runtimes and native identity passed; N11 repaired, final candidate pending |
 
 ## Defects and work batches
 
@@ -89,6 +96,60 @@ including zero-dark, zero-light, dark and light opacity checks. Production build
 passed. Evidence: `/tmp/nebula-stabilization-settings-lens-opacity-red`,
 `/tmp/nebula-stabilization-runtime-policy8-v4`, and reviewed WebKit320 screenshot
 `/tmp/nebula-stabilization-handoff-review-FA6Fy1/cb6996c7ad3fed418fe84c45e515e564281ceb67`.
+
+N11 candidate5 diagnostics polling: the 64-case UI fixture first contradicted its
+injected diagnostic failure by returning healthy ingress on every health poll.
+After making that fixture coherent, a real defect reproduced: each health sample
+publishes storage-healthy before ingress-disabled, so the transient healthy event
+closes an open diagnostics dialog and clears its dismissal state. Red evidence:
+`/tmp/nebula-stabilization-candidate5-vR7HII/diagnostic-poll-red` (unchanged health
+sample closes the visible dialog). Publish one combined diagnostics availability
+per Core snapshot. Polling must preserve an open disclosure and a dismissed notice
+until actual recovery or a new failure. Retain layout/long-content checks and add
+component coverage for atomic health publication, recovery and dismissal.
+Candidate5 native1440, resources48 and model/reset16 passed, but this defect
+blocks release and requires a new clean frontend/Core/package artifact set.
+
+N11 repair: WorkspaceContext publishes one combined Core health sample. The
+logger also retains the latest Core failure when an older event write completes;
+that additional race failed before the guard (`diagnostics-write-red.log`). The
+25 selected diagnostics/logger/recovery cases passed in 3.69s, including stable
+open/dismissed notices, actual recovery and a late sink response. The production
+desktop polling regression passed in 17.11s. The broader frontend run initially
+had 151 pass and one first-navigation test exceed its unchanged 5s timeout under
+parallel build/browser load. That exact case passed independently (2.03s), and
+the same **152/152** cases passed in **39.66s** with two workers, no skips and no
+assertion/timeout change. The eight-profile production UI rerun remains pending
+before sealing the next build.
+Receipts: `/tmp/nebula-stabilization-diagnostics25.log`,
+`/tmp/nebula-stabilization-diagnostics-write-red.log`,
+`/tmp/nebula-stabilization-candidate5-vR7HII/diagnostic-poll-green`,
+`/tmp/nebula-stabilization-frontend152-v2.log` and adjacent collected selection.
+
+Candidate5 artifact audit (not releasable due to N11): source
+`f22361d14777c9a0c0db0f49a28994e9a6b88c24`, built `2026-09-10T21:18:28Z`,
+managed `3.0.0-alpha.13`. Core SHA-256
+`cb7daa60800cc96ade7763a05c01b682a13cfe2e85acf5d378c0d348083a67d4`;
+DEB SHA-256 `fc2b4766d74206aa23eca914d6605868a4c6a2a587ec5b4bd72d34b7d7c4527a`.
+All 81 embedded web hashes and clean Core/web/native identities agreed. Native
+1440 approval/reject/stop, relaunch/scroll, Core restart/reconnect, graph resize
+and scoped reset passed, retaining every disposable conversation. Native graph
+and Diagnostics screenshots were inspected. Production LAN compiled-Core runs:
+resources/settings **48/48**, notes/reports/PDF/Library **16/16**, model/reset
+**16/16**, conversation/project lifecycle **6/6**, device handoff/policy **16/16**,
+linked workspace/Code/terminal **3/3**, mobile Code save/draft recovery **2/2**.
+Fresh configured Codex/Grok no-tool conversations and saved-answer reload also
+passed **2/2 in 39.9s**, using discovered models and disposable Core databases.
+No skips, retries or flaky results in those completed batches. Evidence and exact
+selection receipts: `/tmp/nebula-stabilization-candidate5-vR7HII`.
+
+Rollback preparation is read-only: the downloaded `3.0.0~alpha.5` DEB matches its
+published SHA-256 and both extracted binaries exactly match `/usr/bin/nebula-ui`
+and `/usr/bin/nebula-core`. Retained under candidate5's restricted `rollback/`.
+The installed GitHub CLI lacks attestation verification; no APT channel promotion
+is requested or performed. A consistent live database/configuration backup still
+requires the explicit maintenance handoff. Nothing live has been restarted,
+installed, cleared or migrated; no commits have been pushed.
 
 1. Establish reproducible baseline from production UI entry points; record traces.
 2. Repair decision/delivery/progress contract, idempotency and restart recovery.

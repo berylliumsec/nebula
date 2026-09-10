@@ -13,6 +13,38 @@ describe("interface diagnostics", () => {
     delete (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
   });
 
+  it.each([
+    {diagnosticsDegraded: false, browserDiagnosticIngress: "disabled", available: false, reason: "Browser event capture"},
+    {diagnosticsDegraded: true, browserDiagnosticIngress: "disabled", available: false, reason: "degraded local diagnostics"},
+    {diagnosticsDegraded: false, browserDiagnosticIngress: "enabled", available: true, reason: undefined},
+  ])("publishes one coherent diagnostics state for $browserDiagnosticIngress ingress and degraded=$diagnosticsDegraded", async sample => {
+    const logger = await freshLogger();
+    const events: Array<{available: boolean; reason?: string}> = [];
+    const record = (event: Event) => events.push((event as CustomEvent).detail);
+    window.addEventListener("nebula-diagnostics-health", record);
+    try {
+      logger.setCoreDiagnosticsHealth(sample);
+      logger.setCoreDiagnosticsHealth(sample);
+      expect(events).toHaveLength(2);
+      expect(events.map(event => event.available)).toEqual([sample.available, sample.available]);
+      if (sample.reason) expect(events[0].reason).toContain(sample.reason);
+    } finally { window.removeEventListener("nebula-diagnostics-health", record); }
+  });
+
+  it("does not let an older successful event write recover a newer Core failure", async () => {
+    let finish!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockReturnValue(new Promise(resolve => { finish = resolve; })));
+    const logger = await freshLogger();
+    logger.configureBrowserDiagnostics("/api/v1");
+    const write = logger.logDiagnostic({level: "error", eventCode: "interface.test.failed", message: "Synthetic failure."});
+    logger.setCoreDiagnosticsHealth({diagnosticsDegraded: false, browserDiagnosticIngress: "disabled"});
+    finish(new Response(JSON.stringify({accepted: 1, error_ids: ["err_fixture"]}), {status: 202}));
+    await write;
+    expect(logger.isDiagnosticsAvailable()).toBe(false);
+    logger.setCoreDiagnosticsHealth({diagnosticsDegraded: false, browserDiagnosticIngress: "enabled"});
+    expect(logger.isDiagnosticsAvailable()).toBe(true);
+  });
+
   it("matches the shared cross-language schema, settings, features, and sanitizer contract", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ accepted: 1, error_ids: ["err_contract"] }), { status: 202 }),

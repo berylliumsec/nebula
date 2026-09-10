@@ -1,6 +1,6 @@
 {
   "reviewed_by": "Codex, stabilization foundation acceptance review",
-  "reason": "Reviewed 66 Python, 140 frontend and 91 catalog browser cases, plus 16 focused model/reset profiles in the supplemental local gate. Device handoff, outage recovery and policy recovery passed eight profiles each. N10 adds an opaque shared settings surface after screenshot review found underlying text bleed; the policy journey now checks opacity in four themes. Five policy component regressions cover loading and late-project responses; 140 frontend cases passed. The supplemental launcher uses unmodified compiled Core and embedded assets; native acceptance also checks scoped reset and retained conversations. Final clean candidate and all same-artifact gates remain required; this is not release approval.",
+  "reason": "Reviewed 66 Python, 152 frontend and 91 catalog browser cases, plus 16 focused model/reset profiles in the supplemental local gate. N11 adds the diagnostics logger selection: coherent Core health, retained disclosure/dismissal and late sink-response ownership. The production notice journey waits through an unchanged health poll. Candidate5 native1440, resources48, outputs16, model16 and workspace3 passed, but N11 blocks that artifact. Device, policy and connection recovery remain selected. Final clean candidate and all same-artifact gates are required; this is not release approval.",
   "exclusions": "No full suites, scans, live decisions, data clearing or tool replay. Private runtime smoke tests run locally, not in CI. Native-package and remaining whole-product lifecycle gates are unfinished; this selection is not release approval. Physical devices are outside the selected release bar and unverified.",
   "baseline": "fdaca50",
   "python_versions": [
@@ -8,7 +8,7 @@
   ],
   "expected_tests": {
     "python": 66,
-    "frontend": 140,
+    "frontend": 152,
     "native": 0,
     "playwright": 91
   },
@@ -30,7 +30,7 @@
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
     "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
-  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx", "ui/src/state/WorkspaceContext.recovery.test.tsx", "ui/src/state/useCoreConnectionMonitor.test.tsx", "ui/src/components/ApplicationModelGraph.test.tsx", "ui/src/pages/ApplicationModelPage.test.tsx", "ui/src/components/WorkbenchBrowser.test.tsx", "ui/src/components/EngagementPolicySettings.test.ts", "ui/src/components/EngagementPolicySettings.loading.test.tsx"],
+  "frontend": ["ui/src/App.test.tsx", "ui/src/pages/useSessionState.test.tsx", "ui/src/pages/useComposerAutosize.test.tsx", "ui/src/components/ChatCatchUp.test.tsx", "ui/src/buildIdentity.test.ts", "ui/src/components/HarnessStatusRail.test.tsx", "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx", "ui/src/hooks/useCanonicalResourceSelection.test.tsx", "ui/src/components/PageHeader.test.tsx", "ui/src/components/MissionControls.test.tsx", "ui/src/components/TopBar.test.tsx", "ui/src/hooks/useRevisionedResourceDraft.test.tsx", "ui/src/components/HarnessSettings.test.tsx", "ui/src/state/WorkspaceContext.recovery.test.tsx", "ui/src/state/useCoreConnectionMonitor.test.tsx", "ui/src/components/ApplicationModelGraph.test.tsx", "ui/src/pages/ApplicationModelPage.test.tsx", "ui/src/components/WorkbenchBrowser.test.tsx", "ui/src/components/EngagementPolicySettings.test.ts", "ui/src/components/EngagementPolicySettings.loading.test.tsx", "ui/src/diagnostics/logger.test.ts"],
   "native": [],
   "playwright": ["stabilization/desktop", "stabilization/compact", "stabilization/mobile-chromium-small", "stabilization/mobile-chromium-ledger-390", "stabilization/mobile-chromium-wide", "stabilization/mobile-webkit-small", "stabilization/mobile-webkit", "stabilization/mobile-webkit-wide", "stabilization-core/assistant-real-desktop"],
   "local_playwright": {
@@ -44,7 +44,7 @@
       "desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"
     ]
   },
-  "change_digest": "a5f9527906171a2d7ec55c97e0a053d884145f3626e194c84a070a8c867c0b4c",
+  "change_digest": "c7bf3e3442c1b8d017961fa12965515beda040a1cd60d611ad6c2182f38a57e9",
   "python_node": false,
   "supplemental_local_playwright": [{"config":"ui/playwright.application-model.config.ts","files":["tests/application-model-responsive.spec.ts","tests/application-model-reset.spec.ts"],"projects":["model-desktop","model-compact","model-chromium-320","model-chromium-390","model-chromium-430","model-webkit-320","model-webkit-390","model-webkit-430"],"expected_tests":16,"reason":"Permanent production LAN model collision/resize and scoped reset gates; final acceptance uses the unmodified compiled Core launcher and embedded assets. Invoked separately from the default CI config."}]
 }

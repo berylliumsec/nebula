@@ -2051,6 +2051,12 @@ reloadTest("stabilization empty project offers the existing project picker after
 });
 
 test("stabilization workspace notices leave the composer reachable", async ({page}, testInfo) => {
+  test.setTimeout(75_000);
+  let healthReads = 0;
+  await page.route(/\/api\/v1\/health(?:\?|$)/, route => {
+    healthReads += 1;
+    return route.fulfill({json: {status: "ok", version: "3.0.0", mode: "local", runner: "ready", human_pty: "unavailable", container_terminal: "configured", diagnostics: {writable: true, degraded: false, browser_event_ingress: "disabled"}}});
+  });
   await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
     ...entity, id: "notice-fixture", name: "Configured fixture", kind: "grok_acp",
     connection_mode: "spawn", transport: "stdio", executable: "/bin/true", auth_mode: "existing_session",
@@ -2110,6 +2116,11 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
       await details.click();
       const dialog = page.getByRole("dialog", {name: /(?:Local diagnostics|Browser event capture) (?:are|is) unavailable/});
       await expect(dialog).toBeVisible();
+      if (!landscape && detail.startsWith("Browser event capture")) {
+        const beforePoll = healthReads;
+        await expect.poll(() => healthReads, {timeout: 8_000}).toBeGreaterThan(beforePoll);
+        await expect(dialog, "An unchanged health sample must not close diagnostics being read").toBeVisible();
+      }
       await expect(dialog.getByRole("button", {name: "Close", exact: true})).toBeInViewport();
       expect((await new AxeBuilder({page}).include(".diagnostics-notice-dialog").analyze()).violations).toEqual([]);
       await page.keyboard.press("Escape");
