@@ -11,6 +11,7 @@ const socketSpies = vi.hoisted(() => ({
   constructed: vi.fn(),
   dispose: vi.fn(),
   resize: vi.fn(),
+  sendInput: vi.fn(),
 }));
 
 const terminalSpies = vi.hoisted(() => ({
@@ -33,7 +34,7 @@ vi.mock("../api/containerTerminal", () => ({
     dispose = socketSpies.dispose;
     requestClose = () => this.options.onExit?.({ outcome: "closed" });
     resize = socketSpies.resize;
-    sendInput(): void {}
+    sendInput = socketSpies.sendInput;
   },
 }));
 
@@ -110,13 +111,15 @@ const capacity = (activeSessions: number) => ({
   maxActiveSessions: 32,
 });
 
-function renderPanel(api: ApiClient, strict = false, active = true) {
+function renderPanel(api: ApiClient, strict = false, active = true, command?: { id: string; source: string }, onCommandAccepted?: (id: string) => void) {
   const panel = <DialogProvider><ContainerTerminalPanel
     active={active}
     api={api}
     engagementId="engagement-1"
     engagementName="Lab"
     setupTerminalStatus="ready"
+    commandRequest={command}
+    onCommandAccepted={onCommandAccepted}
   /></DialogProvider>;
   return render(strict ? <StrictMode>{panel}</StrictMode> : panel);
 }
@@ -127,11 +130,29 @@ describe("ContainerTerminalPanel", () => {
     socketSpies.constructed.mockClear();
     socketSpies.dispose.mockClear();
     socketSpies.resize.mockClear();
+    socketSpies.sendInput.mockClear();
     terminalSpies.fit.mockClear();
     terminalSpies.focus.mockClear();
     terminalSpies.keyHandler = undefined;
     terminalSpies.options = undefined;
     terminalSpies.selection = "";
+  });
+
+  it("executes a requested command once in the active live terminal", async () => {
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1",
+      getToken: () => "test-token",
+      containerTerminalCapabilities: vi.fn().mockResolvedValue({ ready: true }),
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [{ session: session("terminal-command"), runtime, network: { mode: "unrestricted", runtimeNetwork: "bridge", publishedPorts: [] } }] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+    const accepted = vi.fn();
+    const view = renderPanel(api, false, true, { id: "command-1", source: "pwd\n" }, accepted);
+    await waitFor(() => expect(socketSpies.sendInput).toHaveBeenCalledWith("pwd\r"));
+    expect(accepted).toHaveBeenCalledWith("command-1");
+    view.rerender(<DialogProvider><ContainerTerminalPanel active api={api} engagementId="engagement-1" engagementName="Lab" setupTerminalStatus="ready" commandRequest={{ id: "command-1", source: "pwd\n" }} onCommandAccepted={accepted} /></DialogProvider>);
+    expect(socketSpies.sendInput).toHaveBeenCalledTimes(1);
   });
 
   it("shows the frozen VPN boundary for a recovered terminal", async () => {

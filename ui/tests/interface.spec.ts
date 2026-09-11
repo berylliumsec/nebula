@@ -4647,6 +4647,28 @@ test("terminal and notes keep a visible focused caret", async ({ page }, testInf
   expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
 });
 
+test("Terminal opens Assistant beside the live shell", async ({ page }) => {
+  await openWorkspace(page, "/", "Workbench");
+  const toggle = page.getByRole("button", { name: "Assistant", exact: true });
+  await expect(toggle).toHaveAttribute("aria-controls", "terminal-assistant-panel");
+  await toggle.click();
+  const assistant = page.getByRole("complementary", { name: "Terminal Assistant" });
+  await expect(assistant).toBeVisible();
+  await expect(page.locator(".container-terminal-live")).toBeVisible();
+  await expect(assistant.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  const bounds = await assistant.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom };
+  });
+  const viewport = page.viewportSize()!;
+  expect(bounds.left).toBeGreaterThanOrEqual(0);
+  expect(bounds.right).toBeLessThanOrEqual(viewport.width + 1);
+  expect(bounds.top).toBeGreaterThanOrEqual(0);
+  expect(bounds.bottom).toBeLessThanOrEqual(viewport.height + 1);
+  await assistant.getByRole("button", { name: "Collapse terminal Assistant" }).click();
+  await expect(assistant).toBeHidden();
+});
+
 test("the populated finding editor stays contained and accessible", async ({ page }) => {
   const finding = {
     ...entity,

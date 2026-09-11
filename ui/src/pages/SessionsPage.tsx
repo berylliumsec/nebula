@@ -502,6 +502,8 @@ export function SessionsPage() {
   const workbenchActionsMenuRef = useRef<HTMLDivElement>(null);
   const conversationMenuRef = useRef<HTMLDetailsElement>(null);
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
+  const [terminalCommandRequest, setTerminalCommandRequest] = useState<{ id: string; source: string }>();
+  const [terminalAssistantOpen, setTerminalAssistantOpen] = useState(false);
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const activeEngagementIdRef = useRef(engagement?.id);
@@ -821,10 +823,11 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!assistantDrafts.length) return;
+    if (view === "terminal") setTerminalAssistantOpen(true);
     setExpandedContextIndex(undefined);
     setConversationOpen(true);
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
-  }, [assistantDrafts]);
+  }, [assistantDrafts, view]);
 
   useComposerAutosize(composerRef, draft, CHAT_COMPOSER_MAX_HEIGHT, `${view}:${conversationOpen}:${sessionId ?? "new"}`);
 
@@ -3004,6 +3007,7 @@ export function SessionsPage() {
       .filter((runtime) => runtime.unrestrictedNetwork)
       .map((runtime) => runtime.language) ?? [],
   ), [executionCapabilities]);
+  const assistantRunnableLanguages = useMemo(() => new Set<ExecutionLanguage>([...runnableLanguages, "bash", "sh"]), [runnableLanguages]);
   const pendingHarnessRequests = authoritativeState?.pending.length ?? harnessInteractions.filter((item) => item.status === "pending").length;
   const decisionNotice = authoritativeState
     ? authoritativeState.execution === "continuing" ? authoritativeState.decisions.at(-1) : undefined
@@ -3031,6 +3035,11 @@ export function SessionsPage() {
   const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
+  const runInTerminal = (candidate: FencedRunCandidate) => {
+    setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
+    setTerminalAssistantOpen(true);
+    setView("terminal");
+  };
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
@@ -3122,7 +3131,7 @@ export function SessionsPage() {
                         {commentaryItems.map((item) => <p key={item.key}>{item.text}</p>)}
                       </div>}
                       {message.content && (message.role === "assistant"
-                        ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={runnableLanguages} onRun={setRunCandidate} />
+                        ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={assistantRunnableLanguages} onRun={setRunCandidate} onRunInTerminal={runInTerminal} />
                         : <p>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
@@ -3331,8 +3340,12 @@ export function SessionsPage() {
           </nav>
         </aside>}
         <section className="session-workspace">
-          {api && engagement && <div className="persistent-terminal" hidden={view !== "terminal"}>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} /></Suspense>
+          {api && engagement && <div className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "terminal"}>
+            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar"><span><SquareTerminal size={16} aria-hidden="true" /> Terminal</span><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
+            {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong><button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
+              {assistantPanel}
+            </BrowserAssistantPanel>}
           </div>}
           {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={(context) => { requestNebulaDraft(context); setView("chat"); }} /></Suspense>
