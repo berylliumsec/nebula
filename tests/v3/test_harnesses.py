@@ -87,6 +87,7 @@ from nebula.v3.harnesses import (
     HarnessRuntimeService,
     HarnessSkillInvocation,
     HarnessTransportError,
+    _harness_developer_instructions,
 )
 from nebula.v3.exporter import export_engagement
 from nebula.v3.mcp import (
@@ -513,6 +514,24 @@ def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
                 path=str((outside / "SKILL.md").resolve()),
             ),
         )
+
+
+def test_disabled_nebula_knowledge_does_not_suppress_installed_skills():
+    instructions = _harness_developer_instructions(
+        SimpleNamespace(metadata={}, mcp_snapshot=[]),
+        HarnessNativeCapabilities(skills=True),
+        vendor="Codex",
+    )
+
+    assert (
+        "When it disables knowledge, report that the turn is not authorized"
+        not in instructions
+    )
+    assert (
+        "The knowledge capability state governs only knowledge.list and "
+        "knowledge.search; it does not constrain explicitly invoked installed skills"
+        in instructions
+    )
 
 
 def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
