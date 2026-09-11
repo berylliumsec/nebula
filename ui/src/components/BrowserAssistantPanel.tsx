@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useResizableSidePanel } from "./useResizableSidePanel";
 
 export const BROWSER_ASSISTANT_SHEET_QUERY = "(max-width: 760px), (pointer: coarse) and (max-height: 500px)";
 
@@ -20,6 +21,15 @@ export function BrowserAssistantPanel({ header, children, onActionContainer, pan
       height: Math.min(560, height - reserve - 12, Math.max(240, height * .68)) };
   };
   const [viewport, setViewport] = useState(measure);
+  const size = useResizableSidePanel({
+    defaultWidth: 560,
+    enabled: !viewport.mobile,
+    label: `Resize ${label}`,
+    maxWidth: 900,
+    minPrimaryWidth: 360,
+    minWidth: 360,
+    storageKey: `nebula.${panelId}.width`,
+  });
   useEffect(() => {
     const update = () => setViewport(measure());
     window.addEventListener("resize", update);
@@ -31,8 +41,9 @@ export function BrowserAssistantPanel({ header, children, onActionContainer, pan
       window.visualViewport?.removeEventListener("scroll", update);
     };
   }, []);
-  const panel = <aside id={panelId} className={`integrated-browser-assistant${viewport.mobile ? " browser-assistant-sheet" : ""}`} aria-label={label}
-    style={viewport.mobile ? { bottom: `calc(${viewport.bottom}px + env(safe-area-inset-bottom, 0px))`, height: `calc(${viewport.height}px - env(safe-area-inset-bottom, 0px))` } : undefined}>
+  const panel = <aside ref={size.panelRef} id={panelId} className={`integrated-browser-assistant${viewport.mobile ? " browser-assistant-sheet" : ""}`} aria-label={label}
+    style={viewport.mobile ? { bottom: `calc(${viewport.bottom}px + env(safe-area-inset-bottom, 0px))`, height: `calc(${viewport.height}px - env(safe-area-inset-bottom, 0px))` } : size.panelStyle}>
+    {size.resizeHandle}
     <header>{header}</header>
     {viewport.mobile && <div ref={onActionContainer} className="browser-assistant-required-actions" />}
     {children}

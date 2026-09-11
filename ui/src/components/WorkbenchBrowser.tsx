@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, MessageSquareText, Network, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Square, Trash2, UserRound, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Link, useSearchParams } from "react-router-dom";
@@ -168,6 +168,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [workspaceError, setWorkspaceError] = useState<string>();
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
+  const [researchPanelWidth, setResearchPanelWidth] = useState<number>();
   const [researchView, setResearchView] = useState<ResearchView>(() => normalizedResearchView(searchParams.get("tool") ?? searchParams.get("browserTool")));
   const [selectedExchangeIds, setSelectedExchangeIds] = useState<string[]>(() => searchParams.get("browserExchange") ? [searchParams.get("browserExchange")!] : []);
   const [identityName, setIdentityName] = useState("");
@@ -255,7 +256,8 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
     : evaluateBrowserScope(desktop ? activeTab?.url : deviceAddress?.url, scope);
-  const browserVisible = desktop && active && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
+  const researchCoversBrowser = researchOpen && window.matchMedia("(max-width: 1100px)").matches;
+  const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
   const bounds = useCallback((): BrowserBounds | undefined => {
@@ -1624,6 +1626,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     session={activeSession}
     targetOptions={automationTargetOptions}
     onClose={() => setResearchOpen(false)}
+    onWidthChange={setResearchPanelWidth}
     toolNavigation={<nav aria-label="Security Browser tools">
       <button type="button" className={researchView === "target" ? "active" : ""} onClick={() => setResearchView("target")}>Target</button>
       <button type="button" className={researchView === "traffic" ? "active" : ""} onClick={() => setResearchView("traffic")}><Network size={14} /> Traffic <span>{sessionTraffic.length}</span></button>
@@ -1701,7 +1704,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     </div>}
   </SecurityBrowserWorkspacePanel> : null;
 
-  if (!desktop) return <div className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`}>
+  if (!desktop) return <div className={`workbench-browser web-browser-fallback${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
     <div className="browser-web-research-bar"><button className="button secondary" type="button" aria-expanded={researchOpen} onClick={() => setResearchOpen((value) => !value)}><Network size={14} /> Research workbench</button><span>Durable history and desktop handoff are available on paired devices.</span></div>
     {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
     {notice && <div className="browser-notice" role="status">
@@ -1728,7 +1731,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   </div>;
 
   return (
-    <div className={`workbench-browser${researchOpen ? " research-open" : ""}`}>
+    <div className={`workbench-browser${researchOpen ? " research-open" : ""}`} style={researchPanelWidth ? { "--security-browser-panel-width": `${researchPanelWidth}px` } as CSSProperties : undefined}>
       <div className="browser-tab-strip" role="tablist" aria-label="Browser tabs">
         {tabs.map((tab) => <div className={tab.id === activeId ? "browser-tab active" : "browser-tab"} key={tab.id}><button type="button" role="tab" aria-selected={tab.id === activeId} title={tab.title} onClick={() => setActiveId(tab.id)}>{tab.loading ? <LoaderCircle className="spin" size={13} /> : <Globe2 size={13} />}<span>{tab.title}</span></button><button type="button" aria-label={`Close ${tab.title}`} onClick={() => void closeTab(tab.id)}><X size={13} /></button></div>)}
         <button className="browser-new-tab" type="button" aria-label="New browser tab" disabled={tabs.length >= MAX_TABS} onClick={() => addTab()}><Plus size={15} /></button>

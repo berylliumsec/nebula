@@ -7,7 +7,7 @@
 .integrated-browser-page > .workbench-browser { flex: 1; min-height: 0; }
 .terminal-companion-page > .container-terminal-shell { flex: 1; min-height: 0; }
 .terminal-companion-page > .browser-workspace-toolbar > span { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
-.integrated-browser-assistant { flex: 1 1 45%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.integrated-browser-assistant { position: relative; flex: 1 1 45%; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .integrated-browser-assistant > header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .integrated-browser-assistant > header > strong { margin-right: auto; }
 .integrated-browser-assistant .chat-panel { flex: 1; min-height: 0; }

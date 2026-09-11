@@ -1,24 +1,37 @@
 {
-  "reviewed_by": "Codex, alpha.16 AppImage integrity repair",
-  "reason": "The release-only change prevents linuxdeploy from stripping the bundled Chromium executable so the staged SHA-256 manifest remains valid inside the AppImage, synchronizes alpha.16 version sources, and adds release notes. The packaging tests cover the workflow command, package tree integrity, version synchronization, and release contracts.",
-  "exclusions": "No application, backend, UI, state, API, or Rust behavior changes. The terminal Assistant product matrix and sandbox integration passed on the identical application commit in alpha.15 preparation run 34619152649. Frontend, native, Playwright, and unrelated Python suites are excluded. Three updater-manifest tests, production UI build, and locked Rust checks run separately. This is not full-suite approval.",
-  "baseline": "19ae74eaeb91089080f9b6ce8168cb6118cf3a98",
+  "reviewed_by": "Codex Security Browser and resizable side-panel review",
+  "reason": "Verifies the requested manual Security Browser lifecycle (pause, Repeater handoff/send, response review, and resume), registers the lazily started managed-browser adapter with guided assessments, preserves the live native browser beside adjustable manual controls, and adds one shared persisted, pointer- and keyboard-adjustable width contract to Browser Assistant, Terminal Assistant, and the Security Browser workspace. Focused component tests cover assessment/Repeater state and sizing bounds; selected browser and terminal-assistant journeys cover desktop resizing and full-width mobile behavior.",
+  "exclusions": "Providers, missions, reports, settings, release/packaging, native Rust commands, and unrelated Workbench journeys are excluded. Native child bounds continue through the existing bridge contract and are exercised by the focused desktop browser journey, so no broad native suite is selected. This is not approval for a full suite. Physical-device testing is unavailable; mobile checks use the repository's permanent emulated Chromium and WebKit profiles. Traffic-to-Repeater capture cannot be exercised in this Linux build because browser event capture reports unavailable; direct editable Repeater send is covered instead.",
+  "baseline": "3e793bb245ab03486cb3e5355428ebd6fc6fe570",
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 33,
-    "frontend": 0,
+    "python": 9,
+    "frontend": 11,
     "native": 0,
-    "playwright": 0
+    "playwright": 7
   },
   "python": [
-    "tests/v3/test_packaging.py"
+    "tests/v3/test_browser_assessments.py",
+    "tests/v3/test_browser_host.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx",
+    "ui/src/components/BrowserResearchSuite.test.tsx",
+    "ui/src/components/useResizableSidePanel.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "b72995606441cb6e2edd585834ceca1d7ab904352d6a63996b18867a9177bfe7",
+  "playwright": [
+    "entry:browser/desktop",
+    "entry:browser/browser-chromium-landscape",
+    "entry:browser/browser-webkit-landscape",
+    "entry:terminal-assistant/desktop",
+    "entry:terminal-assistant/mobile-chromium-small",
+    "entry:terminal-assistant/mobile-webkit-small",
+    "entry:core-api/real-core"
+  ],
+  "change_digest": "7412aa4b7c1ae1f536ce6821442db2fdf941c60e6a9595485ff6b5c59f81e7e1",
   "python_browser": false,
   "python_node": false
 }
