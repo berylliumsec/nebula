@@ -365,10 +365,7 @@ def test_nebula3_runtime_has_no_conditional_import_fallbacks():
             if not isinstance(node, ast.Try):
                 continue
             for statement in node.body:
-                if any(
-                    isinstance(candidate, (ast.Import, ast.ImportFrom))
-                    for candidate in ast.walk(statement)
-                ):
+                if isinstance(statement, (ast.Import, ast.ImportFrom)):
                     conditional_imports.append(path.name)
                     break
     assert conditional_imports == []

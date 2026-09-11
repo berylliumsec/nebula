@@ -1,25 +1,23 @@
 {
-  "reviewed_by": "Codex, automatic knowledge availability review",
-  "reason": "The change removes the per-turn knowledge opt-out so loaded sources are automatically available whenever the selected runtime permits project data. Selected Workbench browser entries cover automatic knowledge status and request shaping on desktop Chromium, mobile Chromium, mobile WebKit, and production UI backed by real Core on a LAN origin.",
-  "exclusions": "No native source changed, so native tests are empty. No standalone frontend unit test exercises the SessionsPage integration; the focused Playwright regressions cover its visible state, outgoing request, and a durable source loaded from real Core. Source ingestion behavior, gateway authorization, reconnect behavior, and browser-origin security are unchanged. A live external Codex App Server response, packaged desktop run, and physical-device run remain outside this focused verification.",
-  "baseline": "f0126429a0df1253e2d695bd18bc1084718d7b4d",
+  "reviewed_by": "Codex, Nebula 3.0.0-alpha.14 release review",
+  "reason": "The release diff synchronizes the alpha.14 version across Python, UI, Tauri, and lockfiles and adds release notes. It narrows the packaging AST check to direct imports in try blocks, moves the one direct harness application-model import before its protected block, and enables an available knowledge gateway by default even when its source list is initially empty. The packaging and harness files cover those rules, synchronized version sources, release and package contracts, knowledge privacy boundaries, and harness runtime behavior. The release workflow separately runs its three updater-manifest contract tests.",
+  "exclusions": "No product layout, API, state, or browser behavior changes in this release commit, so frontend unit, native unit, and Playwright selections are empty. The three packaging/updater/test_generate_manifest.py release-contract tests, production UI build, and locked Rust check run separately because the selection tool only accepts tests/v3 Python files. Broad Python, frontend, native, and browser suites are excluded under the repository's focused-test policy.",
+  "baseline": "507492aa8effe0a1490f16742290b276b04a719c",
   "python_versions": ["3.12"],
   "expected_tests": {
-    "python": 0,
+    "python": 97,
     "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_packaging.py",
+    "tests/v3/test_harnesses.py"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "entry:assistant/assistant-real-desktop"
-  ],
-  "change_digest": "45911467fefc1e93e6badc889efe4fd7151553f003386f9490e73dc03f13cb22",
+  "playwright": [],
+  "change_digest": "7c80b37bc7980e4b0b6af909cebaf5f838e7a202a1be079fa47fd80190422053",
   "python_browser": false,
   "python_node": false
 }

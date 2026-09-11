@@ -1746,7 +1746,6 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
             chat_session_id=None,
             harness_session_id=None,
             mcp_server_ids=[],
-            include_knowledge=True,
         )
         session = store.get(HarnessSession, harness_turn.harness_session_id)
         catalog = runtime._gateway_catalog(session)["tools"]
@@ -1803,6 +1802,36 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         await runtime.close_session(session.id)
 
     asyncio.run(scenario())
+
+
+def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_path):
+    from nebula.v3.harnesses import _harness_turn_prompt
+
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    service = ChatService(store)
+    runtime.bind_knowledge_retriever(
+        lambda engagement_id, query, allow_local_only, token_budget: (
+            service.harness_knowledge_search(
+                engagement_id,
+                query,
+                allow_local_only=allow_local_only,
+                token_budget=token_budget,
+            )
+        )
+    )
+
+    _, _, harness_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="List available knowledge",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+
+    assert harness_turn.metadata["knowledge_access"] is True
+    assert '"knowledge.list":"enabled"' in _harness_turn_prompt(harness_turn)
 
 
 def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_path):
