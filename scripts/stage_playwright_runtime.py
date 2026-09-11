@@ -74,6 +74,25 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _normalize_linux_executable_rpath(path: Path) -> None:
+    """Make linuxdeploy's later rpath pass byte-for-byte idempotent."""
+
+    with path.open("rb") as handle:
+        if handle.read(4) != b"\x7fELF":
+            return
+    try:
+        subprocess.run(
+            ["patchelf", "--set-rpath", "$ORIGIN", str(path)],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise PlaywrightRuntimeStageError(
+            "Playwright Chromium rpath could not be normalized for Linux packaging"
+        ) from exc
+
+
 def stage_playwright_runtime(
     destination: Path,
     *,
@@ -107,6 +126,9 @@ def stage_playwright_runtime(
         raise PlaywrightRuntimeStageError(
             "Playwright did not install an executable full Chromium runtime"
         )
+    if "linux" in target:
+        for executable in executables:
+            _normalize_linux_executable_rpath(destination / executable)
     licenses = _browser_licenses(destination)
     if not licenses:
         raise PlaywrightRuntimeStageError(
