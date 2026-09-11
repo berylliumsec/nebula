@@ -539,7 +539,6 @@ export function SessionsPage() {
   const [skillMenuIndex, setSkillMenuIndex] = useState(0);
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [model, setModel] = useState("");
-  const [includeKnowledge, setIncludeKnowledge] = useState(true);
   const [commandRuntimeReady, setCommandRuntimeReady] = useState(false);
   const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
@@ -1085,11 +1084,6 @@ export function SessionsPage() {
   }, [coreState, providerId, refreshProvider, runtimeKind, sessionId]);
 
   useEffect(() => {
-    if (coreState !== "online" || (runtimeKind === "provider" ? !selectedProvider : !selectedHarness)) return;
-    setIncludeKnowledge(canUseKnowledge);
-  }, [canUseKnowledge, coreState, runtimeKind, selectedHarness, selectedProvider]);
-
-  useEffect(() => {
     sessionLoadAbortRef.current?.abort();
     historicalActivityAbortRef.current.forEach((controller) => controller.abort());
     historicalActivityAbortRef.current.clear();
@@ -1442,7 +1436,6 @@ export function SessionsPage() {
     const provider = enabledProviders.find((item) => item.id === id);
     setProviderId(id);
     setModel(provider?.models[0] ?? "");
-    setIncludeKnowledge(Boolean(knowledgeItemCount && (provider?.kind === "local" || provider?.privacy === "local_only" || provider?.permitsSensitiveData)));
   };
 
   const modelDiscoveryInProgress = discoveringProviderId === providerId;
@@ -2255,19 +2248,9 @@ export function SessionsPage() {
         : item));
     };
 
-    const wantsKnowledge = includeKnowledge && knowledgeItemCount > 0;
-    let allowCloudKnowledge = false;
+    const wantsKnowledge = canUseKnowledge;
     const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
-    const knowledgeRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
-    if (wantsKnowledge && !knowledgeRuntimeIsLocal) {
-      if (!knowledgeRuntimePermitsSensitive) {
-        const detail = "This runtime profile is text-only. Enable project/document data in Settings or turn off knowledge retrieval.";
-        setChatError(detail);
-        failQueuedFollowUp(detail);
-        return;
-      }
-      allowCloudKnowledge = true;
-    }
+    const allowCloudKnowledge = wantsKnowledge && !knowledgeRuntimeIsLocal;
 
     const wantsTools = browserControlEnabled || (runtimeKind === "harness"
       ? Boolean(harnessSessionId
@@ -3076,7 +3059,8 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && !selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>Enable installed skills for this harness in Settings.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness && !selectedHarness.capabilities?.skillInvocation && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>This harness did not advertise structured skill invocation.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project and installed skills…" : harnessSkills.length ? "Type $ in the composer to invoke a skill for one turn." : "No project or installed skills were discovered.")}</small></span></div>}
-                {runtimeKind === "provider" ? <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} project + Library item${knowledgeItemCount === 1 ? "" : "s"}` : "Profile is text-only" : "No sources loaded"}</small></span></label><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <><label className="chat-knowledge-toggle"><input type="checkbox" checked={includeKnowledge && canUseKnowledge} disabled={!canUseKnowledge || sending} onChange={(event) => setIncludeKnowledge(event.target.checked)} /><span>Use knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} bounded item${knowledgeItemCount === 1 ? "" : "s"}` : "Harness is text-only" : "No sources loaded"}</small></span></label><div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div></>}
+                <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
+                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <div className="chat-harness-mcp"><span>MCP servers</span>{harnessSessionId ? <small>Frozen in selected session</small> : mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || Boolean(sessionId)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 </div>
               </section>, document.body)}
@@ -3432,7 +3416,7 @@ export function SessionsPage() {
               ["Corrections", activeContextStatus.snapshot.memory.corrections],
               ["Open questions", activeContextStatus.snapshot.memory.openQuestions],
             ] as const).map(([label, items]) => items.length ? <section key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={`${label}-${index}`}>{item.text}</li>)}</ul></section> : null)}<small>{activeContextStatus.snapshot.sourceReferences.length} source reference{activeContextStatus.snapshot.sourceReferences.length === 1 ? "" : "s"} · private reasoning is not stored</small></div></details>}</> : <p>Context status has not been recorded yet.</p>}</section>
-          <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} project · {libraryItems.length} Library</span><span>{providerIsLocal ? "Local retrieval" : includeKnowledge && canUseKnowledge ? "Confirm each cloud request" : "Text only"}</span></div></section>
+          <section><h3>Knowledge boundary</h3><div className="scope-chip-list"><span>{knowledgeSources.length} project · {libraryItems.length} Library</span><span>{canUseKnowledge ? providerIsLocal ? "Local retrieval · automatic" : "Cloud retrieval · automatic" : "Text only"}</span></div></section>
           <section><h3>Execution boundary</h3><div className="empty-state mini"><Braces size={19} /><p>{canUseTools ? "Bash commands run in this session's isolated container; configured approvals pause this response." : commandRuntimeUnavailableReason ?? "Command runtime is unavailable for this session."}</p></div></section>
 
         <details><summary>Technical session details</summary>          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{conversationOpen ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : "None selected"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div>{runtimeKind === "harness" && <div><dt>Model configuration</dt><dd>{model || "Not selected"}{harnessReasoningEffort ? ` · ${harnessReasoningEffort} effort` : ""}{harnessServiceTier ? ` · ${harnessServiceTier} speed` : ""}</dd></div>}{runtimeKind === "harness" && harnessSessionId && <div><dt>Harness session</dt><dd><code title={harnessSessionId}>{harnessSessionId}</code></dd></div>}<div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl></details></>}

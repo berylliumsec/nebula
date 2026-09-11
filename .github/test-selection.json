@@ -1,29 +1,25 @@
 {
-  "reviewed_by": "Codex, harness skill and knowledge-boundary review",
-  "reason": "The change narrows the trusted Codex harness instruction so a disabled Nebula knowledge gateway cannot suppress an explicitly selected installed skill. Selected Python tests cover skill discovery and validation, the exact instruction boundary, disabled turn capability state through transport loss, and enabled knowledge privacy behavior. Selected Workbench browser entries cover skill autocomplete and the structured harness_skill request on desktop Chromium, mobile Chromium, and mobile WebKit.",
-  "exclusions": "No frontend or native source changed, so frontend and native unit selections are empty. The change does not alter source ingestion, gateway authorization, layout, browser-origin behavior, persistence, or reconnect mechanics. The production build and three focused mocked-browser projects were exercised locally. A live external Codex App Server response, non-loopback LAN run, packaged desktop run, and physical-device run are outside this focused merge gate and remain unverified.",
-  "baseline": "7dc0f8ff0d67b45ce47be93ca7b1b149c3aceddb",
+  "reviewed_by": "Codex, automatic knowledge availability review",
+  "reason": "The change removes the per-turn knowledge opt-out so loaded sources are automatically available whenever the selected runtime permits project data. Selected Workbench browser entries cover automatic knowledge status and request shaping on desktop Chromium, mobile Chromium, mobile WebKit, and production UI backed by real Core on a LAN origin.",
+  "exclusions": "No native source changed, so native tests are empty. No standalone frontend unit test exercises the SessionsPage integration; the focused Playwright regressions cover its visible state, outgoing request, and a durable source loaded from real Core. Source ingestion behavior, gateway authorization, reconnect behavior, and browser-origin security are unchanged. A live external Codex App Server response, packaged desktop run, and physical-device run remain outside this focused verification.",
+  "baseline": "f0126429a0df1253e2d695bd18bc1084718d7b4d",
   "python_versions": ["3.12"],
   "expected_tests": {
-    "python": 4,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 4
   },
-  "python": [
-    "tests/v3/test_harnesses.py::test_harness_skill_catalog_is_bounded_and_invocation_is_validated",
-    "tests/v3/test_harnesses.py::test_disabled_nebula_knowledge_does_not_suppress_installed_skills",
-    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
-    "tests/v3/test_harnesses.py::test_harness_chat_enables_direct_knowledge_with_privacy_confirmation"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:stabilization/desktop",
-    "entry:stabilization/mobile-chromium-small",
-    "entry:stabilization/mobile-webkit-small"
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "entry:assistant/assistant-real-desktop"
   ],
-  "change_digest": "865ef80d771cbdf72eb1bb7f01ebbc70793f9d5aa1a615ea3e729e1db60e85fb",
+  "change_digest": "45911467fefc1e93e6badc889efe4fd7151553f003386f9490e73dc03f13cb22",
   "python_browser": false,
   "python_node": false
 }

@@ -5804,6 +5804,63 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
 });
 
+test("assistant upgrade makes loaded knowledge sources available automatically", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "automatic-knowledge-provider",
+    name: "Automatic knowledge provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["knowledge-model"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: false },
+    metadata: { default_model: "knowledge-model" },
+  };
+  let sent: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [provider] });
+    } else if (path.endsWith("/knowledge") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "automatic-source",
+        engagement_id: "scratch-project",
+        name: "operator-notes.md",
+        source_type: "text/markdown",
+        status: "ready",
+        citation: "Operator notes",
+        document_count: 1,
+        metadata: {},
+      }] });
+    } else if (path.endsWith("/chat/completions")) {
+      sent = route.request().postDataJSON();
+      const frames = [
+        { type: "started", provider_id: provider.id, model: "knowledge-model", session_id: "automatic-knowledge-chat", turn_id: "automatic-knowledge-turn" },
+        { type: "done", provider_id: provider.id, model: "knowledge-model", session_id: "automatic-knowledge-chat", turn_id: "automatic-knowledge-turn", message: { id: "automatic-answer", role: "assistant", content: "Knowledge was available." }, usage: { input_tokens: 4, output_tokens: 3, total_tokens: 7 }, finish_reason: "stop", citations: [] },
+      ];
+      await route.fulfill({ contentType: "text/event-stream", body: frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n" });
+    } else {
+      await route.fallback();
+    }
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Assistant settings" });
+  await expect(settings.getByRole("checkbox", { name: /Use knowledge/ })).toHaveCount(0);
+  await expect(settings.getByRole("status").filter({ hasText: "Knowledge1 source available automatically" })).toBeVisible();
+  await page.getByRole("button", { name: "Close assistant settings", exact: true }).click();
+  await page.getByPlaceholder("Ask about this project…").fill("Use the project notes.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect.poll(() => sent).toMatchObject({ include_knowledge: true, allow_cloud_knowledge: false });
+  await expect(page.getByText("Knowledge was available.", { exact: true }).first()).toBeVisible();
+});
+
 test("browser Assistant approves its requested upload after a device file is staged", async ({ page }) => {
   test.setTimeout(60000);
   const files: Array<{ reference: string; filename: string; size: number; media_type: string }> = [];
