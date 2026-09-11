@@ -2474,3 +2474,125 @@ def test_codex_stdio_accepts_large_thread_response(tmp_path):
             await rpc.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "kind,key",
+    [(HarnessKind.CODEX_APP_SERVER, "CODEX_HOME"), (HarnessKind.GROK_ACP, "GROK_HOME")],
+)
+def test_account_homes_isolate_spawn_without_changing_workspace(
+    tmp_path, monkeypatch, kind, key
+):
+    from nebula.v3.harnesses import _harness_environment
+
+    observed = []
+
+    async def create_process(*argv, **kwargs):
+        observed.append((argv, kwargs))
+        return SimpleNamespace(stdin=None, stdout=None, stderr=None)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(_AcpRpc, "start", lambda self: asyncio.sleep(0))
+    monkeypatch.setattr(_CodexRpc, "start", lambda self: asyncio.sleep(0))
+    monkeypatch.setenv("HOME", str(tmp_path / "host"))
+    monkeypatch.setenv("CODEX_HOME", "/ambient-codex")
+    monkeypatch.setenv("GROK_HOME", "/ambient-grok")
+    executable = tmp_path / "inert-binary"
+    executable.touch()
+
+    async def scenario():
+        for name in ("personal", "work"):
+            home = tmp_path / name
+            home.mkdir()
+            profile = HarnessProfile(
+                name=name,
+                kind=kind,
+                executable=str(executable),
+                home_directory=str(home),
+            )
+            if kind == HarnessKind.CODEX_APP_SERVER:
+                await CodexAppServerAdapter()._connect(
+                    profile, CredentialStore(), (), tmp_path
+                )
+            else:
+                await GrokAcpAdapter()._connect(profile, tmp_path)
+        default = HarnessProfile(name="default", kind=kind, executable=str(executable))
+        assert key not in _harness_environment(default)
+
+    asyncio.run(scenario())
+    assert [kwargs["env"][key] for _, kwargs in observed] == [
+        str(tmp_path / "personal"),
+        str(tmp_path / "work"),
+    ]
+    for argv, kwargs in observed:
+        assert kwargs["env"]["HOME"] == str(tmp_path / "host")
+        assert kwargs["cwd"] == str(tmp_path)
+        assert ("GROK_HOME" if key == "CODEX_HOME" else "CODEX_HOME") not in kwargs[
+            "env"
+        ]
+        if kind == HarnessKind.CODEX_APP_SERVER:
+            assert 'cli_auth_credentials_store="file"' in argv
+
+
+def test_missing_account_home_fails_before_launch(tmp_path):
+    from nebula.v3.harnesses import _harness_environment
+
+    profile = HarnessProfile(
+        name="missing",
+        kind=HarnessKind.CODEX_APP_SERVER,
+        executable="/bin/true",
+        home_directory=str(tmp_path / "missing"),
+    )
+    with pytest.raises(HarnessConfigurationError, match="Choose or create"):
+        _harness_environment(profile)
+
+
+def test_grok_catalog_uses_selected_account_for_command_and_cache(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.harnesses import _grok_model_catalog
+
+    observed = []
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            return b"* grok-build\n", b""
+
+    async def create_process(*argv, **kwargs):
+        observed.append(kwargs["env"]["GROK_HOME"])
+        return Process()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+
+    async def scenario():
+        for account in ("personal", "work"):
+            home = tmp_path / account
+            home.mkdir()
+            (home / "models_cache.json").write_text(
+                json.dumps(
+                    {
+                        "models": {
+                            "grok-build": {
+                                "info": {
+                                    "reasoning_efforts": [{"id": account}],
+                                    "reasoning_effort": account,
+                                }
+                            }
+                        }
+                    }
+                )
+            )
+            profile = HarnessProfile(
+                name=account,
+                kind=HarnessKind.GROK_ACP,
+                executable="/bin/true",
+                home_directory=str(home),
+            )
+            models, options = await _grok_model_catalog(profile)
+            assert models == ["grok-build"]
+            assert options[0].default_reasoning_effort == account
+
+    asyncio.run(scenario())
+    assert observed == [str(tmp_path / name) for name in ("personal", "work")]

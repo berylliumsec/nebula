@@ -2904,3 +2904,84 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     await testInfo.attach("assistant-reliability-screen", {body: await page.screenshot(), contentType: "image/png"});
   } finally {await core.stop();}
 });
+
+reliabilityTest("assistant upgrade account homes persist and switch without losing chat", async ({page}, info) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Account homes"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Account homes acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    const ids: string[] = [];
+    for (const vendor of ["Codex", "Grok"] as const) {
+      await page.goto(`${core.origin}/settings#harness-settings`);
+      await page.getByRole("button", {name: `Add ${vendor}`, exact: true}).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByRole("textbox", {name: "Name", exact: true}).fill(`${vendor} Work`);
+      await dialog.getByRole("textbox", {name: vendor === "Grok" ? "Absolute Grok executable path" : "Absolute executable path", exact: true}).fill("/bin/true");
+      await dialog.getByText("Account folder", {exact: true}).click();
+      const home = path.join(core.dataDir, vendor);
+      await mkdir(home);
+      await dialog.getByLabel("Account home folder", {exact: true}).fill(home);
+      await dialog.getByRole("button", {name: "Browse folders", exact: true}).click();
+      const picker = page.getByRole("dialog", {name: "Choose account folder"});
+      await expect(picker).toContainText("sign-in and settings");
+      await picker.getByRole("button", {name: "Select folder", exact: true}).click();
+      await expect(dialog.locator("pre")).toContainText(`${vendor.toUpperCase()}_HOME='${home}'`);
+      const a11y = await new AxeBuilder({page}).include(".provider-dialog").withTags(["wcag2a", "wcag2aa"]).analyze();
+      expect(a11y.violations).toEqual([]);
+      expect(await dialog.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+      await page.screenshot({path: info.outputPath(`${vendor.toLowerCase()}-account-settings.png`)});
+      await dialog.getByRole("button", {name: "Save harness"}).click();
+      await expect(page.getByRole("heading", {name: `${vendor} Work`, exact: true})).toBeVisible();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      const profiles = await (await core.api.get("harnesses")).json();
+      const saved = profiles.find((p: {name: string}) => p.name === `${vendor} Work`);
+      expect(saved.home_directory).toBe(home);
+      ids.push(saved.id);
+      await page.reload();
+      await page.getByRole("button", {name: `Edit ${vendor} Work`, exact: true}).click();
+      await expect(page.getByLabel("Account home folder", {exact: true})).toHaveValue(home);
+      await page.getByRole("button", {name: "Close harness dialog"}).click();
+    }
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    let chatId: string | null = null;
+    for (const id of ids) {
+      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await page.getByLabel("Chat harness", {exact: true}).selectOption(id);
+      await page.getByRole("button", {name: "Close assistant settings"}).click();
+      await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill(`Remember account ${id}`);
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(ids.indexOf(id) + 1, {timeout: 20_000});
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS", {timeout: 20_000});
+      if (chatId) expect(new URL(page.url()).searchParams.get("session")).toBe(chatId);
+      chatId = new URL(page.url()).searchParams.get("session");
+      const mutation = await core.api.patch(`harnesses/${id}`, {data: {changes: {home_directory: path.join(core.dataDir, "other")}}});
+      expect(mutation.status()).toBe(422);
+      expect(await mutation.text()).toContain("separate harness profile");
+    }
+    await core.restart();
+    await page.reload();
+    await expect(page.locator(".chat-message.operator")).toHaveCount(2);
+    await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Keep this for later");
+    const queue = page.getByRole("button", {name: "Queue for later", exact: true});
+    await expect(queue).toHaveAttribute("title", "Queue for later");
+    await expect(queue).toHaveText("");
+    await expect(queue.locator("svg")).toBeVisible();
+    await queue.focus();
+    await expect(queue).toBeFocused();
+    const box = await queue.boundingBox();
+    expect(box?.width).toBeGreaterThanOrEqual(44);
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    await page.screenshot({path: info.outputPath("queue-icon.png")});
+    await queue.click();
+    await expect(page.getByRole("textbox", {name: "Message the analyst assistant", exact: true})).toHaveValue("");
+    const evidence = JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), chatId, ids, vendor: "inert fixtures; no live login"});
+    await writeFile(info.outputPath("account-home-evidence.json"), evidence);
+    await info.attach("account-home-evidence", {body: evidence, contentType: "application/json"});
+    await info.attach("account-home-screen", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await core.stop();}
+});

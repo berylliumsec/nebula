@@ -19,6 +19,72 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "harness-accounts": [
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-desktop",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-compact",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
+    "runtime": "real-core",
+    "shard": "1/1"
+  }
+],
     "assistant-reliability": [
   {
     "area": "assistant-reliability",
