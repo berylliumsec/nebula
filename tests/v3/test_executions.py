@@ -185,7 +185,7 @@ def _fixture(tmp_path):
     return store, artifacts, engagement, policy, runner, service, request
 
 
-def test_run_capability_is_hidden_until_offline_and_scoped_paths_are_ready(tmp_path):
+def test_run_capability_requires_unrestricted_network_runtime(tmp_path):
     _store, _artifacts, engagement, _policy, _runner, service, _request = _fixture(
         tmp_path
     )
@@ -202,6 +202,7 @@ def test_run_capability_is_hidden_until_offline_and_scoped_paths_are_ready(tmp_p
 
     assert any(runtime.offline for runtime in capabilities.runtimes)
     assert all(not runtime.scoped_network for runtime in capabilities.runtimes)
+    assert all(not runtime.unrestricted_network for runtime in capabilities.runtimes)
     assert capabilities.ready is False
 
 
@@ -231,6 +232,45 @@ async def test_empty_starter_scope_allows_offline_review_but_denies_network(tmp_
     assert offline.allowed is True
     assert networked.allowed is False
     assert networked.error_code == "policy_denied"
+
+
+@async_test
+async def test_reviewed_execution_runs_with_unrestricted_network_without_target(
+    tmp_path,
+):
+    _store, _artifacts, _engagement, _policy, runner, service, request = _fixture(
+        tmp_path
+    )
+    unrestricted = request.model_copy(
+        update={
+            "network": ExecutionNetworkRequest(
+                mode=ExecutionNetworkMode.UNRESTRICTED,
+            )
+        }
+    )
+
+    preview = await service.preflight(unrestricted)
+
+    assert preview.allowed is True
+    assert preview.network is not None
+    assert preview.network.mode == ExecutionNetworkMode.UNRESTRICTED
+    assert preview.network.target is None
+    assert preview.network.ports == []
+    assert preview.preview_token is not None
+    assert preview.preview_fingerprint is not None
+    started = await service.start(
+        ExecutionStartRequest(
+            **unrestricted.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="unrestricted-network",
+        )
+    )
+    await _await_terminal(service, started.id)
+
+    sandbox_request = runner.requests[0][0]
+    assert sandbox_request.network == SandboxNetwork.UNRESTRICTED
+    assert sandbox_request.egress_rules == []
 
 
 async def _await_terminal(

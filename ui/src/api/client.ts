@@ -1633,6 +1633,7 @@ interface WireExecutionCapabilities extends JsonObject {
     aliases: string[];
     offline: boolean;
     scoped_network: boolean;
+    unrestricted_network: boolean;
     detail?: string | null;
   }>;
   limits: WireExecutionLimits;
@@ -6815,6 +6816,7 @@ export class ApiClient {
         aliases: runtime.aliases,
         offline: runtime.offline,
         scopedNetwork: runtime.scoped_network,
+        unrestrictedNetwork: runtime.unrestricted_network,
         detail: runtime.detail ?? undefined,
       })),
       limits: mapExecutionLimits(value.limits),

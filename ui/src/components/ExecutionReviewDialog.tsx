@@ -23,14 +23,6 @@ interface ExecutionReviewDialogProps {
   onStarted: (execution: OperatorExecution) => void;
 }
 
-function parsePorts(value: string): number[] | undefined {
-  const fields = value.split(",").map((item) => item.trim()).filter(Boolean);
-  if (!fields.length) return undefined;
-  const ports = fields.map(Number);
-  if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65_535)) return undefined;
-  return [...new Set(ports)].sort((left, right) => left - right);
-}
-
 export function ExecutionReviewDialog({
   api,
   engagementId,
@@ -39,32 +31,23 @@ export function ExecutionReviewDialog({
   onClose,
   onStarted,
 }: ExecutionReviewDialogProps) {
-  const [mode, setMode] = useState<ExecutionNetworkRequest["mode"]>("none");
-  const [target, setTarget] = useState("");
-  const [portText, setPortText] = useState("443");
+  const mode: ExecutionNetworkRequest["mode"] = "unrestricted";
   const [preview, setPreview] = useState<ExecutionPreflight>();
   const [loading, setLoading] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string>();
   const idempotencyKey = useRef(randomId());
   const runtimeCapability = capabilities?.runtimes.find((item) => item.language === candidate.language);
-  const ports = parsePorts(portText);
-  const network: ExecutionNetworkRequest = mode === "none"
-    ? { mode: "none", ports: [] }
-    : { mode: "scoped", target: target.trim() || undefined, ports: ports ?? [] };
+  const network: ExecutionNetworkRequest = { mode, ports: [] };
   const request = useMemo<ExecutionRequest>(() => ({
     engagementId,
     language: candidate.declaredLanguage,
     source: candidate.source,
     origin: candidate.origin,
     network,
-  }), [candidate, engagementId, mode, network.target, portText]);
+  }), [candidate, engagementId]);
 
   const review = async (signal?: AbortSignal) => {
-    if (mode === "scoped" && (!target.trim() || !ports?.length)) {
-      setError("Scoped network requires one explicit target and at least one valid port.");
-      return;
-    }
     setLoading(true);
     setError(undefined);
     setPreview(undefined);
@@ -84,14 +67,9 @@ export function ExecutionReviewDialog({
     const controller = new AbortController();
     void review(controller.signal);
     return () => controller.abort();
-    // A newly mounted dialog always begins with an offline review.
+    // A newly mounted dialog reviews unrestricted container networking.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidate, engagementId]);
-
-  useEffect(() => {
-    setPreview(undefined);
-    setError(undefined);
-  }, [mode, target, portText]);
 
   const start = async () => {
     if (!preview?.allowed || !preview.previewToken || !preview.previewFingerprint || starting) return;
@@ -127,11 +105,8 @@ export function ExecutionReviewDialog({
         </section>
         <section className="execution-network-review">
           <h3>Network</h3>
-          <div className="segmented-control" role="radiogroup" aria-label="Execution network mode">
-            <label><input type="radio" name="execution-network" checked={mode === "none"} disabled={runtimeCapability?.offline === false} onChange={() => setMode("none")} /> Offline</label>
-            <label><input type="radio" name="execution-network" checked={mode === "scoped"} disabled={runtimeCapability?.scopedNetwork !== true} onChange={() => setMode("scoped")} /> One scoped target</label>
-          </div>
-          {mode === "scoped" && <div className="execution-network-fields"><label>Approved target<input value={target} placeholder="host.example or 192.0.2.10" onChange={(event) => setTarget(event.target.value)} /></label><label>Ports<input value={portText} placeholder="443, 8443" onChange={(event) => setPortText(event.target.value)} /></label></div>}
+          <p>Unrestricted outbound access from this disposable container. Review the exact source before running.</p>
+          {runtimeCapability?.unrestrictedNetwork === false && <p role="status">This runtime does not support networked execution.</p>}
         </section>
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         {preview?.allowed && preview.runtime && preview.network && (
@@ -145,7 +120,7 @@ export function ExecutionReviewDialog({
               <div><dt>Runner</dt><dd>{preview.runtime.runnerRuntime} · {preview.runtime.runnerIsolation} · {preview.runtime.runnerProfileId} r{preview.runtime.runnerProfileRevision}<br /><code>{preview.runtime.runnerExecutable}</code> · {preview.runtime.runnerPlatform}{preview.runtime.runnerContext ? ` · context ${preview.runtime.runnerContext}` : ""}{preview.runtime.runnerSocket ? ` · ${preview.runtime.runnerSocket}` : ""}</dd></div>
               <div><dt>Workspace</dt><dd><code>{preview.workspace}</code> · engagement-persistent</dd></div>
               <div><dt>Limits</dt><dd>{preview.limits.cpuCount} CPU · {preview.limits.memoryMb} MiB · {preview.limits.pids} PIDs · {preview.limits.timeoutSeconds}s · {preview.limits.outputBytesPerStream.toLocaleString()} bytes/stream</dd></div>
-              <div><dt>Network</dt><dd>{preview.network.mode === "none" ? "Offline" : `${preview.network.target} · ports ${preview.network.ports.join(", ")} · ${preview.network.resolvedAddresses.join(", ")}`}</dd></div>
+              <div><dt>Network</dt><dd>{preview.network.mode === "none" ? "Offline" : preview.network.mode === "unrestricted" ? "Unrestricted outbound" : `${preview.network.target} · ports ${preview.network.ports.join(", ")} · ${preview.network.resolvedAddresses.join(", ")}`}</dd></div>
               <div><dt>Source SHA-256</dt><dd><code>{preview.sourceSha256}</code></dd></div>
             </dl>
           </section>

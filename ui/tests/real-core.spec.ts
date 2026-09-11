@@ -1194,7 +1194,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
   }
 });
 
-test("production Code reads real Git changes and hands mutations to Nebula Terminal", async ({ page }) => {
+test("project execution mode uses production Code, real Git changes, and reviewed unrestricted commands", async ({ page }) => {
   test.setTimeout(60_000);
   const core = await startRealCore();
   const projectFolder = await mkdtemp(path.join(tmpdir(), "nebula-source-control-project-"));
@@ -1249,6 +1249,10 @@ test("production Code reads real Git changes and hands mutations to Nebula Termi
     await tasks.getByRole("option", { name: /make: lint/ }).click();
     const executionReview = page.getByRole("dialog", { name: "Review exact code execution" });
     await expect(executionReview.locator(".execution-source-review")).toContainText("make lint");
+    await expect(executionReview.getByText("Unrestricted outbound access")).toBeVisible();
+    await expect(executionReview.getByText("Offline", { exact: true })).toHaveCount(0);
+    await expect(executionReview.getByText("One scoped target", { exact: true })).toHaveCount(0);
+    await expect(executionReview.getByPlaceholder("host.example or 192.0.2.10")).toHaveCount(0);
     await executionReview.getByRole("button", { name: "Close execution review" }).click();
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();

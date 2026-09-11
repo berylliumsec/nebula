@@ -44,6 +44,12 @@ const completed: OperatorExecution = {
   exitCode: 0,
 };
 
+const unrestricted: OperatorExecution = {
+  ...completed,
+  id: "execution-unrestricted",
+  network: { mode: "unrestricted", ports: [], resolvedAddresses: [] },
+};
+
 function renderHistory(api: Partial<ApiClient>) {
   return render(<ExecutionHistory
     api={api as ApiClient}
@@ -59,6 +65,16 @@ afterEach(() => {
 });
 
 describe("ExecutionHistory active updates", () => {
+  it("labels unrestricted execution history without an empty target", async () => {
+    renderHistory({
+      listExecutions: vi.fn().mockResolvedValue({ items: [unrestricted], total: 1 }),
+      executionOutput: vi.fn().mockResolvedValue({ text: "", totalBytes: 0, nextOffset: 0 }),
+    });
+    await act(async () => { await Promise.resolve(); });
+    fireEvent.click(screen.getByRole("button", { name: /bash · completed/i }));
+    expect(screen.getByText("Unrestricted outbound")).toBeVisible();
+  });
+
   it("polls active work and loads selected output as soon as it completes", async () => {
     vi.useFakeTimers();
     const listExecutions = vi.fn()

@@ -579,6 +579,7 @@ class OperatorExecutionStatus(StringEnum):
 class ExecutionNetworkMode(StringEnum):
     NONE = "none"
     SCOPED = "scoped"
+    UNRESTRICTED = "unrestricted"
 
 
 class AutomationApprovalPolicy(StringEnum):
@@ -3787,7 +3788,7 @@ class ExecutionNetworkSnapshot(NebulaModel):
         if not scoped and any(
             (self.target, self.ports, self.resolved_addresses, self.scope_policy_id)
         ):
-            raise ValueError("offline execution cannot contain network scope")
+            raise ValueError("unscoped execution cannot contain network scope")
         return self
 
 

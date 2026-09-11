@@ -117,7 +117,7 @@ def terminal_prompt_command(nonce: str) -> str:
         '&& [ "${HISTCMD:-0}" != "${__nebula_last_histcmd:-0}" ]; then '
         "printf '\\033]633;NebulaCommandEnd;%s;%s;%s;%s\\007' "
         f'\'{nonce}\' "${{HISTCMD:-0}}" "$__nebula_exit" '
-        '"$__nebula_classifier_ok"; fi; '
+        "\"$__nebula_classifier_ok\"; printf '\\r\\n'; fi; "
         '__nebula_last_histcmd="${HISTCMD:-0}"; '
         "__nebula_history_ready=1; "
         "__nebula_debug() { "

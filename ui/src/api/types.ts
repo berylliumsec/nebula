@@ -2190,7 +2190,7 @@ export interface ExecutionOrigin {
 }
 
 export interface ExecutionNetworkRequest {
-  mode: "none" | "scoped";
+  mode: "none" | "scoped" | "unrestricted";
   target?: string;
   ports: number[];
 }
@@ -2220,7 +2220,7 @@ export interface ExecutionRuntimeSnapshot {
 }
 
 export interface ExecutionNetworkSnapshot {
-  mode: "none" | "scoped";
+  mode: "none" | "scoped" | "unrestricted";
   target?: string;
   ports: number[];
   resolvedAddresses: string[];
@@ -2257,6 +2257,7 @@ export interface ExecutionCapability {
   aliases: string[];
   offline: boolean;
   scopedNetwork: boolean;
+  unrestrictedNetwork: boolean;
   detail?: string;
 }
 

@@ -1671,6 +1671,35 @@ def test_fixed_bash_prompt_hook_emits_completed_command_markers_only():
     any(shutil.which(program) is None for program in ("bash", "base64", "tr")),
     reason="bash, base64, and tr are required for shell integration coverage",
 )
+def test_fixed_bash_prompt_starts_on_new_line_after_output_without_newline():
+    environment = {
+        **os.environ,
+        "HISTFILE": "/dev/null",
+        "PS0": TERMINAL_PS0,
+        "PROMPT_COMMAND": TERMINAL_PROMPT_COMMAND,
+        "PS1": "bash-test# ",
+    }
+    completed = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-i"],
+        input=b"printf 'response-without-newline'\nexit\n",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=environment,
+        check=False,
+        timeout=10,
+    )
+    parser = Osc633CommandParser(nonce=TERMINAL_AUDIT_PREVIEW_NONCE)
+    parsed = parser.feed(completed.stdout)
+    tail = parser.flush()
+    visible = parsed.passthrough + tail.passthrough
+
+    assert b"response-without-newline\r\nbash-test# " in visible
+
+
+@pytest.mark.skipif(
+    any(shutil.which(program) is None for program in ("bash", "base64", "tr")),
+    reason="bash, base64, and tr are required for shell integration coverage",
+)
 def test_bash_debug_frames_cover_aliases_functions_and_executed_branches_only():
     environment = {
         **os.environ,
