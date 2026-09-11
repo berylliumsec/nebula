@@ -3557,3 +3557,113 @@ def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
     assert "Remember the first message" in next_turn.prompt
     assert store.get(HarnessSession, original.id) == original
     assert len(runtime._chat_messages(engagement.id, chat.id)) == 2
+
+
+@pytest.mark.parametrize("kind", [HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP])
+def test_account_home_skill_discovery_does_not_cross_accounts(tmp_path, kind):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    for name in ("personal", "work"):
+        home = tmp_path / name
+        skill = home / "skills" / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(name)
+        saved = store.create(
+            HarnessProfile(
+                name=name,
+                kind=kind,
+                executable="/bin/true",
+                home_directory=str(home),
+                capabilities=HarnessCapabilities(skill_invocation=True),
+                native_capabilities=HarnessNativeCapabilities(skills=True),
+            )
+        )
+        assert [
+            item.name
+            for item in runtime.available_skills(
+                engagement_id=engagement.id, profile_id=saved.id
+            )
+        ] == [name]
+
+
+@pytest.mark.parametrize("method", ["patch", "put"])
+def test_account_home_api_persists_invalidates_health_and_preserves_used_identity(
+    tmp_path, method
+):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": HarnessCapabilities(
+                checked_at=utc_now(),
+                models=["old-account-model"],
+                detail="Previously checked",
+            )
+        },
+        expected_revision=profile.revision,
+    )
+    app = create_app(store, auth_token="test-token", harness_runtime_service=runtime)
+    with TestClient(app) as client:
+        headers = {"Authorization": "Bearer test-token"}
+        url = f"/api/v1/harnesses/{profile.id}"
+
+        def change(home):
+            current = client.get(url, headers=headers).json()
+            if method == "patch":
+                return client.patch(
+                    url,
+                    headers=headers,
+                    json={
+                        "changes": {"home_directory": home},
+                        "expected_revision": current["revision"],
+                    },
+                )
+            return client.put(
+                url, headers=headers, json={**current, "home_directory": home}
+            )
+
+        response = change(str(tmp_path / "personal"))
+        assert response.status_code == 200, response.text
+        assert response.json()["capabilities"]["checked_at"] is None
+        assert response.json()["capabilities"]["models"] == []
+        assert client.get(url, headers=headers).json()["home_directory"] == str(
+            tmp_path / "personal"
+        )
+        store.create(
+            HarnessSession(
+                engagement_id=engagement.id,
+                harness_profile_id=profile.id,
+                model="test-model",
+            )
+        )
+        rejected = change(str(tmp_path / "work"))
+        assert rejected.status_code == 422, rejected.text
+        assert "separate harness profile" in rejected.text
+        assert client.get(url, headers=headers).json()["home_directory"] == str(
+            tmp_path / "personal"
+        )
+
+
+@pytest.mark.parametrize(
+    "home", ["relative", "~/account", "/a/../b", "/bad\npath", "/bad\x00path"]
+)
+def test_account_home_requires_unambiguous_absolute_path(home):
+    with pytest.raises(ValueError, match="account home"):
+        HarnessProfile(
+            name="invalid",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            home_directory=home,
+        )
+
+
+def test_remote_endpoint_rejects_local_account_home():
+    with pytest.raises(ValueError, match="managed Codex and Grok"):
+        HarnessProfile(
+            name="remote",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            connection_mode="endpoint",
+            transport="unix",
+            endpoint="unix:///tmp/test.sock",
+            home_directory="/tmp/account",
+        )

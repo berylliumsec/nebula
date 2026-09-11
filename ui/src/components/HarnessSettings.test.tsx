@@ -66,3 +66,25 @@ it("shows harnesses while the MCP catalog is still pending", async () => {
   render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
   expect(await screen.findByRole("heading", {name: profile.name})).toBeVisible();
 });
+
+for (const vendor of ["Grok", "Codex"] as const) {
+  it(`saves a separate ${vendor} account home and shows its host login command`, async () => {
+    api.listHarnesses.mockResolvedValue([]);
+    api.listMcpServers.mockResolvedValue([]);
+    api.createHarness.mockResolvedValue({...profile, homeDirectory: "/accounts/work account"});
+    api.checkHarness.mockResolvedValue({healthy: true});
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", {name: `Add ${vendor}`}));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", {name: "Name"}), `${vendor} Work`);
+    await user.type(within(dialog).getByRole("textbox", {name: vendor === "Grok" ? "Absolute Grok executable path" : "Absolute executable path"}), "/bin/inert");
+    await user.click(within(dialog).getByText("Account folder", {exact: true}));
+    await user.type(within(dialog).getByRole("textbox", {name: "Account home folder"}), "/accounts/work account");
+    expect(within(dialog).getByRole("button", {name: "Browse folders"})).toBeVisible();
+    expect(dialog.querySelector("pre")?.textContent).toContain(`${vendor === "Grok" ? "GROK_HOME" : "CODEX_HOME"}='/accounts/work account'`);
+    if (vendor === "Codex") expect(dialog.querySelector("pre")?.textContent).toContain('cli_auth_credentials_store="file"');
+    await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+    await waitFor(() => expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({home_directory: "/accounts/work account", name: `${vendor} Work`})));
+  });
+}

@@ -1794,6 +1794,7 @@ export interface HarnessProfile {
   connectionMode: "spawn" | "endpoint";
   transport: "stdio" | "unix" | "websocket";
   executable?: string;
+  homeDirectory?: string;
   endpoint?: string;
   authMode: "existing_session" | "secret_ref" | "endpoint_bearer";
   secretRef?: string;

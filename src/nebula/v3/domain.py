@@ -2737,6 +2737,7 @@ class HarnessProfile(Entity):
     connection_mode: HarnessConnectionMode = HarnessConnectionMode.SPAWN
     transport: HarnessTransport = HarnessTransport.STDIO
     executable: str | None = Field(default=None, max_length=4096)
+    home_directory: str | None = Field(default=None, max_length=4096)
     endpoint: str | None = Field(default=None, max_length=4096)
     auth_mode: HarnessAuthMode = HarnessAuthMode.EXISTING_SESSION
     secret_ref: str | None = None
@@ -2756,6 +2757,21 @@ class HarnessProfile(Entity):
             raise ValueError("harness executable must be an absolute path")
         return value
 
+    @field_validator("home_directory")
+    @classmethod
+    def home_is_absolute(cls, value: str | None) -> str | None:
+        if value is not None:
+            if (
+                not value.startswith("/")
+                or "\x00" in value
+                or any(c in value for c in "\r\n")
+            ):
+                raise ValueError("account home must be an absolute host directory")
+            if ".." in value.split("/"):
+                raise ValueError("account home cannot contain parent traversal")
+            value = value.rstrip("/") or "/"
+        return value
+
     @field_validator("secret_ref")
     @classmethod
     def secret_is_opaque(cls, value: str | None) -> str | None:
@@ -2768,6 +2784,13 @@ class HarnessProfile(Entity):
 
     @model_validator(mode="after")
     def connection_is_supported(self) -> "HarnessProfile":
+        if self.home_directory and (
+            self.connection_mode != HarnessConnectionMode.SPAWN
+            or self.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}
+        ):
+            raise ValueError(
+                "account home is supported only for managed Codex and Grok processes"
+            )
         native = self.native_capabilities
         if self.kind == HarnessKind.GROK_ACP:
             if self.connection_mode != HarnessConnectionMode.SPAWN:

@@ -1151,6 +1151,28 @@ def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, st
     return keep
 
 
+def _harness_home(profile: HarnessProfile) -> Path:
+    if profile.home_directory:
+        return Path(profile.home_directory)
+    return Path.home() / (".grok" if profile.kind == HarnessKind.GROK_ACP else ".codex")
+
+
+def _harness_environment(
+    profile: HarnessProfile, extra: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    env = _minimal_environment(extra)
+    if profile.home_directory:
+        home = _harness_home(profile)
+        if not home.is_dir():
+            raise HarnessConfigurationError(
+                "Account folder is unavailable on the Nebula host. "
+                "Choose or create it in the harness settings, then retry Check."
+            )
+        key = "GROK_HOME" if profile.kind == HarnessKind.GROK_ACP else "CODEX_HOME"
+        env[key] = str(home)
+    return env
+
+
 def _scrubbed_claude_environment(
     extra: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
@@ -2847,6 +2869,8 @@ class CodexAppServerAdapter(HarnessAdapter):
                     credentials, profile.secret_ref
                 )
             argv.extend(_codex_mcp_overrides(selected_mcp_config, child_env))
+            if profile.home_directory:
+                argv.extend(["-c", 'cli_auth_credentials_store="file"'])
             argv.extend(["--strict-config", "--listen", "stdio://"])
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -2854,7 +2878,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
-                env=_minimal_environment(child_env),
+                env=_harness_environment(profile, child_env),
                 limit=MAX_MCP_MESSAGE_BYTES,
             )
             rpc = _CodexRpc(process=process)
@@ -4381,7 +4405,7 @@ async def _grok_model_catalog(
             "models",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_minimal_environment(),
+            env=_harness_environment(profile),
             limit=1_000_000,
         )
         try:
@@ -4403,7 +4427,7 @@ async def _grok_model_catalog(
     if not models and profile.default_model:
         models = [profile.default_model]
 
-    cache_path = Path.home() / ".grok" / "models_cache.json"
+    cache_path = _harness_home(profile) / "models_cache.json"
     try:
         cache_size = cache_path.stat().st_size
         if cache_size > 2_000_000:
@@ -4505,7 +4529,7 @@ class GrokAcpAdapter(HarnessAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
-            env=_minimal_environment(),
+            env=_harness_environment(profile),
             limit=MAX_MCP_MESSAGE_BYTES,
         )
         rpc = _AcpRpc(process=process)
@@ -5499,9 +5523,9 @@ class HarnessRuntimeService:
             (workspace / "skills", "project"),
         ]
         if profile.kind == HarnessKind.CODEX_APP_SERVER:
-            roots.append((Path.home() / ".codex" / "skills", "installed"))
+            roots.append((_harness_home(profile) / "skills", "installed"))
         elif profile.kind == HarnessKind.GROK_ACP:
-            grok_root = Path.home() / ".grok"
+            grok_root = _harness_home(profile)
             roots.extend(
                 [
                     (grok_root / "skills", "installed"),

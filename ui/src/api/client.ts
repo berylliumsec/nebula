@@ -1369,6 +1369,7 @@ interface WireHarnessProfile extends WireEntity {
   connection_mode: HarnessProfile["connectionMode"];
   transport: HarnessProfile["transport"];
   executable?: string | null;
+  home_directory?: string | null;
   endpoint?: string | null;
   auth_mode: HarnessProfile["authMode"];
   secret_ref?: string | null;
@@ -3122,6 +3123,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     connectionMode: value.connection_mode,
     transport: value.transport,
     executable: value.executable ?? undefined,
+    homeDirectory: value.home_directory ?? undefined,
     endpoint: value.endpoint ?? undefined,
     authMode: value.auth_mode,
     secretRef: value.secret_ref ?? undefined,

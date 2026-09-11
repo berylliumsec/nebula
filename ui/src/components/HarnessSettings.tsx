@@ -4,7 +4,10 @@ import type { HarnessNativeCapabilities, HarnessProfile, McpServerProfile } from
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
+import { HostFolderPicker } from "./HostFolderPicker";
 import { ModalSurface } from "./DialogSystem";
+
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 
 const approvalOptions = ["risk_based", "ask", "allow", "deny"] as const;
 
@@ -21,6 +24,7 @@ export function HarnessSettings() {
   const [connectionMode, setConnectionMode] = useState<HarnessProfile["connectionMode"]>("spawn");
   const [transport, setTransport] = useState<HarnessProfile["transport"]>("stdio");
   const [executable, setExecutable] = useState("");
+  const [homeDirectory, setHomeDirectory] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
   const [harnessAuthMode, setHarnessAuthMode] = useState<HarnessProfile["authMode"]>("existing_session");
@@ -104,6 +108,7 @@ export function HarnessSettings() {
     setTransport(profile?.transport ?? "stdio");
     setExecutable(profile?.executable ?? "");
     setEndpoint(profile?.endpoint ?? "");
+    setHomeDirectory(profile?.homeDirectory ?? "");
     setModel(profile?.defaultModel ?? (nextKind === "grok_acp" ? "grok-build" : ""));
     setHarnessAuthMode(profile?.authMode ?? "existing_session");
     setHarnessSecret("");
@@ -139,6 +144,7 @@ export function HarnessSettings() {
         connection_mode: connectionMode,
         transport,
         executable: connectionMode === "spawn" && executable.trim() ? executable.trim() : null,
+        home_directory: connectionMode === "spawn" ? homeDirectory.trim() || null : null,
         endpoint: connectionMode === "endpoint" ? endpoint.trim() : null,
         auth_mode: harnessAuthMode,
         secret_ref: harnessAuthMode === "existing_session" ? null : secretRef,
@@ -290,7 +296,7 @@ export function HarnessSettings() {
 
   return <>
     <section className="settings-section" id="harness-settings">
-      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Codex and Grok runtimes</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
+      <div className="section-heading"><div><h2>Agent harnesses</h2><p>Add a named profile for each Codex or Grok account.</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
       {catalogError && <div role="status"><p>{catalogError}</p><button className="button quiet" type="button" onClick={() => void reload()}>Retry catalogs</button></div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card" key={profile.id}>
@@ -326,13 +332,20 @@ export function HarnessSettings() {
           <label>Connection<input value="Managed stdio process" disabled /></label>
           <label>Absolute Grok executable path<input required value={executable} placeholder="/usr/local/bin/grok" onChange={(event) => setExecutable(event.target.value)} /></label>
           <label>Authentication<input value="Cached Grok login (cached_token)" disabled /></label>
-          <p className="provider-dialog-note">Nebula asks Grok to use its cached login without reading or copying ~/.grok/auth.json. Run <code>grok login</code> if the health check reports an expired or missing session.</p>
+
         </> : <>
           <label>Connection<select value={connectionMode} onChange={(event) => { const next = event.target.value as HarnessProfile["connectionMode"]; setConnectionMode(next); setTransport(next === "spawn" ? "stdio" : "unix"); setHarnessAuthMode("existing_session"); setHarnessSecret(""); }}><option value="spawn">Managed process</option><option value="endpoint">Pre-launched endpoint</option></select></label>
           {connectionMode === "spawn" ? <label>Absolute executable path<input required value={executable} placeholder="/usr/local/bin/codex" onChange={(event) => setExecutable(event.target.value)} /></label> : <><label>Transport<select value={transport} onChange={(event) => setTransport(event.target.value as HarnessProfile["transport"])}><option value="unix">Unix socket</option><option value="websocket">Loopback WebSocket (experimental)</option></select></label><label>Endpoint<input required value={endpoint} placeholder={transport === "unix" ? "unix:///path/to/socket" : "ws://127.0.0.1:4500"} onChange={(event) => setEndpoint(event.target.value)} /></label></>}
           <label>Authentication<select value={harnessAuthMode} onChange={(event) => { setHarnessAuthMode(event.target.value as HarnessProfile["authMode"]); setHarnessSecret(""); }}><option value="existing_session">Existing vendor sign-in</option><option value={connectionMode === "endpoint" ? "endpoint_bearer" : "secret_ref"}>{connectionMode === "endpoint" ? "Endpoint bearer token" : "API key credential"}</option></select></label>
           {harnessAuthMode !== "existing_session" && <><label>{editingHarness?.secretRef ? "Replacement credential" : "Credential"}<input type="password" autoComplete="new-password" value={harnessSecret} placeholder={editingHarness?.secretRef ? "Leave blank to keep current authentication" : "Write-only secret"} onChange={(event) => setHarnessSecret(event.target.value)} /></label><label className="provider-consent"><input type="checkbox" checked={harnessSessionCredential} onChange={(event) => setHarnessSessionCredential(event.target.checked)} /><span><strong>Use for this session only</strong><small>Otherwise Core stores it in the operating-system credential vault.</small></span></label></>}
         </>}
+        {connectionMode === "spawn" && <details open={homeDirectory ? true : undefined}>
+          <summary>Account folder</summary>
+          <label>Account home folder<input value={homeDirectory} placeholder="Default host account" onChange={(event) => setHomeDirectory(event.target.value)} aria-describedby="harness-account-help" /></label>
+          <HostFolderPicker purpose="account" api={api} value={homeDirectory} onSelect={setHomeDirectory} />
+          <p id="harness-account-help" className="provider-dialog-note">Choose a separate folder on the Nebula host for each account. Leave blank to use the default host account. Once used by a chat, this folder cannot be changed; add another profile to switch accounts.</p>
+          {harnessAuthMode === "existing_session" && <><p className="provider-dialog-note">Sign in from a terminal on the Nebula host, then use Check:</p><pre style={{whiteSpace: "pre-wrap", overflowWrap: "anywhere"}}><code>{`${homeDirectory.trim() ? `${kind === "grok_acp" ? "GROK_HOME" : "CODEX_HOME"}=${shellQuote(homeDirectory.trim())} ` : `env -u ${kind === "grok_acp" ? "GROK_HOME" : "CODEX_HOME"} `}${shellQuote(executable.trim() || (kind === "grok_acp" ? "grok" : "codex"))}${kind === "codex_app_server" && homeDirectory.trim() ? ` -c 'cli_auth_credentials_store="file"'` : ""} login`}</code></pre></>}
+        </details>}
         <label>Default model<select value={model} disabled={!harnessModelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{harnessModelOptions.length ? "Automatic (harness default)" : "Discovered after saving"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
         <p className="provider-dialog-note">{harnessModelOptions.length ? "Choose a model reported by the harness, or use its automatic default." : "Saving runs a harness check and discovers available models and modes."}</p>
         <label className="provider-consent"><input type="checkbox" checked={harnessLocalOnly} onChange={(event) => setHarnessLocalOnly(event.target.checked)} /><span><strong>Model runtime is local</strong><small>Only enable when prompts and outputs do not leave this machine.</small></span></label>
