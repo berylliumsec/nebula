@@ -109,7 +109,7 @@ class ExecutionNetworkRequest(NebulaModel):
             if not self.target or not self.ports:
                 raise ValueError("scoped network mode requires target and ports")
         elif self.target is not None or self.ports:
-            raise ValueError("offline execution cannot request a target or ports")
+            raise ValueError("unscoped execution cannot request a target or ports")
         return self
 
 
@@ -152,6 +152,7 @@ class ExecutionCapability(NebulaModel):
     aliases: list[str]
     offline: bool
     scoped_network: bool
+    unrestricted_network: bool
     detail: str | None = None
 
 
@@ -350,15 +351,13 @@ class ExecutionService:
                     aliases=aliases,
                     offline=results[False] is None,
                     scoped_network=results[True] is None,
+                    unrestricted_network=results[True] is None,
                     detail=results[False] or results[True],
                 )
             )
         return ExecutionCapabilities(
             engagement_id=engagement_id,
-            # The first Run surface is release-gated as one product: operators
-            # should not see it until both offline and scoped egress are proven
-            # available for at least one declared runtime.
-            ready=any(row.offline and row.scoped_network for row in runtime_rows),
+            ready=any(row.unrestricted_network for row in runtime_rows),
             runtimes=runtime_rows,
         )
 
@@ -370,7 +369,7 @@ class ExecutionService:
             resolution = self._resolve(
                 request.engagement_id,
                 canonical,
-                network=request.network.mode == ExecutionNetworkMode.SCOPED,
+                network=request.network.mode != ExecutionNetworkMode.NONE,
             )
             network, policy_rule, detail = await self._network_snapshot(
                 request.engagement_id, request.network
@@ -864,7 +863,7 @@ class ExecutionService:
                 ),
             )
             addresses: list[str] = []
-        else:
+        elif request.mode == ExecutionNetworkMode.SCOPED:
             assert request.target is not None
             addresses = await asyncio.to_thread(_resolve_target, request.target)
             decision = PolicyEngine().evaluate(
@@ -878,13 +877,23 @@ class ExecutionService:
                     action="operator_code",
                 ),
             )
+        else:
+            decision = PolicyEngine().evaluate(
+                policy,
+                PolicyRequest(
+                    tool_name="reviewed_code.execute_networked",
+                    risk_class=RiskClass.WORKSPACE_WRITE,
+                    action="operator_code",
+                ),
+            )
+            addresses = []
         if decision.effect == PolicyEffect.REQUIRE_APPROVAL:
             raise ExecutionServiceError("approval_required", decision.reason)
         if decision.effect != PolicyEffect.ALLOW:
             raise ExecutionServiceError("policy_denied", decision.reason)
         if request.mode == ExecutionNetworkMode.NONE:
             snapshot = ExecutionNetworkSnapshot()
-        else:
+        elif request.mode == ExecutionNetworkMode.SCOPED:
             snapshot = ExecutionNetworkSnapshot(
                 mode=ExecutionNetworkMode.SCOPED,
                 target=request.target,
@@ -893,6 +902,8 @@ class ExecutionService:
                 scope_policy_id=policy.id,
                 scope_policy_revision=policy.revision,
             )
+        else:
+            snapshot = ExecutionNetworkSnapshot(mode=ExecutionNetworkMode.UNRESTRICTED)
         return snapshot, decision.rule, decision.reason
 
     @staticmethod
@@ -968,7 +979,8 @@ class ExecutionService:
                 )
 
     async def _run_isolated(self, execution: OperatorExecution) -> None:
-        network_enabled = execution.network.mode == ExecutionNetworkMode.SCOPED
+        network_enabled = execution.network.mode != ExecutionNetworkMode.NONE
+        scoped_network = execution.network.mode == ExecutionNetworkMode.SCOPED
         resolution = self._resolve(
             execution.engagement_id, execution.language, network=network_enabled
         )
@@ -976,7 +988,7 @@ class ExecutionService:
             raise ExecutionServiceError(
                 "preview_stale", "execution environment changed while queued"
             )
-        if network_enabled:
+        if scoped_network:
             assert execution.network.scope_policy_id is not None
             policy = self.store.get(ScopePolicy, execution.network.scope_policy_id)
             if policy.revision != execution.network.scope_policy_revision:
@@ -1048,7 +1060,7 @@ class ExecutionService:
         environment: dict[str, str] = {}
         egress_rules: list[EgressRule] = []
         pinned_hosts: dict[str, str] = {}
-        if network_enabled:
+        if scoped_network:
             environment = {
                 "NEBULA_TARGET": execution.network.target or "",
                 "NEBULA_PORTS": json.dumps(execution.network.ports),
@@ -1070,7 +1082,13 @@ class ExecutionService:
             workspace=resolution.workspace,
             workspace_access=SandboxWorkspaceAccess.WRITE,
             environment=environment,
-            network=(SandboxNetwork.SCOPED if network_enabled else SandboxNetwork.NONE),
+            network=(
+                SandboxNetwork.SCOPED
+                if scoped_network
+                else SandboxNetwork.UNRESTRICTED
+                if network_enabled
+                else SandboxNetwork.NONE
+            ),
             execution_kind=(
                 SandboxExecutionKind.NETWORK_TOOL
                 if network_enabled
@@ -1506,7 +1524,7 @@ class ExecutionService:
             resolution = self._resolve(
                 execution.engagement_id,
                 execution.language,
-                network=execution.network.mode == ExecutionNetworkMode.SCOPED,
+                network=execution.network.mode != ExecutionNetworkMode.NONE,
             )
             await resolution.runner._force_remove(
                 f"nebula-exec-{execution.id.replace('-', '')}"

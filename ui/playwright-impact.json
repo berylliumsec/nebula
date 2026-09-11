@@ -19,6 +19,9 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "unrestricted-execution": [
+      {"area":"unrestricted-execution","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"project execution mode uses production Code","runtime":"real-core","shard":"1/1"}
+    ],
     "branch-review": [
   {
     "area": "branch-review",

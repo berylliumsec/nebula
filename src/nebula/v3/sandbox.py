@@ -361,9 +361,12 @@ class SandboxRequest(BaseModel):
                 else SandboxExecutionKind.LOCAL_TOOL
             )
         if self.execution_kind == SandboxExecutionKind.NETWORK_TOOL:
-            if self.network != SandboxNetwork.SCOPED:
-                raise ValueError("network tools require scoped network execution")
-            if (
+            if self.network not in {
+                SandboxNetwork.SCOPED,
+                SandboxNetwork.UNRESTRICTED,
+            }:
+                raise ValueError("network tools require network execution")
+            if self.network == SandboxNetwork.SCOPED and (
                 not self.network_name
                 and not self.egress_rules
                 and not self.egress_domains
@@ -432,9 +435,7 @@ class SandboxRequest(BaseModel):
                 self.pinned_hosts,
             )
         ):
-            raise ValueError(
-                "unrestricted human-terminal networking cannot declare scoped egress"
-            )
+            raise ValueError("unrestricted networking cannot declare scoped egress")
         if self.egress_rules:
             if any(
                 not any(

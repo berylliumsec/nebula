@@ -3018,7 +3018,7 @@ export function SessionsPage() {
     && visibleHarnessProgress?.phase !== "complete";
   const runnableLanguages = useMemo(() => new Set<ExecutionLanguage>(
     executionCapabilities?.runtimes
-      .filter((runtime) => runtime.offline && runtime.scopedNetwork)
+      .filter((runtime) => runtime.unrestrictedNetwork)
       .map((runtime) => runtime.language) ?? [],
   ), [executionCapabilities]);
   const pendingHarnessRequests = authoritativeState?.pending.length ?? harnessInteractions.filter((item) => item.status === "pending").length;

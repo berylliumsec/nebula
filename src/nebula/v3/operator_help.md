@@ -236,9 +236,9 @@ RAM, 128 PIDs, a 300-second limit, and separate 2,000,000-byte stdout and stderr
 capture limits. Only the Project workspace is mounted at `/workspace`; containers
 are never resumed.
 
-Reviewed execution is offline by default. Scoped mode needs one explicit
-policy-approved target and selected ports and is available only when the egress
-boundary is ready. There is no bridge/host network option and no host fallback.
+Reviewed execution uses unrestricted container outbound networking by default and
+does not require target or port entry. The exact-source review remains mandatory;
+there is no host fallback.
 When a run fails, report its observed status, exit code, timeout flag, stderr, and
 evidence references. Correct only an error justified by those observations; do not
 invent packages, paths, flags, or a different network mode. Use the human Terminal
