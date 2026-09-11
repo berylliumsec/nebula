@@ -448,6 +448,43 @@ def test_playwright_runtime_staging_keeps_only_verified_generated_payload(tmp_pa
     assert commands[0][1] == str(destination.resolve())
 
 
+def test_linux_playwright_runtime_normalizes_rpath_before_recording_digest(
+    tmp_path, monkeypatch
+):
+    destination = tmp_path / "playwright-browsers"
+    normalized: list[Path] = []
+
+    def install(command, *, env, check, text):
+        runtime = Path(env["PLAYWRIGHT_BROWSERS_PATH"])
+        executable = runtime / "chromium-test" / "chrome-linux" / "chrome"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"\x7fELForiginal")
+        executable.chmod(0o755)
+        (executable.parent / "LICENSE").write_text("license\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0)
+
+    def normalize(path):
+        normalized.append(path)
+        path.write_bytes(b"\x7fELFnormalized")
+        path.chmod(0o755)
+
+    monkeypatch.setattr(
+        "scripts.stage_playwright_runtime._normalize_linux_executable_rpath",
+        normalize,
+    )
+    manifest = stage_playwright_runtime(
+        destination,
+        target="x86_64-unknown-linux-gnu",
+        run=install,
+    )
+
+    executable = destination / "chromium-test/chrome-linux/chrome"
+    assert normalized == [executable]
+    assert manifest["executable_sha256"]["chromium-test/chrome-linux/chrome"] == (
+        hashlib.sha256(b"\x7fELFnormalized").hexdigest()
+    )
+
+
 def test_playwright_runtime_staging_rejects_a_symlink_destination(tmp_path):
     target = tmp_path / "outside"
     target.mkdir()

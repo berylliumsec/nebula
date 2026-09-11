@@ -1,37 +1,24 @@
 {
-  "reviewed_by": "Codex Security Browser and resizable side-panel review",
-  "reason": "Verifies the requested manual Security Browser lifecycle (pause, Repeater handoff/send, response review, and resume), registers the lazily started managed-browser adapter with guided assessments, preserves the live native browser beside adjustable manual controls, and adds one shared persisted, pointer- and keyboard-adjustable width contract to Browser Assistant, Terminal Assistant, and the Security Browser workspace. Focused component tests cover assessment/Repeater state and sizing bounds; selected browser and terminal-assistant journeys cover desktop resizing and full-width mobile behavior.",
-  "exclusions": "Providers, missions, reports, settings, release/packaging, native Rust commands, and unrelated Workbench journeys are excluded. Native child bounds continue through the existing bridge contract and are exercised by the focused desktop browser journey, so no broad native suite is selected. This is not approval for a full suite. Physical-device testing is unavailable; mobile checks use the repository's permanent emulated Chromium and WebKit profiles. Traffic-to-Repeater capture cannot be exercised in this Linux build because browser event capture reports unavailable; direct editable Repeater send is covered instead.",
-  "baseline": "3e793bb245ab03486cb3e5355428ebd6fc6fe570",
+  "reviewed_by": "Codex, alpha.17 AppImage integrity repair",
+  "reason": "The release packaging change normalizes bundled Chromium's Linux rpath before hashing it, so linuxdeploy's later mandatory rpath operation is byte-for-byte idempotent. Tests cover the ordering, resulting digest, workflow packaging contract, package audit, version synchronization, and release contracts.",
+  "exclusions": "No application, backend, UI, state, or API behavior changes. The terminal Assistant product matrix passed on the identical application code in PR 276 and preparation run 34619152649. Frontend, native, Playwright, and unrelated Python suites are excluded. The protected release still runs its real-Core sandbox integration, installer audits, self-tests, and clean-install smoke. This is not full-suite approval.",
+  "baseline": "daae3e241d1f2a81bc4516984bc46192e0dda693",
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 9,
-    "frontend": 11,
+    "python": 34,
+    "frontend": 0,
     "native": 0,
-    "playwright": 7
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_browser_assessments.py",
-    "tests/v3/test_browser_host.py"
+    "tests/v3/test_packaging.py"
   ],
-  "frontend": [
-    "ui/src/components/SecurityBrowserWorkspacePanel.test.tsx",
-    "ui/src/components/BrowserResearchSuite.test.tsx",
-    "ui/src/components/useResizableSidePanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:browser/desktop",
-    "entry:browser/browser-chromium-landscape",
-    "entry:browser/browser-webkit-landscape",
-    "entry:terminal-assistant/desktop",
-    "entry:terminal-assistant/mobile-chromium-small",
-    "entry:terminal-assistant/mobile-webkit-small",
-    "entry:core-api/real-core"
-  ],
-  "change_digest": "7412aa4b7c1ae1f536ce6821442db2fdf941c60e6a9595485ff6b5c59f81e7e1",
+  "playwright": [],
+  "change_digest": "53b8cf760d79d1ecd27a5dc9fc69d94fbb787b76ff1569e4e9868124609074af",
   "python_browser": false,
   "python_node": false
 }
