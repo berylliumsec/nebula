@@ -1,6 +1,6 @@
 [package]
 name = "nebula-ui"
-version = "3.0.0-alpha.13"
+version = "3.0.0-alpha.14"
 description = "Nebula 3 local-first security workspace"
 authors = ["Nebula contributors"]
 edition = "2024"

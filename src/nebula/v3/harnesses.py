@@ -5570,6 +5570,8 @@ class HarnessRuntimeService:
                 raise HarnessConfigurationError(
                     "harness command-runtime snapshot has invalid tool names"
                 )
+        from .application_model.tools import standalone_components
+
         try:
             components: RuntimeToolComponents | AutomationToolComponents | None = None
             if self.automation_tool_platform is not None:
@@ -5593,8 +5595,6 @@ class HarnessRuntimeService:
                     components = browser_components
                 else:
                     components = combine_tool_components(components, browser_components)
-            from .application_model.tools import standalone_components
-
             model_components = standalone_components(self.store, engagement_id)
             if components is None:
                 components = model_components
@@ -6003,7 +6003,7 @@ class HarnessRuntimeService:
         queue_claim: tuple[str, int, str] | None = None,
         citations: list[ChatCitation] | None = None,
         allow_remote_mcp: bool = False,
-        include_knowledge: bool = False,
+        include_knowledge: bool = True,
         allow_cloud_knowledge: bool = False,
         max_artifact_queries: int | None = None,
         harness_mode: str | None = None,
@@ -6360,6 +6360,7 @@ class HarnessRuntimeService:
                     else {}
                 ),
                 "knowledge_access": knowledge_access,
+                "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "harness_mode": harness_mode,
                 "harness_skill": (
                     harness_skill.model_dump(mode="json")
@@ -8300,7 +8301,7 @@ class HarnessRuntimeService:
             engagement_id, profile
         )
         if not project_sources and not library_sources:
-            return False
+            return True
         if profile.privacy.local_only:
             return True
         if not profile.privacy.permits_sensitive_data:
@@ -9171,6 +9172,22 @@ class HarnessRuntimeService:
         project_sources, library_sources = self._visible_knowledge_sources(
             turn.engagement_id, profile
         )
+        if (
+            (project_sources or library_sources)
+            and not profile.privacy.local_only
+            and not profile.privacy.permits_sensitive_data
+        ):
+            return self._gateway_denial(
+                "The harness profile does not permit project knowledge access."
+            )
+        if (
+            (project_sources or library_sources)
+            and not profile.privacy.local_only
+            and turn.metadata.get("cloud_knowledge_confirmed") is not True
+        ):
+            return self._gateway_denial(
+                "Knowledge access requires operator confirmation for this cloud harness turn."
+            )
         visible: list[tuple[str, KnowledgeSource | LibraryItem]] = []
         if scope in {"all", "project"}:
             visible.extend(("project", source) for source in project_sources)
@@ -9303,6 +9320,25 @@ class HarnessRuntimeService:
             )
         session = self.store.get(HarnessSession, turn.harness_session_id)
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
+        project_sources, library_sources = self._visible_knowledge_sources(
+            turn.engagement_id, profile
+        )
+        if (
+            (project_sources or library_sources)
+            and not profile.privacy.local_only
+            and not profile.privacy.permits_sensitive_data
+        ):
+            return self._gateway_denial(
+                "The harness profile does not permit project knowledge access."
+            )
+        if (
+            (project_sources or library_sources)
+            and not profile.privacy.local_only
+            and turn.metadata.get("cloud_knowledge_confirmed") is not True
+        ):
+            return self._gateway_denial(
+                "Knowledge access requires operator confirmation for this cloud harness turn."
+            )
         allow_local_only = profile.privacy.local_only
         owner_id = turn.chat_turn_id or turn.run_id or turn.id
         call = ToolCall(
