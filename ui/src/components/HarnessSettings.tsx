@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Bot, Network, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
 import type { HarnessNativeCapabilities, HarnessProfile, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -49,12 +49,24 @@ export function HarnessSettings() {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
 
-  const reload = async () => {
+  const [catalogError, setCatalogError] = useState<string>();
+  const reload = useCallback(async (isActive: () => boolean = () => true) => {
     if (!api || coreState !== "online") return;
-    const [nextHarnesses, nextServers] = await Promise.all([api.listHarnesses(), api.listMcpServers()]);
-    setHarnesses(nextHarnesses);
-    setServers(nextServers);
-  };
+    if (isActive()) setCatalogError(undefined);
+    const failures: string[] = [];
+    await Promise.all([
+      api.listHarnesses().then(next => { if (isActive()) setHarnesses(next); }).catch(loadError => {
+        void logCaughtDiagnostic("interface.harness_settings.catalog_failed", "The harness catalog could not be refreshed.", loadError, "harness_settings");
+        failures.push("Agent harnesses could not be refreshed.");
+        if (isActive()) setCatalogError(failures.join(" "));
+      }),
+      api.listMcpServers().then(next => { if (isActive()) setServers(next); }).catch(loadError => {
+        void logCaughtDiagnostic("interface.harness_settings.mcp_catalog_failed", "The MCP catalog could not be refreshed.", loadError, "harness_settings");
+        failures.push("MCP servers could not be refreshed. Agent harnesses remain available.");
+        if (isActive()) setCatalogError(failures.join(" "));
+      }),
+    ]);
+  }, [api, coreState]);
 
   const checkSavedHarness = async (profile: HarnessProfile) => {
     if (!api) return false;
@@ -79,19 +91,9 @@ export function HarnessSettings() {
 
   useEffect(() => {
     let active = true;
-    if (!api || coreState !== "online") return () => { active = false; };
-    void Promise.all([api.listHarnesses(), api.listMcpServers()])
-      .then(([nextHarnesses, nextServers]) => {
-        if (!active) return;
-        setHarnesses(nextHarnesses);
-        setServers(nextServers);
-      })
-      .catch((loadError) => {
-        void logCaughtDiagnostic("interface.harness_settings.caught_failure_01", "A handled interface operation failed.", loadError, "harness_settings");
-        if (active) setError(loadError instanceof Error ? loadError.message : "Harness settings are unavailable.");
-      });
+    void reload(() => active);
     return () => { active = false; };
-  }, [api, coreState]);
+  }, [reload]);
 
   const openHarness = (profile?: HarnessProfile, requestedKind: HarnessProfile["kind"] = "codex_app_server") => {
     setEditingHarness(profile);
@@ -289,6 +291,7 @@ export function HarnessSettings() {
   return <>
     <section className="settings-section" id="harness-settings">
       <div className="section-heading"><div><h2>Agent harnesses</h2><p>Codex and Grok runtimes</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => openHarness(undefined, "grok_acp")}><Plus size={16} /> Add Grok</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openHarness()}><Plus size={16} /> Add Codex</button></div></div>
+      {catalogError && <div role="status"><p>{catalogError}</p><button className="button quiet" type="button" onClick={() => void reload()}>Retry catalogs</button></div>}
       {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." />}
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card" key={profile.id}>
         <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "grok_acp" ? "Grok Build · ACP" : "Codex App Server"}</small><h3>{profile.name}</h3></div></header>
@@ -302,7 +305,7 @@ export function HarnessSettings() {
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.subagents} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { subagents: event.target.checked })} /><span><strong>Subagents</strong><small>Delegated analysis in the bounded session.</small></span></label>
         </details>
-        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
+        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings">
@@ -312,7 +315,7 @@ export function HarnessSettings() {
         {server.transport === "stdio" && <p className="provider-dialog-note"><ShieldAlert size={14} /> Runs outside the automation-container boundary. Enable only after trusting this executable.</p>}
         <p className="integration-card-summary">{server.detail ?? `${server.tools.length} discovered tool${server.tools.length === 1 ? "" : "s"} · ${server.defaultApproval.replace("_", " ")}`}</p>
         {server.tools.length > 0 && <div className="mcp-tool-policies">{server.tools.map((tool) => <label key={tool.name}><span><strong>{tool.name}</strong><small>{tool.readOnly ? "read-only" : "write/unknown"}{tool.destructive ? " · destructive" : ""}{tool.openWorld ? " · open-world" : ""}</small></span><select aria-label={`${tool.name} approval policy`} value={tool.approval} onChange={(event) => void updateServer(server, { tool_overrides: { ...server.toolOverrides, [tool.name]: event.target.value } })}>{approvalOptions.map((option) => <option value={option} key={option}>{option.replace("_", " ")}</option>)}</select></label>)}</div>}
-        <footer><button className="button quiet" type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.probeMcpServer(server.id, engagement?.id).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_08", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Probe failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === server.id ? "spin" : undefined} size={14} /> Probe</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${server.name}`} type="button" onClick={() => openMcp(server)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === server.id || (server.transport === "stdio" && !server.trustedStdio)} onClick={() => void updateServer(server, { enabled: !server.enabled })}>{server.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${server.name}`} type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.deleteMcpServer(server.id, server.revision).then(reload).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_09", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
+        <footer><button className="button quiet" type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.probeMcpServer(server.id, engagement?.id).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_08", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Probe failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === server.id ? "spin" : undefined} size={14} /> Probe</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${server.name}`} type="button" onClick={() => openMcp(server)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === server.id || (server.transport === "stdio" && !server.trustedStdio)} onClick={() => void updateServer(server, { enabled: !server.enabled })}>{server.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${server.name}`} type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.deleteMcpServer(server.id, server.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_09", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
       </article>)}</div> : <div className="empty-state compact"><Network size={23} /><strong>No MCP server profiles</strong><p>Profiles are never launched until an explicit probe or selected agent runtime uses them.</p></div>}
     </section>
     {harnessDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="harness-dialog-title" onClose={() => { if (!busy) setHarnessDialog(false); }} onSubmit={(event) => void submitHarness(event)}>

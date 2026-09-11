@@ -937,3 +937,68 @@ def test_model_question_uses_graph_without_command_or_browser_runtime(
         resumed.tool_components.runtime_digest
         == prepared.tool_components.runtime_digest
     )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_provider_settings_change_preserves_chat_and_history(
+    tmp_path, monkeypatch, stream
+):
+    async def scenario():
+        store = NebulaStore(tmp_path / "settings.db")
+        project = store.create(Engagement(name="Settings"))
+        first = store.create(_profile(local=True))
+        second = store.create(
+            first.model_copy(
+                update={
+                    "id": "provider-b",
+                    "model_allowlist": ["model-b"],
+                    "metadata": {"default_model": "model-b"},
+                }
+            )
+        )
+        providers = {
+            first.id: FakeProvider(first.id, local=True),
+            second.id: FakeProvider(second.id, local=True),
+        }
+        providers[second.id].config = providers[second.id].config.model_copy(
+            update={"model_allowlist": ["model-b"], "default_model": "model-b"}
+        )
+        monkeypatch.setattr(
+            chat_module, "provider_from_profile", lambda profile: providers[profile.id]
+        )
+        service = ChatService(store)
+        initial_request = ChatCompletionRequest(
+            provider_id=first.id,
+            engagement_id=project.id,
+            model="model-a",
+            messages=[{"role": "user", "content": "Remember this note"}],
+            include_knowledge=False,
+        )
+        initial = await service.complete(await service.prepare_async(initial_request))
+        request = ChatCompletionRequest(
+            provider_id=second.id,
+            engagement_id=project.id,
+            session_id=initial.session_id,
+            model="model-b",
+            messages=[{"role": "user", "content": "Continue with the new model"}],
+            include_knowledge=False,
+            stream=stream,
+        )
+        prepared = await service.prepare_async(request)
+        if stream:
+            events = [event async for event in service.stream(prepared)]
+            assert events
+        else:
+            await service.complete(prepared)
+        saved = store.get(ChatSession, initial.session_id)
+        assert saved.provider_profile_id == second.id
+        assert saved.model == "model-b"
+        messages = service.session_messages(saved.id)
+        assert len(messages) == 4
+        assert messages[0].content == "Remember this note"
+        assert any(
+            "Remember this note" in str(request.messages)
+            for request in providers[second.id].requests
+        )
+
+    asyncio.run(scenario())

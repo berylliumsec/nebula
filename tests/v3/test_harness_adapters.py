@@ -65,6 +65,8 @@ class FixtureCodexRpc:
         self.calls.append((method, params))
         if method == "initialize":
             return {"userAgent": "codex-cli/0.144.0"}
+        if method == "account/read":
+            return {"account": {"type": "chatgpt"}, "requiresOpenaiAuth": True}
         if method == "model/list":
             return {
                 "data": [
@@ -308,7 +310,11 @@ def test_codex_probe_discovers_selectable_models():
         assert [item.id for item in options.reasoning_efforts] == ["low", "medium"]
         assert options.default_service_tier == "default"
         assert [item.id for item in options.service_tiers] == ["default", "fast"]
-        assert [method for method, _ in rpc.calls] == ["initialize", "model/list"]
+        assert [method for method, _ in rpc.calls] == [
+            "initialize",
+            "account/read",
+            "model/list",
+        ]
         assert rpc.calls[0][1]["capabilities"] == {"requestAttestation": False}
         assert rpc.closed is True
 
@@ -2344,5 +2350,127 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
             ).item_id
             == "thinking-1"
         )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "account,healthy",
+    [
+        ({"account": None, "requiresOpenaiAuth": True}, False),
+        ({"account": {"type": "chatgpt"}, "requiresOpenaiAuth": True}, True),
+        ({"account": None, "requiresOpenaiAuth": False}, True),
+        ({}, False),
+    ],
+)
+def test_codex_health_checks_authentication(account, healthy):
+    async def scenario():
+        rpc = FixtureCodexRpc()
+        original = rpc.request
+
+        async def request(method, params):
+            if method == "account/read":
+                return account
+            return await original(method, params)
+
+        rpc.request = request
+        profile = HarnessProfile(
+            name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
+        )
+        result = await FixtureCodexAdapter(rpc).probe(profile, CredentialStore())
+        assert result.healthy is healthy
+        assert rpc.closed
+        if account.get("requiresOpenaiAuth") and not account.get("account"):
+            assert "codex login" in result.detail
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "kind,method",
+    [
+        ("codex", "initialize"),
+        ("codex", "thread/start"),
+        ("codex", "thread/resume"),
+        ("grok", "session/new"),
+        ("grok", "session/load"),
+    ],
+)
+@pytest.mark.parametrize("cancel", [False, True])
+def test_harness_startup_deadline_and_cancellation_close_transport(
+    tmp_path, monkeypatch, kind, method, cancel
+):
+    import nebula.v3.harnesses as module
+
+    async def scenario():
+        monkeypatch.setattr(
+            module, "HARNESS_STARTUP_TIMEOUT_SECONDS", 0.03 if not cancel else 10
+        )
+        rpc = FixtureCodexRpc() if kind == "codex" else FixtureGrokRpc()
+        original = rpc.request
+        waiting = asyncio.Event()
+
+        async def request(name, params):
+            if name == method:
+                waiting.set()
+                await asyncio.Future()
+            return await original(name, params)
+
+        rpc.request = request
+        adapter = (
+            FixtureCodexAdapter(rpc) if kind == "codex" else FixtureGrokAdapter(rpc)
+        )
+        profile = HarnessProfile(name=kind, kind=adapter.kind, executable="/bin/true")
+        session = HarnessSession(
+            engagement_id="project",
+            harness_profile_id=profile.id,
+            model="fixture",
+            external_session_id="existing"
+            if method.endswith(("resume", "load"))
+            else None,
+        )
+        task = asyncio.create_task(
+            adapter.open(
+                AdapterOpenRequest(
+                    profile=profile,
+                    session=session,
+                    workspace=tmp_path,
+                    mcp_profiles=(),
+                    credential_store=CredentialStore(),
+                    permission_handler=lambda _request: None,
+                )
+            )
+        )
+        await asyncio.wait_for(waiting.wait(), 1)
+        if cancel:
+            task.cancel()
+        with pytest.raises(asyncio.CancelledError if cancel else TimeoutError):
+            await asyncio.wait_for(task, 1)
+        assert rpc.closed
+
+    asyncio.run(scenario())
+
+
+def test_codex_stdio_accepts_large_thread_response(tmp_path):
+    async def scenario():
+        executable = tmp_path / "codex-fixture"
+        executable.write_text(
+            '#!/usr/bin/env python3\nimport json,sys\nfor line in sys.stdin:\n r=json.loads(line)\n if "id" in r: print(json.dumps({"id":r["id"],"result":{"history":"x"*200000}}),flush=True)\n'
+        )
+        executable.chmod(0o700)
+        profile = HarnessProfile(
+            name="Large frame",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable=str(executable),
+        )
+        rpc = await CodexAppServerAdapter()._connect(
+            profile, CredentialStore(), (), tmp_path
+        )
+        try:
+            result = await asyncio.wait_for(rpc.request("thread/resume", {}), 3)
+            assert len(result["history"]) == 200000
+            assert rpc.connection_state == "connected"
+        finally:
+            await rpc.close()
 
     asyncio.run(scenario())

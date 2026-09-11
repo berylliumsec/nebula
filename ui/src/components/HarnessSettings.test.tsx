@@ -49,3 +49,20 @@ describe("harness settings persistence boundaries", () => {
     });
   }
 });
+
+it("shows harnesses independently of a failed MCP catalog and retries in place", async () => {
+  api.listHarnesses.mockResolvedValue([profile]);
+  api.listMcpServers.mockRejectedValueOnce(new Error("MCP unavailable")).mockResolvedValue([]);
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(await screen.findByRole("heading", {name: profile.name})).toBeVisible();
+  await userEvent.click(await screen.findByRole("button", {name: "Retry catalogs"}));
+  await waitFor(() => expect(screen.queryByRole("button", {name: "Retry catalogs"})).not.toBeInTheDocument());
+  expect(screen.getByRole("heading", {name: profile.name})).toBeVisible();
+});
+
+it("shows harnesses while the MCP catalog is still pending", async () => {
+  api.listHarnesses.mockResolvedValue([profile]);
+  api.listMcpServers.mockReturnValue(new Promise(() => {}));
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(await screen.findByRole("heading", {name: profile.name})).toBeVisible();
+});

@@ -45,6 +45,7 @@ from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 import claude_agent_sdk
+from jsonschema import Draft7Validator
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
 
@@ -174,6 +175,8 @@ CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
 CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
+HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
+
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 _CODEX_MANAGED_VENDOR_FEATURES = (
     "shell_tool",
@@ -1280,8 +1283,8 @@ class _CodexRpc:
         self._next_id += 1
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self._write({"method": method, "id": request_id, "params": params})
         try:
+            await self._write({"method": method, "id": request_id, "params": params})
             return await future
         finally:
             self._pending.pop(request_id, None)
@@ -1425,7 +1428,7 @@ class _CodexRpc:
         request_id = message.get("id")
         if "method" not in message and isinstance(request_id, int):
             pending = self._pending.get(request_id)
-            if pending is None:
+            if pending is None or pending.done():
                 return
             if "error" in message:
                 pending.set_exception(
@@ -2571,6 +2574,20 @@ class CodexAppServerAdapter(HarnessAdapter):
             initialize = await asyncio.wait_for(
                 self._initialize(rpc), timeout=profile.metadata.get("probe_timeout", 15)
             )
+            account = await asyncio.wait_for(
+                rpc.request("account/read", {"refreshToken": True}),
+                timeout=profile.metadata.get("probe_timeout", 15),
+            )
+            if not isinstance(account, dict) or not isinstance(
+                account.get("requiresOpenaiAuth"), bool
+            ):
+                raise HarnessTransportError(
+                    "Codex returned an invalid authentication state"
+                )
+            if account["requiresOpenaiAuth"] and not account.get("account"):
+                raise HarnessConfigurationError(
+                    "Codex is not signed in; run `codex login` on the Nebula host and retry Check"
+                )
             models, model_options = await self._models(
                 rpc, timeout=profile.metadata.get("probe_timeout", 15)
             )
@@ -2636,6 +2653,16 @@ class CodexAppServerAdapter(HarnessAdapter):
                 await rpc.close()
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+        try:
+            async with asyncio.timeout(HARNESS_STARTUP_TIMEOUT_SECONDS):
+                return await self._open(request)
+        except TimeoutError as exc:
+            # diagnostic-expected: startup deadline becomes an actionable retryable error.
+            raise TimeoutError(
+                "Codex startup timed out. Check the runtime on the Nebula host, then retry this message."
+            ) from exc
+
+    async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         managed_gateway = bool(request.gateway_config)
         native_capabilities = _session_native_capabilities(
             request.session, request.profile
@@ -2750,7 +2777,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 approval_policy=approval_policy,
                 trusted_mcp_servers=frozenset(request.gateway_config),
             )
-        except Exception as caught_error:
+        except (Exception, asyncio.CancelledError) as caught_error:
             record_caught_exception(
                 "harnesses",
                 "harnesses.harnesses.caught_failure_007",
@@ -2828,6 +2855,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
                 env=_minimal_environment(child_env),
+                limit=MAX_MCP_MESSAGE_BYTES,
             )
             rpc = _CodexRpc(process=process)
             await rpc.start()
@@ -4602,6 +4630,16 @@ class GrokAcpAdapter(HarnessAdapter):
                 await rpc.close()
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+        try:
+            async with asyncio.timeout(HARNESS_STARTUP_TIMEOUT_SECONDS):
+                return await self._open(request)
+        except TimeoutError as exc:
+            # diagnostic-expected: startup deadline becomes an actionable retryable error.
+            raise TimeoutError(
+                "Grok startup timed out. Check the runtime on the Nebula host, then retry this message."
+            ) from exc
+
+    async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         rpc = await self._connect(request.profile, request.workspace, request.session)
         try:
             await self._initialize(rpc)
@@ -4665,7 +4703,7 @@ class GrokAcpAdapter(HarnessAdapter):
                     gateway_tools=request.gateway_tools,
                 ),
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await rpc.close()
             raise
 
@@ -5886,7 +5924,19 @@ class HarnessRuntimeService:
         return self.store.update(
             ChatSession,
             chat.id,
-            {"harness_session_id": session.id, "metadata": metadata},
+            {
+                "backend": ChatBackend.HARNESS,
+                "provider_profile_id": None,
+                "harness_profile_id": session.harness_profile_id,
+                "harness_session_id": session.id,
+                "model": session.model,
+                "metadata": {
+                    **metadata,
+                    "harness_runtime_options": session.metadata.get(
+                        "runtime_options", {}
+                    ),
+                },
+            },
             expected_revision=chat.revision,
         )
 
@@ -6023,7 +6073,7 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError("Attach at most four images per message.")
         if image_blocks:
             image_model = (model or profile.default_model or "").strip()
-            if chat_session_id:
+            if chat_session_id and not model:
                 image_chat = self.store.get(ChatSession, chat_session_id)
                 image_model = self.store.get(
                     HarnessSession, image_chat.harness_session_id or ""
@@ -6083,47 +6133,100 @@ class HarnessRuntimeService:
             requested=include_knowledge,
             allow_cloud_knowledge=allow_cloud_knowledge,
         )
+        settings_previous_session_id: str | None = None
+        settings_handoff = ""
         if chat_session_id:
             chat = self.store.get(ChatSession, chat_session_id)
-            if chat.backend != ChatBackend.HARNESS:
-                raise HarnessStateError("provider chats cannot switch to a harness")
-            if (
-                chat.engagement_id != engagement_id
-                or chat.harness_profile_id != profile_id
+            if chat.engagement_id != engagement_id:
+                raise HarnessStateError("chat belongs to a different project")
+            session = (
+                self.store.get(HarnessSession, chat.harness_session_id)
+                if chat.backend == ChatBackend.HARNESS and chat.harness_session_id
+                else None
+            )
+            if harness_session_id and (
+                session is None or harness_session_id != session.id
             ):
-                raise HarnessStateError("chat harness identity cannot change")
-            if harness_session_id and harness_session_id != chat.harness_session_id:
                 raise HarnessStateError(
                     "chat is attached to a different harness session"
                 )
-            session = self.store.get(HarnessSession, chat.harness_session_id or "")
-            existing_options = session.metadata.get("runtime_options")
             frozen_options = (
-                existing_options if isinstance(existing_options, dict) else {}
+                (session.metadata.get("runtime_options") or {}) if session else {}
             )
-            if (
+            selected_model = model or (
+                session.model
+                if session and session.harness_profile_id == profile_id
+                else profile.default_model
+            )
+            selected_mcp = (
+                list(dict.fromkeys(mcp_server_ids))
+                if mcp_server_ids is not None
+                else list(session.mcp_server_ids if session else [])
+            )
+            same_model = bool(
+                session
+                and session.harness_profile_id == profile_id
+                and session.model == selected_model
+            )
+            model_options = next(
+                (
+                    option
+                    for option in profile.capabilities.model_options
+                    if option.model == selected_model
+                ),
+                None,
+            )
+            effort = (
                 harness_reasoning_effort
-                and harness_reasoning_effort != frozen_options.get("reasoning_effort")
-            ):
-                raise HarnessStateError(
-                    "reasoning effort cannot change within a durable harness session"
-                )
-            if harness_service_tier and harness_service_tier != frozen_options.get(
-                "service_tier"
-            ):
-                raise HarnessStateError(
-                    "speed cannot change within a durable harness session"
-                )
-            self._validate_harness_privacy(
-                engagement_id,
-                profile,
-                session.mcp_server_ids,
-                allow_remote_mcp=allow_remote_mcp,
+                if harness_reasoning_effort is not None
+                else frozen_options.get("reasoning_effort")
+                if same_model
+                else None
             )
-            if mcp_server_ids:
-                raise HarnessConfigurationError(
-                    "MCP selection is frozen; it is accepted only for a new harness session"
+            tier = (
+                harness_service_tier
+                if harness_service_tier is not None
+                else frozen_options.get("service_tier")
+                if same_model
+                else None
+            )
+            effort = effort or (
+                model_options.default_reasoning_effort if model_options else None
+            )
+            tier = tier or (
+                model_options.default_service_tier if model_options else None
+            )
+            changed = (
+                session is None
+                or session.harness_profile_id != profile_id
+                or session.model != selected_model
+                or set(session.mcp_server_ids) != set(selected_mcp)
+                or effort != frozen_options.get("reasoning_effort")
+                or tier != frozen_options.get("service_tier")
+            )
+            self._validate_harness_privacy(
+                engagement_id, profile, selected_mcp, allow_remote_mcp=allow_remote_mcp
+            )
+            if changed:
+                settings_previous_session_id = session.id if session else None
+                settings_handoff = self._chat_handoff_context(
+                    chat, reason="an assistant settings update"
                 )
+                session = self.create_session(
+                    engagement_id=engagement_id,
+                    profile_id=profile_id,
+                    model=selected_model,
+                    mcp_server_ids=selected_mcp,
+                    reasoning_effort=effort,
+                    service_tier=tier,
+                )
+                chat = self._rebind_chat_session(
+                    chat,
+                    session,
+                    previous_session_id=settings_previous_session_id or "",
+                    reason="assistant_settings_changed",
+                )
+            assert session is not None
             pending_context_message_id = chat.metadata.get("pending_context_message_id")
             if isinstance(pending_context_message_id, str):
                 pending_context_message = self.store.get(
@@ -6218,9 +6321,11 @@ class HarnessRuntimeService:
                     },
                 )
             )
-        forked_from_session_id: str | None = None
-        session_rollover_reason: str | None = None
-        handoff_context = ""
+        forked_from_session_id = settings_previous_session_id
+        session_rollover_reason = (
+            "assistant_settings_changed" if settings_handoff else None
+        )
+        handoff_context = settings_handoff
         if chat.metadata.get("harness_context_handoff_pending") is True:
             handoff_context = self._chat_handoff_context(chat)
             chat = self.store.update(
@@ -6563,6 +6668,10 @@ class HarnessRuntimeService:
                 turn.metadata.get("session_rollover_reason")
                 == "workspace_connection_changed"
             )
+            settings_changed = (
+                turn.metadata.get("session_rollover_reason")
+                == "assistant_settings_changed"
+            )
             runtime_changed = (
                 turn.metadata.get("session_rollover_reason")
                 == "command_runtime_changed"
@@ -6579,14 +6688,18 @@ class HarnessRuntimeService:
                     model=session.model,
                     payload={
                         "phase": (
-                            "workspace_session_created"
+                            "settings_session_created"
+                            if settings_changed
+                            else "workspace_session_created"
                             if workspace_changed
                             else "command_runtime_session_created"
                             if runtime_changed
                             else "parallel_session_created"
                         ),
                         "detail": (
-                            "The workspace connection was updated. Nebula preserved this chat "
+                            "Assistant settings updated. Continuing with the saved conversation context."
+                            if settings_changed
+                            else "The workspace connection was updated. Nebula preserved this chat "
                             "and continued in a new runtime session with conversation context."
                             if workspace_changed
                             else "The command runtime changed, so Nebula preserved the prior session "
@@ -9080,6 +9193,13 @@ class HarnessRuntimeService:
         call = self.store.reserve_tool_call(call)
         call = self._attach_gateway_tool_call(turn, call.id)
         try:
+            schema = _GATEWAY_RETRIEVAL_SCHEMAS[name]
+            if not Draft7Validator(schema).is_valid(arguments):
+                required = ", ".join(schema.get("required", []))
+                accepted = ", ".join(schema.get("properties", {}))
+                raise HarnessConfigurationError(
+                    f"Invalid arguments for {name}. Required: {required}. Accepted: {accepted}. Correct the arguments and retry."
+                )
             if name == "tool_output.search":
                 output_service = ToolOutputService(self.store, self.artifact_store)
                 result = await asyncio.to_thread(
@@ -9619,7 +9739,7 @@ class HarnessRuntimeService:
                     interaction_handler=interaction_handler,
                 )
             )
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             self._gateways.pop(session.id, None)
             await gateway.close()
             raise

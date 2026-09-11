@@ -590,18 +590,29 @@ def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
         == session.metadata["runtime_options"]
     )
 
-    with pytest.raises(Exception, match="reasoning effort cannot change"):
-        runtime.prepare_chat(
-            engagement_id=engagement.id,
-            profile_id=profile.id,
-            model="test-model",
-            prompt="Change effort",
-            chat_session_id=chat.id,
-            harness_session_id=session.id,
-            mcp_server_ids=[],
-            harness_reasoning_effort="low",
-            harness_service_tier="fast",
-        )
+    updated_chat, _, updated_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Change effort",
+        chat_session_id=chat.id,
+        harness_session_id=session.id,
+        mcp_server_ids=[],
+        harness_reasoning_effort="low",
+        harness_service_tier="fast",
+    )
+    replacement = store.get(HarnessSession, updated_turn.harness_session_id)
+    assert updated_chat.id == chat.id
+    assert replacement.id != session.id
+    assert replacement.metadata["runtime_options"]["reasoning_effort"] == "low"
+    assert (
+        store.get(HarnessSession, session.id).metadata["runtime_options"][
+            "reasoning_effort"
+        ]
+        == "high"
+    )
+    assert "Use the selected runtime" in updated_turn.prompt
+    assert updated_chat.metadata["harness_runtime_options"]["reasoning_effort"] == "low"
 
 
 def test_grok_skill_catalog_discovers_bundled_and_installed_plugin_skills(
@@ -3452,3 +3463,97 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
     assert (
         store.get(HarnessSession, second.harness_session_id).external_session_id is None
     )
+
+
+@pytest.mark.parametrize(
+    "name,arguments,required",
+    [
+        ("workspace.read", {}, "path"),
+        ("workspace.search", {}, "query"),
+        ("workspace.search", {"query": "text", "glob": "*.md"}, "query"),
+    ],
+)
+def test_workspace_retrieval_reports_actionable_argument_errors(
+    tmp_path, name, arguments, required
+):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    _, _, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Read the local notes",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    with pytest.raises(Exception, match=f"Required: {required}") as error:
+        asyncio.run(runtime._gateway_retrieval(turn, name, arguments))
+    assert "Correct the arguments and retry" in str(error.value)
+    assert "keyword" not in str(error.value)
+
+
+@pytest.mark.parametrize("change", ["model", "profile", "mcp", "provider"])
+def test_assistant_settings_keep_chat_history_and_replace_frozen_runtime(
+    tmp_path, change
+):
+    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+    chat, _, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Remember the first message",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    original = store.get(HarnessSession, turn.harness_session_id)
+    selected = profile
+    model = original.model
+    if change == "model":
+        model = "second-model"
+        selected = store.update(
+            HarnessProfile,
+            profile.id,
+            {
+                "capabilities": profile.capabilities.model_copy(
+                    update={"models": [original.model, model]}
+                )
+            },
+            expected_revision=profile.revision,
+        )
+    if change == "profile":
+        selected = store.create(
+            profile.model_copy(
+                update={"id": "second-harness", "name": "Second harness"}
+            )
+        )
+    if change == "provider":
+        chat = store.update(
+            ChatSession,
+            chat.id,
+            {
+                "backend": ChatBackend.PROVIDER,
+                "provider_profile_id": "previous-provider",
+                "harness_profile_id": None,
+                "harness_session_id": None,
+            },
+            expected_revision=chat.revision,
+        )
+    updated, _, next_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=selected.id,
+        model=model,
+        prompt="Continue the conversation",
+        chat_session_id=chat.id,
+        harness_session_id=None,
+        mcp_server_ids=[mcp.id] if change == "mcp" else [],
+        allow_remote_mcp=True,
+    )
+    assert updated.id == chat.id
+    assert updated.model == model
+    assert updated.harness_profile_id == selected.id
+    assert updated.harness_session_id != original.id
+    assert updated.backend == ChatBackend.HARNESS
+    assert "Remember the first message" in next_turn.prompt
+    assert store.get(HarnessSession, original.id) == original
+    assert len(runtime._chat_messages(engagement.id, chat.id)) == 2

@@ -251,10 +251,8 @@ class ChatCompletionRequest(NebulaModel):
     # Optional vendor-native turn controls.  They are validated again against
     # the negotiated profile in HarnessRuntime.prepare_chat.
     harness_mode: str | None = Field(default=None, min_length=1, max_length=100)
-    harness_reasoning_effort: str | None = Field(
-        default=None, min_length=1, max_length=100
-    )
-    harness_service_tier: str | None = Field(default=None, min_length=1, max_length=100)
+    harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    harness_service_tier: str | None = Field(default=None, max_length=100)
     harness_skill: dict[str, str] | None = None
     stream: bool = False
 
@@ -906,14 +904,6 @@ class ChatService:
                     "chat session does not belong to the requested engagement"
                 )
             engagement_id = session.engagement_id
-            if session.provider_profile_id != profile.id:
-                raise ChatHistoryConflict(
-                    "provider_id cannot change within a durable chat session"
-                )
-            if request.model and request.model != session.model:
-                raise ChatHistoryConflict(
-                    "model cannot change within a durable chat session"
-                )
             stored_messages = self._session_messages(session)
             incoming, _ = self._merge_history(stored_messages, incoming)
             _, new_messages = self._merge_history(stored_messages, durable_incoming)
@@ -3372,7 +3362,14 @@ class ChatService:
                 prepared.session = transaction.update(
                     ChatSession,
                     session.id,
-                    {"metadata": metadata},
+                    {
+                        "backend": ChatBackend.PROVIDER,
+                        "provider_profile_id": prepared.provider_profile.id,
+                        "harness_profile_id": None,
+                        "harness_session_id": None,
+                        "model": prepared.resolved_model,
+                        "metadata": metadata,
+                    },
                     expected_revision=session.revision,
                 )
                 transaction.add_all([*messages, turn])
@@ -3506,6 +3503,11 @@ class ChatService:
                     ChatSession,
                     prepared.session.id,
                     {
+                        "backend": ChatBackend.PROVIDER,
+                        "provider_profile_id": prepared.provider_profile.id,
+                        "harness_profile_id": None,
+                        "harness_session_id": None,
+                        "model": prepared.resolved_model,
                         "metadata": {
                             **prepared.session.metadata,
                             **(
@@ -3516,7 +3518,7 @@ class ChatService:
                             ),
                             "message_count": messages[-1].sequence,
                             "last_sequence": messages[-1].sequence,
-                        }
+                        },
                     },
                     expected_revision=prepared.session.revision,
                 )

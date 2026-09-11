@@ -1,24 +1,40 @@
 {
-  "reviewed_by": "Codex, alpha.17 AppImage integrity repair",
-  "reason": "The release packaging change normalizes bundled Chromium's Linux rpath before hashing it, so linuxdeploy's later mandatory rpath operation is byte-for-byte idempotent. Tests cover the ordering, resulting digest, workflow packaging contract, package audit, version synchronization, and release contracts.",
-  "exclusions": "No application, backend, UI, state, or API behavior changes. The terminal Assistant product matrix passed on the identical application code in PR 276 and preparation run 34619152649. Frontend, native, Playwright, and unrelated Python suites are excluded. The protected release still runs its real-Core sandbox integration, installer audits, self-tests, and clean-install smoke. This is not full-suite approval.",
-  "baseline": "daae3e241d1f2a81bc4516984bc46192e0dda693",
+  "reviewed_by": "Codex assistant reliability review",
+  "reason": "Focused adapter transport/auth/startup coverage, durable next-turn runtime settings and history, validated workspace retrieval errors, independent settings catalogs and opt-in assistant failure details. One real-Core production LAN journey across eight permanent desktop/mobile profiles validates settings, persistence, disclosure and catalog recovery.",
+  "exclusions": "No full suite authorized. Unrelated missions, security browser, releases, native shell and other UI journeys excluded. Shared harness/chat files reviewed: adapter contract tests and exact runtime/history regressions cover touched paths. No native code changes. Real vendor authentication and physical devices are unavailable; vendor protocols use inert fixtures and mobile browsers are emulated.",
+  "baseline": "8491ca4702e3a46384ccd3b489bfe7f8718a5a39",
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
-    "python": 34,
-    "frontend": 0,
+    "python": 61,
+    "frontend": 14,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_packaging.py"
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_harnesses.py::test_harness_model_controls_are_validated_and_frozen_per_session",
+    "tests/v3/test_harnesses.py::test_workspace_retrieval_reports_actionable_argument_errors",
+    "tests/v3/test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime",
+    "tests/v3/test_chat.py::test_provider_settings_change_preserves_chat_and_history"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/ActivityLedger.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "53b8cf760d79d1ecd27a5dc9fc69d94fbb787b76ff1569e4e9868124609074af",
+  "playwright": [
+    "entry:assistant-reliability/assistant-real-desktop",
+    "entry:assistant-reliability/assistant-real-compact",
+    "entry:assistant-reliability/assistant-real-chromium-320",
+    "entry:assistant-reliability/assistant-real-webkit-320",
+    "entry:assistant-reliability/assistant-real-chromium-390",
+    "entry:assistant-reliability/assistant-real-webkit-390",
+    "entry:assistant-reliability/assistant-real-chromium-430",
+    "entry:assistant-reliability/assistant-real-webkit-430"
+  ],
+  "change_digest": "829bae289cb54c6c37e7da094d27c21013e382671c45d2e1640a8ef6b1c376f6",
   "python_browser": false,
   "python_node": false
 }
