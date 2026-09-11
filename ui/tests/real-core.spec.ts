@@ -2052,6 +2052,44 @@ for (const runtime of [
   });
 }
 
+test("assistant upgrade production LAN enables durable knowledge automatically", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({streamDelayMs: 50});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const project = projects[0];
+    const providerResponse = await api.post("providers", {data: {name: "Automatic knowledge acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const sourceResponse = await api.post("knowledge/ingest", {data: {
+      engagement_id: project.id,
+      filename: "automatic-knowledge.md",
+      media_type: "text/markdown",
+      content_base64: Buffer.from("# Project marker\n\nThe automatic knowledge marker is NEBULA_AUTO_KNOWLEDGE.").toString("base64"),
+    }});
+    expect(sourceResponse.ok(), await sourceResponse.text()).toBe(true);
+
+    await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.getByRole("button", {name: "Start new chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await expect(settings.getByRole("checkbox", {name: /Use knowledge/})).toHaveCount(0);
+    await expect(settings.getByRole("status").filter({hasText: "Knowledge1 source available automatically"})).toBeVisible();
+    await page.getByRole("button", {name: "Close assistant settings", exact: true}).click();
+    const completion = page.waitForRequest(request => request.url().endsWith("/api/v1/chat/completions") && request.method() === "POST");
+    await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("What is the project marker?");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    expect((await completion).postDataJSON()).toMatchObject({include_knowledge: true, allow_cloud_knowledge: false});
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Core is continuing in Project A", {timeout: 20_000});
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(stub);
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade deployed local service retains operator workflow", async ({page}, testInfo) => {
   const origin = process.env.NEBULA_ASSISTANT_LIVE_ORIGIN;
   const tokenFile = process.env.NEBULA_ASSISTANT_LIVE_TOKEN_FILE;
