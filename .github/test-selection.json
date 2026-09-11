@@ -1,29 +1,43 @@
 {
-  "reviewed_by": "Codex, unrestricted reviewed execution and terminal prompt review",
-  "reason": "The change crosses the reviewed-execution UI, API mapping, Core preflight/runtime capability, sandbox network contract, durable execution presentation, and terminal prompt hook. Selected tests cover exact-source binding, unrestricted bridge launch without target/ports, sandbox invariants, prompt audit/newline behavior, dialog/history rendering, and the production real-Core Code entry point on desktop Chromium.",
-  "exclusions": "No native Rust source changed, so native tests are empty. Existing scoped/offline API compatibility remains covered by the selected execution and sandbox suites. No external target is scanned and no live data is modified. Mobile Chromium exposed a separate compact Code-action handoff defect before this dialog opens, so mobile Chromium/WebKit acceptance is not silently waived and remains unverified. Physical-device and packaged-desktop acceptance are also outside this merge gate.",
-  "baseline": "de92b76c462be3c899bb2af7f25420def7cbce54",
-  "python_versions": ["3.11", "3.12", "3.13"],
+  "reviewed_by": "Codex, compact chat actions and host folder filtering review",
+  "reason": "The change crosses the host-folder Core route and API client, project folder picker, chat message actions, responsive interaction geometry, and the production real-Core project lifecycle. Selected tests cover case-insensitive full-directory filtering and pagination, stale-response handling, create/select/reopen persistence, compact fine-pointer controls, 44px touch targets, accessibility, and desktop plus Chromium/WebKit mobile boundaries.",
+  "exclusions": "No native Rust source changed, so native tests are empty. Provider, execution, browser-automation, database migration, and packaging workflows are outside the changed paths. Python 3.12 covers the platform-neutral folder enumeration contract; no browser or Node runtime is needed for that Python file. Physical-device and packaged-desktop checks are not available in this workspace and are not represented as automated merge evidence.",
+  "baseline": "904cfc41bcd187e8fc471f3f7f9fb8a9277122f2",
+  "python_versions": ["3.12"],
   "expected_tests": {
-    "python": 88,
-    "frontend": 5,
+    "python": 20,
+    "frontend": 48,
     "native": 0,
-    "playwright": 1
+    "playwright": 17
   },
   "python": [
-    "tests/v3/test_executions.py",
-    "tests/v3/test_sandbox.py",
-    "tests/v3/test_container_terminal.py"
+    "tests/v3/test_workspace.py"
   ],
   "frontend": [
-    "ui/src/components/ExecutionReviewDialog.test.tsx",
-    "ui/src/components/ExecutionHistory.test.tsx"
+    "ui/src/api/client.test.ts",
+    "ui/src/components/HostFolderPicker.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:unrestricted-execution/assistant-real-desktop"
+    "entry:project-lifecycle/desktop",
+    "entry:project-lifecycle/compact",
+    "entry:project-lifecycle/mobile-chromium",
+    "entry:project-lifecycle/mobile-chromium-small",
+    "entry:project-lifecycle/mobile-chromium-wide",
+    "entry:project-lifecycle/mobile-webkit-small",
+    "entry:project-lifecycle/mobile-webkit",
+    "entry:project-lifecycle/mobile-webkit-wide",
+    "entry:project-lifecycle/real-core",
+    "entry:stabilization/desktop",
+    "entry:stabilization/compact",
+    "entry:stabilization/mobile-chromium-small",
+    "entry:stabilization/mobile-chromium-ledger-390",
+    "entry:stabilization/mobile-chromium-wide",
+    "entry:stabilization/mobile-webkit-small",
+    "entry:stabilization/mobile-webkit",
+    "entry:stabilization/mobile-webkit-wide"
   ],
-  "change_digest": "63e0913909816b3dd38a5c2f3865ed60b87362ee33989bc5d94f8647082a17a4",
-  "python_browser": true,
-  "python_node": true
+  "change_digest": "5ef0356037adc3bf353148209c73091c9fd29ac0b39f2afc46fe24e6ae257e00",
+  "python_browser": false,
+  "python_node": false
 }

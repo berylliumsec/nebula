@@ -1,6 +1,6 @@
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUp, ChevronRight, Folder, FolderOpen, FolderPlus, LoaderCircle, Server, X } from "lucide-react";
+import { ArrowUp, ChevronRight, Folder, FolderOpen, FolderPlus, LoaderCircle, Search, Server, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface } from "./DialogSystem";
@@ -28,16 +28,24 @@ export function HostFolderPicker({ api, value, onSelect }: {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const [loadMoreError, setLoadMoreError] = useState<string>();
+  const [folderFilter, setFolderFilter] = useState("");
   const browseButtonRef = useRef<HTMLButtonElement>(null);
   const folderListRef = useRef<HTMLDivElement>(null);
   const newFolderInputRef = useRef<HTMLInputElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
   const retryLoadMoreButtonRef = useRef<HTMLButtonElement>(null);
   const selectButtonRef = useRef<HTMLButtonElement>(null);
+  const filterTimerRef = useRef<number | undefined>(undefined);
+  const loadSequenceRef = useRef(0);
 
-  const load = async (path?: string, moveFocus = false) => {
+  useEffect(() => () => window.clearTimeout(filterTimerRef.current), []);
+
+  const load = async (path?: string, moveFocus = false, filter = "") => {
     if (!api) return;
+    const sequence = ++loadSequenceRef.current;
     if (moveFocus) {
+      window.clearTimeout(filterTimerRef.current);
+      setFolderFilter("");
       setNewFolderOpen(false);
       setNewFolderName("");
       setCreateError(undefined);
@@ -46,18 +54,23 @@ export function HostFolderPicker({ api, value, onSelect }: {
     setError(undefined);
     setLoadMoreError(undefined);
     try {
-      setListing(await api.listHostWorkspaceFolders(path));
+      const nextListing = filter
+        ? await api.listHostWorkspaceFolders(path, 0, filter)
+        : await api.listHostWorkspaceFolders(path);
+      if (sequence !== loadSequenceRef.current) return;
+      setListing(nextListing);
       if (moveFocus) requestAnimationFrame(() => {
         const firstFolder = folderListRef.current?.querySelector<HTMLButtonElement>("button");
         if (firstFolder) firstFolder.focus();
         else selectButtonRef.current?.focus();
       });
     } catch (caught) {
+      if (sequence !== loadSequenceRef.current) return;
       logCaughtDiagnostic("interface.host_folder.list_failed", "A host workspace folder could not be listed.", caught, "host-folder-picker");
       setError(caught instanceof Error ? caught.message : "Folder could not be listed.");
       requestAnimationFrame(() => retryButtonRef.current?.focus());
     } finally {
-      setLoading(false);
+      if (sequence === loadSequenceRef.current) setLoading(false);
     }
   };
 
@@ -67,7 +80,9 @@ export function HostFolderPicker({ api, value, onSelect }: {
     setLoadingMore(true);
     setLoadMoreError(undefined);
     try {
-      const page = await api.listHostWorkspaceFolders(path, nextOffset);
+      const page = folderFilter.trim()
+        ? await api.listHostWorkspaceFolders(path, nextOffset, folderFilter)
+        : await api.listHostWorkspaceFolders(path, nextOffset);
       setListing((current) => {
         if (!current || current.path !== page.path) return current;
         const known = new Set(current.directories.map((directory) => directory.path));
@@ -86,8 +101,9 @@ export function HostFolderPicker({ api, value, onSelect }: {
   };
 
   const openBrowser = () => {
+    setFolderFilter("");
     setOpen(true);
-    void load(value?.trim() || listing?.path);
+    void load(value?.trim() || listing?.path, false, "");
   };
 
   const closeBrowser = () => {
@@ -97,7 +113,24 @@ export function HostFolderPicker({ api, value, onSelect }: {
     setNewFolderName("");
     setCreateError(undefined);
     setLoadMoreError(undefined);
+    setFolderFilter("");
+    window.clearTimeout(filterTimerRef.current);
+    loadSequenceRef.current += 1;
     requestAnimationFrame(() => browseButtonRef.current?.focus());
+  };
+
+  const filterFolders = (value: string) => {
+    setFolderFilter(value);
+    window.clearTimeout(filterTimerRef.current);
+    filterTimerRef.current = window.setTimeout(() => {
+      void load(listing?.path, false, value.trim());
+    }, 180);
+  };
+
+  const clearFolderFilter = () => {
+    setFolderFilter("");
+    window.clearTimeout(filterTimerRef.current);
+    void load(listing?.path, false, "");
   };
 
   const beginCreateFolder = () => {
@@ -166,11 +199,17 @@ export function HostFolderPicker({ api, value, onSelect }: {
           </form> : <button className="button secondary" type="button" disabled={!listing || loading} onClick={beginCreateFolder}><FolderPlus size={14} /> New folder</button>}
           {createError && <small role="alert">{createError}</small>}
         </div>
+        <label className="host-folder-filter">
+          <Search size={15} aria-hidden="true" />
+          <span className="sr-only">Filter folders</span>
+          <input type="search" value={folderFilter} placeholder="Filter folders by name" autoComplete="off" spellCheck={false} disabled={!listing || loading} onChange={(event) => filterFolders(event.target.value)} />
+          {folderFilter && <button className="icon-button subtle" type="button" aria-label="Clear folder filter" disabled={loading} onClick={clearFolderFilter}><X size={14} /></button>}
+        </label>
         <div ref={folderListRef} className="host-folder-list" aria-busy={loading}>
           {loading && <div className="host-folder-state" role="status"><LoaderCircle className="spin" size={20} /><span>Loading folders…</span></div>}
           {!loading && error && <div className="host-folder-state error" role="alert"><strong>Folder unavailable</strong><span>{error}</span><button ref={retryButtonRef} className="button secondary" type="button" onClick={() => void load(listing?.path, true)}>Try again</button></div>}
           {!loading && !error && listing?.directories.map((directory) => <button type="button" key={directory.path} title={directory.path} onClick={() => void load(directory.path, true)}><Folder size={18} /><span>{directory.name}</span><ChevronRight size={16} /></button>)}
-          {!loading && !error && listing && !listing.directories.length && <div className="host-folder-state"><FolderOpen size={20} /><span>This folder has no child folders.</span></div>}
+          {!loading && !error && listing && !listing.directories.length && <div className="host-folder-state"><FolderOpen size={20} /><span>{folderFilter.trim() ? `No folders match “${folderFilter.trim()}”.` : "This folder has no child folders."}</span></div>}
         </div>
         {!loading && !error && listing?.truncated && <div className={`host-folder-truncated${loadMoreError ? " error" : ""}`}>
           {loadMoreError

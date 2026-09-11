@@ -1717,6 +1717,23 @@ describe("ApiClient", () => {
     );
   });
 
+  it("requests a host-folder name filter", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      path: "/projects",
+      parent: "/",
+      directories: [{ name: "Research", path: "/projects/Research" }],
+      truncated: false,
+      next_offset: null,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.listHostWorkspaceFolders("/projects", 0, " Research ");
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/workspace-folders?path=%2Fprojects&filter=Research",
+    );
+  });
+
   it("maps bounded VS Code launch profiles and preserves disabled reasons", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       engagement_id: "project/one",

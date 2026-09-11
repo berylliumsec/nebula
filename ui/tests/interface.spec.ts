@@ -275,18 +275,23 @@ async function installTruthfulCore(page: Page) {
       } else {
         const requested = url.searchParams.get("path") ?? "/home/agent";
         const offset = Number(url.searchParams.get("offset") ?? "0");
+        const filter = url.searchParams.get("filter")?.toLocaleLowerCase() ?? "";
+        const firstPageDirectories = [{
+          name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+          path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
+        }];
+        const nextPageDirectories = [{
+          name: "z-folder-loaded-from-the-next-page",
+          path: "/home/agent/z-folder-loaded-from-the-next-page",
+        }];
+        const filteredDirectories = [...firstPageDirectories, ...nextPageDirectories]
+          .filter(directory => directory.name.toLocaleLowerCase().includes(filter));
         body = {
           path: requested,
           parent: requested === "/home/agent" ? "/home" : "/home/agent",
-          directories: requested === "/home/agent" && offset === 0 ? [{
-            name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog",
-            path: "/home/agent/a-very-long-project-folder-name-that-must-not-expand-the-dialog",
-          }] : requested === "/home/agent" ? [{
-            name: "z-folder-loaded-from-the-next-page",
-            path: "/home/agent/z-folder-loaded-from-the-next-page",
-          }] : [],
-          truncated: requested === "/home/agent" && offset === 0,
-          next_offset: requested === "/home/agent" && offset === 0 ? 1 : null,
+          directories: requested !== "/home/agent" ? [] : filter ? filteredDirectories : offset === 0 ? firstPageDirectories : nextPageDirectories,
+          truncated: requested === "/home/agent" && !filter && offset === 0,
+          next_offset: requested === "/home/agent" && !filter && offset === 0 ? 1 : null,
         };
       }
     } else if (path.endsWith("/engagements/scratch-project/scope")) {
@@ -2003,6 +2008,14 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   await expect(dialog.getByText("/home/agent/fresh-assessment", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Select folder" })).toBeFocused();
   await dialog.getByRole("button", { name: "Up one level" }).click();
+
+  const filter = dialog.getByRole("searchbox", { name: "Filter folders" });
+  await expect(filter).toBeEnabled();
+  await filter.fill("Z-FOLDER");
+  await expect(dialog.getByRole("button", { name: "z-folder-loaded-from-the-next-page" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "a-very-long-project-folder-name-that-must-not-expand-the-dialog" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Clear folder filter" }).click();
+  await expect(filter).toHaveValue("");
 
   const loadMore = dialog.getByRole("button", { name: "Load more folders" });
   await expect(loadMore).toBeVisible();
@@ -4043,6 +4056,9 @@ test("stabilization completed harness output keeps one continuous transcript scr
     const bounds = await forkAction.boundingBox();
     expect(bounds?.width).toBeGreaterThanOrEqual(44);
     expect(bounds?.height).toBeGreaterThanOrEqual(44);
+  } else {
+    const actionWidths = await completedMessage.locator(".chat-message-actions > button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().width));
+    expect(actionWidths.every(width => width <= 32)).toBe(true);
   }
 });
 
