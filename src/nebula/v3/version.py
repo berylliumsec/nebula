@@ -9,7 +9,7 @@ import sysconfig
 from importlib import resources
 from typing import TypedDict
 
-__version__ = "3.0.0-alpha.15"
+__version__ = "3.0.0-alpha.16"
 
 
 class BuildMetadata(TypedDict):
