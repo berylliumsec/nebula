@@ -1002,11 +1002,11 @@ kbd { font-size: 11px; }
 .chat-message header span { font-size: 11px; }
 .chat-message-actions { display: flex; min-height: 28px; align-items: center; gap: 4px; margin-top: 4px; opacity: 0; transition: opacity 120ms ease; }
 .chat-message:hover .chat-message-actions, .chat-message:focus-within .chat-message-actions { opacity: 1; }
-.chat-message-actions .icon-button { width: 28px; height: 28px; color: var(--muted); }
+.chat-message-actions .icon-button { width: 28px; min-width: 28px; height: 28px; min-height: 28px; color: var(--muted); }
 .chat-message-actions .icon-button:hover, .chat-message-actions .icon-button:focus-visible { color: var(--text-strong); background: var(--surface-hover); }
 @media (hover: none), (pointer: coarse) {
   .chat-message-actions { min-height: 44px; opacity: 1; }
-  .chat-message-actions .icon-button { width: 44px; height: 44px; }
+  .chat-message-actions .icon-button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) { .chat-message-actions { transition: none; } }
 .assistant-markdown.streaming::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; border-radius: var(--radius-control); vertical-align: -2px; background: var(--blue); animation: assistant-stream-caret 1s steps(2, jump-none) infinite; }
@@ -1915,7 +1915,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   display: grid;
   width: min(680px, calc(100vw - 32px));
   max-height: min(760px, calc(100dvh - 32px));
-  grid-template-rows: auto auto auto minmax(180px, 1fr) auto auto;
+  grid-template-rows: auto auto auto auto minmax(180px, 1fr) auto auto;
   overflow: hidden;
 }
 .host-folder-dialog > header {
@@ -1940,6 +1940,10 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .host-folder-create label { display: grid; min-width: 0; gap: 4px; color: var(--muted); font-size: 11px; }
 .host-folder-create input { width: 100%; min-width: 0; min-height: 36px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
 .host-folder-create > small { color: var(--red); overflow-wrap: anywhere; }
+.host-folder-filter { display: grid; min-width: 0; grid-template-columns: 20px minmax(0, 1fr) 28px; align-items: center; gap: 7px; margin: 8px 12px 0; padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); background: var(--surface); }
+.host-folder-filter:focus-within { border-color: var(--focus); }
+.host-folder-filter input { width: 100%; min-width: 0; height: 30px; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 12px; }
+.host-folder-filter .icon-button { width: 28px; height: 28px; }
 .host-folder-list { min-width: 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px; }
 .host-folder-list > button { display: grid; width: 100%; min-width: 0; min-height: 46px; grid-template-columns: 24px minmax(0, 1fr) 20px; align-items: center; gap: 9px; padding: 8px 10px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; text-align: left; cursor: pointer; }
 .host-folder-list > button:hover, .host-folder-list > button:focus-visible { background: var(--surface-hover); }
@@ -2087,7 +2091,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
      keyboard does not crop chat or make a full-screen workbench look smaller. */
   :root .page :is(input:not([type="checkbox"]):not([type="radio"]), textarea, select) { font-size: 16px; }
   .dialog-backdrop:has(.host-folder-dialog) { align-items: end; padding: 8px; }
-  .modal-surface.host-folder-dialog { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--radius-dialog); grid-template-rows: auto auto auto minmax(120px, 1fr) auto auto; }
+  .modal-surface.host-folder-dialog { width: 100%; max-height: calc(100dvh - 16px); border-radius: var(--radius-dialog); grid-template-rows: auto auto auto auto minmax(120px, 1fr) auto auto; }
   .host-folder-dialog > header { grid-template-columns: minmax(0, 1fr) 44px; gap: 10px; padding: 16px 16px 13px; }
   .host-folder-dialog > header h2 { margin-top: 5px; font-size: var(--type-title-sm); }
   .host-folder-dialog > header p { font-size: 11px; }
@@ -2097,6 +2101,9 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .host-folder-create > form { grid-template-columns: 1fr 1fr; }
   .host-folder-create label { grid-column: 1 / -1; }
   .host-folder-create .button { min-height: 44px; justify-content: center; }
+  .host-folder-filter { grid-template-columns: 20px minmax(0, 1fr) 44px; margin: 8px 10px 0; padding-right: 0; }
+  .host-folder-filter input { height: 40px; font-size: 16px; }
+  .host-folder-filter .icon-button { width: 44px; height: 44px; }
   .host-folder-list { padding: 6px; }
   .host-folder-list > button { min-height: 48px; padding-inline: 10px; }
   .host-folder-truncated { min-height: 48px; padding: 4px 10px 6px 16px; }
@@ -2435,6 +2442,9 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .assistant-search > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 
 .quiet-icon-action.icon-button, .quiet-icon-action.button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 44px; min-width: 44px; width: 44px; min-height: 44px; height: 44px; padding: 0; border-radius: 10px; }
+@media (hover: hover) and (pointer: fine) {
+  .chat-message-actions .quiet-icon-action.icon-button { flex-basis: 28px; min-width: 28px; width: 28px; min-height: 28px; height: 28px; }
+}
 .quiet-icon-action[aria-pressed="true"] { color: var(--blue); background: var(--blue-muted); }
 .quiet-icon-action:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 

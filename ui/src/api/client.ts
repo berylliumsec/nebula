@@ -7187,7 +7187,7 @@ export class ApiClient {
     ).then(mapSourceControlDiff);
   }
 
-  listHostWorkspaceFolders(path?: string, offset = 0): Promise<{
+  listHostWorkspaceFolders(path?: string, offset = 0, filter = ""): Promise<{
     path: string;
     parent?: string;
     directories: Array<{ name: string; path: string }>;
@@ -7197,6 +7197,7 @@ export class ApiClient {
     const parameters = new URLSearchParams();
     if (path) parameters.set("path", path);
     if (offset > 0) parameters.set("offset", String(offset));
+    if (filter.trim()) parameters.set("filter", filter.trim());
     const query = parameters.size ? `?${parameters}` : "";
     return this.request<{
       path: string;

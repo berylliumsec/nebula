@@ -5179,6 +5179,7 @@ def create_app(
         path: str | None = Query(default=None, max_length=4096),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=500, ge=1, le=500),
+        filter: str = Query(default="", max_length=255),
     ) -> dict[str, Any]:
         requested = Path(path).expanduser() if path else Path.home()
         if not requested.is_absolute():
@@ -5193,6 +5194,7 @@ def create_app(
             raise HTTPException(status_code=422, detail="selected path is not a folder")
         directories: list[dict[str, str]] = []
         directory_index = 0
+        name_filter = filter.strip().casefold()
         try:
             with os.scandir(current) as entries:
                 for entry in sorted(
@@ -5200,6 +5202,8 @@ def create_app(
                 ):
                     try:
                         if entry.is_dir(follow_symlinks=False):
+                            if name_filter and name_filter not in entry.name.casefold():
+                                continue
                             if directory_index < offset:
                                 directory_index += 1
                                 continue
@@ -5272,7 +5276,7 @@ def create_app(
             if descriptor is not None:
                 os.close(descriptor)
         return await list_host_workspace_folders(
-            str(parent / request.name), offset=0, limit=500
+            str(parent / request.name), offset=0, limit=500, filter=""
         )
 
     @app.get(

@@ -105,5 +105,31 @@ describe("HostFolderPicker", () => {
     expect(listHostWorkspaceFolders).toHaveBeenNthCalledWith(1, "/projects");
     expect(listHostWorkspaceFolders).toHaveBeenNthCalledWith(2, "/projects", 500);
     expect(listHostWorkspaceFolders).toHaveBeenNthCalledWith(3, "/projects", 500);
+  }, 10_000);
+
+  it("filters folder names across the host directory and clears the filter", async () => {
+    const listHostWorkspaceFolders = vi.fn(async (_path?: string, _offset?: number, filter?: string) => ({
+      path: "/projects",
+      parent: "/",
+      directories: filter === "TARGET"
+        ? [{ name: "Target-Research", path: "/projects/Target-Research" }]
+        : [{ name: "alpha", path: "/projects/alpha" }, { name: "Target-Research", path: "/projects/Target-Research" }],
+      truncated: false,
+    }));
+    const api = { listHostWorkspaceFolders } as unknown as ApiClient;
+    const user = userEvent.setup();
+    render(<HostFolderPicker api={api} value="/projects" onSelect={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Browse folders" }));
+    const filter = await screen.findByRole("searchbox", { name: "Filter folders" });
+    await user.type(filter, "TARGET");
+    await waitFor(() => expect(listHostWorkspaceFolders).toHaveBeenLastCalledWith("/projects", 0, "TARGET"));
+    expect(screen.getByRole("button", { name: "Target-Research" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "alpha" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear folder filter" }));
+    await waitFor(() => expect(listHostWorkspaceFolders).toHaveBeenLastCalledWith("/projects"));
+    expect(filter).toHaveValue("");
+    expect(await screen.findByRole("button", { name: "alpha" })).toBeVisible();
   });
 });

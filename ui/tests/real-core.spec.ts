@@ -1340,6 +1340,12 @@ test("real Core persists a project folder chosen through the host browser", asyn
     expect(existsSync(selectedFolder)).toBe(true);
     await browser.getByRole("button", { name: "Up one level" }).click();
     await expect(browser.getByRole("button", { name: "project-498", exact: true })).toBeVisible();
+    const folderFilter = browser.getByRole("searchbox", { name: "Filter folders" });
+    await folderFilter.fill("PROJECT-502");
+    await expect(browser.getByRole("button", { name: "project-502", exact: true })).toBeVisible();
+    await expect(browser.getByRole("button", { name: "project-498", exact: true })).toHaveCount(0);
+    await browser.getByRole("button", { name: "Clear folder filter" }).click();
+    await expect(folderFilter).toHaveValue("");
     await browser.getByRole("button", { name: "Load more folders" }).click();
     await browser.getByRole("button", { name: "project-502", exact: true }).click();
     await expect(browser.getByText(paginatedFolder, { exact: true })).toBeVisible();

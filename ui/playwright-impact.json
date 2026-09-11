@@ -169,9 +169,15 @@
       {"area":"mobile-layout","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
     ],
     "project-lifecycle": [
-      {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"project|workspace|host folder","runtime":"mock","shard":"1/1"},
-      {"area":"project-lifecycle","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"project|workspace|host folder","runtime":"mock","shard":"1/1"},
-      {"area":"project-lifecycle","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"project","runtime":"real-core","shard":"1/1"}
+      {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"compact","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
+      {"area":"project-lifecycle","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"real Core persists a project folder chosen through the host browser","runtime":"real-core","shard":"1/1"}
     ],
     "core-api": [
       {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}

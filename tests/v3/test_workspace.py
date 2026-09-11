@@ -504,6 +504,30 @@ def test_host_workspace_folder_browser_paginates_all_directories(tmp_path):
     assert second_listing["truncated"] is False
 
 
+def test_host_workspace_folder_browser_filters_all_directories_case_insensitively(
+    tmp_path,
+):
+    _store, _artifacts, _platform, _workspace, _engagement, client = _services(tmp_path)
+    browse_root = tmp_path / "filter-projects"
+    browse_root.mkdir()
+    for index in range(503):
+        (browse_root / f"project-{index:03d}").mkdir()
+    target = browse_root / "Research-Target"
+    target.mkdir()
+
+    response = client.get(
+        "/api/v1/workspace-folders",
+        params={"path": str(browse_root), "filter": "research"},
+        headers=AUTH,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["directories"] == [
+        {"name": target.name, "path": str(target.resolve())}
+    ]
+    assert response.json()["truncated"] is False
+
+
 def test_promotion_survives_symlink_safe_workspace_reset(tmp_path):
     store, artifacts, platform, workspace, engagement, client = _services(tmp_path)
     root = platform.workspace_for(engagement.id)
