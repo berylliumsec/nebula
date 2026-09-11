@@ -118,4 +118,14 @@ describe("exact assistant Markdown", () => {
     rerender(<AssistantMarkdown content={'```zsh\ncurl https://example.test\n```'} durable messageId="m" runnableLanguages={new Set(["bash"])} onRun={onRun} />);
     expect(screen.getByRole("button", { name: "Review and run bash code" })).toBeVisible();
   });
+
+  it("runs a durable bash fence in the terminal even without an execution runtime", async () => {
+    const user = userEvent.setup();
+    const onRun = vi.fn();
+    const onRunInTerminal = vi.fn();
+    render(<AssistantMarkdown content={'```bash\npwd\n```'} durable messageId="m" runnableLanguages={new Set(["bash"])} onRun={onRun} onRunInTerminal={onRunInTerminal} />);
+    await user.click(screen.getByRole("button", { name: "Run bash code in terminal" }));
+    expect(onRunInTerminal).toHaveBeenCalledWith(expect.objectContaining({ source: "pwd\n", language: "bash" }));
+    expect(onRun).not.toHaveBeenCalled();
+  });
 });

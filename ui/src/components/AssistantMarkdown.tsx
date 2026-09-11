@@ -27,6 +27,7 @@ interface AssistantMarkdownProps {
   streaming?: boolean;
   runnableLanguages: ReadonlySet<ExecutionLanguage>;
   onRun: (candidate: FencedRunCandidate) => void;
+  onRunInTerminal?: (candidate: FencedRunCandidate) => void;
 }
 
 function safeUrl(value: string): string {
@@ -73,11 +74,13 @@ function FencedCode({
   canRun,
   messageId,
   onRun,
+  onRunInTerminal,
 }: {
   block: ExactFence;
   canRun: boolean;
   messageId?: string;
   onRun: (candidate: FencedRunCandidate) => void;
+  onRunInTerminal?: (candidate: FencedRunCandidate) => void;
 }) {
   const codeRef = useRef<HTMLElement>(null);
   const selectionRef = useRef<{ start: number; end: number } | undefined>(undefined);
@@ -118,7 +121,7 @@ function FencedCode({
     if (!block.canonicalLanguage || !messageId) return;
     const selected = slice();
     const blockSha256 = await sha256(block.source);
-    onRun({
+    const candidate = {
       source: selected.source,
       language: block.canonicalLanguage,
       declaredLanguage: block.declaredLanguage,
@@ -130,7 +133,9 @@ function FencedCode({
         selectionStartByte: selected.selectionStartByte,
         selectionEndByte: selected.selectionEndByte,
       },
-    });
+    } satisfies FencedRunCandidate;
+    if (["bash", "sh"].includes(candidate.language) && onRunInTerminal) onRunInTerminal(candidate);
+    else onRun(candidate);
   };
 
   return (
@@ -142,8 +147,8 @@ function FencedCode({
             {feedback === "Copied exact source" ? <Check size={13} /> : <Copy size={13} />} Copy
           </button>
           {canRun && (
-            <button className="run-code" type="button" onMouseDown={captureSelection} onClick={() => void run()} aria-label={`Review and run ${block.canonicalLanguage} code`}>
-              <Play size={13} /> Run
+            <button className="run-code" type="button" onMouseDown={captureSelection} onClick={() => void run()} aria-label={["bash", "sh"].includes(block.canonicalLanguage ?? "") && onRunInTerminal ? `Run ${block.canonicalLanguage} code in terminal` : `Review and run ${block.canonicalLanguage} code`}>
+              <Play size={13} /> {["bash", "sh"].includes(block.canonicalLanguage ?? "") && onRunInTerminal ? "Run in terminal" : "Run"}
             </button>
           )}
         </div>
@@ -176,6 +181,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   streaming = false,
   runnableLanguages,
   onRun,
+  onRunInTerminal,
 }: AssistantMarkdownProps) {
   const parsed = useMemo(() => parseExactFences(content), [content]);
   const renderable = parsed.unmatchedStart === undefined ? content : content.slice(0, parsed.unmatchedStart);
@@ -200,6 +206,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
             messageId={messageId}
             canRun={Boolean(durable && messageId && block.canonicalLanguage && runnableLanguages.has(block.canonicalLanguage))}
             onRun={onRun}
+            onRunInTerminal={onRunInTerminal}
           />
         );
       }

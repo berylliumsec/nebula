@@ -335,8 +335,14 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
       : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, draft));
-    navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId) : "/?view=chat");
-    void persistSelectionHandoff(draft, "ask_nebula", "chat", currentSessionId);
+    const currentView = new URLSearchParams(location.search).get("view");
+    const targetView = currentView === "terminal" ? "terminal" : "chat";
+    navigate(engagement
+      ? targetView === "terminal"
+        ? `${projectSurface(engagement.id, "workbench")}?view=terminal${currentSessionId ? `&session=${encodeURIComponent(currentSessionId)}` : ""}`
+        : assistantHandoffPath(engagement.id, currentSessionId)
+      : `/?view=${targetView}`);
+    void persistSelectionHandoff(draft, "ask_nebula", targetView, currentSessionId);
   }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
   const openNoteSelection = useCallback((draft: SelectionActionDraft) => {
     setNoteDraft(draft);

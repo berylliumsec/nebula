@@ -4,9 +4,11 @@ import { createPortal } from "react-dom";
 export const BROWSER_ASSISTANT_SHEET_QUERY = "(max-width: 760px), (pointer: coarse) and (max-height: 500px)";
 
 /** Desktop column or a nonmodal phone sheet, retaining the same conversation. */
-export function BrowserAssistantPanel({ header, children, onActionContainer }: {
+export function BrowserAssistantPanel({ header, children, onActionContainer, panelId = "browser-assistant-panel", label = "Browser Assistant" }: {
   header: ReactNode; children: ReactNode;
   onActionContainer: (element: HTMLDivElement | null) => void;
+  panelId?: string;
+  label?: string;
 }) {
   const measure = () => {
     const viewport = window.visualViewport;
@@ -29,7 +31,7 @@ export function BrowserAssistantPanel({ header, children, onActionContainer }: {
       window.visualViewport?.removeEventListener("scroll", update);
     };
   }, []);
-  const panel = <aside id="browser-assistant-panel" className={`integrated-browser-assistant${viewport.mobile ? " browser-assistant-sheet" : ""}`} aria-label="Browser Assistant"
+  const panel = <aside id={panelId} className={`integrated-browser-assistant${viewport.mobile ? " browser-assistant-sheet" : ""}`} aria-label={label}
     style={viewport.mobile ? { bottom: `calc(${viewport.bottom}px + env(safe-area-inset-bottom, 0px))`, height: `calc(${viewport.height}px - env(safe-area-inset-bottom, 0px))` } : undefined}>
     <header>{header}</header>
     {viewport.mobile && <div ref={onActionContainer} className="browser-assistant-required-actions" />}

@@ -1,23 +1,37 @@
 {
-  "reviewed_by": "Codex, Nebula 3.0.0-alpha.14 release review",
-  "reason": "The release diff synchronizes the alpha.14 version across Python, UI, Tauri, and lockfiles and adds release notes. It narrows the packaging AST check to direct imports in try blocks, moves the one direct harness application-model import before its protected block, and enables an available knowledge gateway by default even when its source list is initially empty. The packaging and harness files cover those rules, synchronized version sources, release and package contracts, knowledge privacy boundaries, and harness runtime behavior. The release workflow separately runs its three updater-manifest contract tests.",
-  "exclusions": "No product layout, API, state, or browser behavior changes in this release commit, so frontend unit, native unit, and Playwright selections are empty. The three packaging/updater/test_generate_manifest.py release-contract tests, production UI build, and locked Rust check run separately because the selection tool only accepts tests/v3 Python files. Broad Python, frontend, native, and browser suites are excluded under the repository's focused-test policy.",
-  "baseline": "507492aa8effe0a1490f16742290b276b04a719c",
-  "python_versions": ["3.12"],
+  "reviewed_by": "Codex, terminal Assistant companion review",
+  "reason": "Adds the Terminal and Assistant companion layout, preserves terminal-selection chat handoff, and sends durable shell fences once to the active live terminal. Component tests cover exact fence routing and one-shot socket input. The terminal-assistant Playwright entries exercise the visible companion from the real Workbench entry point across desktop, compact, narrow, and 320/390/430 Chromium and WebKit mobile profiles. The packaging contract selection covers the alpha.15 version synchronization and release-note tree.",
+  "exclusions": "Backend behavior and Rust, browser automation, settings, and unrelated UI journeys are unchanged and excluded. The three updater-manifest contract tests and production build are checked separately. Real-Core and physical-device execution are evaluated separately after the focused mock-browser matrix; no full suite is selected.",
+  "baseline": "7937ccf00b3feb60589e3e3534632a8464971158",
+  "python_versions": [
+    "3.12"
+  ],
   "expected_tests": {
-    "python": 97,
-    "frontend": 0,
+    "python": 33,
+    "frontend": 22,
     "native": 0,
-    "playwright": 0
+    "playwright": 9
   },
   "python": [
-    "tests/v3/test_packaging.py",
-    "tests/v3/test_harnesses.py"
+    "tests/v3/test_packaging.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/assistantMarkdown.test.tsx",
+    "ui/src/components/ContainerTerminalPanel.test.tsx"
+  ],
   "native": [],
-  "playwright": [],
-  "change_digest": "4fb6609a6f7a677e39b7deb1eedb008e101066b9fe6f69250e41d61844660224",
+  "playwright": [
+    "entry:terminal-assistant/desktop",
+    "entry:terminal-assistant/compact",
+    "entry:terminal-assistant/narrow",
+    "entry:terminal-assistant/mobile-chromium-small",
+    "entry:terminal-assistant/mobile-chromium-ledger-390",
+    "entry:terminal-assistant/mobile-chromium-wide",
+    "entry:terminal-assistant/mobile-webkit-small",
+    "entry:terminal-assistant/mobile-webkit",
+    "entry:terminal-assistant/mobile-webkit-wide"
+  ],
+  "change_digest": "48df8d7f7ee96e508768d8ccb82d9d3d9f9ec278742a0366d8feaf4474814576",
   "python_browser": false,
   "python_node": false
 }

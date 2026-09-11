@@ -46,6 +46,8 @@ interface ContainerTerminalPanelProps {
   onUploadEvidence?: (request: EvidenceUploadRequest) => Promise<EvidenceSummary>;
   setupTerminalDetail?: string;
   setupTerminalStatus?: "detecting_runner" | "needs_runner" | "preparing_image" | "ready" | "disabled" | "error";
+  commandRequest?: { id: string; source: string };
+  onCommandAccepted?: (id: string) => void;
 }
 
 type LaunchPhase = "detecting" | "checking" | "preparing" | "starting";
@@ -124,6 +126,8 @@ function LiveContainerTerminal({
   session,
   runtime,
   network,
+  commandRequest,
+  onCommandAccepted,
 }: {
   api: ApiClient;
   active: boolean;
@@ -139,6 +143,8 @@ function LiveContainerTerminal({
   session: ContainerTerminalSession;
   runtime: ContainerTerminalRuntimeSnapshot;
   network: ContainerTerminalNetworkSnapshot;
+  commandRequest?: { id: string; source: string };
+  onCommandAccepted?: (id: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const selectionActions = useOptionalSelectionActions();
@@ -154,6 +160,7 @@ function LiveContainerTerminal({
   const [exit, setExit] = useState<ContainerTerminalExit>();
   const [networkWarning, setNetworkWarning] = useState<string>();
   const [networkBoundaryVisible, setNetworkBoundaryVisible] = useState(true);
+  const acceptedCommandRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -322,6 +329,14 @@ function LiveContainerTerminal({
     };
   }, [active, state]);
 
+  useEffect(() => {
+    if (!active || state !== "ready" || !commandRequest || acceptedCommandRef.current === commandRequest.id) return;
+    acceptedCommandRef.current = commandRequest.id;
+    socketRef.current?.sendInput(`${commandRequest.source.replace(/[\r\n]+$/, "")}\r`);
+    terminalRef.current?.focus();
+    onCommandAccepted?.(commandRequest.id);
+  }, [active, commandRequest, onCommandAccepted, state]);
+
   const auditWarningCount = (auditHealth?.degradedCount ?? 0)
     + (auditHealth?.truncatedCount ?? 0)
     + (auditHealth?.auditGapCount ?? 0)
@@ -442,6 +457,8 @@ export function ContainerTerminalPanel({
   onUploadEvidence,
   setupTerminalDetail,
   setupTerminalStatus,
+  commandRequest,
+  onCommandAccepted,
 }: ContainerTerminalPanelProps) {
   const confirm = useConfirmation();
   const apiBaseUrl = api.baseUrl;
@@ -957,6 +974,8 @@ export function ContainerTerminalPanel({
         runtime={tab.runtime}
         network={tab.network}
         session={tab.session}
+        commandRequest={activeKey === tab.key ? commandRequest : undefined}
+        onCommandAccepted={onCommandAccepted}
       />}
     </div>)}
   </section>;
