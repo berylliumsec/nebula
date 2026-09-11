@@ -2849,3 +2849,58 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await rm(backup, { recursive: true, force: true });
   }
 });
+
+const reliabilityTest = test.extend({serviceWorkers: "block"});
+reliabilityTest("assistant upgrade reliability settings and quiet activity survive refresh", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  page.setDefaultTimeout(10_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Assistant settings acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Assistant settings acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Remember this first message");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", {timeout: 20_000});
+    const chatId = new URL(page.url()).searchParams.get("session");
+    expect(chatId).toBeTruthy();
+    await expect(page.getByText("Fixture workspace argument error", {exact: true})).not.toBeVisible();
+    const ledger = page.locator(".chat-message.assistant .activity-ledger").last();
+    await ledger.getByRole("button", {name: "Show activity"}).click();
+    await ledger.getByText("Workspace read", {exact: true}).click();
+    await expect(ledger.getByText("Fixture workspace argument error", {exact: true}).first()).toBeVisible();
+    await ledger.getByRole("button", {name: "Hide activity"}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await page.getByLabel("Chat harness model", {exact: true}).selectOption("fixture-next");
+    await page.getByLabel("Harness reasoning effort", {exact: true}).selectOption("high");
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    await composer.fill("Continue using the new settings");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture-next high", {timeout: 20_000});
+    expect(new URL(page.url()).searchParams.get("session")).toBe(chatId);
+    await page.reload();
+    await expect(page.locator(".chat-message.operator")).toHaveCount(2);
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(page.getByLabel("Chat harness model", {exact: true})).toHaveValue("fixture-next");
+    await expect(page.getByLabel("Harness reasoning effort", {exact: true})).toHaveValue("high");
+    await page.getByRole("button", {name: "Close assistant settings"}).click();
+    await expect(page.getByText("Fixture workspace argument error", {exact: true})).not.toBeVisible();
+    let mcpFails = true;
+    await page.route(/\/api\/v1\/mcp-servers(?:\?|$)/, route => mcpFails ? route.fulfill({status: 503, json: {detail: "Unavailable fixture"}}) : route.continue());
+    await page.goto(`${core.origin}/settings#harness-settings`);
+    await expect(page.getByRole("heading", {name: "Approval fixture"})).toBeVisible();
+    await expect(page.getByRole("button", {name: "Retry catalogs"})).toBeVisible();
+    mcpFails = false;
+    await page.getByRole("button", {name: "Retry catalogs"}).click();
+    await expect(page.getByRole("button", {name: "Retry catalogs"})).toHaveCount(0);
+    await expect(page.getByRole("heading", {name: "Approval fixture"})).toBeVisible();
+    await testInfo.attach("assistant-reliability", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), chatId, runtime: "inert adapter; real Core, durable storage, production assets"}), contentType: "application/json"});
+    await testInfo.attach("assistant-reliability-screen", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await core.stop();}
+});

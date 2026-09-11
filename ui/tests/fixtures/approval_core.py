@@ -20,6 +20,8 @@ from nebula.v3.domain import (
     HarnessCapabilities,
     HarnessKind,
     HarnessProfile,
+    HarnessModelOptions,
+    HarnessRuntimeOption,
     ToolCall,
 )
 from nebula.v3.harnesses import (
@@ -93,6 +95,22 @@ class InertConnection(HarnessConnection):
         return decision
 
     async def run_turn(self, prompt, **kwargs):
+        if self.runtime.scenario == "settings":
+            options = self.request.session.metadata.get("runtime_options", {})
+            answer = f"SETTINGS {self.request.session.model} {options.get('reasoning_effort')}"
+            yield HarnessEvent(
+                type="item_upsert",
+                vendor=HarnessKind.CODEX_APP_SERVER,
+                item_id="fixture-read",
+                item_kind="tool",
+                item_status="failed",
+                title="Workspace read",
+                summary="Fixture workspace argument error",
+                payload={"detail": "Fixture workspace argument error"},
+            )
+            yield HarnessEvent(type="message_delta", delta=answer)
+            yield HarnessEvent(type="completed", message=answer)
+            return
         decisions = await asyncio.gather(
             *(
                 self.request_decision(index + 1)
@@ -133,7 +151,25 @@ class InertAdapter(HarnessAdapter):
             profile_id=profile.id,
             healthy=True,
             kind=self.kind,
-            capabilities=HarnessCapabilities(models=["fixture"], interruption=True),
+            capabilities=HarnessCapabilities(
+                models=["fixture", "fixture-next"]
+                if self.runtime.scenario == "settings"
+                else ["fixture"],
+                interruption=True,
+                model_options=[
+                    HarnessModelOptions(
+                        model=model,
+                        reasoning_efforts=[
+                            HarnessRuntimeOption(id="low", label="Low"),
+                            HarnessRuntimeOption(id="high", label="High"),
+                        ],
+                        default_reasoning_effort="low",
+                    )
+                    for model in ["fixture", "fixture-next"]
+                ]
+                if self.runtime.scenario == "settings"
+                else [],
+            ),
         )
 
     async def open(self, request):
@@ -162,6 +198,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scenario",
         choices=[
+            "settings",
             "single",
             "two_requests",
             "adapter_exit",

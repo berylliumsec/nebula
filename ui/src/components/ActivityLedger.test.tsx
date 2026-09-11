@@ -116,18 +116,16 @@ it("collapses failed command details without hiding their status, and preserves 
   const user = userEvent.setup();
   const failed = model({ status: "attention", attentionCount: 1, entries: [{ ...model().entries[0], status: "failed", brief: "Save finding failed — Command timed out", outputs: [{ label: "stderr", content: "Detailed command failure output" }] }] });
   const { rerender } = render(<ActivityLedger compact model={failed} />);
-  const attention = screen.getByLabelText("Activity requiring attention");
-  const summary = attention.querySelector("summary")!;
-  expect(within(attention).getByText("Failed")).toBeVisible();
-  expect(within(attention).getByText("Command timed out")).toBeVisible();
-  expect(within(attention).getByText("Detailed command failure output")).not.toBeVisible();
-  await user.click(summary);
-  expect(within(attention).getByText("Detailed command failure output")).toBeVisible();
+  expect(screen.queryByText("Detailed command failure output")).not.toBeInTheDocument();
+  expect(screen.getByText(/1 warning/)).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Show activity"}));
+  await user.click(screen.getByText("Save finding"));
+  expect(screen.getByText("Detailed command failure output")).toBeVisible();
   rerender(<ActivityLedger compact model={{ ...failed, durationMs: 9000 }} />);
-  expect(within(attention).getByText("Detailed command failure output")).toBeVisible();
-  await user.click(summary);
-  expect(within(attention).getByText("Detailed command failure output")).not.toBeVisible();
-  expect(screen.getByRole("button", { name: "Show activity" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByText("Detailed command failure output")).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Hide activity"}));
+  expect(screen.queryByText("Detailed command failure output")).not.toBeInTheDocument();
+
 });
 
 it("keeps saved thinking discoverable even when a completed turn used no tools", async () => {
@@ -136,4 +134,16 @@ it("keeps saved thinking discoverable even when a completed turn used no tools",
   await user.click(screen.getByRole("button", { name: "Show activity" }));
   await user.click(screen.getByText("Thinking"));
   expect(screen.getByText("Saved thinking episode")).toBeVisible();
+});
+
+it("keeps assistant technical failures opt-in while exposing requests for attention", async () => {
+  const failed = {...model().entries[0], id: "failed", status: "failed" as const, label: "Workspace read", summary: "Missing path argument", brief: "Missing path argument"};
+  const approval = {...model().entries[0], id: "approval", status: "attention" as const, label: "Approval required"};
+  render(<ActivityLedger compact model={model({attentionCount: 2, entries: [failed, approval]})} />);
+  expect(screen.queryByText("Workspace read")).not.toBeInTheDocument();
+  expect(screen.queryByText("Missing path argument")).not.toBeInTheDocument();
+  expect(screen.getByText("Approval required")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", {name: "Show activity"}));
+  await userEvent.click(screen.getByText("Workspace read"));
+  expect(screen.getByText("Missing path argument")).toBeVisible();
 });
