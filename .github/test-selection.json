@@ -1,37 +1,24 @@
 {
-  "reviewed_by": "Codex, terminal Assistant companion review",
-  "reason": "Adds the Terminal and Assistant companion layout, preserves terminal-selection chat handoff, and sends durable shell fences once to the active live terminal. Component tests cover exact fence routing and one-shot socket input. The terminal-assistant Playwright entries exercise the visible companion from the real Workbench entry point across desktop, compact, narrow, and 320/390/430 Chromium and WebKit mobile profiles. The packaging contract selection covers the alpha.15 version synchronization and release-note tree.",
-  "exclusions": "Backend behavior and Rust, browser automation, settings, and unrelated UI journeys are unchanged and excluded. The three updater-manifest contract tests and production build are checked separately. Real-Core and physical-device execution are evaluated separately after the focused mock-browser matrix; no full suite is selected.",
-  "baseline": "7937ccf00b3feb60589e3e3534632a8464971158",
+  "reviewed_by": "Codex, alpha.16 AppImage integrity repair",
+  "reason": "The release-only change prevents linuxdeploy from stripping the bundled Chromium executable so the staged SHA-256 manifest remains valid inside the AppImage, synchronizes alpha.16 version sources, and adds release notes. The packaging tests cover the workflow command, package tree integrity, version synchronization, and release contracts.",
+  "exclusions": "No application, backend, UI, state, API, or Rust behavior changes. The terminal Assistant product matrix and sandbox integration passed on the identical application commit in alpha.15 preparation run 34619152649. Frontend, native, Playwright, and unrelated Python suites are excluded. Three updater-manifest tests, production UI build, and locked Rust checks run separately. This is not full-suite approval.",
+  "baseline": "19ae74eaeb91089080f9b6ce8168cb6118cf3a98",
   "python_versions": [
     "3.12"
   ],
   "expected_tests": {
     "python": 33,
-    "frontend": 22,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python": [
     "tests/v3/test_packaging.py"
   ],
-  "frontend": [
-    "ui/src/components/assistantMarkdown.test.tsx",
-    "ui/src/components/ContainerTerminalPanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:terminal-assistant/desktop",
-    "entry:terminal-assistant/compact",
-    "entry:terminal-assistant/narrow",
-    "entry:terminal-assistant/mobile-chromium-small",
-    "entry:terminal-assistant/mobile-chromium-ledger-390",
-    "entry:terminal-assistant/mobile-chromium-wide",
-    "entry:terminal-assistant/mobile-webkit-small",
-    "entry:terminal-assistant/mobile-webkit",
-    "entry:terminal-assistant/mobile-webkit-wide"
-  ],
-  "change_digest": "48df8d7f7ee96e508768d8ccb82d9d3d9f9ec278742a0366d8feaf4474814576",
+  "playwright": [],
+  "change_digest": "b72995606441cb6e2edd585834ceca1d7ab904352d6a63996b18867a9177bfe7",
   "python_browser": false,
   "python_node": false
 }

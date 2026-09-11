@@ -291,7 +291,7 @@ jobs:
           test -n "$sidecar"
           "$sidecar" doctor --data-dir "$RUNNER_TEMP/nebula-core-direct" --json
           poetry run python scripts/package_audit.py "$sidecar"
-          NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --features direct-updater --bundles appimage --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
+          NO_STRIP=1 NEBULA_DISTRIBUTION=direct npm --prefix ui run tauri -- build --ci --target "${{ matrix.target }}" --features direct-updater --bundles appimage --config src-tauri/tauri.direct.conf.json --config "$RUNNER_TEMP/tauri-updater.conf.json"
           appimage="$(find "$bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
           test -n "$appimage"
           test -s "$appimage.sig"
