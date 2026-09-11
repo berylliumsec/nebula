@@ -372,6 +372,10 @@ class BrowserCompanion:
             host = host_ref()
             if host is not None:
                 adapter = await host.adapter()
+                # Assessments and the companion share this registry. Once the
+                # lazy desktop host is ready, publish that authoritative adapter
+                # so guided preflight and pause/resume see the same capability.
+                self.engines.register(adapter)
         if not isinstance(adapter, LocalBrowserdAdapter):
             raise ValueError(
                 "Managed Chromium is unavailable. Prepare the browser runtime on the Nebula host, then retry. Your saved conversations remain available."

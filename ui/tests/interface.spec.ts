@@ -904,7 +904,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
       address: { top: addressRect.top, bottom: addressRect.bottom, height: addressRect.height },
       surfaceTop: surfaceRect.top,
       panelBottom: panelRect.bottom,
-      bounds: create?.args.bounds as { y: number; height: number },
+      bounds: create?.args.bounds as { x: number; y: number; width: number; height: number },
       devicePixelRatio: window.devicePixelRatio,
     };
   });
@@ -919,8 +919,51 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
   expect(geometry.devicePixelRatio).toBe(2);
   await expect(page.getByText("In scope")).toBeVisible();
+
+  const callsBeforeResearch = await page.evaluate(() => (
+    (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<unknown> }).__NEBULA_BROWSER_CALLS__ ?? []
+  ).length);
+  await page.getByRole("button", { name: "Security research workbench" }).click();
+  const securityWorkspace = page.getByRole("complementary", { name: "Security Browser workspace", exact: true });
+  await expect(securityWorkspace).toBeVisible();
+  const securityResize = securityWorkspace.getByRole("separator", { name: "Resize Security Browser workspace" });
+  await expect(securityResize).toBeVisible();
+  await expect.poll(() => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
+    return bounds?.width ?? 0;
+  })).toBeLessThan(geometry.bounds.width);
+  const narrowedBrowserWidth = await page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
+    return bounds?.width ?? 0;
+  });
+  const initialSecurityWidth = (await securityWorkspace.boundingBox())!.width;
+  await securityResize.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(async () => (await securityWorkspace.boundingBox())!.width).toBeLessThan(initialSecurityWidth);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.security-browser-workspace.width"))).not.toBeNull();
+  await expect.poll(() => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
+    return bounds?.width ?? 0;
+  })).toBeGreaterThan(narrowedBrowserWidth);
+  expect(await page.evaluate((start) => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    return calls.slice(start).some((call) => call.command === "browser_set_visible" && call.args.visible === false);
+  }, callsBeforeResearch)).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("browser-address-bar-2x.png") });
 
+  await page.getByRole("button", { name: "Security research workbench" }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    const boundsCalls = calls.filter((call) => call.command === "browser_set_bounds");
+    const bounds = boundsCalls.at(-1)?.args.bounds as { width?: number } | undefined;
+    return bounds?.width ?? 0;
+  })).toBeGreaterThan(narrowedBrowserWidth);
   await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
   await expect(page).toHaveURL(/view=browser/);
   const attachment = page.getByRole("region", { name: "Selected context pack" });
@@ -4665,6 +4708,17 @@ test("Terminal opens Assistant beside the live shell", async ({ page }) => {
   expect(bounds.right).toBeLessThanOrEqual(viewport.width + 1);
   expect(bounds.top).toBeGreaterThanOrEqual(0);
   expect(bounds.bottom).toBeLessThanOrEqual(viewport.height + 1);
+  const resizeHandle = assistant.getByRole("separator", { name: "Resize Terminal Assistant" });
+  if (viewport.width > 760) {
+    await expect(resizeHandle).toBeVisible();
+    const initialWidth = (await assistant.boundingBox())!.width;
+    await resizeHandle.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await assistant.boundingBox())!.width).toBeGreaterThan(initialWidth);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.terminal-assistant-panel.width"))).not.toBeNull();
+  } else {
+    await expect(resizeHandle).toHaveCount(0);
+  }
   await assistant.getByRole("button", { name: "Collapse terminal Assistant" }).click();
   await expect(assistant).toBeHidden();
 });
@@ -5642,6 +5696,18 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(page.getByRole("complementary", { name: "Browser Assistant", exact: true })).toHaveCount(0);
   await toggleAssistant.click();
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "true");
+  const openedAssistant = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+  const assistantResize = openedAssistant.getByRole("separator", { name: "Resize Browser Assistant" });
+  if (await openedAssistant.locator(".browser-assistant-sheet").count() === 0 && await openedAssistant.evaluate((element) => !element.classList.contains("browser-assistant-sheet"))) {
+    await expect(assistantResize).toBeVisible();
+    const initialWidth = (await openedAssistant.boundingBox())!.width;
+    await assistantResize.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await openedAssistant.boundingBox())!.width).toBeGreaterThan(initialWidth);
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.browser-assistant-panel.width"))).not.toBeNull();
+  } else {
+    await expect(assistantResize).toHaveCount(0);
+  }
   await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
   await expect(toggleAssistant).toBeFocused();
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
@@ -5663,7 +5729,7 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   }
   const pageSurface = page.locator(".managed-browser-screen");
   const expandedPage = await pageSurface.boundingBox();
-  const browserBounds = await page.locator(".integrated-browser-page").boundingBox();
+  const browserBounds = await page.locator(".persistent-browser > .integrated-browser-page").boundingBox();
   expect(expandedPage!.height).toBeGreaterThanOrEqual(160);
   expect(expandedPage!.y - browserBounds!.y).toBeLessThan(205);
   await expect(page.getByLabel("Browser address")).toHaveAttribute("readonly", "");

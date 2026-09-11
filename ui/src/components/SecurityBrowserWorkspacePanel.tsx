@@ -26,6 +26,7 @@ import type {
 } from "../api/types";
 import type { StreamState } from "../api/events";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useResizableSidePanel } from "./useResizableSidePanel";
 
 interface SecurityBrowserWorkspacePanelProps {
   api: ApiClient;
@@ -37,6 +38,7 @@ interface SecurityBrowserWorkspacePanelProps {
   toolNavigation: ReactNode;
   children: ReactNode;
   onClose: () => void;
+  onWidthChange?: (width: number | undefined) => void;
 }
 
 const PROFILE_ORDER: SecurityBrowserAssessmentProfile[] = [
@@ -69,6 +71,7 @@ export function SecurityBrowserWorkspacePanel({
   toolNavigation,
   children,
   onClose,
+  onWidthChange,
 }: SecurityBrowserWorkspacePanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [workspace, setWorkspace] = useState<SecurityBrowserAssessmentWorkspace>();
@@ -84,6 +87,25 @@ export function SecurityBrowserWorkspacePanel({
   const [validationTechnique, setValidationTechnique] = useState("");
   const [validationMaxRequests, setValidationMaxRequests] = useState(10);
   const [validationDurationSeconds, setValidationDurationSeconds] = useState(600);
+  const [compact, setCompact] = useState(() => globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false);
+  const size = useResizableSidePanel({
+    defaultWidth: 920,
+    enabled: !compact,
+    label: "Resize Security Browser workspace",
+    maxWidth: 1280,
+    minPrimaryWidth: 320,
+    minWidth: 640,
+    onWidthChange,
+    storageKey: "nebula.security-browser-workspace.width",
+  });
+
+  useEffect(() => {
+    const media = globalThis.matchMedia?.("(max-width: 1100px)");
+    if (!media) return;
+    const update = () => setCompact(media.matches);
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   const selectedId = searchParams.get("assessment") ?? undefined;
   const selected = workspace?.assessments.find((assessment) => assessment.id === selectedId);
@@ -372,7 +394,8 @@ export function SecurityBrowserWorkspacePanel({
     </section>,
   ];
 
-  return <aside className="browser-research-panel security-browser-workspace" aria-label="Security Browser workspace">
+  return <aside ref={size.panelRef} style={size.panelStyle} className="browser-research-panel security-browser-workspace" aria-label="Security Browser workspace">
+    {size.resizeHandle}
     <header>
       <div><strong>Security Browser</strong><small>Guided assessments, live browser, evidence, and expert tools</small></div>
       <div className="security-browser-header-actions"><span className={`security-browser-stream stream-${streamState}`}>{stateLabel(streamState)}</span><button type="button" aria-label="Close Security Browser" onClick={onClose}><X size={17} /></button></div>

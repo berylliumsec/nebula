@@ -660,8 +660,12 @@ kbd { font-size: 11px; }
 .browser-selection-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--red); font-size: 11px; line-height: 1.45; }
 .browser-selection-assistant > footer { justify-content: space-between; gap: 10px; color: var(--muted); font-size: 11px; }
 .browser-unavailable { min-height: 590px; }
-.workbench-browser.research-open > .browser-surface { margin-right: min(920px, 68vw); }
+.workbench-browser.research-open > .browser-surface { margin-right: min(var(--security-browser-panel-width, 920px), calc(100% - 320px)); }
 .browser-research-panel { position: absolute; z-index: 6; top: 86px; right: 0; bottom: 0; display: flex; width: min(920px, 68vw); min-width: 640px; max-width: calc(100% - 320px); flex-direction: column; overflow: hidden; border-left: 1px solid var(--border); color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-lg); }
+.side-panel-resize-handle { position: absolute; z-index: 8; inset: 0 auto 0 -11px; width: 22px; cursor: col-resize; touch-action: none; }
+.side-panel-resize-handle::after { content: ""; position: absolute; inset: 0 auto 0 10px; width: 2px; background: transparent; transition: background-color 120ms ease; }
+.side-panel-resize-handle:hover::after, .side-panel-resize-handle:focus-visible::after { background: var(--blue); }
+.side-panel-resize-handle:focus-visible { outline: 2px solid var(--blue); outline-offset: -4px; }
 .browser-research-panel > header { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 10px 10px 14px; border-bottom: 1px solid var(--border-soft); }
 .browser-research-panel > header > div { display: grid; min-width: 0; gap: 3px; }
 .browser-research-panel > header strong { font-size: 13px; }
@@ -690,7 +694,7 @@ kbd { font-size: 11px; }
 .security-browser-empty strong, .security-browser-welcome h2 { margin: 0; color: var(--text); }
 .security-browser-empty span, .security-browser-welcome p { margin: 0; font-size: 11px; line-height: 1.5; }
 .security-browser-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
-.security-browser-run-summary { display: grid; gap: 9px; padding: 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.security-browser-run-summary { display: grid; max-height: 46%; flex: 0 1 auto; gap: 9px; padding: 12px; overflow: auto; border-bottom: 1px solid var(--border); background: var(--surface); }
 .security-browser-run-summary > header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; }
 .security-browser-run-summary > header > div:first-child { display: grid; min-width: 0; gap: 4px; }
 .security-browser-run-summary h2 { margin: 0; font-size: 15px; }
@@ -911,7 +915,7 @@ kbd { font-size: 11px; }
 .web-browser-fallback .browser-start { overflow: auto; justify-content: safe center; }
 .web-browser-fallback .browser-start input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .web-browser-fallback .browser-research-panel { top: 55px; width: min(920px, 100%); }
-.web-browser-fallback.research-open > .browser-surface { margin-right: min(920px, 68vw); }
+.web-browser-fallback.research-open > .browser-surface { margin-right: min(var(--security-browser-panel-width, 920px), calc(100% - 320px)); }
 @media (max-width: 1100px) {
   .workbench-browser.research-open > .browser-surface, .web-browser-fallback.research-open > .browser-surface { margin-right: 0; visibility: hidden; }
   .browser-research-panel { width: 100%; min-width: 0; max-width: none; border-left: 0; }
@@ -929,6 +933,7 @@ kbd { font-size: 11px; }
   .security-browser-layout { display: flex; flex-direction: column; overflow: auto; }
   .security-browser-assessment-rail { min-height: 210px; max-height: 42%; border-right: 0; border-bottom: 1px solid var(--border); }
   .security-browser-main { min-height: 520px; overflow: visible; }
+  .security-browser-run-summary { max-height: none; overflow: visible; }
   .security-browser-run-summary > header { flex-direction: column; }
   .security-browser-run-controls { width: 100%; justify-content: stretch; }
   .security-browser-run-controls .button { min-height: 44px; flex: 1; justify-content: center; }

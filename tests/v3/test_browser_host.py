@@ -88,3 +88,39 @@ def test_partial_external_configuration_does_not_switch_browser_profiles(
     )
     with pytest.raises(ValueError, match="Managed Chromium is unavailable"):
         asyncio.run(service.adapter())
+
+
+def test_lazy_host_adapter_becomes_available_to_guided_assessments(tmp_path):
+    from nebula.v3.browser_companion import BrowserCompanion
+    from nebula.v3.browser_engine import LocalBrowserdAdapter, BrowserEngineRegistry
+    from nebula.v3.domain import BrowserEngineCapability, BrowserEngineState
+
+    class ReadyAdapter(LocalBrowserdAdapter):
+        def __init__(self):
+            super().__init__("http://127.0.0.1:4711", "fixture-token")
+
+        async def readiness(self):
+            return BrowserEngineCapability(
+                adapter="managed-chromium",
+                display_name="Managed Chromium",
+                state=BrowserEngineState.READY,
+                installed_version="fixture",
+                digest=f"sha256:{'a' * 64}",
+                actions=["navigate", "takeover"],
+                protocols=["http", "https"],
+            )
+
+    adapter = ReadyAdapter()
+
+    class Host:
+        async def adapter(self):
+            return adapter
+
+    host = Host()
+    registry = BrowserEngineRegistry([])
+    companion = BrowserCompanion(
+        NebulaStore(tmp_path / "core.db"), registry, managed_host=host
+    )
+
+    assert asyncio.run(companion.adapter()) is adapter
+    assert asyncio.run(registry.adapter("managed-chromium")) is adapter
