@@ -172,3 +172,12 @@
 
 .harness-command-hints button > span { min-width: 0; overflow-wrap: anywhere; }
 .harness-command-hints small { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; font-size: .75rem; color: var(--muted); }
+
+/* Terminal geometry must win over the vendor-canvas layer: fit the visible
+   pane and put padding where xterm FitAddon actually measures it. */
+.container-terminal-live.compact-terminal-live { display: flex; flex-direction: column; }
+.compact-terminal-live > :is(header, .terminal-live-notices, footer) { flex: 0 0 auto; }
+.compact-terminal-live > .xterm-shell { flex: 1 1 auto; min-height: 0; }
+.compact-terminal-live > .xterm-shell { padding: 0; }
+.compact-terminal-live > .xterm-shell > .xterm { padding: 10px 12px; }
+@media (max-width: 760px) { .compact-terminal-live > .xterm-shell > .xterm { padding-inline: 7px; } }

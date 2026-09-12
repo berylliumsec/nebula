@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
+import { TerminalToolbarDetails } from "./TerminalToolbarDetails";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
   AlertTriangle,
   ChevronDown,
+  Info,
+  Network,
   CircleStop,
   LoaderCircle,
   Plus,
@@ -38,6 +42,7 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import type { ContainerTerminalCapabilities } from "../api/types";
 
 interface ContainerTerminalPanelProps {
+  toolbarHost?: HTMLElement | null;
   active?: boolean;
   api: ApiClient;
   engagementId: string;
@@ -128,7 +133,9 @@ function LiveContainerTerminal({
   network,
   commandRequest,
   onCommandAccepted,
+  actionHost,
 }: {
+  actionHost: HTMLElement | null;
   api: ApiClient;
   active: boolean;
   auditHealth?: TerminalCommandHistoryStatus;
@@ -351,10 +358,9 @@ function LiveContainerTerminal({
         ? "Starting container…"
         : state.replaceAll("_", " ");
 
-  return <div className="container-terminal-live">
-    <header>
-      <div><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span><strong>{statusLabel}</strong></span></div>
-      <div className="terminal-header-actions">
+  const controls = <>
+      <div className="terminal-connection-status" role="status" title={statusLabel}><span className={`status-dot ${failedExit || state === "error" ? "unavailable" : state === "ready" ? "healthy" : "warning"}`} /><span className="terminal-connection-label">{statusLabel}</span></div>
+      <div className="terminal-header-actions" data-terminal-session={session.sessionId}>
         <TerminalScreenshotAction
           capturedBy={capturedBy}
           engagementId={engagementId}
@@ -363,21 +369,27 @@ function LiveContainerTerminal({
           session={session}
           uploadEvidence={onUploadEvidence ?? ((request) => api.uploadEvidence(request))}
         />
-        {exit ? <button className="button secondary" type="button" onClick={onNewTerminal}><Plus size={15} /> New terminal</button> : <button className="button danger" type="button" disabled={state === "closing" || state === "closed"} onClick={() => socketRef.current?.requestClose()}><CircleStop size={15} /> Stop terminal</button>}
+        <TerminalToolbarDetails label="Terminal details" icon={<Info size={16} aria-hidden="true" />}>
+          <p><strong>Image</strong> <code>{runtime.baseImage}</code></p>
+          <p><strong>Digest</strong> <code>{runtime.baseImageDigest}</code></p>
+          <p>Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.</p>
+        </TerminalToolbarDetails>
+        {exit ? <button className="icon-button subtle" type="button" aria-label="Restart terminal" title="Start a new terminal" onClick={onNewTerminal}><Plus size={16} aria-hidden="true" /></button> : <button className="icon-button terminal-stop" type="button" aria-label="Stop terminal" title="Stop terminal" disabled={state === "closing" || state === "closed"} onClick={() => socketRef.current?.requestClose()}><CircleStop size={16} aria-hidden="true" /></button>}
       </div>
-    </header>
+    </>;
+  return <div className="container-terminal-live compact-terminal-live">
+    {actionHost ? active && createPortal(controls, actionHost) : <header>{controls}</header>}
     <div className="terminal-live-notices">
       {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The terminal operation could not be completed." compact />}
       {managementError && <DiagnosticErrorNotice error={managementError} fallback="The terminal could not be stopped." compact />}
       {(auditWarningCount > 0 || auditHealthUnavailable) && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {auditHealthUnavailable ? "Terminal audit health is unavailable. Capture failures cannot be ruled out." : `${auditWarningCount} terminal audit warning${auditWarningCount === 1 ? "" : "s"} detected. Review Terminal Audit for classification, truncation, interruption, recovery, or persistence gaps.`}</p>}
       {networkWarning && <p className="terminal-audit-warning" role="alert"><AlertTriangle size={14} /> {networkWarning}</p>}
-      <p><code>kali-linux-headless</code> · <code title={runtime.baseImage}>{runtime.baseImageDigest.slice(0, 19)}…</code></p>
       {networkBoundaryVisible && (network.mode === "vpn"
         ? <p className="terminal-network-warning"><ShieldCheck size={14} /><span><strong>VPN enforced · {network.vpnProfileName ?? "Selected profile"}</strong> All container traffic remains blocked until OpenVPN is ready and fails closed if the tunnel stops. No VPN capability or profile secret is exposed to this shell.</span><button className="icon-button subtle" type="button" aria-label="Dismiss VPN boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>
         : <p className="terminal-network-warning"><AlertTriangle size={14} /><span>Bridge networking is permitted, not guaranteed. Host IPv4 and IPv6 availability can differ. Inbound TCP or UDP ports are granted only when explicitly published on host loopback. No raw-packet capabilities, host shell, or runtime socket are granted.</span><button className="icon-button subtle" type="button" aria-label="Dismiss network boundary notice" onClick={() => setNetworkBoundaryVisible(false)}><X size={14} /></button></p>)}
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
-    <footer><ShieldCheck size={14} /> Additional system changes and packages disappear when this content-pinned container closes; the Kali headless baseline and <code>/workspace</code> remain available in new sessions.{exit?.exitCode !== undefined ? ` Exit code ${exit.exitCode}.` : ""}</footer>
+    {exit?.exitCode !== undefined && <footer>Exit code {exit.exitCode}.</footer>}
   </div>;
 }
 
@@ -449,6 +461,7 @@ function tabStatus(tab: TerminalTab): "healthy" | "warning" | "unavailable" | "m
 }
 
 export function ContainerTerminalPanel({
+  toolbarHost,
   active = true,
   api,
   capturedBy,
@@ -460,6 +473,7 @@ export function ContainerTerminalPanel({
   commandRequest,
   onCommandAccepted,
 }: ContainerTerminalPanelProps) {
+  const [actionHost, setActionHost] = useState<HTMLDivElement | null>(null);
   const confirm = useConfirmation();
   const apiBaseUrl = api.baseUrl;
   const apiToken = api.getToken();
@@ -898,8 +912,7 @@ export function ContainerTerminalPanel({
   const canAdd = !launchInProgress && capacity.availableSessions > 0;
   const activeTab = tabs.find((tab) => tab.key === activeKey);
 
-  return <section className="terminal-workspace" aria-label="Project terminals">
-    <header className="terminal-tab-bar">
+  const toolbar = <header className="terminal-tab-bar">
       <div className="terminal-tab-strip" role="tablist" aria-label="Open terminals">
         {tabs.map((tab) => <button
             key={tab.key}
@@ -918,6 +931,9 @@ export function ContainerTerminalPanel({
           </button>)}
       </div>
       <div className="terminal-tab-actions">
+        <div className="terminal-active-actions" ref={setActionHost} />
+        <TerminalToolbarDetails label="Terminal network settings" icon={<Network size={16} aria-hidden="true" />}>
+        <p>Publish container TCP or UDP ports on host loopback for the next terminal. Running terminals keep their existing ports.</p>
         <label className="terminal-port-control" title="Publish selected container TCP or UDP ports on host loopback for the next terminal">
           <span>Inbound</span>
           <input
@@ -929,8 +945,9 @@ export function ContainerTerminalPanel({
             disabled={launchInProgress}
           />
         </label>
+        <p>{capacity.activeSessions} / {capacity.maxActiveSessions} terminal containers active across all Projects.</p>
+        </TerminalToolbarDetails>
         {publishedPortsError && <span className="terminal-port-error" role="alert">{publishedPortsError}</span>}
-        <span className="terminal-capacity" title="Active terminal containers across all Projects">{capacity.activeSessions} / {capacity.maxActiveSessions}</span>
         {activeTab && <button className="icon-button subtle terminal-tab-close" type="button" aria-label={`Close Terminal ${activeTab.ordinal}`} onClick={() => void closeTab(activeTab)}><X size={14} /></button>}
         <button className="icon-button subtle terminal-add" type="button" aria-label="New terminal" title={canAdd ? "New terminal" : capacity.availableSessions <= 0 ? "Terminal capacity is full" : "Wait for the current terminal to finish starting"} disabled={!canAdd} onClick={addTerminal}><Plus size={16} /></button>
         <div className="terminal-overflow">
@@ -940,7 +957,9 @@ export function ContainerTerminalPanel({
           </div>}
         </div>
       </div>
-    </header>
+    </header>;
+  return <section className="terminal-workspace" aria-label="Project terminals">
+    {toolbarHost ? createPortal(toolbar, toolbarHost) : toolbar}
     {!tabs.length && <div className="terminal-empty-state"><SquareTerminal size={28} /><strong>No open terminals</strong><p>Start another isolated Kali container for this Project.</p><button className="button primary" type="button" disabled={!canAdd} onClick={addTerminal}><Plus size={15} /> New terminal</button></div>}
     {tabs.map((tab) => <div
       id={`terminal-panel-${tab.key}`}
@@ -957,6 +976,7 @@ export function ContainerTerminalPanel({
         onClose={() => removeTab(tab.key)}
         onRetry={() => retryTab(tab)}
       /> : <LiveContainerTerminal
+        actionHost={actionHost}
         active={active && activeKey === tab.key}
         api={api}
         auditHealth={auditHealth}

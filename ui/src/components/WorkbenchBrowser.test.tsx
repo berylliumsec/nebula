@@ -199,6 +199,31 @@ describe("WorkbenchBrowser", () => {
     vi.restoreAllMocks();
   });
 
+  it("shows missing native scope without claiming research state is unavailable", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    api.recordSecurityBrowserTraffic = vi.fn(async (sessionId, event) => ({...event, sessionId, id: "blocked-scope-event"} as never));
+    renderBrowser(undefined, undefined, {...scope, allowAllTargets: true}, undefined, api);
+    await openPage();
+    expect(screen.getByText("Project: all targets")).toBeVisible();
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await act(async () => eventMocks.handlers.get("nebula-browser-traffic")?.({payload: {
+      sessionId: "browser-session-1", tabId, url: "https://docs.example.com/guide", method: "GET", protocol: "http/1.1",
+      requestHeaders: {}, responseHeaders: {}, blocked: true, error: "no compiled Project scope is active for this browser session",
+    }}));
+    expect(screen.getByText("Browser scope unavailable")).toBeVisible();
+    expect(screen.getByText(/Navigation blocked: browser scope unavailable/)).toBeVisible();
+    expect(screen.queryByText("Research state is unavailable")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Reload page"})).toBeEnabled();
+    await act(async () => eventMocks.handlers.get("nebula-browser-traffic")?.({payload: {
+      sessionId: "browser-session-1", tabId, url: "https://docs.example.com/guide", method: "GET", protocol: "http/1.1",
+      requestHeaders: {}, responseHeaders: {}, blocked: false, statusCode: 200,
+    }}));
+    expect(screen.queryByText(/Navigation blocked: browser scope unavailable/)).not.toBeInTheDocument();
+    expect(screen.getByText("Project: all targets")).toBeVisible();
+  });
+
   it("hides the native browser while a settings lens is open and restores the active tab", async () => {
     runtimeMocks.isTauriRuntime.mockReturnValue(true);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
