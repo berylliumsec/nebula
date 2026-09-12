@@ -151,6 +151,7 @@
       "shard": "1/1"
     }
   ],
+    "toolbar-actions": [{"area": "toolbar-actions", "project": "desktop", "test_match": "tests/interface.spec.ts", "grep": "shared actions keep sleek geometry for direct Workbench toolbar icons", "runtime": "mock", "shard": "1/1"}, {"area": "toolbar-actions", "project": "compact", "test_match": "tests/interface.spec.ts", "grep": "shared actions keep sleek geometry for direct Workbench toolbar icons", "runtime": "mock", "shard": "1/1"}, {"area": "toolbar-actions", "project": "mobile-chromium", "test_match": "tests/interface.spec.ts", "grep": "shared actions keep sleek geometry for direct Workbench toolbar icons", "runtime": "mock", "shard": "1/1"}, {"area": "toolbar-actions", "project": "mobile-webkit", "test_match": "tests/interface.spec.ts", "grep": "shared actions keep sleek geometry for direct Workbench toolbar icons", "runtime": "mock", "shard": "1/1"}],
     "compact-header": [
       {
         "area": "compact-header",

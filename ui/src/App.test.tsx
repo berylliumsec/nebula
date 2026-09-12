@@ -91,15 +91,15 @@ describe("Nebula workspace", () => {
   it("opens the Workbench full screen and exits with Escape", async () => {
     const user = userEvent.setup();
     renderApp();
-    await user.click(await screen.findByRole("button", { name: "More Workbench actions" }));
+    expect(screen.queryByRole("button", { name: "More Workbench actions" })).not.toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Enter focus mode" }));
     const workbench = document.querySelector(".sessions-page");
-    await user.click(screen.getByRole("menuitem", { name: /Enter focus mode/ }));
     expect(workbench).toHaveClass("full-screen");
     expect(screen.getByRole("button", { name: "Exit full screen workbench" })).toBeVisible();
 
     await user.keyboard("{Escape}");
     expect(workbench).not.toHaveClass("full-screen");
-    expect(screen.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   });
 
   it("defaults to Zero Dark and preserves all four supported preferences", () => {
@@ -345,8 +345,7 @@ describe("Nebula workspace", () => {
     expect(screen.queryByRole("textbox", { name: "Message the analyst assistant" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "More Workbench actions" }));
-    expect(screen.getByRole("menuitem", { name: /Show session details/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Show session details" })).toBeVisible();
     await user.keyboard("{Escape}");
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/chat/completions") && init?.method === "POST")).toBe(false);
 
