@@ -9,8 +9,8 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:branch-review/desktop",
+    "entry:assistant/desktop",
     "entry:assistant/mobile-chromium",
-    "entry:branch-review/mobile-webkit"
+    "entry:assistant/mobile-webkit"
   ]
 }
