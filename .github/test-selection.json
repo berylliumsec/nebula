@@ -1,33 +1,53 @@
 {
-  "baseline": "c5fd66d2d42c5f33d1776eb5706073791a9a627e",
-  "change_digest": "bf3090a0ec765b80e4906cfc53d53d1afca27c3a626bcdfcd47fe9cf7c2361f4",
-  "reviewed_by": "Codex toolbar review",
-  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; the existing transcript stability regression is included. Integrated current main header placement; additionally selected its eight compact-header cases to prove icon order, navigation and layout at 320/390/430 widths. Stabilize view and terminal-handoff callbacks to resolve the existing transcript DOM-stability failure exposed by the selected App tests; the same selected component file proves unchanged transcript nodes and preserved draft behavior.",
-  "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and manual screen-reader checks unavailable.",
+  "baseline": "1778f34ca6d350ad1d516f68b180299126041a72",
+  "change_digest": "5b8ea7c7de69d8f2c9ff8bb3bd26bc8f7ffc565406a7bc57d5516670409cd0b1",
+  "reviewed_by": "Codex reasoning retention review",
+  "reason": "Reasoning retention plus read-only viewer reconnection for accepted chat turns. Reviewed shared API/client/Core changes: focused completion replay, cursor/deduplication, heartbeat cleanup, uncertain execution rejection, detach and transport loss tests. Browser journeys use the existing eight profiles with deterministic viewer faults against real Core. Earlier unchanged reasoning cases retain their prior verified results; new work runs only reconnection selections.",
+  "exclusions": "No full suites. Unrelated features and native tests excluded. No live provider traffic or physical devices. New local run: 9 Python cases (120s), 9 UI cases (120s), 16 browser cases (60s each, 15min total), production build (180s). Cumulative branch selection also retains the previous 9 Python, 33 UI and 16 reasoning browser cases. Local Python 3.11; CI default 3.12.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 38,
+    "python": 18,
+    "frontend": 42,
     "native": 0,
-    "playwright": 12
+    "playwright": 32
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
+    "tests/v3/test_harness_adapters.py::test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_long_stream_without_snapshot",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_rejects_malformed_private_payloads",
+    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
+    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches",
+    "tests/v3/test_chat_api.py::test_completed_provider_events_wait_for_a_late_follower",
+    "tests/v3/test_harnesses.py::test_chat_harness_activity_is_durable_replayable_and_viewer_independent",
+    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay"
+  ],
   "frontend": [
-    "ui/src/App.test.tsx",
-    "ui/src/components/PostToolAssistant.test.tsx"
+    "ui/src/pages/harnessActivity.test.ts",
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/HarnessReasoningDetails.test.tsx",
+    "ui/src/api/chatConnection.test.ts",
+    "ui/src/pages/chatStreamLifecycle.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:toolbar-actions/desktop",
-    "entry:toolbar-actions/compact",
-    "entry:toolbar-actions/mobile-chromium",
-    "entry:toolbar-actions/mobile-webkit",
-    "entry:compact-header/desktop",
-    "entry:compact-header/compact",
-    "entry:compact-header/mobile-chromium-small",
-    "entry:compact-header/mobile-chromium-ledger-390",
-    "entry:compact-header/mobile-chromium-wide",
-    "entry:compact-header/mobile-webkit-small",
-    "entry:compact-header/mobile-webkit",
-    "entry:compact-header/mobile-webkit-wide"
+    "entry:thinking-retention/model-desktop",
+    "entry:thinking-retention/model-compact",
+    "entry:thinking-retention/model-chromium-320",
+    "entry:thinking-retention/model-webkit-320",
+    "entry:thinking-retention/model-chromium-390",
+    "entry:thinking-retention/model-webkit-390",
+    "entry:thinking-retention/model-chromium-430",
+    "entry:thinking-retention/model-webkit-430",
+    "entry:chat-reconnection/model-desktop",
+    "entry:chat-reconnection/model-compact",
+    "entry:chat-reconnection/model-chromium-320",
+    "entry:chat-reconnection/model-webkit-320",
+    "entry:chat-reconnection/model-chromium-390",
+    "entry:chat-reconnection/model-webkit-390",
+    "entry:chat-reconnection/model-chromium-430",
+    "entry:chat-reconnection/model-webkit-430"
   ]
 }

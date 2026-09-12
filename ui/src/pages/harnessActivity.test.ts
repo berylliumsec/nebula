@@ -263,6 +263,7 @@ describe("harness activity presentation", () => {
     expect(reasoningSummaryState(live[0])).toBe("available");
     expect(reasoningSummaryText(live[0])).toBe("Authoritative summary");
     expect(live[0].streams.reasoning_summary).toBe("Authoritative summary");
+    expect(live[0].payload.reasoning_streamed_text).toBe("Partial summary");
     expect(shouldShowActivityKind(live[0])).toBe(false);
 
     const duplicate = reduceHarnessActivity(live, completed, "assistant-1");
@@ -286,7 +287,7 @@ describe("harness activity presentation", () => {
     expect(item.summary).toBeUndefined();
     expect(reasoningSummaryState(item)).toBe("not_provided");
     expect(reasoningSummaryText(item)).toBeUndefined();
-    expect(shouldShowActivityItem(item)).toBe(false);
+    expect(shouldShowActivityItem(item)).toBe(true);
   });
 
   it("keeps active, summarized, and malformed reasoning items visible", () => {
@@ -499,10 +500,10 @@ describe("thinking episode recovery", () => {
     expect(replayed).toEqual(items);
     expect(events.reduce((items, event) => reduceHarnessActivity(items, event, "a"), [] as typeof items)).toEqual(items);
   });
-  it("marks long thinking previews as truncated rather than silently losing the tail", () => {
+  it("preserves long thinking including the tail", () => {
     let items = reduceHarnessActivity([], { ...thought(1, "a".repeat(40000)), itemId: "thinking-1" }, "a");
     items = reduceHarnessActivity(items, { ...thought(2, "b".repeat(40000)), itemId: "thinking-1" }, "a");
-    expect(reasoningSummaryText(items[0])).toHaveLength(65536);
-    expect(items[0].payload.reasoning_summary_truncated).toBe(true);
+    expect(reasoningSummaryText(items[0])).toBe("a".repeat(40000) + "b".repeat(40000));
+    expect(items[0].payload.reasoning_summary_truncated).toBeUndefined();
   });
 });

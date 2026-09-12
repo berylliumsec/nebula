@@ -147,3 +147,10 @@ it("keeps assistant technical failures opt-in while exposing requests for attent
   await userEvent.click(screen.getByText("Workspace read"));
   expect(screen.getByText("Missing path argument")).toBeVisible();
 });
+
+it("keeps completed reasoning without text discoverable", async () => {
+  render(<ActivityLedger compact model={model({status: "complete", actionCount: 0, entries: [{...model().entries[0], kind: "reasoning", status: "complete", countsAsAction: false, label: "Reasoning", summary: undefined, payload: {reasoning_summary_state: "not_provided"}}]})} />);
+  expect(screen.getByText(/1 thinking episode/)).toBeVisible();
+  await userEvent.click(screen.getByRole("button", {name: "Show activity"}));
+  expect(screen.getByText("Reasoning")).toBeVisible();
+});

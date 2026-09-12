@@ -169,6 +169,40 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
                 },
             )
 
+        # New long text must survive both diagnostic and UI limits, and differing
+        # final summaries must leave the earlier public stream inspectable.
+        append(
+            "output_delta",
+            "long-summary",
+            stream="reasoning_summary",
+            delta="Long public text. " * 5000 + "PRESERVED TAIL",
+        )
+        append(
+            "item_upsert",
+            "long-summary",
+            item_status="completed",
+            payload={
+                "reasoning_summary_text": "Completed summary for " + vendor,
+                "reasoning_summary_source": "completed_item",
+                "reasoning_summary_state": "available",
+            },
+        )
+        append(
+            "item_upsert",
+            "no-summary",
+            item_status="completed",
+            payload={"reasoning_summary_state": "not_provided"},
+        )
+        append(
+            "item_upsert",
+            "old-truncated",
+            item_status="completed",
+            payload={
+                "reasoning_summary_text": "Historical saved text…[truncated]",
+                "reasoning_summary_state": "available",
+            },
+        )
+
     # Legacy cancellation has events and a user message, but no final assistant row.
     stopped = store.create(
         HarnessTurn(

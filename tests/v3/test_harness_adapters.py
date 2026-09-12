@@ -874,7 +874,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert rpc.calls[1][1]["reasoningEffort"] == "high"
         assert rpc.calls[1][1]["serviceTier"] == "fast"
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
-        assert rpc.calls[2][1]["summary"] == "auto"
+        assert rpc.calls[2][1]["summary"] == "detailed"
         assert [event.type for event in events] == [
             "started",
             "approval_required",
@@ -1301,7 +1301,7 @@ def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
             event async for event in connection.run_turn("inspect", model="gpt-test")
         ]
 
-        assert rpc.calls[0][1]["summary"] == "auto"
+        assert rpc.calls[0][1]["summary"] == "detailed"
         streamed = [
             event
             for event in events
@@ -1340,13 +1340,13 @@ def test_codex_reasoning_summary_uses_streams_and_authoritative_completion():
     asyncio.run(scenario())
 
 
-def test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot():
+def test_codex_reasoning_summary_preserves_long_stream_without_snapshot():
     class StreamOnlyRpc(FixtureCodexRpc):
         async def request(self, method: str, params: dict[str, Any]) -> Any:
             self.calls.append((method, params))
             if method != "turn/start":
                 return {}
-            long_summary = "s" * 70_000
+            long_summary = "s" * 270_000
             for event in [
                 {
                     "method": "item/reasoning/summaryTextDelta",
@@ -1396,17 +1396,17 @@ def test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot():
         events = [
             event async for event in connection.run_turn("inspect", model="gpt-test")
         ]
-        streamed = next(event for event in events if event.type == "output_delta")
+        streamed = [event for event in events if event.type == "output_delta"]
         completed = next(
             event
             for event in events
             if event.item_id == "reasoning-1" and event.item_status == "completed"
         )
-        assert len(streamed.delta or "") == 64_000
-        assert (streamed.delta or "").endswith("…[truncated]")
+        assert "".join(event.delta for event in streamed) == "s" * 270_000
+        assert all(len(event.delta) <= 200_000 for event in streamed)
         assert completed.payload["reasoning_summary_state"] == "available"
         assert completed.payload["reasoning_summary_source"] == "stream"
-        assert completed.payload["reasoning_summary_text"] == streamed.delta
+        assert completed.payload["reasoning_summary_text"] == "s" * 270_000
 
     asyncio.run(scenario())
 
@@ -2299,7 +2299,7 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
                 },
                 {
                     "sessionUpdate": "agent_thought_chunk",
-                    "content": {"type": "text", "text": "Last episode"},
+                    "content": {"type": "text", "text": "Last episode" + "." * 210_000},
                 },
             ]:
                 self.events.put_nowait(
@@ -2324,10 +2324,11 @@ def test_grok_thinking_episodes_drain_completion_race(stop_reason):
             "thinking-1",
             "thinking-2",
             "thinking-3",
+            "thinking-3",
         ]
         assert (
             "".join(event.delta for event in thoughts)
-            == "First episodeSecond episodeLast episode"
+            == "First episodeSecond episodeLast episode" + "." * 210_000
         )
         closed = [
             event

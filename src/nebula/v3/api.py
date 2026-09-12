@@ -3574,9 +3574,12 @@ def create_app(
         )
         await websocket.accept(subprotocol=protocol)
         try:
-            async for event in harness_runtime.follow_turn(
-                turn_id, after_sequence=after
+            async for event in _with_heartbeats(
+                harness_runtime.follow_turn(turn_id, after_sequence=after), None
             ):
+                if event is None:
+                    await websocket.send_json({"kind": "heartbeat"})
+                    continue
                 await websocket.send_json(
                     {"kind": "event", "event": event.model_dump(mode="json")}
                 )
@@ -8052,6 +8055,7 @@ def create_app(
                     harness_event_stream(),
                     request_id=current_request_id(),
                     operation_id=current_operation_id(),
+                    heartbeat=True,
                 ),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -8145,12 +8149,107 @@ def create_app(
                 event_stream(),
                 request_id=current_request_id(),
                 operation_id=current_operation_id(),
+                heartbeat=True,
             ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    @app.get(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/events",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def follow_chat_turn(
+        turn_id: str, after: int = Query(default=0, ge=0)
+    ) -> StreamingResponse:
+        """Attach a viewer only. Never create, resume or retry execution."""
+        turn = store.get(ChatTurn, turn_id)
+        chat = store.get(ChatSession, turn.session_id)
+        service = chat_service()
+        if (
+            not turn.harness_turn_id
+            and not turn.final_message_id
+            and not service.has_active_provider_turn(turn_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This turn is no longer running. Reload the conversation to review its saved state.",
+            )
+
+        async def events() -> Any:
+            if turn.harness_turn_id:
+                async for event in harness_runtime.follow_turn(
+                    turn.harness_turn_id, after_sequence=after
+                ):
+                    payload = event.model_dump(mode="json")
+                    if event.type == "error":
+                        payload["detail"] = (
+                            event.operator_detail
+                            or event.message
+                            or "Harness turn failed."
+                        )
+                    yield _server_sent_event(event.type, payload)
+                    if event.type == "error":
+                        return
+            elif not turn.final_message_id:
+                try:
+                    async for event_type, payload in service.follow_provider_turn(
+                        turn_id, after_sequence=after
+                    ):
+                        yield _server_sent_event(event_type, payload)
+                    return
+                except (ChatError, ProviderError, ConflictError) as exc:
+                    # diagnostic-expected: recover a durable completion or surface the error frame.
+                    if not store.get(ChatTurn, turn_id).final_message_id:
+                        yield _server_sent_event(
+                            "error", {"type": "error", "detail": str(exc)}
+                        )
+                        return
+            completed = store.get(ChatTurn, turn_id)
+            if not completed.final_message_id:
+                yield _server_sent_event(
+                    "error",
+                    {
+                        "type": "error",
+                        "detail": completed.error
+                        or "This turn was interrupted. Review its saved state before retrying.",
+                    },
+                )
+                return
+            message = store.get(ChatMessage, completed.final_message_id)
+            response = ChatCompletionResponse(
+                turn_id=completed.id,
+                session_id=chat.id,
+                backend=completed.backend,
+                provider_id=completed.provider_profile_id,
+                harness_profile_id=chat.harness_profile_id,
+                harness_session_id=chat.harness_session_id,
+                harness_turn_id=completed.harness_turn_id,
+                model=completed.model,
+                message=ChatResponseMessage(
+                    id=message.id, role=ChatRole.ASSISTANT, content=message.content
+                ),
+                usage=completed.usage,
+                finish_reason="stop",
+                citations=message.citations,
+            )
+            yield _server_sent_event(
+                "done", {"type": "done", **response.model_dump(mode="json")}
+            )
+
+        return StreamingResponse(
+            _correlated_stream(
+                events(),
+                request_id=current_request_id(),
+                operation_id=current_operation_id(),
+                heartbeat=True,
+            ),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
     @app.post(
@@ -8230,6 +8329,7 @@ def create_app(
                 event_stream(),
                 request_id=current_request_id(),
                 operation_id=current_operation_id(),
+                heartbeat=True,
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
@@ -10121,15 +10221,49 @@ def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
     return f"{identifier}event: {event}\ndata: {encoded}\n\n".encode()
 
 
+async def _with_heartbeats(
+    stream: AsyncIterator[Any], heartbeat: Any, interval: float = 15
+) -> AsyncIterator[Any]:
+    """Keep a quiet viewer alive without cancelling its pending read on timeout."""
+    iterator = aiter(stream)
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                # diagnostic-expected: iterator-owned task is drained in finally.
+                pending = asyncio.ensure_future(anext(iterator))
+            done, _ = await asyncio.wait({pending}, timeout=interval)
+            if not done:
+                yield heartbeat
+                continue
+            try:
+                value = pending.result()
+            except StopAsyncIteration:
+                # diagnostic-expected: normal source completion ends heartbeat delivery.
+                return
+            pending = None
+            yield value
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
+
+
 async def _correlated_stream(
     stream: AsyncIterator[bytes],
     *,
     request_id: str | None,
     operation_id: str | None,
+    heartbeat: bool = False,
 ) -> AsyncIterator[bytes]:
     """Preserve request correlation after the HTTP response starts streaming."""
 
-    iterator = aiter(stream)
+    iterator = aiter(
+        _with_heartbeats(stream, b": keepalive\n\n") if heartbeat else stream
+    )
     try:
         while True:
             # Reset ContextVar tokens before yielding: ASGI may close this
