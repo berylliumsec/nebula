@@ -103,7 +103,6 @@
   .chat-composer footer .chat-runtime-summary { max-width: 120px; }
   .chat-composer footer .chat-context-meter { min-width: 44px; }
   .chat-operator-updates { max-height: min(200px, 30cqh); width: calc(100% - 12px); }
-  .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
 .chat-panel > .chat-composer:has(.chat-skill-menu), .chat-composer-input:has(.chat-skill-menu) { overflow: visible; z-index: 3; }
@@ -114,7 +113,6 @@
   :root { --shell-top-row: 48px; --shell-row-gap: 4px; --shell-inset: 4px; }
   :root .main-content > .sessions-page.chat-active:not(.full-screen) { padding-block: 4px; }
   .main-content:has(> .sessions-page.chat-active:not(.full-screen)) > .workspace-notices { max-height: min(24%, 44px); }
-  .assistant-search:not([open]) { padding-block: 0; }
   .chat-panel > .chat-composer { margin-block: 2px; max-height: calc(100% - 4px); }
 }
 

@@ -3033,9 +3033,18 @@ export function SessionsPage() {
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
   };
 
+  const [transcriptSearchOpen, setTranscriptSearchOpen] = useState(false);
+  const transcriptSearchButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setTranscriptSearchOpen(false); }, [sessionId, view]);
+  const closeTranscriptSearch = () => {
+    setTranscriptSearchOpen(false);
+    transcriptSearchButtonRef.current?.focus();
+  };
+  const transcriptSearchAction = <button ref={transcriptSearchButtonRef} type="button" className="icon-button subtle transcript-search-toggle" aria-label="Search messages and bookmarks" title="Search messages and bookmarks" aria-expanded={transcriptSearchOpen} aria-controls={transcriptSearchOpen ? "assistant-transcript-search" : undefined} onClick={() => setTranscriptSearchOpen(open => !open)}><Search size={18} aria-hidden="true" /></button>;
+
   const assistantPanel = (
             <div className="chat-panel">
-              <ChatSearchPanel key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
+              <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 setSearchParams(current => { const next = new URLSearchParams(current); next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", view === "browser" ? "browser" : "chat"); return next; });
               }} />
               {sessions.find(item => item.id === sessionId)?.parentSessionId && <div className="chat-action-status">Branched conversation · files remain shared. <button className="button quiet" onClick={() => void selectSession(sessions.find(item => item.id === sessionId)!.parentSessionId!)}>Open parent</button></div>}
@@ -3234,6 +3243,7 @@ export function SessionsPage() {
           { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
         ] as const} />
         <div className="session-toolbar-actions">
+          {view === "chat" && conversationOpen && transcriptSearchAction}
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
           {view === "chat" && <button
             className="icon-button subtle session-conversations-toggle"
@@ -3340,7 +3350,7 @@ export function SessionsPage() {
           {api && engagement && <div className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "terminal"}>
             <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar"><span><SquareTerminal size={16} aria-hidden="true" /> Terminal</span><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
-            {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong><button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
+            {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
               {assistantPanel}
             </BrowserAssistantPanel>}
           </div>}
@@ -3371,7 +3381,7 @@ export function SessionsPage() {
               onUploadEvidence={uploadEvidence}
             />}
             </div>
-            {view === "browser" && browserAssistantOpen && <BrowserAssistantPanel onActionContainer={setBrowserActionContainer} header={<><strong>Assistant</strong><button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse browser Assistant" title="Collapse Assistant" onClick={collapseBrowserAssistant}><X size={16} /></button></>}>
+            {view === "browser" && browserAssistantOpen && <BrowserAssistantPanel onActionContainer={setBrowserActionContainer} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse browser Assistant" title="Collapse Assistant" onClick={collapseBrowserAssistant}><X size={16} /></button></>}>
               {assistantPanel}
             </BrowserAssistantPanel>}
           </div>}

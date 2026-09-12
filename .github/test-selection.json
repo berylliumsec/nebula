@@ -1,20 +1,18 @@
 {
-  "baseline": "1356be325dfb283b1ab48813fbd4d9d8bc9dcb71",
-  "reviewed_by": "Codex header and search layout review",
-  "reason": "New chat trailing portal, contextual New shortcut, focus-mode placement, and transcript search presentation. Shared AppShell/TopBar/PageHeader/ChromeContext changes reviewed: App, header and TopBar component tests cover navigation, cleanup and actions; search component tests cover filter arguments, busy, error/retry and result selection. Two exact production browser journeys cover placement, spacing, mobile wrapping, empty/error/retry and accessibility. Search controls no longer share the old 40% scrolling region: only results scroll, and empty-result navigation is hidden; selected search tests assert visible control geometry. Reviewed the later ui.css height override as part of the same search control containment correction.",
+  "baseline": "d2fb9fa",
+  "reviewed_by": "Codex compact conversation search review",
+  "reason": "Move transcript search trigger to existing chat, terminal companion and browser companion headers; closed search renders no row. Shared SessionsPage and stylesheet impact reviewed as presentation-only. Four component cases cover filters, query retention, focus, close/Escape, busy, results and error/retry. Two exact production browser journeys across eight profiles cover header geometry and search accessibility, clipping, touch targets, close/reopen and refresh. Reviewed mobile toolbar visibility rules and removed obsolete details/summary CSS so search stays reachable on mobile and short windows. Additional user-reported editor Files clipping: sidebar flex sizing constrains the scrolling list; one long-directory journey covers last-entry access, refresh, Files/Changes switching and desktop focus mode across eight profiles. No unit tests for CSS geometry. User-requested sidebar resizing adds a device-local bounded width preference and accessible pointer/keyboard divider; selected sidebar journey now covers drag, clamp, reset, Files/Changes and reload. Two hook tests cover corrupt preferences, clamping and retention. Initial sidebar check reached the last entry but exact intersection ratio was 0.995 due to fractional border/scroll rounding; use 0.99 alongside explicit sidebar containment and successful activation. Rerun only these eight failed cases. Final review includes read-storage diagnostic classification and acceptance evidence only; rerun two width hook tests and build after that diagnostic fix.",
   "exclusions": "No backend, native, packaging or search API changes. No full suite. Persistence, streaming and reconnect semantics are unchanged. Physical-device and manual screen-reader checks unavailable. Component runtime bounded to five minutes, browser run ten minutes, production build ten minutes.",
   "expected_tests": {
     "python": 0,
-    "frontend": 47,
+    "frontend": 6,
     "native": 0,
-    "playwright": 16
+    "playwright": 24
   },
   "python": [],
   "frontend": [
-    "ui/src/App.test.tsx",
-    "ui/src/components/PageHeader.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/components/ChatSearchPanel.test.tsx"
+    "ui/src/components/ChatSearchPanel.test.tsx",
+    "ui/src/components/useEditorSidebarWidth.test.tsx"
   ],
   "native": [],
   "playwright": [
@@ -33,7 +31,15 @@
     "entry:transcript-search-layout/mobile-chromium-wide",
     "entry:transcript-search-layout/mobile-webkit-small",
     "entry:transcript-search-layout/mobile-webkit",
-    "entry:transcript-search-layout/mobile-webkit-wide"
+    "entry:transcript-search-layout/mobile-webkit-wide",
+    "entry:editor-files-scroll/desktop",
+    "entry:editor-files-scroll/compact",
+    "entry:editor-files-scroll/mobile-chromium-small",
+    "entry:editor-files-scroll/mobile-chromium-ledger-390",
+    "entry:editor-files-scroll/mobile-chromium-wide",
+    "entry:editor-files-scroll/mobile-webkit-small",
+    "entry:editor-files-scroll/mobile-webkit",
+    "entry:editor-files-scroll/mobile-webkit-wide"
   ],
-  "change_digest": "bd6832e1fe3f7f92cdb24e413c91b14e15a9ce99f184ff321e7430d48bef1444"
+  "change_digest": "152b69a8c504aeeecaf91b05222086e8353fe1414cebf2c196db2cb1b459a187"
 }

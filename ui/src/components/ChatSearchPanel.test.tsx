@@ -4,12 +4,12 @@ import { expect, test, vi } from "vitest";
 import { ChatSearchPanel } from "./ChatSearchPanel";
 
 async function openSearch() {
-  await userEvent.click(screen.getByTitle("Search messages and bookmarks"));
+  expect(screen.getByRole("searchbox", {name: "Search transcript"})).toHaveFocus();
 }
 
 test("search keeps named filters and submits their selected values with Enter", async () => {
   const search = vi.fn().mockResolvedValue({items: [], next_offset: null});
-  render(<ChatSearchPanel search={search} onSelect={vi.fn()} />);
+  render(<ChatSearchPanel open onClose={vi.fn()} search={search} onSelect={vi.fn()} />);
   await openSearch();
   expect(screen.getByRole("checkbox", {name: "This conversation"})).toBeChecked();
   await userEvent.click(screen.getByRole("checkbox", {name: "This conversation"}));
@@ -21,7 +21,7 @@ test("search keeps named filters and submits their selected values with Enter", 
 
 test("search explains a failure and allows retry from the same query", async () => {
   const search = vi.fn().mockRejectedValueOnce(new Error("Search unavailable. Try again.")).mockResolvedValueOnce({items: [], next_offset: null});
-  render(<ChatSearchPanel search={search} onSelect={vi.fn()} />);
+  render(<ChatSearchPanel open onClose={vi.fn()} search={search} onSelect={vi.fn()} />);
   await openSearch();
   await userEvent.type(screen.getByRole("searchbox", {name: "Search transcript"}), "retry");
   await userEvent.click(screen.getByRole("button", {name: "Search messages"}));
@@ -36,11 +36,28 @@ test("search disables duplicate submission while busy and selects the returned h
   let finish!: (result: {items: typeof hit[]; next_offset: null}) => void;
   const search = vi.fn(() => new Promise<{items: typeof hit[]; next_offset: null}>(resolve => {finish = resolve;}));
   const select = vi.fn();
-  render(<ChatSearchPanel search={search} onSelect={select} />);
+  render(<ChatSearchPanel open onClose={vi.fn()} search={search} onSelect={select} />);
   await openSearch();
   await userEvent.click(screen.getByRole("button", {name: "Search messages"}));
   expect(screen.getByRole("button", {name: "Searching…"})).toBeDisabled();
   finish({items: [hit], next_offset: null});
   await userEvent.click(await screen.findByRole("button", {name: /Saved conversation/}));
   expect(select).toHaveBeenCalledWith(hit);
+});
+
+ test("closed search reserves no row and reopening focuses the retained query", async () => {
+  const search = vi.fn();
+  const close = vi.fn();
+  const {rerender, container} = render(<ChatSearchPanel open={false} onClose={close} search={search} onSelect={vi.fn()} />);
+  expect(container).toBeEmptyDOMElement();
+  rerender(<ChatSearchPanel open onClose={close} search={search} onSelect={vi.fn()} />);
+  await userEvent.type(screen.getByRole("searchbox"), "retained query{Escape}");
+  expect(close).toHaveBeenCalledOnce();
+  await userEvent.click(screen.getByRole("button", {name: "Close transcript search"}));
+  expect(close).toHaveBeenCalledTimes(2);
+  rerender(<ChatSearchPanel open={false} onClose={close} search={search} onSelect={vi.fn()} />);
+  expect(container).toBeEmptyDOMElement();
+  rerender(<ChatSearchPanel open onClose={close} search={search} onSelect={vi.fn()} />);
+  expect(screen.getByRole("searchbox")).toHaveValue("retained query");
+  expect(screen.getByRole("searchbox")).toHaveFocus();
 });
