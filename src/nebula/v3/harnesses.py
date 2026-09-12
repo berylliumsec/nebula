@@ -1058,17 +1058,18 @@ def _require_codex_activity_version(initialize: Any) -> Version:
     return parsed
 
 
+def _display_delta_chunks(value: str) -> list[str]:
+    """Bound individual transport events without shortening transcript content."""
+    return [
+        value[start : start + MAX_NORMALIZED_TEXT]
+        for start in range(0, len(value), MAX_NORMALIZED_TEXT)
+    ]
+
+
 def _codex_reasoning_summary_index(value: Any) -> int:
-    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 256:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value:
         return value
     return 0
-
-
-def _truncate_reasoning_summary(value: str) -> str:
-    if len(value) <= MAX_TOOL_RESULT_TEXT:
-        return value
-    marker = "…[truncated]"
-    return value[: MAX_TOOL_RESULT_TEXT - len(marker)] + marker
 
 
 def _codex_completed_reasoning_summary(value: Any) -> tuple[str, bool]:
@@ -1076,16 +1077,16 @@ def _codex_completed_reasoning_summary(value: Any) -> tuple[str, bool]:
 
     if not isinstance(value, list):
         return "", value is not None
-    malformed = len(value) > 256
+    malformed = False
     parts: list[str] = []
-    for part in value[:256]:
+    for part in value:
         if not isinstance(part, str):
             malformed = True
             continue
         safe = sanitize_display_text(redact_text(part))
         if safe:
             parts.append(safe)
-    return _truncate_reasoning_summary("\n\n".join(parts)), malformed
+    return "\n\n".join(parts), malformed
 
 
 def _append_codex_reasoning_summary_delta(
@@ -1095,27 +1096,17 @@ def _append_codex_reasoning_summary_delta(
     part_index: int,
     delta: str,
 ) -> str:
-    """Append one safe summary fragment while bounding the whole item."""
+    """Retain displayable summary text; diagnostic limits do not apply to it."""
 
     safe = sanitize_display_text(redact_text(delta))
     parts = buffers.setdefault(item_id, {})
     current_part = parts.get(part_index, "")
-    existing_summary = "\n\n".join(part for _, part in sorted(parts.items()) if part)
+    has_summary = any(parts.values())
     separator = (
-        "\n\n"
-        if not current_part and existing_summary and not safe.startswith("\n")
-        else ""
+        "\n\n" if not current_part and has_summary and not safe.startswith("\n") else ""
     )
-    remaining = MAX_TOOL_RESULT_TEXT - len(existing_summary) - len(separator)
-    if not safe or remaining <= 0:
+    if not safe:
         return ""
-    if len(safe) > remaining:
-        marker = "…[truncated]"
-        safe = (
-            safe[: remaining - len(marker)] + marker
-            if remaining > len(marker)
-            else marker[:remaining]
-        )
     parts[part_index] = current_part + safe
     return separator + safe
 
@@ -1123,9 +1114,7 @@ def _append_codex_reasoning_summary_delta(
 def _codex_buffered_reasoning_summary(parts: Mapping[int, str] | None) -> str:
     if not parts:
         return ""
-    return _truncate_reasoning_summary(
-        "\n\n".join(part for _, part in sorted(parts.items()) if part)
-    )
+    return "\n\n".join(part for _, part in sorted(parts.items()) if part)
 
 
 def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -1546,7 +1535,7 @@ class CodexAppServerConnection(HarnessConnection):
             "input": turn_input,
             "model": model,
             "approvalPolicy": self.approval_policy,
-            "summary": "auto",
+            "summary": "detailed",
         }
         if mode:
             # App Server calls this a collaboration mode.  It is only sent when
@@ -1734,17 +1723,20 @@ class CodexAppServerConnection(HarnessConnection):
                 delta = str(params.get("delta") or "")
                 item_id = str(params.get("itemId") or "")
                 if message_phases.get(item_id) == "commentary":
-                    yield HarnessEvent(
-                        type="output_delta",
-                        vendor=HarnessKind.CODEX_APP_SERVER,
-                        external_turn_id=self.active_turn_id,
-                        item_id=item_id or "commentary",
-                        item_kind="reasoning",
-                        item_status="streaming",
-                        title="Commentary",
-                        stream="commentary",
-                        delta=str(_bounded(delta, limit=MAX_TOOL_RESULT_TEXT)),
-                    )
+                    for chunk in _display_delta_chunks(
+                        sanitize_display_text(redact_text(delta))
+                    ):
+                        yield HarnessEvent(
+                            type="output_delta",
+                            vendor=HarnessKind.CODEX_APP_SERVER,
+                            external_turn_id=self.active_turn_id,
+                            item_id=item_id or "commentary",
+                            item_kind="reasoning",
+                            item_status="streaming",
+                            title="Commentary",
+                            stream="commentary",
+                            delta=chunk,
+                        )
                     continue
                 message_parts.append(delta)
                 yield HarnessEvent(
@@ -1782,22 +1774,23 @@ class CodexAppServerConnection(HarnessConnection):
                 )
                 if not delta:
                     continue
-                yield HarnessEvent(
-                    type="output_delta",
-                    vendor=HarnessKind.CODEX_APP_SERVER,
-                    external_turn_id=self.active_turn_id,
-                    item_id=item_id,
-                    item_kind="reasoning",
-                    item_status="streaming",
-                    title="Reasoning",
-                    stream="reasoning_summary",
-                    delta=delta,
-                    payload={
-                        "reasoning_summary_state": "available",
-                        "reasoning_summary_source": "stream",
-                        "part_index": part_index,
-                    },
-                )
+                for chunk in _display_delta_chunks(delta):
+                    yield HarnessEvent(
+                        type="output_delta",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=item_id,
+                        item_kind="reasoning",
+                        item_status="streaming",
+                        title="Reasoning",
+                        stream="reasoning_summary",
+                        delta=chunk,
+                        payload={
+                            "reasoning_summary_state": "available",
+                            "reasoning_summary_source": "stream",
+                            "part_index": part_index,
+                        },
+                    )
                 continue
             if method == "item/reasoning/summaryPartAdded":
                 item_id = str(params.get("itemId") or "reasoning")
@@ -4128,16 +4121,17 @@ class GrokAcpConnection(HarnessConnection):
                     # Only a subsequent tool start proves this text was progress
                     # narration. Session metadata can arrive after the final answer.
                     commentary_sequence += 1
-                    yield HarnessEvent(
-                        type="output_delta",
-                        vendor=HarnessKind.GROK_ACP,
-                        item_id=f"commentary-{commentary_sequence}",
-                        item_kind="reasoning",
-                        item_status="streaming",
-                        title="Commentary",
-                        stream="commentary",
-                        delta="".join(pending_agent_parts),
-                    )
+                    for chunk in _display_delta_chunks("".join(pending_agent_parts)):
+                        yield HarnessEvent(
+                            type="output_delta",
+                            vendor=HarnessKind.GROK_ACP,
+                            item_id=f"commentary-{commentary_sequence}",
+                            item_kind="reasoning",
+                            item_status="streaming",
+                            title="Commentary",
+                            stream="commentary",
+                            delta=chunk,
+                        )
                     pending_agent_parts.clear()
                 if kind == "agent_thought_chunk":
                     delta = _acp_text(update.get("content"))
@@ -4145,16 +4139,17 @@ class GrokAcpConnection(HarnessConnection):
                         if thinking_id is None:
                             thinking_sequence += 1
                             thinking_id = f"thinking-{thinking_sequence}"
-                        yield HarnessEvent(
-                            type="output_delta",
-                            vendor=HarnessKind.GROK_ACP,
-                            item_id=thinking_id,
-                            item_kind="reasoning",
-                            item_status="streaming",
-                            title="Reasoning",
-                            stream="reasoning_summary",
-                            delta=delta,
-                        )
+                        for chunk in _display_delta_chunks(delta):
+                            yield HarnessEvent(
+                                type="output_delta",
+                                vendor=HarnessKind.GROK_ACP,
+                                item_id=thinking_id,
+                                item_kind="reasoning",
+                                item_status="streaming",
+                                title="Reasoning",
+                                stream="reasoning_summary",
+                                delta=chunk,
+                            )
                 elif kind == "plan":
                     plan = _acp_plan_entries(update.get("entries"))
                     yield HarnessEvent(
@@ -10829,6 +10824,17 @@ class HarnessRuntimeService:
         payload = _bounded(event.model_dump(mode="json"), limit=MAX_TOOL_RESULT_TEXT)
         if not isinstance(payload, dict):
             payload = {}
+        # These fields already have an explicit display contract. Keep complete
+        # transcript text through durable replay while still redacting secrets;
+        # arbitrary diagnostic payloads retain their normal bounds.
+        if event.item_kind == "reasoning":
+            if event.stream in {"reasoning_summary", "commentary"} and event.delta:
+                payload["delta"] = sanitize_display_text(redact_text(event.delta))
+            summary_text = event.payload.get("reasoning_summary_text")
+            if isinstance(summary_text, str):
+                payload.setdefault("payload", {})["reasoning_summary_text"] = (
+                    sanitize_display_text(redact_text(summary_text))
+                )
         identity = (
             f"MCP {event.server_id}/{event.tool_name}"
             if event.server_id and event.tool_name

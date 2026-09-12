@@ -22,7 +22,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       }
       await page.getByRole("button", { name: "Show activity", exact: true }).first().click();
       const rows = page.locator(".activity-ledger-audit li").filter({ has: page.locator(".harness-reasoning-summary") });
-      await expect(rows).toHaveCount(vendor === "grok_acp" ? 3 : 2);
+      await expect(rows).toHaveCount(vendor === "grok_acp" ? 6 : 4);
       for (const marker of ["First thinking episode from ", "Second thinking episode from "]) {
         const row = rows.filter({ has: page.getByText(marker + vendor, { exact: true }) });
         const summary = row.locator(".activity-ledger-entry-content > details > summary");
@@ -30,10 +30,28 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
         else { await summary.focus(); await summary.press("Enter"); }
         await expect(row.getByText(marker + vendor, { exact: true })).toBeVisible();
       }
+      const changed = rows.filter({ has: page.getByText("Completed summary for " + vendor, {exact: true}) });
+      await changed.locator(".activity-ledger-entry-content > details > summary").click();
+      await changed.getByText("Earlier streamed summary", {exact: true}).click();
+      const earlier = changed.locator(".harness-streamed-summary p");
+      await expect(earlier).toHaveText("Long public text. ".repeat(5000) + "PRESERVED TAIL");
+      await earlier.focus();
+      await earlier.press("End");
+      await expect.poll(() => earlier.evaluate(node => node.scrollTop > 0)).toBe(true);
+      const absent = page.locator(".activity-ledger-audit li").filter({has: page.getByText("No thinking summary was provided by the harness.", {exact: true})});
+      await expect(absent).toHaveCount(1);
+      await absent.locator(".activity-ledger-entry-content > details > summary").click();
+      await expect(absent.getByText("No thinking summary was provided by the harness.", {exact: true})).toBeVisible();
+      const historical = rows.filter({has: page.getByText("Historical saved text…[truncated]", {exact: true})});
+      await historical.locator(".activity-ledger-entry-content > details > summary").click();
+      await expect(historical.getByText("This saved thinking text was shortened. The omitted text is unavailable.", {exact: true})).toBeVisible();
       if (vendor === "grok_acp") {
-        const long = rows.filter({ has: page.getByText("Thinking display shortened after 65,536 characters.", { exact: true }) });
+        const long = rows.filter({has: page.getByText(/^Long thinking /)});
         await long.locator(".activity-ledger-entry-content > details > summary").click();
-        await expect(long.getByText("Thinking display shortened after 65,536 characters.", { exact: true })).toBeVisible();
+        expect(await long.locator(".harness-reasoning-summary").textContent()).toBe("Long thinking " + "x".repeat(39986) + "y".repeat(40000));
+        const commentary = rows.filter({has: page.getByText("A public progress update.", {exact: true})});
+        await commentary.locator(".activity-ledger-entry-content > details > summary").click();
+        await expect(commentary.locator("p.harness-reasoning-summary")).toBeVisible();
       }
       return rows;
     };

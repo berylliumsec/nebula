@@ -933,7 +933,7 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
                 item_status="streaming",
                 title="Reasoning",
                 stream="reasoning_summary",
-                delta="Live safe summary",
+                delta=("Live safe summary " * 5000 + "STREAM TAIL"),
                 payload={
                     "reasoning_summary_state": "available",
                     "reasoning_summary_source": "stream",
@@ -949,7 +949,9 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
                 payload={
                     "type": "reasoning",
                     "reasoning_summary_state": "available",
-                    "reasoning_summary_text": "Authoritative safe summary",
+                    "reasoning_summary_text": (
+                        "Authoritative safe summary " * 5000 + "SNAPSHOT TAIL"
+                    ),
                     "reasoning_summary_source": "completed_item",
                 },
             )
@@ -988,9 +990,16 @@ def test_reasoning_summary_snapshot_is_identical_after_durable_replay(tmp_path, 
             if event.item_id == "reasoning-1" and event.item_status == "completed"
         )
 
+        live_delta = next(event for event in live if event.type == "output_delta")
+        replay_delta = next(event for event in replay if event.type == "output_delta")
+        assert (
+            live_delta.delta
+            == replay_delta.delta
+            == ("Live safe summary " * 5000 + "STREAM TAIL")
+        )
         assert live_completed.payload == replayed_completed.payload
         assert replayed_completed.payload["reasoning_summary_text"] == (
-            "Authoritative safe summary"
+            "Authoritative safe summary " * 5000 + "SNAPSHOT TAIL"
         )
         assert store.get(HarnessTurn, turn.id).response == "Visible answer"
         await runtime.shutdown()

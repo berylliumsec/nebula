@@ -1,3 +1,4 @@
+import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
 import { IconAction } from "../components/IconAction";
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
 import { BrowserAssistantPanel, BROWSER_ASSISTANT_SHEET_QUERY } from "../components/BrowserAssistantPanel";
@@ -117,8 +118,6 @@ import {
   harnessCostLabel,
   isTimelineActivity,
   isSameHarnessSessionActivity,
-  reasoningSummaryState,
-  reasoningSummaryText,
   reduceHarnessActivity,
   shouldShowActivityItem,
   type HarnessActivityItem,
@@ -299,14 +298,8 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
     {Object.keys(tool.receipt ?? {}).length > 0 && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(tool.receipt, null, 2)}</pre></details>}
   </div>;
   if (!item) return null;
-  const summaryText = reasoningSummaryText(item);
   return <div className="activity-ledger-entry-body">
-    {item.summary && <p>{item.summary}</p>}
-    {summaryText && <p className="harness-reasoning-summary">{summaryText}</p>}
-    {reasoningSummaryState(item) === "pending" && !summaryText && <p>Thinking is in progress. Text will appear if the harness provides it.</p>}
-    {reasoningSummaryState(item) === "not_provided" && <p>No thinking summary was provided by the harness.</p>}
-    {item.payload.reasoning_summary_truncated === true && <p>Thinking display shortened after 65,536 characters.</p>}
-    {reasoningSummaryState(item) && <small className="harness-reasoning-note">Thinking text provided by the harness.</small>}
+    <HarnessReasoningDetails item={item} />
     {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => {
       if (typeof step === "string") return <li key={index}>{step}</li>;
       if (!step || typeof step !== "object") return null;

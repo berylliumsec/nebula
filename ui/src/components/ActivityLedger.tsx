@@ -1,3 +1,4 @@
+import { HarnessReasoningDetails } from "./HarnessReasoningDetails";
 import { ChevronDown } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import {
@@ -25,6 +26,8 @@ function timeLabel(value: string | undefined): string | undefined {
 function receiptParts(model: ActivityLedgerViewModel): string[] {
   const parts: string[] = [];
   if (model.totalTasks !== undefined) parts.push(`${model.completedTasks ?? 0}/${model.totalTasks} tasks`);
+  const reasoningCount = model.entries.filter(entry => entry.kind === "reasoning").length;
+  if (reasoningCount) parts.push(`${reasoningCount} thinking episode${reasoningCount === 1 ? "" : "s"}`);
   if (model.actionCount) parts.push(`${model.actionCount} action${model.actionCount === 1 ? "" : "s"}`);
   if (model.attentionCount) parts.push(`${model.attentionCount} warning${model.attentionCount === 1 ? "" : "s"}`);
   if (model.artifactCount) parts.push(`${model.artifactCount} artifact${model.artifactCount === 1 ? "" : "s"}`);
@@ -41,9 +44,9 @@ function DefaultEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
   const hasPayload = Object.keys(entry.payload).length > 0;
   if (!entry.summary && !entry.outputs.length && !hasPayload && !entry.usageLabel) return null;
   return <div className="activity-ledger-entry-body">
-    {entry.summary && entry.summary !== entry.label && <p>{entry.summary}</p>}
+    {entry.sourceItem?.kind === "reasoning" ? <HarnessReasoningDetails item={entry.sourceItem} /> : entry.summary && entry.summary !== entry.label && <p>{entry.summary}</p>}
     {entry.outputs.map((output, index) => <div className="harness-output" key={`${output.label}-${index}`}><small>{output.label}</small><pre tabIndex={0}>{output.content}</pre></div>)}
-    {hasPayload && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(entry.payload, null, 2)}</pre></details>}
+    {hasPayload && entry.sourceItem?.kind !== "reasoning" && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(entry.payload, null, 2)}</pre></details>}
     {entry.usageLabel && <small>{entry.usageLabel}</small>}
   </div>;
 }
@@ -70,7 +73,7 @@ export function ActivityLedger({
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
-  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" && Boolean(entry.summary) || ["attention", "failed", "cancelled"].includes(entry.status));
+  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
     <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}`} aria-label={model.title}>

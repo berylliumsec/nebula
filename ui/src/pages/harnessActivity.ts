@@ -221,7 +221,7 @@ function isDisplayReasoningItem(
   item: Pick<HarnessActivityItem, "kind" | "vendor" | "title" | "summary" | "payload" | "streams">,
 ): boolean {
   if (item.kind !== "reasoning") return false;
-  return item.vendor === "grok_acp" && "reasoning_summary" in item.streams
+  return item.vendor === "grok_acp" && ("reasoning_summary" in item.streams || "reasoning_summary_state" in item.payload)
     || item.vendor === "codex_app_server"
     && (item.title === "Reasoning"
       || item.title === "Reasoning summary"
@@ -296,14 +296,19 @@ export function reduceHarnessActivity(
   const streams = { ...(existing?.streams ?? {}) };
   const payload = stale ? { ...event.payload, ...(existing?.payload ?? {}) } : { ...(existing?.payload ?? {}), ...event.payload };
   const authoritativeReasoningSummary = typeof event.payload.reasoning_summary_text === "string"
-    ? event.payload.reasoning_summary_text.slice(0, 65_536)
+    ? event.payload.reasoning_summary_text
     : undefined;
   if (authoritativeReasoningSummary !== undefined) {
+    const streamed = streams.reasoning_summary;
+    if (streamed && streamed !== authoritativeReasoningSummary
+        && existing?.payload.reasoning_summary_source !== "completed_item") {
+      payload.reasoning_streamed_text = streamed;
+    }
     streams.reasoning_summary = authoritativeReasoningSummary;
   } else if (event.delta) {
     const combined = `${streams[stream] ?? ""}${event.delta}`;
-    streams[stream] = combined.slice(0, 65_536);
-    if (stream === "reasoning_summary" && combined.length > 65_536) payload.reasoning_summary_truncated = true;
+    streams[stream] = ["reasoning_summary", "commentary"].includes(stream)
+      ? combined : combined.slice(0, 65_536);
   }
 
   const next: HarnessActivityItem = {
@@ -387,11 +392,9 @@ export function reasoningSummaryText(item: HarnessActivityItem): string | undefi
   return item.streams.reasoning_summary || undefined;
 }
 
-export function shouldShowActivityItem(item: HarnessActivityItem): boolean {
-  if (item.kind !== "reasoning") return true;
-  if (item.payload.reasoning_summary_malformed === true) return true;
-  const completed = ["completed", "complete", "success"].includes(item.status ?? "");
-  return !(completed && reasoningSummaryState(item) === "not_provided");
+export function shouldShowActivityItem(_item: HarnessActivityItem): boolean {
+  // A completed episode without supplied text still explains a visible wait.
+  return true;
 }
 
 export function shouldShowActivityKind(item: HarnessActivityItem): boolean {
