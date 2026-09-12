@@ -653,7 +653,7 @@ class ChatService:
         return runtime is not None and not runtime.done
 
     async def follow_provider_turn(
-        self, turn_id: str
+        self, turn_id: str, *, after_sequence: int = 0
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         runtime = self._active_provider_turns.get(turn_id)
         if runtime is None:
@@ -664,19 +664,20 @@ class ChatService:
             cleanup_task.cancel()
             runtime.cleanup_task = None
             await asyncio.gather(cleanup_task, return_exceptions=True)
-        index = 0
+        index = after_sequence
         try:
             while True:
                 async with runtime.condition:
                     await runtime.condition.wait_for(
                         lambda: index < len(runtime.events) or runtime.done
                     )
+                    batch_start = index
                     batch = runtime.events[index:]
                     index = len(runtime.events)
                     done = runtime.done
                     error = runtime.error
-                for event in batch:
-                    yield event
+                for offset, (event_type, payload) in enumerate(batch, batch_start + 1):
+                    yield event_type, {**payload, "sequence": offset}
                 if done and index >= len(runtime.events):
                     if error is not None:
                         raise error

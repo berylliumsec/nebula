@@ -1,14 +1,14 @@
 {
   "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
-  "change_digest": "bbd875c4a81d3341840f5aa68a83e3d6ffc2a87335ef525324093a07c075a7ba",
+  "change_digest": "0f22b39a6ff004a499797e67b37d096032cad09099ae987b19d2e1099a182598",
   "reviewed_by": "Codex reasoning retention review",
-  "reason": "Preserve provider-designated summaries and commentary through adapter normalization, durable replay, UI projection and disclosure. Shared harness/activity/CSS paths reviewed: only display text and thinking disclosure change. Main Playwright config routes the explicit thinking file (including workers via validated inherited selection) to its existing isolated real-Core fixture and permanent eight-profile matrix. Browser assertions distinguish label from body and wait for keyboard scroll; no unrelated coverage.",
-  "exclusions": "No full suite authorized. Unrelated tools, browser, missions, native shell, packaging and session mutations excluded. Browser fixture uses real Core with inert synthetic ledger events; actual provider execution and physical mobile devices are not represented. Local Python 3.11; CI default 3.12. Runtime limits: Python 120 seconds; frontend 120 seconds; browser 60 seconds per test and 15 minutes total; production build 180 seconds.",
+  "reason": "Reasoning retention plus read-only viewer reconnection for accepted chat turns. Reviewed shared API/client/Core changes: focused completion replay, cursor/deduplication, heartbeat cleanup, uncertain execution rejection, detach and transport loss tests. Browser journeys use the existing eight profiles with deterministic viewer faults against real Core. Earlier unchanged reasoning cases retain their prior verified results; new work runs only reconnection selections.",
+  "exclusions": "No full suites. Unrelated features and native tests excluded. No live provider traffic or physical devices. New local run: 9 Python cases (120s), 9 UI cases (120s), 16 browser cases (60s each, 15min total), production build (180s). Cumulative branch selection also retains the previous 9 Python, 33 UI and 16 reasoning browser cases. Local Python 3.11; CI default 3.12.",
   "expected_tests": {
-    "python": 9,
-    "frontend": 33,
+    "python": 18,
+    "frontend": 42,
     "native": 0,
-    "playwright": 16
+    "playwright": 32
   },
   "python": [
     "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
@@ -17,12 +17,19 @@
     "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_long_stream_without_snapshot",
     "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_rejects_malformed_private_payloads",
     "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
-    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay"
+    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches",
+    "tests/v3/test_chat_api.py::test_completed_provider_events_wait_for_a_late_follower",
+    "tests/v3/test_harnesses.py::test_chat_harness_activity_is_durable_replayable_and_viewer_independent",
+    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay"
   ],
   "frontend": [
     "ui/src/pages/harnessActivity.test.ts",
     "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/HarnessReasoningDetails.test.tsx"
+    "ui/src/components/HarnessReasoningDetails.test.tsx",
+    "ui/src/api/chatConnection.test.ts",
+    "ui/src/pages/chatStreamLifecycle.test.ts"
   ],
   "native": [],
   "playwright": [
@@ -33,6 +40,14 @@
     "entry:thinking-retention/model-chromium-390",
     "entry:thinking-retention/model-webkit-390",
     "entry:thinking-retention/model-chromium-430",
-    "entry:thinking-retention/model-webkit-430"
+    "entry:thinking-retention/model-webkit-430",
+    "entry:chat-reconnection/model-desktop",
+    "entry:chat-reconnection/model-compact",
+    "entry:chat-reconnection/model-chromium-320",
+    "entry:chat-reconnection/model-webkit-320",
+    "entry:chat-reconnection/model-chromium-390",
+    "entry:chat-reconnection/model-webkit-390",
+    "entry:chat-reconnection/model-chromium-430",
+    "entry:chat-reconnection/model-webkit-430"
   ]
 }

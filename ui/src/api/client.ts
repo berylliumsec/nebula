@@ -1,3 +1,4 @@
+import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
 import type {
   AgentRunSummary,
   ActionDescriptor,
@@ -5184,46 +5185,78 @@ export class ApiClient {
     onEvent: (event: HarnessActivityEvent) => void,
     onComplete?: () => void,
     onError?: (error: Error) => void,
+    onConnection?: (state: "connected" | "reconnecting") => void,
   ): () => void {
-    const endpoint = new URL(
-      `${this.baseUrl.replace(/\/$/, "")}/harness-turns/${encodeURIComponent(id)}/events/ws`,
-      globalThis.location?.origin ?? "http://127.0.0.1",
-    );
-    endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
-    endpoint.searchParams.set("after", String(after));
-    const protocols = ["nebula.harness-activity.v1"];
-    const token = this.getToken();
-    if (token) protocols.push(websocketAuthProtocol(token));
-    const socket = new WebSocket(endpoint, protocols);
-    socket.addEventListener("message", (message) => {
-      try {
-        const frame = JSON.parse(String(message.data)) as {
-          kind?: string;
-          event?: WireChatStreamEvent;
-        };
-        if (frame.kind === "event" && frame.event) {
-          onEvent(mapHarnessActivityEvent(frame.event));
-        } else if (frame.kind === "complete") {
-          onComplete?.();
-        }
-      } catch (error) {
-        void logCaughtDiagnostic(
-          "interface.client.harness_activity_frame",
-          "A harness activity frame could not be decoded.",
-          error,
-          "client",
-        );
-        onError?.(
-          error instanceof Error
-            ? error
-            : new Error("Malformed harness activity frame"),
-        );
-      }
-    });
-    socket.addEventListener("error", () =>
-      onError?.(new Error("Harness activity connection failed")),
-    );
-    return () => socket.close(1000, "viewer detached");
+    let cursor = after;
+    let socket: WebSocket | undefined;
+    let stopped = false;
+    let attempts = 0;
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    let recovery: AbortController | undefined;
+    const closeSocket = () => {
+      clearTimeout(watchdog);
+      const previous = socket;
+      socket = undefined;
+      previous?.close(1000, "viewer detached");
+    };
+    const detach = () => { stopped = true; recovery?.abort(); closeSocket(); };
+    const fail = (error: Error) => { detach(); onError?.(error); };
+    const retry = () => {
+      if (stopped || recovery) return;
+      closeSocket();
+      if (attempts >= 8) { fail(new Error("Could not reconnect to harness activity. The turn has not been resubmitted.")); return; }
+      onConnection?.("reconnecting");
+      recovery = new AbortController();
+      void waitForChatReconnect(attempts++, recovery.signal).then(() => {
+        recovery = undefined;
+        if (!stopped) connect();
+      }).catch(() => undefined); // Intentional viewer detachment cancels the wait.
+    };
+    const touch = () => { clearTimeout(watchdog); watchdog = setTimeout(retry, 45_000); };
+    const connect = () => {
+      if (stopped) return;
+      const endpoint = new URL(`${this.baseUrl.replace(/\/$/, "")}/harness-turns/${encodeURIComponent(id)}/events/ws`, globalThis.location?.origin ?? "http://127.0.0.1");
+      endpoint.protocol = endpoint.protocol === "https:" ? "wss:" : "ws:";
+      endpoint.searchParams.set("after", String(cursor));
+      const protocols = ["nebula.harness-activity.v1"];
+      const token = this.getToken();
+      if (token) protocols.push(websocketAuthProtocol(token));
+      let current: WebSocket;
+      try { current = new WebSocket(endpoint, protocols); }
+      catch { retry(); return; }
+      socket = current;
+      touch();
+      current.addEventListener("open", () => { if (socket === current && !stopped) onConnection?.("connected"); });
+      current.addEventListener("message", message => {
+        if (socket !== current || stopped) return;
+        touch();
+        try {
+          const frame = JSON.parse(String(message.data)) as {kind?: string; event?: WireChatStreamEvent};
+          if (frame.kind === "event" && frame.event) {
+            const event = mapHarnessActivityEvent(frame.event);
+            if (event.sequence !== undefined && event.sequence <= cursor) return;
+            onEvent(event);
+            cursor = Math.max(cursor, event.sequence ?? cursor);
+            attempts = 0;
+          } else if (frame.kind === "heartbeat") {
+            attempts = 0;
+          } else if (frame.kind === "complete") {
+            detach();
+            onComplete?.();
+          }
+        } catch (error) { fail(error instanceof Error ? error : new Error("Malformed harness activity frame")); }
+      });
+      // close is authoritative (including clean closures before a complete frame).
+      // error alone can precede an auth close; the watchdog covers a missing close.
+      current.addEventListener("error", () => { if (socket === current && !stopped) onConnection?.("reconnecting"); });
+      current.addEventListener("close", event => {
+        if (socket !== current || stopped) return;
+        if ([4401, 4403, 4404].includes(event.code)) { fail(new Error(event.reason || "Harness activity access is unavailable. Reconnect to Core or reload this conversation.")); return; }
+        retry();
+      });
+    };
+    connect();
+    return detach;
   }
 
   listHarnessInteractions(
@@ -7580,34 +7613,13 @@ export class ApiClient {
     onEvent: (event: ChatStreamEvent) => void,
     signal?: AbortSignal,
     resumeTurnId?: string,
+    followOnly = false,
   ): Promise<ChatCompletionResponse | undefined> {
-    const headers = new Headers({
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-    });
-    this.authorizeHeaders(headers, "POST");
-    const response = await this.fetchImpl(
-      resumeTurnId
-        ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
-        : `${this.baseUrl}/chat/completions`,
-      {
-        method: "POST",
-        headers,
-        signal,
-        credentials: "same-origin",
-        body: resumeTurnId
-          ? undefined
-          : JSON.stringify(chatRequestBody(body, true)),
-      },
-    );
-    if (!response.ok) throw await responseError(response);
-    if (!response.body) {
-      throw new ApiError("The chat response stream was empty.", 502);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    let turnId = resumeTurnId;
+    let cursor = 0;
+    let recovering = followOnly;
+    let attempts = 0;
+    let protocolFailure = false;
     let completed: ChatCompletionResponse | undefined;
     let pausedForApproval = false;
 
@@ -7622,6 +7634,7 @@ export class ApiClient {
       try {
         wire = JSON.parse(data) as WireChatStreamEvent;
       } catch (caughtError) {
+        protocolFailure = true;
         void logCaughtDiagnostic(
           "interface.client.caught_failure_02",
           "A handled interface operation failed.",
@@ -7635,7 +7648,16 @@ export class ApiClient {
           data,
         );
       }
+      if (wire.turn_id && !wire.harness_turn_id || wire.type === "started" && wire.turn_id) turnId = wire.turn_id;
+      // Durable sequence numbers are scoped to the accepted turn. Unsequenced
+      // final snapshots remain deliverable after an interrupted final frame.
+      if (typeof wire.sequence === "number") {
+        if (wire.sequence <= cursor) return;
+        cursor = wire.sequence;
+        attempts = 0;
+      }
       if (wire.type === "error") {
+        protocolFailure = true;
         const event: ChatStreamEvent = {
           type: "error",
           detail: wire.detail || "Chat completion failed.",
@@ -7810,6 +7832,7 @@ export class ApiClient {
           typeof wire.message === "string" ||
           (!wire.provider_id && !wire.harness_profile_id)
         ) {
+          protocolFailure = true;
           throw new ApiError(
             "Nebula Core returned an incomplete chat completion.",
             502,
@@ -7823,26 +7846,77 @@ export class ApiClient {
     };
 
     while (true) {
-      const { value, done } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      let separator = buffer.search(/\r?\n\r?\n/);
-      while (separator >= 0) {
-        const block = buffer.slice(0, separator);
-        const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
-        buffer = buffer.slice(separator + (match?.[0].length ?? 2));
-        processBlock(block);
-        separator = buffer.search(/\r?\n\r?\n/);
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+      const attemptController = new AbortController();
+      const abortAttempt = () => attemptController.abort();
+      signal?.addEventListener("abort", abortAttempt, {once: true});
+      const headerTimer = setTimeout(abortAttempt, 45_000);
+      try {
+        if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
+        const headers = new Headers({Accept: "text/event-stream", "Content-Type": "application/json"});
+        this.authorizeHeaders(headers, recovering ? "GET" : "POST");
+        const response = await this.fetchImpl(
+          recovering
+            ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}`
+            : resumeTurnId
+              ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
+              : `${this.baseUrl}/chat/completions`,
+          {method: recovering ? "GET" : "POST", headers, signal: attemptController.signal, credentials: "same-origin",
+            body: recovering || resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true))},
+        );
+        clearTimeout(headerTimer);
+        if (!response.ok) throw await responseError(response);
+        if (!response.body) throw new Error("The chat response stream was empty.");
+        reader = response.body.getReader();
+        if (recovering) onEvent({type: "connection", state: "connected"});
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const {value, done} = await readChatChunk(reader);
+          if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
+          buffer += decoder.decode(value, {stream: !done});
+          let separator = buffer.search(/\r?\n\r?\n/);
+          while (separator >= 0) {
+            const block = buffer.slice(0, separator);
+            const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
+            buffer = buffer.slice(separator + (match?.[0].length ?? 2));
+            processBlock(block);
+            separator = buffer.search(/\r?\n\r?\n/);
+          }
+          if (completed || pausedForApproval) return completed;
+          if (done) break;
+        }
+        if (buffer.trim()) processBlock(buffer);
+        if (completed || pausedForApproval) return completed;
+        throw new Error("The chat connection ended before the turn completed.");
+      } catch (error) {
+        if (signal?.aborted || protocolFailure) throw error;
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) throw error;
+        // A lost initial acceptance response is uncertain: never POST again.
+        if (!turnId) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
+        if (attempts >= 8) throw new Error("Could not reconnect to this turn. Reload the conversation to read its saved state; the message has not been resubmitted.");
+        recovering = true;
+        onEvent({type: "connection", state: "reconnecting"});
+      } finally {
+        clearTimeout(headerTimer);
+        signal?.removeEventListener("abort", abortAttempt);
+        attemptController.abort();
+        if (reader) {
+          // Cancel only the viewer; Core retains ownership of execution.
+          void reader.cancel().catch(() => undefined);
+        }
       }
-      if (done) break;
+      await waitForChatReconnect(attempts++, signal);
     }
-    if (buffer.trim()) processBlock(buffer);
-    if (!completed && !pausedForApproval) {
-      throw new ApiError(
-        "The chat response ended before a completion was received.",
-        502,
-      );
-    }
-    return completed;
+  }
+
+  followChatTurn(
+    turnId: string,
+    fallback: ChatCompletionRequest,
+    onEvent: (event: ChatStreamEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatCompletionResponse | undefined> {
+    return this.streamChat(fallback, onEvent, signal, turnId, true);
   }
 
   resumeChatTurn(

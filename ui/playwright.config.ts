@@ -1,3 +1,4 @@
+import reconnection from "./playwright.reconnection.config";
 import thinking from "./playwright.thinking.config";
 import { defineConfig, devices } from "@playwright/test";
 import { assertPlaywrightInvocation } from "../scripts/test_scope_guard.mjs";
@@ -14,7 +15,7 @@ const isolatedMatrixEntry = true;
 
 // Workers inherit the validated parent selection rather than its CLI arguments.
 const selectedArgs: string[] = JSON.parse(process.env.NEBULA_PLAYWRIGHT_FOCUSED_ARGS ?? "[]");
-export default selectedArgs.includes("tests/thinking.spec.ts") ? thinking : defineConfig({
+export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconnection : selectedArgs.includes("tests/thinking.spec.ts") ? thinking : defineConfig({
   testDir: "./tests",
   // Usage-video scripts mutate a narrated fixture and have their own config.
   // They are not product acceptance tests and must not enter deployment E2E.

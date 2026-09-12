@@ -572,6 +572,7 @@ export function SessionsPage() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [reloadingConversation, setReloadingConversation] = useState(false);
   const [chatError, setChatError] = useState<string>();
+  const [chatReconnecting, setChatReconnecting] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
@@ -764,6 +765,7 @@ export function SessionsPage() {
   };
 
   const detachActiveChatStream = () => {
+    setChatReconnecting(false);
     const controller = abortRef.current;
     if (!detachChatStream(
       controller,
@@ -1637,16 +1639,20 @@ export function SessionsPage() {
         } else {
           setPendingResponse(undefined);
           setSending(true);
-          void api.resumeChatTurn(
+          const restoreController = new AbortController();
+          abortRef.current = restoreController;
+          streamBackendRef.current = "provider";
+          void api.followChatTurn(
             pendingTurn.id,
             resumeRequest,
-            (streamEvent) => applyChatEvent(streamEvent, assistantId, "", resumeRequest),
+            (streamEvent) => { if (selectionIsCurrent() && !restoreController.signal.aborted) applyChatEvent(streamEvent, assistantId, "", resumeRequest); },
+            restoreController.signal,
           ).then(async (response) => {
-            if (response?.sessionId) await refreshSessions(response.sessionId);
+            if (selectionIsCurrent() && response?.sessionId) await refreshSessions(response.sessionId);
           }).catch((error) => {
             void logCaughtDiagnostic("interface.sessions_page.caught_failure_09", "A handled interface operation failed.", error, "sessions_page");
-            setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
-          }).finally(() => setSending(false));
+            if (selectionIsCurrent() && !restoreController.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
+          }).finally(() => { if (selectionIsCurrent()) { setSending(false); setChatReconnecting(false); } });
         }
       } else if (pendingTurn?.harnessTurnId && summary?.backend === "harness") {
         const assistantId = makeId("assistant-harness-pending");
@@ -1726,8 +1732,10 @@ export function SessionsPage() {
             setHarnessProgress(undefined);
             setPendingResponse(undefined);
             setSending(false);
+            setChatReconnecting(false);
             setChatError(`${error.message} Reload this conversation to read its authoritative saved state.`);
           },
+          state => { if (selectionIsCurrent()) setChatReconnecting(state === "reconnecting"); },
         );
         setPendingResponse(approval ? {
           turnId: pendingTurn.id,
@@ -1894,6 +1902,10 @@ export function SessionsPage() {
     userId: string,
     request: ChatCompletionRequest,
   ) => {
+    if (streamEvent.type === "connection") {
+      setChatReconnecting(streamEvent.state === "reconnecting");
+      return;
+    }
     // Events invalidate the durable snapshot; they never independently resolve
     // an approval. Polling/visibility recovery also covers missed stream events.
     if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) refreshSessionState();
@@ -2043,6 +2055,7 @@ export function SessionsPage() {
       }));
     }
     if (streamEvent.type === "done") {
+      setChatReconnecting(false);
       if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
       if (streamFrameRef.current !== undefined) {
         cancelAnimationFrame(streamFrameRef.current);
@@ -2464,6 +2477,7 @@ export function SessionsPage() {
       if (abortRef.current === controller) {
         abortRef.current = undefined;
         streamBackendRef.current = undefined;
+        setChatReconnecting(false);
         setSending(false);
       }
     }
@@ -3189,6 +3203,7 @@ export function SessionsPage() {
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
+              {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}

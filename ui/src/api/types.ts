@@ -1676,6 +1676,7 @@ export interface ContextStatus {
 }
 
 export type ChatStreamEvent =
+  | { type: "connection"; state: "connected" | "reconnecting" }
   | {
       type: "started";
       providerId?: Identifier;

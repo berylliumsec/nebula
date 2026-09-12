@@ -19,6 +19,72 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "chat-reconnection": [
+  {
+    "area": "chat-reconnection",
+    "project": "model-desktop",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-compact",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-chromium-320",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-webkit-320",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-chromium-390",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-webkit-390",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-chromium-430",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "chat-reconnection",
+    "project": "model-webkit-430",
+    "test_match": "tests/chat-reconnection.spec.ts",
+    "grep": "chat reconnects",
+    "runtime": "real-core",
+    "shard": "1/1"
+  }
+],
     "thinking-retention": [
   {
     "area": "thinking-retention",
