@@ -1,40 +1,25 @@
 {
-  "reviewed_by": "Codex assistant reliability review",
-  "reason": "Focused adapter transport/auth/startup coverage, durable next-turn runtime settings and history, validated workspace retrieval errors, independent settings catalogs and opt-in assistant failure details. One real-Core production LAN journey across eight permanent desktop/mobile profiles validates settings, persistence, disclosure and catalog recovery.",
-  "exclusions": "No full suite authorized. Unrelated missions, security browser, releases, native shell and other UI journeys excluded. Shared harness/chat files reviewed: adapter contract tests and exact runtime/history regressions cover touched paths. No native code changes. Real vendor authentication and physical devices are unavailable; vendor protocols use inert fixtures and mobile browsers are emulated.",
-  "baseline": "8491ca4702e3a46384ccd3b489bfe7f8718a5a39",
-  "python_versions": [
-    "3.12"
-  ],
+  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
+  "change_digest": "4873f0e69eb1544881ebe3acb102e2c9e0dad7408ad8a890f6b3075d6889efc5",
+  "reviewed_by": "Codex toolbar review",
+  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; existing transcript stability failure is documented.",
+  "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and full mobile boundary coverage unavailable.",
   "expected_tests": {
-    "python": 61,
-    "frontend": 14,
+    "python": 0,
+    "frontend": 38,
     "native": 0,
-    "playwright": 8
+    "playwright": 4
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harnesses.py::test_harness_model_controls_are_validated_and_frozen_per_session",
-    "tests/v3/test_harnesses.py::test_workspace_retrieval_reports_actionable_argument_errors",
-    "tests/v3/test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime",
-    "tests/v3/test_chat.py::test_provider_settings_change_preserves_chat_and_history"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/ActivityLedger.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:assistant-reliability/assistant-real-desktop",
-    "entry:assistant-reliability/assistant-real-compact",
-    "entry:assistant-reliability/assistant-real-chromium-320",
-    "entry:assistant-reliability/assistant-real-webkit-320",
-    "entry:assistant-reliability/assistant-real-chromium-390",
-    "entry:assistant-reliability/assistant-real-webkit-390",
-    "entry:assistant-reliability/assistant-real-chromium-430",
-    "entry:assistant-reliability/assistant-real-webkit-430"
-  ],
-  "change_digest": "829bae289cb54c6c37e7da094d27c21013e382671c45d2e1640a8ef6b1c376f6",
-  "python_browser": false,
-  "python_node": false
+    "entry:toolbar-actions/desktop",
+    "entry:toolbar-actions/compact",
+    "entry:toolbar-actions/mobile-chromium",
+    "entry:toolbar-actions/mobile-webkit"
+  ]
 }

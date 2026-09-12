@@ -519,6 +519,10 @@ kbd { font-size: 11px; }
   .sessions-page.screen-fit .workspace-entry-list { min-height: 0; }
 }
 .session-toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.session-toolbar { column-gap: 8px; }
+.session-toolbar-actions > .icon-button,
+.session-toolbar-actions .post-tool-menu > .icon-button { width: 44px; height: 44px; min-height: 44px; padding: 0; flex: 0 0 44px; }
+
 .workbench-full-screen-toggle { color: var(--muted-strong); }
 .post-tool-toggles { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .post-tool-toggles label { display: inline-flex; min-height: 30px; align-items: center; gap: 6px; padding: 4px 7px; border: 1px solid transparent; border-radius: 8px; cursor: pointer; transition: color .16s ease, border-color .16s ease, background .16s ease; }

@@ -3017,8 +3017,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await expect(page.locator(".chat-composer footer")).not.toContainText("0 MCP");
   await expect(page.locator(".harness-status-rail")).toHaveCount(0);
   await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
-  await page.getByRole("button", { name: "More Workbench actions" }).click();
-  await page.getByRole("menuitem", { name: /Show session details/ }).click();
+  await page.getByRole("button", { name: "Show session details" }).click();
   await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
@@ -4206,8 +4205,7 @@ test("the workbench expands to the full viewport with compact chrome and complet
     await page.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Enter focus mode" }).click();
   } else {
-    await page.getByRole("button", { name: "More Workbench actions" }).click();
-    await page.getByRole("menuitem", { name: /Enter focus mode/ }).click();
+    await page.getByRole("button", { name: "Enter focus mode" }).click();
   }
   const workbench = page.locator(".sessions-page.full-screen");
   await expect(workbench).toBeVisible();
@@ -4268,7 +4266,7 @@ test("the workbench expands to the full viewport with compact chrome and complet
 
   await page.keyboard.press("Escape");
   if (mobile) await expect(page.getByRole("button", { name: "More workbench views" })).toBeVisible();
-  else await expect(page.getByRole("button", { name: "More Workbench actions" })).toBeVisible();
+  else await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
@@ -5161,8 +5159,7 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
 
   await openWorkspace(page, "/", "Workbench");
   await expect(page.getByRole("combobox", { name: "Post-tool analysis backend" })).toHaveCount(0);
-  await page.getByRole("button", { name: "More Workbench actions" }).click();
-  await page.getByRole("menuitem", { name: "Tool assistance" }).click();
+  await page.getByRole("button", { name: "Tool assistance" }).click();
   const suggestions = page.getByRole("checkbox", { name: "Suggest next steps" });
   await suggestions.click();
   await expect(suggestions).toBeChecked();
@@ -5208,8 +5205,7 @@ test("tool follow-up toggles explain missing runtime setup", async ({ page }, te
   });
 
   await openWorkspace(page, "/", "Workbench");
-  await page.getByRole("button", { name: "More Workbench actions" }).click();
-  await page.getByRole("menuitem", { name: "Tool assistance" }).click();
+  await page.getByRole("button", { name: "Tool assistance" }).click();
   const notes = page.getByRole("checkbox", { name: "Take notes" });
   await notes.click();
 
@@ -5462,8 +5458,7 @@ test("Assistant session details use reloadable drawer navigation", async ({ page
     await page.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Show session details" }).click();
   } else {
-    await page.getByRole("button", { name: "More Workbench actions" }).click();
-    await page.getByRole("menuitem", { name: /Show session details/ }).click();
+    await page.getByRole("button", { name: "Show session details" }).click();
   }
   const drawer = (page.viewportSize()?.width ?? 1440) <= 1100
     ? page.getByRole("dialog", {name: "Conversation details"})
@@ -6137,3 +6132,38 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
     await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
   });
 }
+
+test("shared actions keep sleek geometry for direct Workbench toolbar icons", async ({ page }) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  await expect(page.getByRole("button", { name: "More Workbench actions" })).toHaveCount(0);
+  if (mobile) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: "Enter focus mode" }).click();
+  } else {
+    const bar = page.locator(".session-toolbar-actions");
+    for (const name of ["Tool assistance", "Show session details", "Enter focus mode"]) {
+      const button = bar.getByRole("button", { name, exact: true });
+      await expect(button).toBeVisible();
+      await expect(button).toHaveAttribute("title", name);
+      const rect = await button.boundingBox();
+      expect(rect!.width).toBeGreaterThanOrEqual(44);
+      expect(rect!.height).toBeGreaterThanOrEqual(44);
+    }
+    await bar.getByRole("button", { name: "Show session details" }).click();
+    await expect(bar.getByRole("button", { name: "Hide session details" })).toHaveAttribute("aria-expanded", "true");
+    if ((page.viewportSize()?.width ?? 1440) <= 1100) await page.keyboard.press("Escape");
+    else await bar.getByRole("button", { name: "Hide session details" }).click();
+    if ((page.viewportSize()?.width ?? 1440) <= 1100) {
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await bar.getByRole("button", { name: "Enter focus mode" }).click();
+    } else {
+      await bar.getByRole("button", { name: "Enter focus mode" }).focus();
+      await page.keyboard.press("Enter");
+    }
+  }
+  await expect(page.locator(".sessions-page")).toHaveClass(/full-screen/);
+  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
