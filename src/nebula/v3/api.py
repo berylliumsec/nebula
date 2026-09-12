@@ -10247,7 +10247,9 @@ async def _with_heartbeats(
         if pending is not None:
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
-        await iterator.aclose()
+        close = getattr(iterator, "aclose", None)
+        if close is not None:
+            await close()
 
 
 async def _correlated_stream(
