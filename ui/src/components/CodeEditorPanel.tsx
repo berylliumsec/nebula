@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Braces, Bug, Columns2, File, FileCheck2, FilePlus2, Folder, FolderSync, GitBranch, ListChecks, ListTodo, LoaderCircle, MessageSquareText, MoreHorizontal, Paintbrush, PencilLine, Play, RefreshCw, RotateCcw, Save, Search, Settings2, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
+import { Braces, Bug, Columns2, File, FileCheck2, FilePlus2, Folder, FolderSync, GitBranch, GripVertical, ListChecks, ListTodo, LoaderCircle, MessageSquareText, MoreHorizontal, Paintbrush, PencilLine, Play, RefreshCw, RotateCcw, Save, Search, Settings2, ShieldAlert, Sparkles, TextSearch, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ExecutionLanguage, WorkspaceEntry, WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -25,6 +25,8 @@ import { EditorDebuggerPanel } from "./EditorDebuggerPanel";
 import { useOptionalChrome } from "../state/ChromeContext";
 import { EditorEnvironmentDialog } from "./EditorEnvironmentDialog";
 import type { FindingDraftRequest } from "../state/WorkbenchDraftContext";
+
+import { useEditorSidebarWidth } from "./useEditorSidebarWidth";
 
 const MAX_EDITOR_BYTES = 1024 * 1024;
 
@@ -84,6 +86,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
 }
 
 export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch }: CodeEditorPanelProps) {
+  const sidebarSize = useEditorSidebarWidth();
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
   const openPalette = chrome?.openPalette;
@@ -752,7 +755,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     <CodeMirrorSurface active={active} ariaLabel={secondaryBuffer ? `${pane === "primary" ? "Primary" : "Secondary"} code editor: ${candidate.filePath}` : "Code editor"} filePath={candidate.filePath} fontSize={preferences.fontSize} tabSize={preferences.tabSize} wordWrap={preferences.wordWrap} saveKey={codeMirrorKey(preferences.keybindings.save)} value={candidate.content} breakpointLines={breakpoints[candidate.filePath] ?? []} onToggleBreakpoint={(line) => toggleBreakpoint(candidate.filePath, line)} definitionRequest={candidate.id === buffer?.id ? definitionRequest : 0} findRequest={candidate.id === buffer?.id ? findRequest : 0} problemsRequest={candidate.id === buffer?.id ? problemsRequest : 0} formatRequest={candidate.id === buffer?.id ? formatRequest : 0} referencesRequest={candidate.id === buffer?.id ? referencesRequest : 0} renameRequest={candidate.id === buffer?.id ? renameRequest : 0} reveal={candidate.id === buffer?.id ? navigation : undefined} onFocus={() => focusPane(candidate.id)} onChange={(content) => updateBufferById(candidate.id, { content })} onSelectionChange={(text) => { if (candidate.id === buffer?.id) setSelection(text); }} completionSource={candidate.filePath.endsWith(".py") ? undefined : completionSource} languageServer={candidate.filePath.endsWith(".py") ? { apiBaseUrl: api.baseUrl ?? "/api/v1", engagementId, token: api.getToken?.(), onState: setLanguageServerState } : undefined} onCursorChange={(line, column) => { if (candidate.id === buffer?.id) setCursor({ line, column }); }} onSave={() => void save(false, candidate)} />
   </div>;
 
-  return <div className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
+  return <div ref={sidebarSize.panelRef} style={sidebarSize.style} className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
     <aside className="code-editor-sidebar" aria-label="Editor files">
       <header><div><Braces size={16} /><strong>Code workspace</strong></div><div><button className="icon-button subtle" type="button" aria-label="New file" onClick={() => void createFile()}><FilePlus2 size={15} /></button><button className="icon-button subtle" type="button" aria-label="Refresh editor files and open tabs" disabled={loading || syncing} onClick={() => { void load(0); void reconcileOpenFiles(); }}><RefreshCw className={loading || syncing ? "spin" : undefined} size={14} /></button>{buffer && <button className="icon-button subtle code-editor-mobile-only" type="button" aria-label="Hide editor files" onClick={() => setMobileFilesOpen(false)}><X size={15} /></button>}</div></header>
       <div className="code-editor-sidebar-tabs" role="tablist" aria-label="Editor sidebar"><button type="button" role="tab" aria-selected={sidebarMode === "files"} onClick={() => setSidebarMode("files")}><Folder size={13} /> Files</button><button type="button" role="tab" aria-selected={sidebarMode === "source-control"} onClick={() => setSidebarMode("source-control")}><GitBranch size={13} /> Changes</button></div>
@@ -761,6 +764,12 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
         <div className="code-editor-files">{entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={buffer?.existing && buffer.filePath === entry.path ? "active" : undefined} disabled={entry.kind === "symlink" || entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => chooseEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={15} /> : <File size={15} />}<span><strong>{entry.name}</strong><small>{entry.kind === "file" ? `${entry.size.toLocaleString()} bytes` : entry.kind}</small></span></button>)}{!entries.length && !loading && <div className="empty-state compact"><Folder size={20} /><strong>No files here</strong><p>Create a text file or use Terminal to populate /workspace.</p></div>}{nextOffset !== undefined && <button className="button quiet" type="button" onClick={() => void load(nextOffset)}>Load more</button>}</div>
       </> : <EditorSourceControl active={active} api={api} engagementId={engagementId} refreshKey={sourceControlRevision} onOpenTerminal={onOpenTerminal} onOpenFile={(path) => void openFile({ path, name: path.split("/").at(-1) ?? path, kind: "file", size: 0, modifiedAt: new Date().toISOString() })} />}
     </aside>
+    <div className="code-editor-sidebar-resize" role="separator" aria-label="Resize editor sidebar" aria-orientation="vertical" aria-valuemin={200} aria-valuemax={sidebarSize.maxWidth} aria-valuenow={sidebarSize.width} aria-valuetext={`${sidebarSize.width} pixels`} tabIndex={0} title="Drag to resize sidebar. Arrow keys adjust; double-click resets." onPointerDown={sidebarSize.onPointerDown} onPointerMove={sidebarSize.onPointerMove} onPointerUp={sidebarSize.onPointerUp} onPointerCancel={sidebarSize.onPointerUp} onLostPointerCapture={sidebarSize.onLostPointerCapture} onDoubleClick={() => sidebarSize.resize(250)} onKeyDown={event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      sidebarSize.resize(event.key === "Home" ? 200 : event.key === "End" ? sidebarSize.maxWidth : sidebarSize.width + (event.key === "ArrowRight" ? 1 : -1) * (event.shiftKey ? 48 : 16));
+    }}><GripVertical size={16} aria-hidden="true" /></div>
     <section className={`code-editor-main${buffer ? "" : " is-empty"}`}>
       {buffer ? <>
         <div className="code-editor-tabs" role="tablist" aria-label="Open editor files">

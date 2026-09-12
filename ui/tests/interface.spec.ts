@@ -5773,13 +5773,13 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await page.keyboard.press("Escape");
   await expect(settings).toHaveCount(0);
   await expect(panel.getByRole("button", { name: "Assistant settings", exact: true })).toBeFocused();
-  const searchToggle = panel.locator(".assistant-search > summary");
+  const searchToggle = panel.getByRole("button", {name: "Search messages and bookmarks", exact: true});
   await expect(searchToggle).toHaveAccessibleName("Search messages and bookmarks");
   await expect(searchToggle.locator("svg")).toBeVisible();
   await searchToggle.focus();
   await page.keyboard.press("Enter");
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeVisible();
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Escape");
   await expect(panel.getByRole("searchbox", { name: "Search transcript" })).toBeHidden();
   for (const name of ["Results", "Attach files"]) {
     const action = panel.getByRole("button", { name, exact: true });
@@ -6286,8 +6286,15 @@ test("stabilization transcript search has a compact field and usable filters", a
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const panel = page.locator(".assistant-search");
-  await panel.locator("summary").click();
+  await expect(panel).toHaveCount(0);
+  const toggle = page.getByRole("button", {name: "Search messages and bookmarks", exact: true});
+  await expect(page.locator(".session-toolbar-actions").getByRole("button", {name: "Search messages and bookmarks", exact: true})).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  const toggleBox = await toggle.boundingBox();
+  expect(toggleBox!.height).toBeGreaterThanOrEqual(44);
+  await toggle.click();
   const input = panel.getByRole("searchbox", {name: "Search transcript"});
+  await expect(input).toBeFocused();
   await expect(input).toHaveAttribute("placeholder", "Find a message…");
   await expect(panel.getByRole("checkbox", {name: "This conversation"})).toBeChecked();
   await panel.getByRole("checkbox", {name: "Bookmarks only"}).check();
@@ -6313,4 +6320,95 @@ test("stabilization transcript search has a compact field and usable filters", a
   await page.mouse.move(0, 0);
   await expect(page.getByRole("tooltip")).toBeHidden();
   await page.screenshot({path: testInfo.outputPath("transcript-search.png")});
+  await input.focus();
+  await input.press("Escape");
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toBeFocused();
+  await toggle.press("Enter");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("a message worth finding");
+  await panel.getByRole("button", {name: "Close transcript search"}).click();
+  await expect(panel).toHaveCount(0);
+  await expect(toggle).toBeFocused();
+  await page.screenshot({path: testInfo.outputPath("transcript-search-closed.png")});
+  await page.reload();
+  await expect(panel).toHaveCount(0);
+});
+
+reloadTest("stabilization editor files scroll within the sidebar", async ({page}, info) => {
+  await page.route("**/engagements/*/workspace?*", route => {
+    const path = new URL(route.request().url()).searchParams.get("path") ?? "";
+    const entries = path ? [] : Array.from({length: 70}, (_, index) => ({
+      name: `folder-${String(index).padStart(2, "0")}`, path: `folder-${String(index).padStart(2, "0")}`,
+      kind: "directory", size: 0, modified_at: "2026-09-12T00:00:00Z",
+    }));
+    return route.fulfill({json: {engagement_id: "scratch-project", path, entries, offset: 0, next_offset: null, total: entries.length}});
+  });
+  await openWorkspace(page, "/?view=code", "Workbench");
+  const sidebar = page.getByRole("complementary", {name: "Editor files", exact: true});
+  const list = sidebar.locator(".code-editor-files");
+  const checkScroll = async () => {
+    await expect(list.getByRole("button")).toHaveCount(70);
+    const geometry = await list.evaluate(element => ({
+      height: element.clientHeight, content: element.scrollHeight,
+      bottom: element.getBoundingClientRect().bottom,
+      sidebarBottom: element.closest("aside")!.getBoundingClientRect().bottom,
+    }));
+    expect(geometry.height).toBeGreaterThan(44);
+    expect(geometry.content).toBeGreaterThan(geometry.height);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.sidebarBottom + 1);
+    const headerY = await sidebar.locator("header").evaluate(element => element.getBoundingClientRect().y);
+    const last = list.getByRole("button", {name: "folder-69 directory", exact: true});
+    await last.focus();
+    await expect.poll(() => list.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    // Fractional scroll rounding can leave less than one border pixel outside.
+    await expect(last).toBeInViewport({ratio: 0.99});
+    expect(await sidebar.locator("header").evaluate(element => element.getBoundingClientRect().y)).toBe(headerY);
+    await last.click();
+    await expect(sidebar.getByRole("navigation", {name: "Editor workspace path"})).toContainText("folder-69");
+    await expect(list.getByText("No files here")).toBeVisible();
+    await sidebar.getByRole("button", {name: "/workspace", exact: true}).click();
+  };
+  await checkScroll();
+  const divider = page.getByRole("separator", {name: "Resize editor sidebar"});
+  let rememberedWidth: string | null = null;
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    await expect(divider).toBeVisible();
+    const handle = (await divider.boundingBox())!;
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2 + 90, handle.y + handle.height / 2, {steps: 6});
+    await page.mouse.up();
+    await expect(divider).toHaveAttribute("aria-valuenow", "340");
+    await divider.focus();
+    await divider.press("Home");
+    await expect(divider).toHaveAttribute("aria-valuenow", "200");
+    await divider.press("ArrowRight");
+    await expect(divider).toHaveAttribute("aria-valuenow", "216");
+    await divider.press("End");
+    expect(await divider.getAttribute("aria-valuenow")).toBe(await divider.getAttribute("aria-valuemax"));
+    await divider.dblclick();
+    await expect(divider).toHaveAttribute("aria-valuenow", "250");
+    await divider.press("Shift+ArrowRight");
+    rememberedWidth = "298";
+    await expect(divider).toHaveAttribute("aria-valuenow", rememberedWidth);
+    const actualWidth = await sidebar.evaluate(element => element.getBoundingClientRect().width);
+    expect(Math.abs(actualWidth - 298)).toBeLessThan(2);
+  } else await expect(divider).toBeHidden();
+  await sidebar.getByRole("button", {name: "Refresh editor files and open tabs"}).click();
+  await checkScroll();
+  await sidebar.getByRole("tab", {name: "Changes", exact: true}).click();
+  await expect(sidebar.getByText("research/mock", {exact: true})).toBeVisible();
+  await sidebar.getByRole("tab", {name: "Files", exact: true}).click();
+  await checkScroll();
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    await page.getByRole("button", {name: "Enter focus mode"}).click();
+    await checkScroll();
+    await page.getByRole("button", {name: "Exit full screen workbench"}).click();
+  }
+  await page.reload();
+  await checkScroll();
+  if (rememberedWidth) await expect(divider).toHaveAttribute("aria-valuenow", rememberedWidth);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: info.outputPath("editor-files-scroll.png")});
 });
