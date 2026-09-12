@@ -31,6 +31,18 @@ TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
 def session_state(
     store: NebulaStore, session: ChatSession, runtime=None
 ) -> dict[str, Any]:
+    # Most callers poll an unchanged snapshot. Keep that common path read-only so
+    # it does not queue behind (or block) harness event writes in SQLite.
+    with store.database.session() as database:
+        projected = _project(database, session.id, runtime)
+        digest = hashlib.sha256(
+            json.dumps(projected, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        cached = database.get(SessionProjectionRow, session.id)
+        if cached is not None and cached.digest == digest:
+            projected["revision"] = cached.revision
+            return projected
+
     # Serialize the snapshot and watermark together. SQLite uses BEGIN IMMEDIATE;
     # PostgreSQL uses the existing per-key transaction advisory-lock boundary.
     # Always reread the selected session, never assign a new revision to stale
@@ -39,6 +51,8 @@ def session_state(
         store._begin_run_write(connection, f"session-state:{session.id}")
         try:
             with Session(bind=connection) as database:
+                # Re-project after acquiring the lock: another reader may have
+                # assigned the revision while this request was waiting.
                 projected = _project(database, session.id, runtime)
                 digest = hashlib.sha256(
                     json.dumps(

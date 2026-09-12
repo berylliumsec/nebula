@@ -1,33 +1,25 @@
 {
-  "baseline": "a0be3fb2f1c505d391d1d54a4feaa48cad15b207",
-  "change_digest": "608b1216ee2a770a4867251ceb40f00d1ac1598f534a4583440a82ee529478e3",
-  "reviewed_by": "Codex manual workspace source review",
-  "reason": "Focused review covers the branch's persistent manual-request drafts and visible transport controls, plus the new minimal model-instruction contract across chat, harnesses, writing, browser attachments, tool results, and structured workflows. Four Python contract tests assert that Nebula retains only workspace, capability, citation, tool-call, and schema mechanics. The selected component files cover the existing manual-request journey and every changed browser attachment label; the catalogued browser entries retain responsive coverage for the earlier visible workspace changes.",
-  "exclusions": "No full suites. Five minute Python and component bounds, ten minute browser and production-build bounds. Native proxy/API edits predate the prompt work and remain unverified; omission is not native correctness evidence. Unrelated automation, scanning, replay execution, provider, Python, frontend, and shell journeys are excluded. Live Codex, Grok, Claude, and direct-provider precedence, Real-Core persistence, physical-device, LAN-origin, and manual screen-reader evidence remain release gates.",
-  "expected_tests": {
-    "python": 4,
-    "frontend": 58,
-    "native": 0,
-    "playwright": 8
-  },
+  "baseline": "d1c7737727652f03d23c7450160f7bb1044c8705",
+  "change_digest": "b06c5fd8023d26eb109c05a441f9215dd08a2d407eaa3bec644e12bea4759e60",
+  "reviewed_by": "Codex conversation-switch performance review",
+  "reason": "Focused coverage proves unchanged session-state polling avoids SQLite write locks, revisions still advance safely, conversation selection performs one authoritative state read, and durable transcripts, URL identity, prefetched activity, responsive interaction, and real-Core relaunch persistence remain intact.",
+  "exclusions": "No full suites. Python is limited to the session projection contract plus the catalog exposure check. Frontend is limited to session-state ownership. Playwright is limited to the conversation-switch journey across permanent desktop/mobile Chromium/WebKit profiles and one real-Core desktop persistence journey. Unrelated provider generation, missions, browser automation, terminal, project mutation, and native shell tests are excluded. The real-Core journey uses a non-loopback LAN origin; physical devices are unavailable, and the responsive browser checks use permanent emulated profiles.",
+  "expected_tests": {"python": 15, "frontend": 5, "native": 0, "playwright": 9},
   "python": [
-    "tests/v3/test_minimal_agent_instructions.py"
+    "tests/v3/test_session_state.py",
+    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
   ],
-  "frontend": [
-    "ui/src/components/RepeaterWorkspace.test.tsx",
-    "ui/src/api/workbenchBrowser.test.ts",
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/ManagedAssistantBrowser.test.tsx"
-  ],
+  "frontend": ["ui/src/pages/useSessionState.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:manual-request-workspace/desktop",
-    "entry:manual-request-workspace/compact",
-    "entry:manual-request-workspace/mobile-chromium-small",
-    "entry:manual-request-workspace/mobile-chromium-ledger-390",
-    "entry:manual-request-workspace/mobile-chromium-wide",
-    "entry:manual-request-workspace/mobile-webkit-small",
-    "entry:manual-request-workspace/mobile-webkit",
-    "entry:manual-request-workspace/mobile-webkit-wide"
+    "entry:conversation-switch-performance/desktop",
+    "entry:conversation-switch-performance/compact",
+    "entry:conversation-switch-performance/mobile-chromium-small",
+    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
+    "entry:conversation-switch-performance/mobile-chromium-wide",
+    "entry:conversation-switch-performance/mobile-webkit-small",
+    "entry:conversation-switch-performance/mobile-webkit",
+    "entry:conversation-switch-performance/mobile-webkit-wide",
+    "entry:conversation-switch-performance/assistant-real-desktop"
   ]
 }

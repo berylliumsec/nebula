@@ -317,6 +317,55 @@ test("production mission defaults to unlimited duration through real Core", asyn
   }
 });
 
+test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagements = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", {data: {
+      name: "Conversation switch model", provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const createConversation = async (content: string) => {
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model",
+        engagement_id: projectId, messages: [{role: "user", content}],
+        include_knowledge: false, stream: false,
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {session_id: string}).session_id;
+    };
+    const sourceId = await createConversation("Durable source conversation");
+    const targetId = await createConversation("Durable target conversation");
+
+    await page.goto(`${core.origin}/?view=chat&session=${sourceId}#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    await page.getByRole("button", {name: "Show conversations"}).click();
+    const startedAt = Date.now();
+    await page.locator(`.session-select[data-session-id="${targetId}"]`).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetId);
+    await expect(page.getByText("Durable target conversation", {exact: true})).toBeVisible();
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
   test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();

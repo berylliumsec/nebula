@@ -157,6 +157,20 @@ def test_projection_revision_survives_reopen_and_concurrent_reads(tmp_path):
         reopened.database.engine.dispose()
 
 
+def test_unchanged_projection_does_not_acquire_write_lock(tmp_path, monkeypatch):
+    from nebula.v3.session_state import session_state
+
+    _, store, runtime, _, _, owner = fixture(tmp_path)
+    chat = store.get(ChatSession, owner.session_id)
+    before = session_state(store, chat, runtime)
+
+    def unexpected_write(*_args, **_kwargs):
+        raise AssertionError("an unchanged session-state read acquired a write lock")
+
+    monkeypatch.setattr(store, "_begin_run_write", unexpected_write)
+    assert session_state(store, chat, runtime) == before
+
+
 def test_projection_reloads_session_identity_and_removes_cache_on_deletion(tmp_path):
     from sqlalchemy import select
     from nebula.v3.database import SessionProjectionRow
