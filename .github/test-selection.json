@@ -1,8 +1,8 @@
 {
   "baseline": "c5fd66d2d42c5f33d1776eb5706073791a9a627e",
-  "change_digest": "7248df98abac20562d4d77cdc31b40f0db4ed9c34330298a392f7c7587fc86f5",
+  "change_digest": "bf3090a0ec765b80e4906cfc53d53d1afca27c3a626bcdfcd47fe9cf7c2361f4",
   "reviewed_by": "Codex toolbar review",
-  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; existing transcript stability failure is documented. Integrated current main header placement; additionally selected its eight compact-header cases to prove icon order, navigation and layout at 320/390/430 widths.",
+  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; the existing transcript stability regression is included. Integrated current main header placement; additionally selected its eight compact-header cases to prove icon order, navigation and layout at 320/390/430 widths. Stabilize view and terminal-handoff callbacks to resolve the existing transcript DOM-stability failure exposed by the selected App tests; the same selected component file proves unchanged transcript nodes and preserved draft behavior.",
   "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and manual screen-reader checks unavailable.",
   "expected_tests": {
     "python": 0,

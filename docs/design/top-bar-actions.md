@@ -33,3 +33,11 @@ journey (4 profiles) and existing compact-header journey (8 profiles, including
 Component rerun: 37 passed, one existing transcript DOM-stability failure.
 Artifacts: /tmp/toolbar-integrated-{build,unit,browser,header}.log.
 Physical-device and manual screen-reader checks remain unavailable.
+
+CI prerequisite: keep view-navigation and terminal-handoff callbacks stable while typing. React remains the presentation authority and the URL remains navigation authority. The existing draft/transcript DOM-stability test must pass without weakening its assertions; saved content and draft persistence stay unchanged.
+
+Final verification after callback fix: 38/38 selected component tests passed,
+production build passed, and all 12 production-browser cases passed again.
+Logs: /tmp/toolbar-final-{unit,build,browser,header}.log.
+CI's initial frontend failure matched the baseline transcript assertion; its
+existing assertion now passes without modification. No tests were removed.

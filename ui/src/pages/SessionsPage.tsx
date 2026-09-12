@@ -19,7 +19,7 @@ import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
 import {
@@ -428,12 +428,12 @@ export function SessionsPage() {
       : requestedView === "files" ? "workspace"
         : "terminal";
   const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "browser" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
-  const setView = (next: SessionView) => {
+  const setView = useCallback((next: SessionView) => {
     setViewState(next);
     const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", next);
     setSearchParams(params, { replace: true });
-  };
+  }, [setSearchParams]);
   const openUnattachedChatView = () => {
     const nextView = view === "browser" ? "browser" : "chat";
     setViewState(nextView);
@@ -3016,11 +3016,11 @@ export function SessionsPage() {
   const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
-  const runInTerminal = (candidate: FencedRunCandidate) => {
+  const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
     setTerminalAssistantOpen(true);
     setView("terminal");
-  };
+  }, [setView]);
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
