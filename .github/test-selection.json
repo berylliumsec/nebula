@@ -1,44 +1,33 @@
 {
-  "reviewed_by": "Codex dynamic command discovery review",
-  "reason": "Grok/Codex native command routing, goal states and notification channels, preserved planning context, usage accounting, thinking disclosure, and catch-up geometry. Shared adapter, API types, SessionsPage and CSS changes reviewed. Focused unit and production desktop/mobile journeys cover discovery, use, invalid input/retry, durable replay and Core restart; no unrelated suites selected. Dynamic ACP catalogs are captured by the reader, scoped per session, replaced atomically, exposed through activity, and used by generic dispatch, help and picker. Reviewed shared protocol reader and activity equality impact; selected protocol, component and real-Core command journeys cover the new boundaries. Includes no-text native replies and bounded help for maximum-size catalogs. Rebased onto the compact Workbench header and browser welcome cleanup; preserved upstream entries and reviewed SessionsPage integration. Existing focused browser journeys exercise the updated header entry point. Type-check preparation makes existing adapter narrowing and validated usage summation explicit without changing command behavior.",
-  "exclusions": "No full suite approved. No native code or packaging changes. Unrelated adapters and UI journeys excluded. Real Core uses inert protocol peers and actual adapters; physical devices unavailable. Browser layer runtime bound ten minutes per focused matrix; unit layers two minutes; build five minutes.",
-  "baseline": "aab0054979a2cf7f5672b94223405294b44049c5",
+  "baseline": "c5fd66d2d42c5f33d1776eb5706073791a9a627e",
+  "change_digest": "bf3090a0ec765b80e4906cfc53d53d1afca27c3a626bcdfcd47fe9cf7c2361f4",
+  "reviewed_by": "Codex toolbar review",
+  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; the existing transcript stability regression is included. Integrated current main header placement; additionally selected its eight compact-header cases to prove icon order, navigation and layout at 320/390/430 widths. Stabilize view and terminal-handoff callbacks to resolve the existing transcript DOM-stability failure exposed by the selected App tests; the same selected component file proves unchanged transcript nodes and preserved draft behavior.",
+  "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and manual screen-reader checks unavailable.",
   "expected_tests": {
-    "python": 34,
-    "frontend": 27,
+    "python": 0,
+    "frontend": 38,
     "native": 0,
-    "playwright": 24
+    "playwright": 12
   },
-  "python": [
-    "tests/v3/test_harness_commands.py",
-    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_rejects_malformed_private_payloads"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/HarnessThinking.test.tsx",
-    "ui/src/pages/harnessActivity.test.ts",
-    "ui/src/components/HarnessStatusRail.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:harness-commands/desktop",
-    "entry:harness-commands/compact",
-    "entry:harness-commands/mobile-chromium-small",
-    "entry:harness-commands/mobile-chromium-ledger-390",
-    "entry:harness-commands/mobile-chromium-wide",
-    "entry:harness-commands/mobile-webkit-small",
-    "entry:harness-commands/mobile-webkit",
-    "entry:harness-commands/mobile-webkit-wide",
-    "entry:harness-commands-real/assistant-real-desktop",
-    "entry:harness-commands-real/assistant-real-compact",
-    "entry:harness-commands-real/assistant-real-chromium-320",
-    "entry:harness-commands-real/assistant-real-webkit-320",
-    "entry:harness-commands-real/assistant-real-chromium-390",
-    "entry:harness-commands-real/assistant-real-webkit-390",
-    "entry:harness-commands-real/assistant-real-chromium-430",
-    "entry:harness-commands-real/assistant-real-webkit-430"
-  ],
-  "change_digest": "d4fffc944664feda8ccadf68420495aeef1eb4f249f69ace03b69c5b9ae391a4"
+    "entry:toolbar-actions/desktop",
+    "entry:toolbar-actions/compact",
+    "entry:toolbar-actions/mobile-chromium",
+    "entry:toolbar-actions/mobile-webkit",
+    "entry:compact-header/desktop",
+    "entry:compact-header/compact",
+    "entry:compact-header/mobile-chromium-small",
+    "entry:compact-header/mobile-chromium-ledger-390",
+    "entry:compact-header/mobile-chromium-wide",
+    "entry:compact-header/mobile-webkit-small",
+    "entry:compact-header/mobile-webkit",
+    "entry:compact-header/mobile-webkit-wide"
+  ]
 }

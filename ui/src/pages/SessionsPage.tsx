@@ -19,7 +19,7 @@ import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
 import {
@@ -428,12 +428,12 @@ export function SessionsPage() {
       : requestedView === "files" ? "workspace"
         : "terminal";
   const [view, setViewState] = useState<SessionView>(initialView === "chat" || initialView === "code" || initialView === "browser" || initialView === "missions" || initialView === "activity" || initialView === "workspace" || initialView === "notes" ? initialView : "terminal");
-  const setView = (next: SessionView) => {
+  const setView = useCallback((next: SessionView) => {
     setViewState(next);
     const params = new URLSearchParams(currentSearchParams.current);
     params.set("view", next);
     setSearchParams(params, { replace: true });
-  };
+  }, [setSearchParams]);
   const openUnattachedChatView = () => {
     const nextView = view === "browser" ? "browser" : "chat";
     setViewState(nextView);
@@ -468,7 +468,6 @@ export function SessionsPage() {
   const [conversationPanelOpen, setConversationPanelOpen] = useState(
     () => readConversationPanelOpen(localStorage),
   );
-  const [workbenchActionsOpen, setWorkbenchActionsOpen] = useState(false);
   const drawerTab = searchParams.get("drawer") === "results" ? "results" : "context";
   const sessionInspectorOpen = ["context", "results"].includes(searchParams.get("drawer") ?? "");
   const setSessionInspectorOpen = (value: boolean | ((open: boolean) => boolean)) => {
@@ -500,8 +499,6 @@ export function SessionsPage() {
   const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
   const [browserScope, setBrowserScope] = useState<EngagementScopePolicy>();
   const [browserScopeLoading, setBrowserScopeLoading] = useState(false);
-  const workbenchActionsButtonRef = useRef<HTMLButtonElement>(null);
-  const workbenchActionsMenuRef = useRef<HTMLDivElement>(null);
   const conversationMenuRef = useRef<HTMLDetailsElement>(null);
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
   const [terminalCommandRequest, setTerminalCommandRequest] = useState<{ id: string; source: string }>();
@@ -2931,27 +2928,6 @@ export function SessionsPage() {
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [assistantSettingsOpen]);
-  useEffect(() => {
-    if (!workbenchActionsOpen) return;
-    const closeActions = (event: PointerEvent | globalThis.KeyboardEvent) => {
-      if (event instanceof KeyboardEvent && event.key !== "Escape") return;
-      if (event instanceof PointerEvent) {
-        const target = event.target as Node;
-        if (workbenchActionsMenuRef.current?.contains(target) || workbenchActionsButtonRef.current?.contains(target)) return;
-      }
-      setWorkbenchActionsOpen(false);
-      if (event instanceof KeyboardEvent) {
-        event.preventDefault();
-        requestAnimationFrame(() => workbenchActionsButtonRef.current?.focus());
-      }
-    };
-    document.addEventListener("pointerdown", closeActions);
-    document.addEventListener("keydown", closeActions);
-    return () => {
-      document.removeEventListener("pointerdown", closeActions);
-      document.removeEventListener("keydown", closeActions);
-    };
-  }, [workbenchActionsOpen]);
   const composerBusy = sending || Boolean(authoritativeState?.busy) || pendingResponseActive;
   const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
@@ -3040,11 +3016,11 @@ export function SessionsPage() {
   const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
-  const runInTerminal = (candidate: FencedRunCandidate) => {
+  const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
     setTerminalAssistantOpen(true);
     setView("terminal");
-  };
+  }, [setView]);
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
@@ -3251,33 +3227,31 @@ export function SessionsPage() {
         <div className="session-toolbar-actions">
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
           {view === "chat" && <button
-            className="button quiet session-conversations-toggle"
+            className="icon-button subtle session-conversations-toggle"
             type="button"
             aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            aria-expanded={conversationPanelOpen}
             title={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
+            aria-expanded={conversationPanelOpen}
             aria-controls="workbench-conversations"
             onClick={toggleConversationPanel}
           >
-            <MessageSquare size={18} aria-hidden="true" />
+            <MessageSquare size={16} aria-hidden="true" />
           </button>}
-          {fullScreen && <button className="icon-button subtle workbench-full-screen-toggle" type="button" aria-label="Exit full screen workbench" title="Exit focus mode" onClick={() => setFullScreen(false)}><Minimize2 size={17} aria-hidden="true" /></button>}
-          <div className="workbench-actions">
-            <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" title="More Workbench actions" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>
-            {workbenchActionsOpen && <div ref={workbenchActionsMenuRef} className="workbench-actions-menu" id="workbench-actions-menu" role="menu" aria-label="Workbench actions">
-              {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
-              {view === "chat" && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => {
-                setSessionInspectorOpen((open) => {
-                  localStorage.setItem("nebula.session-inspector.open", String(!open));
-                  return !open;
-                });
-                setWorkbenchActionsOpen(false);
-              }}><PanelRight size={16} aria-hidden="true" /><span><strong>{sessionInspectorOpen ? "Hide session details" : "Show session details"}</strong><small>Runtime, knowledge, and execution boundaries</small></span></button>}
-              <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setFullScreen((value) => !value); setWorkbenchActionsOpen(false); }}>
-                {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}<span><strong>{fullScreen ? "Exit focus mode" : "Enter focus mode"}</strong><small>{fullScreen ? "Restore the application shell" : "Use the full viewport for this tool"}</small></span>
-              </button>
-            </div>}
-          </div>
+          {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />}
+          {view === "chat" && <button className="icon-button subtle" type="button"
+            aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
+            title={sessionInspectorOpen ? "Hide session details" : "Show session details"}
+            aria-expanded={sessionInspectorOpen}
+            onClick={() => setSessionInspectorOpen((open) => {
+              localStorage.setItem("nebula.session-inspector.open", String(!open));
+              return !open;
+            })}><PanelRight size={16} aria-hidden="true" /></button>}
+          <button className="icon-button subtle workbench-full-screen-toggle" type="button"
+            aria-label={fullScreen ? "Exit full screen workbench" : "Enter focus mode"}
+            title={fullScreen ? "Exit focus mode" : "Enter focus mode"}
+            aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
+            {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
+          </button>
           {view === "chat" && <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} />}
         </div>
       </Toolbar>
