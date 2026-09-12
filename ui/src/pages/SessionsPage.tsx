@@ -7,7 +7,7 @@ import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
-import { isPendingRequest, pendingApprovalId, useSessionState, type SessionState } from "./useSessionState";
+import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
 import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
@@ -1557,15 +1557,11 @@ export function SessionsPage() {
       setModel(summary.model ?? "");
     }
     try {
-      const [history, pendingTurn, snapshot] = await Promise.all([
+      const [history, pendingTurn] = await Promise.all([
         api.listChatMessages(id, loadController.signal),
         api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
           if (loadController.signal.aborted) return undefined;
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
-          return undefined;
-        }),
-        api.request<SessionState>(`chat/sessions/${encodeURIComponent(id)}/state`, {signal: loadController.signal}).catch((error) => {
-          if (!loadController.signal.aborted) void logCaughtDiagnostic("interface.chat.approval_state_restore", "Pending action state could not be restored.", error, "sessions_page");
           return undefined;
         }),
       ]);
@@ -1588,7 +1584,10 @@ export function SessionsPage() {
         : []);
       setToolCards(restoredToolCards);
       // Restore the exact durable request, independently of the workspace catalog cache.
-      const restoredApprovalId = pendingApprovalId(snapshot, pendingTurn?.id) ?? pendingTurn?.approvalId;
+      // useSessionState owns the authoritative snapshot. Avoid issuing a second
+      // state read here; the durable turn already carries the approval identity
+      // needed for immediate restoration.
+      const restoredApprovalId = pendingTurn?.approvalId;
       const approvalRecord = restoredApprovalId
         ? await api.getApproval(restoredApprovalId, loadController.signal)
         : undefined;

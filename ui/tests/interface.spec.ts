@@ -3120,6 +3120,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   const targetSessionId = "chat-switch-target";
   let sourceMessageLoads = 0;
   let targetActivityLoads = 0;
+  let targetStateLoads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
@@ -3177,6 +3178,11 @@ test("conversation switching commits URL identity and keeps prefetched work deta
         citations: [],
         metadata: { harness_turn_id: "turn-switch-target" },
       }]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${targetSessionId}/state`)) {
+      targetStateLoads += 1;
+      await route.fallback();
       return;
     }
     if (path.endsWith("/pending-turn")) {
@@ -3238,6 +3244,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.locator(".session-list-item.active")).toContainText("Target conversation");
   await expect(page.getByText("Target transcript")).toBeVisible();
   expect(sourceMessageLoads).toBe(1);
+  expect(targetStateLoads).toBe(1);
   await expect.poll(() => targetActivityLoads).toBe(1);
   await expect(page.getByText("Deferred command")).toHaveCount(0);
 
