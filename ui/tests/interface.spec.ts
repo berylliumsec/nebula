@@ -6147,6 +6147,9 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
   expect(await newChat.innerText()).toBe('');
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (!mobile) {
+    const plusBox = await newChat.boundingBox();
+    const moreBox = await header.getByRole('button', {name: 'More Workbench actions'}).boundingBox();
+    expect(plusBox!.x).toBeGreaterThanOrEqual(moreBox!.x + moreBox!.width);
     const tabs = header.getByRole('tablist', {name: 'Workbench views'});
     await expect(tabs.getByRole('tab')).toHaveCount(8);
     for (const tab of await tabs.getByRole('tab').all()) {

@@ -3243,7 +3243,6 @@ export function SessionsPage() {
           { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
         ] as const} />
         <div className="session-toolbar-actions">
-          {view === "chat" && <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} />}
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
           {view === "chat" && <button
             className="button quiet session-conversations-toggle"
@@ -3273,6 +3272,7 @@ export function SessionsPage() {
               </button>
             </div>}
           </div>
+          {view === "chat" && <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} />}
         </div>
       </Toolbar>
   );
