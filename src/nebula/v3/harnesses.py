@@ -4051,10 +4051,28 @@ async def _run_harness_command(
     grok = isinstance(connection, GrokAcpConnection)
     vendor = HarnessKind.GROK_ACP if grok else HarnessKind.CODEX_APP_SERVER
     if name == "/goal" and isinstance(connection, GrokAcpConnection):
-        async for event in connection.run_turn(
-            context_prompt, model=model, mode=mode, command=f"/goal {argument}".rstrip()
-        ):
-            yield event
+        command = f"/goal {argument}".rstrip()
+        monitor = argument.lower() not in {"", "status", "pause", "clear"}
+        while True:
+            latest_goal: HarnessGoalSnapshot | None = None
+            completed_event: HarnessEvent | None = None
+            async for event in connection.run_turn(
+                context_prompt, model=model, mode=mode, command=command
+            ):
+                if event.goal is not None:
+                    latest_goal = event.goal
+                if event.type == "completed":
+                    completed_event = event
+                else:
+                    yield event
+            if not monitor or latest_goal is None or latest_goal.status != "running":
+                if completed_event is not None:
+                    yield completed_event
+                return
+            # ACP's end_turn only terminates one vendor turn. The goal update is
+            # authoritative for the longer-lived workflow, so keep executing in
+            # the same session until Grok reports a terminal or paused state.
+            command = "/goal resume"
         return
     yield HarnessEvent(
         type="started",
@@ -4749,7 +4767,7 @@ class GrokAcpAdapter(HarnessAdapter):
                     reasoning_summaries=True,
                     plans=True,
                     planning_mode=True,
-                    goal_monitoring=False,
+                    goal_monitoring=True,
                     skill_invocation=True,
                     modes=["default", "plan"],
                     live_command_output=True,

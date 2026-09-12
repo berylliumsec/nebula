@@ -305,6 +305,7 @@ def test_codex_probe_discovers_selectable_models():
 
         assert health.healthy is True
         assert health.capabilities.models == ["gpt-5.4", "gpt-5.3-codex"]
+        assert health.capabilities.goal_monitoring is True
         options = health.capabilities.model_options[0]
         assert options.default_reasoning_effort == "medium"
         assert [item.id for item in options.reasoning_efforts] == ["low", "medium"]
@@ -337,6 +338,7 @@ def test_grok_probe_negotiates_cached_token_without_credentials():
         assert health.healthy is True
         assert health.harness_version == "1.0.5"
         assert health.capabilities.plans is True
+        assert health.capabilities.goal_monitoring is True
         assert health.capabilities.skill_invocation is True
         assert [method for method, _ in rpc.calls] == ["initialize", "authenticate"]
         assert rpc.calls[1][1] == {

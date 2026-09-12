@@ -1,25 +1,20 @@
 {
-  "baseline": "d1c7737727652f03d23c7450160f7bb1044c8705",
-  "change_digest": "b06c5fd8023d26eb109c05a441f9215dd08a2d407eaa3bec644e12bea4759e60",
-  "reviewed_by": "Codex conversation-switch performance review",
-  "reason": "Focused coverage proves unchanged session-state polling avoids SQLite write locks, revisions still advance safely, conversation selection performs one authoritative state read, and durable transcripts, URL identity, prefetched activity, responsive interaction, and real-Core relaunch persistence remain intact.",
-  "exclusions": "No full suites. Python is limited to the session projection contract plus the catalog exposure check. Frontend is limited to session-state ownership. Playwright is limited to the conversation-switch journey across permanent desktop/mobile Chromium/WebKit profiles and one real-Core desktop persistence journey. Unrelated provider generation, missions, browser automation, terminal, project mutation, and native shell tests are excluded. The real-Core journey uses a non-loopback LAN origin; physical devices are unavailable, and the responsive browser checks use permanent emulated profiles.",
-  "expected_tests": {"python": 15, "frontend": 5, "native": 0, "playwright": 9},
+  "baseline": "72d1e13ef5e9923e1125eeb8f6b8d32438161d3f",
+  "change_digest": "00a1c1f0fd7f46f3d9d5b4d6b0130a81639debd40d29a72687af325cd77fa691",
+  "reviewed_by": "Codex cross-harness goal-continuation implementation",
+  "reason": "Focused adapter coverage proves that Grok active-goal events cause same-session continuation, terminal and attention states stop continuation, intermediate ACP turn completion is not surfaced as durable goal completion, and native goal notifications remain normalized. Codex coverage proves set/resume dispatch starts execution through its native thread goal API. Both verified harness probes advertise goal monitoring.",
+  "exclusions": "No full suites. Python is limited to fifteen collected Codex and Grok goal-command and capability-probe cases. No frontend source changed, so component tests are excluded. No native source changed. Browser and real-Core Playwright are excluded from this local selection because no committed live-Grok goal fixture exists; live authenticated Grok, production bundle, LAN-origin, mobile-browser, reconnect, and physical-device evidence remain required before the operator workflow is called complete. Unrelated Claude, provider, mission, browser automation, terminal, project mutation, and packaging tests are excluded.",
+  "expected_tests": {"python": 15, "frontend": 0, "native": 0, "playwright": 0},
   "python": [
-    "tests/v3/test_session_state.py",
-    "tests/test_playwright_impact.py::test_catalog_exposes_stable_choices_for_agents_and_humans"
+    "tests/v3/test_harness_commands.py::test_grok_goal_continues_vendor_turns_until_goal_is_complete",
+    "tests/v3/test_harness_commands.py::test_grok_goal_does_not_continue_terminal_or_attention_states",
+    "tests/v3/test_harness_commands.py::test_grok_goal_prefix_precedes_but_preserves_core_context",
+    "tests/v3/test_harness_commands.py::test_grok_native_goal_notifications_are_not_lost",
+    "tests/v3/test_harness_commands.py::test_codex_goal_dispatch_and_continuation",
+    "tests/v3/test_harness_adapters.py::test_codex_probe_discovers_selectable_models",
+    "tests/v3/test_harness_adapters.py::test_grok_probe_negotiates_cached_token_without_credentials"
   ],
-  "frontend": ["ui/src/pages/useSessionState.test.tsx"],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/compact",
-    "entry:conversation-switch-performance/mobile-chromium-small",
-    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
-    "entry:conversation-switch-performance/mobile-chromium-wide",
-    "entry:conversation-switch-performance/mobile-webkit-small",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:conversation-switch-performance/mobile-webkit-wide",
-    "entry:conversation-switch-performance/assistant-real-desktop"
-  ]
+  "playwright": []
 }

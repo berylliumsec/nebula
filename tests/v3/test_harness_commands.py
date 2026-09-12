@@ -119,6 +119,121 @@ def test_grok_goal_prefix_precedes_but_preserves_core_context():
     asyncio.run(scenario())
 
 
+def test_grok_goal_continues_vendor_turns_until_goal_is_complete():
+    class ContinuingGoalRpc(Rpc):
+        def __init__(self):
+            super().__init__({})
+            self.turn = 0
+
+        async def request(self, method, params):
+            if method == "session/prompt":
+                self.calls.append((method, params))
+                self.turn += 1
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "goal_updated",
+                                "objective": "Ship the clock",
+                                "status": "active" if self.turn == 1 else "complete",
+                            }
+                        },
+                    }
+                )
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {
+                                    "type": "text",
+                                    "text": "Next steps remain."
+                                    if self.turn == 1
+                                    else "Done.",
+                                },
+                            }
+                        },
+                    }
+                )
+                return {"stopReason": "end_turn"}
+            return await super().request(method, params)
+
+    async def scenario():
+        rpc = ContinuingGoalRpc()
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok", permission_handler=None
+        )
+        events = [
+            event
+            async for event in _run_harness_command(
+                connection,
+                ("/goal", "Ship the clock"),
+                model="model",
+                context_prompt="trusted context",
+            )
+        ]
+        prompts = [
+            params["prompt"]
+            for method, params in rpc.calls
+            if method == "session/prompt"
+        ]
+        assert len(prompts) == 2
+        assert prompts[0][0] == {"type": "text", "text": "/goal Ship the clock"}
+        assert prompts[1][0] == {"type": "text", "text": "/goal resume"}
+        assert [event.goal.status for event in events if event.goal] == [
+            "running",
+            "complete",
+        ]
+        assert events[-1].message == "Done."
+        assert len([event for event in events if event.type == "completed"]) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "status", ["paused", "usageLimited", "budgetLimited", "failed"]
+)
+def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
+    class StoppedGoalRpc(Rpc):
+        async def request(self, method, params):
+            if method == "session/prompt":
+                self.calls.append((method, params))
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "goal_updated",
+                                "objective": "Clock",
+                                "status": status,
+                            }
+                        },
+                    }
+                )
+                return {"stopReason": "end_turn", "text": "Stopped."}
+            return await super().request(method, params)
+
+    async def scenario():
+        rpc = StoppedGoalRpc({})
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok", permission_handler=None
+        )
+        _ = [
+            event
+            async for event in _run_harness_command(
+                connection,
+                ("/goal", "Clock"),
+                model="model",
+                context_prompt="trusted context",
+            )
+        ]
+        assert len([call for call in rpc.calls if call[0] == "session/prompt"]) == 1
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     "argument,method,extra",
     [
