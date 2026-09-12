@@ -21,7 +21,7 @@
         "streaming": true, "replay": true, "steering": false, "interruption": true,
         "interrupt_then_submit": true,
         "resumable_sessions": true, "approvals": true, "structured_user_input": false,
-        "planning_mode": true, "goal_monitoring": false, "skill_invocation": false,
+        "planning_mode": true, "goal_monitoring": true, "skill_invocation": true,
         "modes": ["default", "plan"], "reasoning_summaries": true,
         "tools": true, "live_output": true, "diffs": true, "checkpoints": false,
         "subagents": true, "hooks": false, "images": true, "citations_artifacts": true,
