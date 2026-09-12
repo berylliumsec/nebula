@@ -1,53 +1,39 @@
 {
-  "baseline": "1778f34ca6d350ad1d516f68b180299126041a72",
-  "change_digest": "5b8ea7c7de69d8f2c9ff8bb3bd26bc8f7ffc565406a7bc57d5516670409cd0b1",
-  "reviewed_by": "Codex reasoning retention review",
-  "reason": "Reasoning retention plus read-only viewer reconnection for accepted chat turns. Reviewed shared API/client/Core changes: focused completion replay, cursor/deduplication, heartbeat cleanup, uncertain execution rejection, detach and transport loss tests. Browser journeys use the existing eight profiles with deterministic viewer faults against real Core. Earlier unchanged reasoning cases retain their prior verified results; new work runs only reconnection selections.",
-  "exclusions": "No full suites. Unrelated features and native tests excluded. No live provider traffic or physical devices. New local run: 9 Python cases (120s), 9 UI cases (120s), 16 browser cases (60s each, 15min total), production build (180s). Cumulative branch selection also retains the previous 9 Python, 33 UI and 16 reasoning browser cases. Local Python 3.11; CI default 3.12.",
+  "baseline": "1356be325dfb283b1ab48813fbd4d9d8bc9dcb71",
+  "reviewed_by": "Codex header and search layout review",
+  "reason": "New chat trailing portal, contextual New shortcut, focus-mode placement, and transcript search presentation. Shared AppShell/TopBar/PageHeader/ChromeContext changes reviewed: App, header and TopBar component tests cover navigation, cleanup and actions; search component tests cover filter arguments, busy, error/retry and result selection. Two exact production browser journeys cover placement, spacing, mobile wrapping, empty/error/retry and accessibility. Search controls no longer share the old 40% scrolling region: only results scroll, and empty-result navigation is hidden; selected search tests assert visible control geometry. Reviewed the later ui.css height override as part of the same search control containment correction.",
+  "exclusions": "No backend, native, packaging or search API changes. No full suite. Persistence, streaming and reconnect semantics are unchanged. Physical-device and manual screen-reader checks unavailable. Component runtime bounded to five minutes, browser run ten minutes, production build ten minutes.",
   "expected_tests": {
-    "python": 18,
-    "frontend": 42,
+    "python": 0,
+    "frontend": 47,
     "native": 0,
-    "playwright": 32
+    "playwright": 16
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
-    "tests/v3/test_harness_adapters.py::test_grok_connection_keeps_each_pre_tool_commentary_as_a_spaced_item",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_long_stream_without_snapshot",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_rejects_malformed_private_payloads",
-    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
-    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
-    "tests/v3/test_chat_reconnection.py",
-    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches",
-    "tests/v3/test_chat_api.py::test_completed_provider_events_wait_for_a_late_follower",
-    "tests/v3/test_harnesses.py::test_chat_harness_activity_is_durable_replayable_and_viewer_independent",
-    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/pages/harnessActivity.test.ts",
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/HarnessReasoningDetails.test.tsx",
-    "ui/src/api/chatConnection.test.ts",
-    "ui/src/pages/chatStreamLifecycle.test.ts"
+    "ui/src/App.test.tsx",
+    "ui/src/components/PageHeader.test.tsx",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/components/ChatSearchPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:thinking-retention/model-desktop",
-    "entry:thinking-retention/model-compact",
-    "entry:thinking-retention/model-chromium-320",
-    "entry:thinking-retention/model-webkit-320",
-    "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-webkit-390",
-    "entry:thinking-retention/model-chromium-430",
-    "entry:thinking-retention/model-webkit-430",
-    "entry:chat-reconnection/model-desktop",
-    "entry:chat-reconnection/model-compact",
-    "entry:chat-reconnection/model-chromium-320",
-    "entry:chat-reconnection/model-webkit-320",
-    "entry:chat-reconnection/model-chromium-390",
-    "entry:chat-reconnection/model-webkit-390",
-    "entry:chat-reconnection/model-chromium-430",
-    "entry:chat-reconnection/model-webkit-430"
-  ]
+    "entry:compact-header/desktop",
+    "entry:compact-header/compact",
+    "entry:compact-header/mobile-chromium-small",
+    "entry:compact-header/mobile-chromium-ledger-390",
+    "entry:compact-header/mobile-chromium-wide",
+    "entry:compact-header/mobile-webkit-small",
+    "entry:compact-header/mobile-webkit",
+    "entry:compact-header/mobile-webkit-wide",
+    "entry:transcript-search-layout/desktop",
+    "entry:transcript-search-layout/compact",
+    "entry:transcript-search-layout/mobile-chromium-small",
+    "entry:transcript-search-layout/mobile-chromium-ledger-390",
+    "entry:transcript-search-layout/mobile-chromium-wide",
+    "entry:transcript-search-layout/mobile-webkit-small",
+    "entry:transcript-search-layout/mobile-webkit",
+    "entry:transcript-search-layout/mobile-webkit-wide"
+  ],
+  "change_digest": "bd6832e1fe3f7f92cdb24e413c91b14e15a9ce99f184ff321e7430d48bef1444"
 }

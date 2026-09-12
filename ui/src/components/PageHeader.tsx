@@ -12,11 +12,12 @@ interface PageHeaderProps {
   title: string;
   description: string;
   actions?: ReactNode;
+  trailingActions?: ReactNode;
   showIntroduction?: boolean;
 }
 
-export function PageHeader({ eyebrow, title, description, actions, showIntroduction = true }: PageHeaderProps) {
-  const { toolbarHost } = useChrome();
+export function PageHeader({ eyebrow, title, description, actions, trailingActions, showIntroduction = true }: PageHeaderProps) {
+  const { toolbarHost, trailingToolbarHost } = useChrome();
   return (
     <>
     {showIntroduction && <header className="page-header">
@@ -25,9 +26,10 @@ export function PageHeader({ eyebrow, title, description, actions, showIntroduct
         <h1>{title}</h1>
         <p>{description}</p>
       </div>
-      {!toolbarHost && actions && <div className="page-actions">{actions}</div>}
+      {!toolbarHost && (actions || trailingActions) && <div className="page-actions">{actions}{trailingActions}</div>}
     </header>}
     {actions && toolbarHost && createPortal(<div className="page-actions toolbar-page-actions">{actions}</div>, toolbarHost)}
+    {trailingActions && (trailingToolbarHost || toolbarHost) && createPortal(<div className="page-actions toolbar-page-actions">{trailingActions}</div>, trailingToolbarHost || toolbarHost!)}
     </>
   );
 }

@@ -3220,8 +3220,9 @@ export function SessionsPage() {
             </div>
   );
 
+  const newChatAction = view === "chat" ? <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} /> : undefined;
   const workbenchToolbar = (
-      <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls">
+      <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
         <TabBar iconOnly className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
@@ -3260,7 +3261,6 @@ export function SessionsPage() {
             aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
             {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
           </button>
-          {view === "chat" && <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} />}
         </div>
       </Toolbar>
   );
@@ -3272,6 +3272,7 @@ export function SessionsPage() {
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
         showIntroduction={false}
         actions={fullScreen ? undefined : workbenchToolbar}
+        trailingActions={fullScreen ? undefined : newChatAction}
       />
       {fullScreen && workbenchToolbar}
 

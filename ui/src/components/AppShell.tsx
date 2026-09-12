@@ -53,6 +53,7 @@ export function AppShell() {
     return stored === null ? window.matchMedia("(max-width: 760px)").matches : stored === "true";
   });
   const [toolbarHost, setToolbarHost] = useState<HTMLElement | null>(null);
+  const [trailingToolbarHost, setTrailingToolbarHost] = useState<HTMLElement | null>(null);
   const [contextualCommands, setContextualCommands] = useState<ContextualCommand[]>([]);
   const authorizationRecovery = runtime?.reason === "browser_session_token_missing"
     ? browserAuthorizationRecovery(window.location.hostname)
@@ -71,7 +72,8 @@ export function AppShell() {
     if (!sidebarCollapsed && window.matchMedia("(max-width: 760px)").matches) toggleSidebar();
   }, [sidebarCollapsed, toggleSidebar]);
   const runContextualNew = useCallback(() => {
-    document.querySelector<HTMLButtonElement>(".top-bar-page-actions .button.primary:not(:disabled)")?.click();
+    (document.querySelector<HTMLButtonElement>(".top-bar-trailing-actions .button.primary:not(:disabled)")
+      ?? document.querySelector<HTMLButtonElement>(".top-bar-page-actions .button.primary:not(:disabled)"))?.click();
   }, []);
 
   const runCommand = useCallback((command: string) => {
@@ -148,6 +150,7 @@ export function AppShell() {
     settingLensOpen: Boolean(settingLens),
     sidebarCollapsed,
     toolbarHost,
+    trailingToolbarHost,
     openPalette,
     openProjectPicker,
     setActivityOpen,
@@ -156,7 +159,7 @@ export function AppShell() {
     setToolbarHost,
     toggleActivity,
     toggleSidebar,
-  }), [activityOpen, contextualCommands, openPalette, openProjectPicker, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost]);
+  }), [activityOpen, contextualCommands, openPalette, openProjectPicker, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost, trailingToolbarHost]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>
@@ -174,6 +177,7 @@ export function AppShell() {
                 onToggleSidebar={toggleSidebar}
                 onOpenPalette={openPalette}
                 setToolbarHost={setToolbarHost}
+                setTrailingToolbarHost={setTrailingToolbarHost}
                 sidebarCollapsed={sidebarCollapsed}
                 variant={zero ? "zero" : "standard"}
               />

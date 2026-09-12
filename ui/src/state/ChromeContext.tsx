@@ -16,6 +16,7 @@ export interface ChromeContextValue {
   settingLensOpen: boolean;
   sidebarCollapsed: boolean;
   toolbarHost: HTMLElement | null;
+  trailingToolbarHost?: HTMLElement | null;
   contextualCommands?: ContextualCommand[];
   openPalette: () => void;
   openProjectPicker?: () => void;
