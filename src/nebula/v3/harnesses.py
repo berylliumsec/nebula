@@ -23,6 +23,12 @@ from .diagnostics import (
     record_diagnostic,
 )
 from .diagnostic_guidance import guidance_for, reason_code_for
+from .harness_commands import (
+    compatibility_commands,
+    normalize_commands,
+    parse_harness_command,
+    usage_reply,
+)
 
 import asyncio
 import difflib
@@ -577,7 +583,16 @@ class HarnessPlanEntry(NebulaModel):
 
 class HarnessGoalSnapshot(NebulaModel):
     objective: str = Field(min_length=1, max_length=10_000)
-    status: Literal["pending", "running", "complete", "blocked", "failed"]
+    status: Literal[
+        "pending",
+        "running",
+        "complete",
+        "blocked",
+        "failed",
+        "paused",
+        "usage_limited",
+        "budget_limited",
+    ]
     progress: float | None = Field(default=None, ge=0, le=1)
     current_step: str | None = Field(default=None, max_length=2_000)
     elapsed_ms: int | None = Field(default=None, ge=0)
@@ -805,6 +820,8 @@ class HarnessSessionActivity(NebulaModel):
     mode: str | None = None
     plan: list[HarnessPlanEntry] = Field(default_factory=list)
     goal: HarnessGoalSnapshot | None = None
+    commands: list[dict[str, str]] = Field(default_factory=list)
+    commands_discovered: bool = False
 
 
 class HarnessCatalogItem(NebulaModel):
@@ -1463,11 +1480,16 @@ class _CodexRpc:
                 pending.set_result(message.get("result"))
             return
         if isinstance(message.get("method"), str):
+            if self._capture_notification(message):
+                return
             await self.events.put(message)
             return
         raise HarnessTransportError(
             f"{self.transport_name} returned an uncorrelatable message"
         )
+
+    def _capture_notification(self, message: dict[str, Any]) -> bool:
+        return False
 
     async def _drain_stderr(self) -> None:
         assert self.process is not None and self.process.stderr is not None
@@ -1901,7 +1923,12 @@ class CodexAppServerConnection(HarnessConnection):
                         payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
                     )
                 continue
-            if method in {"turn/goal/updated", "item/goal/updated", "goal/updated"}:
+            if method in {
+                "thread/goal/updated",
+                "turn/goal/updated",
+                "item/goal/updated",
+                "goal/updated",
+            }:
                 goal = _harness_goal_snapshot(
                     params.get("goal")
                     if isinstance(params.get("goal"), dict)
@@ -3819,6 +3846,38 @@ class _AcpRpc(_CodexRpc):
     transport_name = "Grok ACP"
     diagnostic_namespace = "grok_acp"
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.command_catalogs: dict[str, list[dict[str, str]]] = {}
+
+    def _capture_notification(self, message: dict[str, Any]) -> bool:
+        if "id" in message or message.get("method") not in {
+            "session/update",
+            "_x.ai/session/update",
+            "_x.ai/session_notification",
+        }:
+            return False
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return False
+        update = params.get("update")
+        if (
+            not isinstance(update, dict)
+            or update.get("sessionUpdate") != "available_commands_update"
+        ):
+            return False
+        session_id = params.get("sessionId")
+        if (
+            isinstance(session_id, str)
+            and session_id
+            and isinstance(update.get("availableCommands"), list)
+        ):
+            if session_id in self.command_catalogs or len(self.command_catalogs) < 64:
+                self.command_catalogs[session_id] = normalize_commands(
+                    update["availableCommands"]
+                )
+        return True
+
     async def _write(self, value: dict[str, Any]) -> None:
         await super()._write({"jsonrpc": "2.0", **value})
 
@@ -3955,8 +4014,28 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
         return None
     raw_status = str(value.get("status") or "pending").lower().replace("-", "_")
     status = cast(
-        Literal["pending", "running", "complete", "blocked", "failed"] | None,
+        Literal[
+            "pending",
+            "running",
+            "complete",
+            "blocked",
+            "failed",
+            "paused",
+            "usage_limited",
+            "budget_limited",
+        ]
+        | None,
         {
+            "active": "running",
+            "paused": "paused",
+            "user_paused": "paused",
+            "back_off_paused": "paused",
+            "no_progress_paused": "paused",
+            "infra_paused": "paused",
+            "usagelimited": "usage_limited",
+            "usage_limited": "usage_limited",
+            "budgetlimited": "budget_limited",
+            "budget_limited": "budget_limited",
             "running": "running",
             "in_progress": "running",
             "complete": "complete",
@@ -3975,7 +4054,9 @@ def _harness_goal_snapshot(value: Any) -> HarnessGoalSnapshot | None:
         )
     else:
         progress = None
-    elapsed_raw = value.get("elapsedMs") or value.get("elapsed_ms")
+    elapsed_raw = value.get("elapsedMs", value.get("elapsed_ms"))
+    if elapsed_raw is None and isinstance(value.get("timeUsedSeconds"), (int, float)):
+        elapsed_raw = value["timeUsedSeconds"] * 1_000
     token_budget_raw = value.get("tokenBudget") or value.get("token_budget")
     tokens_used_raw = value.get("tokensUsed") or value.get("tokens_used")
     return HarnessGoalSnapshot(
@@ -4011,9 +4092,140 @@ def _goal_item_status(goal: HarnessGoalSnapshot) -> HarnessItemStatus:
         return "queued"
     if goal.status == "running":
         return "running"
-    if goal.status == "complete":
+    if goal.status in {"complete", "paused"}:
         return "completed"
+    if goal.status in {"usage_limited", "budget_limited"}:
+        return "waiting_input"
     return "failed"
+
+
+def _connection_commands(connection: HarnessConnection) -> list[dict[str, str]]:
+    commands = {item["name"]: item for item in compatibility_commands()}
+    if isinstance(connection, GrokAcpConnection):
+        for item in getattr(connection.rpc, "command_catalogs", {}).get(
+            connection.external_session_id, []
+        ):
+            # Bridges retain stable Nebula semantics for help, goals and billing.
+            commands.setdefault(item["name"], item)
+    return list(commands.values())
+
+
+async def _run_harness_command(
+    connection: CodexAppServerConnection | GrokAcpConnection,
+    command: tuple[str, str],
+    *,
+    model: str,
+    context_prompt: str,
+    mode: str | None = None,
+) -> AsyncIterator[HarnessEvent]:
+    name, argument = command
+    catalog = _connection_commands(connection)
+    descriptor = next((item for item in catalog if "/" + item["name"] == name), None)
+    if descriptor is None:
+        raise HarnessConfigurationError(
+            f"{name} is not available in this harness session. Use /help to see available commands, then retry."
+        )
+    if descriptor["source"] == "native" and isinstance(connection, GrokAcpConnection):
+        async for event in connection.run_turn(
+            context_prompt,
+            model=model,
+            mode=mode,
+            command=f"{name} {argument}".rstrip(),
+        ):
+            if event.type == "completed" and not event.message:
+                reply = f"The harness returned no text for {name}. Check the session state before retrying."
+                yield HarnessEvent(
+                    type="message_delta", vendor=HarnessKind.GROK_ACP, delta=reply
+                )
+                event = event.model_copy(update={"message": reply})
+            yield event
+        return
+    if name == "/goals":
+        name = "/goal"
+    grok = isinstance(connection, GrokAcpConnection)
+    vendor = HarnessKind.GROK_ACP if grok else HarnessKind.CODEX_APP_SERVER
+    if name == "/goal" and isinstance(connection, GrokAcpConnection):
+        async for event in connection.run_turn(
+            context_prompt, model=model, mode=mode, command=f"/goal {argument}".rstrip()
+        ):
+            yield event
+        return
+    yield HarnessEvent(
+        type="started",
+        vendor=vendor,
+        external_session_id=connection.external_session_id,
+    )
+    if name == "/help":
+        reply = "Commands for this harness session:\n\n" + "\n\n".join(
+            f"/{item['name']} {item['hint'][:200]} — {item['description'][:240]}".replace(
+                "  —", " —"
+            )
+            for item in catalog
+        )
+    elif name == "/usage":
+        if argument:
+            raise HarnessConfigurationError(
+                "Use /usage without arguments to read this session's usage."
+            )
+        result = await connection.rpc.request(
+            "_x.ai/session/usage" if grok else "account/usage/read",
+            {"sessionId" if grok else "threadId": connection.external_session_id},
+        )
+        reply = usage_reply(result, grok=grok)
+    else:
+        params: dict[str, Any] = {"threadId": connection.external_session_id}
+        action = argument.lower()
+        if action in {"", "status"}:
+            method = "thread/goal/get"
+        elif action == "clear":
+            method = "thread/goal/clear"
+        else:
+            method = "thread/goal/set"
+            if action in {"pause", "resume"}:
+                params["status"] = "paused" if action == "pause" else "active"
+            else:
+                params.update(objective=argument, status="active")
+        result = await connection.rpc.request(method, params)
+        if not isinstance(result, dict):
+            raise HarnessTransportError(
+                "Codex returned an invalid goal response. Retry the command."
+            )
+        raw_goal = result.get("goal")
+        goal = _harness_goal_snapshot(raw_goal)
+        if action == "clear":
+            reply = "Goal cleared."
+        elif raw_goal is None and method == "thread/goal/get":
+            reply = "No goal is set. Use /goal <objective> to start one."
+        elif goal is None:
+            raise HarnessTransportError(
+                "Codex returned an unsupported goal state. Update the harness and retry."
+            )
+        else:
+            yield HarnessEvent(
+                type="item_upsert",
+                vendor=vendor,
+                item_id="turn-goal",
+                item_kind="goal",
+                item_status=_goal_item_status(goal),
+                title="Goal",
+                summary=goal.objective,
+                goal=goal,
+                payload={"goal": goal.model_dump(mode="json")},
+            )
+            assert isinstance(raw_goal, dict)
+            reply = f"Goal: {goal.objective}\n\nStatus: {raw_goal.get('status')}"
+            if method == "thread/goal/set" and action != "pause":
+                # Establish the vendor-owned goal before starting its first turn.
+                # Keep Core's context and the original operator request intact.
+                async for event in connection.run_turn(
+                    context_prompt, model=model, mode=mode
+                ):
+                    yield event
+                return
+    # A usage query is a transcript reply, never billable turn usage: otherwise
+    # repeated queries would add cumulative session totals to the run ledger.
+    yield HarnessEvent(type="message_delta", vendor=vendor, delta=reply)
+    yield HarnessEvent(type="completed", vendor=vendor, message=reply)
 
 
 class GrokAcpConnection(HarnessConnection):
@@ -4045,6 +4257,7 @@ class GrokAcpConnection(HarnessConnection):
         mode: str | None = None,
         skill: HarnessSkillInvocation | None = None,
         images: list[dict[str, Any]] | None = None,
+        command: str | None = None,
     ) -> AsyncIterator[HarnessEvent]:
         if images:
             raise HarnessConfigurationError(
@@ -4070,7 +4283,8 @@ class GrokAcpConnection(HarnessConnection):
                 "session/prompt",
                 {
                     "sessionId": self.external_session_id,
-                    "prompt": [{"type": "text", "text": prompt}],
+                    "prompt": ([{"type": "text", "text": command}] if command else [])
+                    + [{"type": "text", "text": prompt}],
                 },
             )
         )
@@ -4115,7 +4329,11 @@ class GrokAcpConnection(HarnessConnection):
                     async for event in self._permission(raw, params):
                         yield event
                     continue
-                if method != "session/update":
+                if method not in {
+                    "session/update",
+                    "_x.ai/session/update",
+                    "_x.ai/session_notification",
+                }:
                     yield HarnessEvent(
                         type="notice",
                         vendor=HarnessKind.GROK_ACP,
@@ -6891,13 +7109,39 @@ class HarnessRuntimeService:
                     turn_options["images"] = [
                         part for part in resolved_content if part["type"] == "image"
                     ]
-                async for event in _coalesce_activity_deltas(
-                    connection.run_turn(
+                command = (
+                    parse_harness_command(turn.prompt)
+                    if turn.origin == HarnessTurnOrigin.CHAT
+                    and isinstance(
+                        connection, (CodexAppServerConnection, GrokAcpConnection)
+                    )
+                    else None
+                )
+                if command and (
+                    turn_options.get("images") or turn_options.get("skill")
+                ):
+                    raise HarnessConfigurationError(
+                        "Send harness commands without images or a selected skill."
+                    )
+                turn_events = (
+                    _run_harness_command(
+                        connection,
+                        command,
+                        model=session.model,
+                        context_prompt=_harness_turn_prompt(turn),
+                        mode=turn_options.get("mode"),
+                    )
+                    if command
+                    and isinstance(
+                        connection, (CodexAppServerConnection, GrokAcpConnection)
+                    )
+                    else connection.run_turn(
                         _harness_turn_prompt(turn),
                         model=session.model,
                         **turn_options,
                     )
-                ):
+                )
+                async for event in _coalesce_activity_deltas(turn_events):
                     event = event.model_copy(
                         update={
                             "origin": turn.origin,
@@ -8525,6 +8769,7 @@ class HarnessRuntimeService:
                 if event.item_kind == "goal" and event.goal is not None:
                     goal = event.goal
 
+        connection = self._connections.get(session.id)
         return HarnessSessionActivity(
             session_id=session.id,
             session_status=session.status,
@@ -8539,6 +8784,21 @@ class HarnessRuntimeService:
             mode=mode,
             plan=plan,
             goal=goal,
+            commands=(
+                _connection_commands(connection)
+                if isinstance(connection, (GrokAcpConnection, CodexAppServerConnection))
+                and self.connection_state(session.id) != "disconnected"
+                else compatibility_commands()
+                if self.store.get(HarnessProfile, session.harness_profile_id).kind
+                in {HarnessKind.GROK_ACP, HarnessKind.CODEX_APP_SERVER}
+                else []
+            ),
+            commands_discovered=(
+                isinstance(connection, GrokAcpConnection)
+                and self.connection_state(session.id) != "disconnected"
+                and session.external_session_id
+                in getattr(connection.rpc, "command_catalogs", {})
+            ),
         )
 
     def _gateway_catalog(

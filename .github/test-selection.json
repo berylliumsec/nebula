@@ -1,26 +1,44 @@
 {
-  "baseline": "f5c3b79be93708f76beafd3d9a9f32c2a0be97cb",
-  "change_digest": "911f6fcfd5da4dd889bc36fdfe64b1f58db78456a271cc3c634bcfa57c90dcfc",
-  "reviewed_by": "Codex focused header layout review",
-  "reason": "Focused compact header journey, including rightmost New chat placement, icon names, dimensions, keyboard/focus mode, selection and clipping across eight profiles.",
-  "exclusions": "No full suite. No backend/native/state changes; existing lifecycle handlers unchanged. Shared TabBar opt-in presentation reviewed. Component behavior exercised in focused browser test; physical devices unavailable.",
+  "reviewed_by": "Codex dynamic command discovery review",
+  "reason": "Grok/Codex native command routing, goal states and notification channels, preserved planning context, usage accounting, thinking disclosure, and catch-up geometry. Shared adapter, API types, SessionsPage and CSS changes reviewed. Focused unit and production desktop/mobile journeys cover discovery, use, invalid input/retry, durable replay and Core restart; no unrelated suites selected. Dynamic ACP catalogs are captured by the reader, scoped per session, replaced atomically, exposed through activity, and used by generic dispatch, help and picker. Reviewed shared protocol reader and activity equality impact; selected protocol, component and real-Core command journeys cover the new boundaries. Includes no-text native replies and bounded help for maximum-size catalogs. Rebased onto the compact Workbench header and browser welcome cleanup; preserved upstream entries and reviewed SessionsPage integration. Existing focused browser journeys exercise the updated header entry point. Type-check preparation makes existing adapter narrowing and validated usage summation explicit without changing command behavior.",
+  "exclusions": "No full suite approved. No native code or packaging changes. Unrelated adapters and UI journeys excluded. Real Core uses inert protocol peers and actual adapters; physical devices unavailable. Browser layer runtime bound ten minutes per focused matrix; unit layers two minutes; build five minutes.",
+  "baseline": "aab0054979a2cf7f5672b94223405294b44049c5",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 34,
+    "frontend": 27,
     "native": 0,
-    "playwright": 8
+    "playwright": 24
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_harness_commands.py",
+    "tests/v3/test_harness_adapters.py::test_grok_thinking_episodes_drain_completion_race",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_preserves_bounded_stream_without_snapshot",
+    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_rejects_malformed_private_payloads"
+  ],
+  "frontend": [
+    "ui/src/components/HarnessThinking.test.tsx",
+    "ui/src/pages/harnessActivity.test.ts",
+    "ui/src/components/HarnessStatusRail.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:compact-header/desktop",
-    "entry:compact-header/compact",
-    "entry:compact-header/mobile-chromium-small",
-    "entry:compact-header/mobile-chromium-ledger-390",
-    "entry:compact-header/mobile-chromium-wide",
-    "entry:compact-header/mobile-webkit-small",
-    "entry:compact-header/mobile-webkit",
-    "entry:compact-header/mobile-webkit-wide"
-  ]
+    "entry:harness-commands/desktop",
+    "entry:harness-commands/compact",
+    "entry:harness-commands/mobile-chromium-small",
+    "entry:harness-commands/mobile-chromium-ledger-390",
+    "entry:harness-commands/mobile-chromium-wide",
+    "entry:harness-commands/mobile-webkit-small",
+    "entry:harness-commands/mobile-webkit",
+    "entry:harness-commands/mobile-webkit-wide",
+    "entry:harness-commands-real/assistant-real-desktop",
+    "entry:harness-commands-real/assistant-real-compact",
+    "entry:harness-commands-real/assistant-real-chromium-320",
+    "entry:harness-commands-real/assistant-real-webkit-320",
+    "entry:harness-commands-real/assistant-real-chromium-390",
+    "entry:harness-commands-real/assistant-real-webkit-390",
+    "entry:harness-commands-real/assistant-real-chromium-430",
+    "entry:harness-commands-real/assistant-real-webkit-430"
+  ],
+  "change_digest": "d4fffc944664feda8ccadf68420495aeef1eb4f249f69ace03b69c5b9ae391a4"
 }

@@ -1515,7 +1515,7 @@ export interface HarnessPlanEntry {
 
 export interface HarnessGoalSnapshot {
   objective: string;
-  status: "pending" | "running" | "complete" | "blocked" | "failed";
+  status: "pending" | "running" | "complete" | "blocked" | "failed" | "paused" | "usage_limited" | "budget_limited";
   progress?: number;
   currentStep?: string;
   elapsedMs?: number;
@@ -1928,7 +1928,16 @@ export interface HarnessSessionSummary {
   lastActivityAt: string;
 }
 
+export interface HarnessCommand {
+  name: string;
+  description: string;
+  hint: string;
+  source: "native" | "nebula";
+}
+
 export interface HarnessSessionActivity {
+  commands?: HarnessCommand[];
+  commandsDiscovered?: boolean;
   sessionId: Identifier;
   sessionStatus: HarnessSessionSummary["status"];
   busy: boolean;
