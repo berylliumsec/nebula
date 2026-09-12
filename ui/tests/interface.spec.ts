@@ -6169,11 +6169,22 @@ test("shared actions keep sleek geometry for direct Workbench toolbar icons", as
 });
 test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
-  const header = page.locator('.top-bar-page-actions');
+  const header = page.locator('.top-bar');
   const newChat = header.getByRole('button', {name: 'New chat', exact: true});
   await expect(newChat).toBeVisible();
   await expect(newChat).toHaveAttribute('title', 'New chat');
   expect(await newChat.innerText()).toBe('');
+  await expect(newChat).toHaveCount(1);
+  const placement = await header.evaluate(element => {
+    const buttons = [...element.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0);
+    const last = buttons.at(-1)!;
+    const previous = buttons.at(-2)!;
+    return { last: last.getAttribute('aria-label'), gap: last.getBoundingClientRect().left - previous.getBoundingClientRect().right, rightInset: element.getBoundingClientRect().right - last.getBoundingClientRect().right };
+  });
+  expect(placement.last).toBe('New chat');
+  expect(placement.gap).toBeGreaterThanOrEqual(12);
+  expect(placement.rightInset).toBeLessThanOrEqual(28);
+
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (!mobile) {
     const plusBox = await newChat.boundingBox();
@@ -6198,7 +6209,9 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
     await expect(tabs.getByRole('tab', {name: 'Workspace files'})).toBeFocused();
     await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
     await header.getByRole('button', {name: 'Enter focus mode'}).click();
-    await expect(page.locator('.sessions-page > .session-toolbar')).toBeVisible();
+    const focusedToolbar = page.locator('.sessions-page > .session-toolbar');
+    await expect(focusedToolbar).toBeVisible();
+    await expect(focusedToolbar.getByRole('button', {name: 'New chat', exact: true})).toBeVisible();
     await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
   }
   await newChat.click();
@@ -6262,3 +6275,42 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await expect(thinking.getByText(/Check the selected session/)).toBeVisible();
   });
 }
+
+test("stabilization transcript search has a compact field and usable filters", async ({ page }, testInfo) => {
+  let requests = 0;
+  await page.route("**/chat/projects/*/search?*", async route => {
+    requests++;
+    if (requests === 1) await route.fulfill({status: 503, json: {detail: "Search unavailable. Try again."}});
+    else await route.fulfill({json: {items: [], next_offset: null}});
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const panel = page.locator(".assistant-search");
+  await panel.locator("summary").click();
+  const input = panel.getByRole("searchbox", {name: "Search transcript"});
+  await expect(input).toHaveAttribute("placeholder", "Find a message…");
+  await expect(panel.getByRole("checkbox", {name: "This conversation"})).toBeChecked();
+  await panel.getByRole("checkbox", {name: "Bookmarks only"}).check();
+  await input.fill("a message worth finding");
+  await input.press("Enter");
+  await expect(panel.getByRole("alert")).toBeVisible();
+  await panel.getByRole("button", {name: "Search messages", exact: true}).click();
+  await expect(panel.getByText("No matching messages.")).toBeVisible();
+  const geometry = await panel.evaluate(element => ({
+    width: innerWidth,
+    right: element.getBoundingClientRect().right,
+    clipped: element.scrollWidth > element.clientWidth,
+    targets: [...element.querySelectorAll(".assistant-search-filter, .assistant-search-field > button")].map(target => ({height: target.getBoundingClientRect().height, contained: target.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom})),
+  }));
+  expect(geometry.right).toBeLessThanOrEqual(geometry.width + 1);
+  expect(geometry.clipped).toBe(false);
+  await expect.poll(() => panel.evaluate(element => [...element.querySelectorAll(".assistant-search-filter, .assistant-search-field > button")].every(target => {
+    const bounds = target.getBoundingClientRect();
+    return bounds.height >= 44 && bounds.bottom <= element.getBoundingClientRect().bottom;
+  }))).toBe(true);
+  expect((await new AxeBuilder({page}).include(".assistant-search").analyze()).violations).toEqual([]);
+  await page.locator(".chat-scroll").click();
+  await page.mouse.move(0, 0);
+  await expect(page.getByRole("tooltip")).toBeHidden();
+  await page.screenshot({path: testInfo.outputPath("transcript-search.png")});
+});

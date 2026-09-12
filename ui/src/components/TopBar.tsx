@@ -27,6 +27,7 @@ interface TopBarProps {
   onToggleSidebar: () => void;
   onOpenPalette: () => void;
   setToolbarHost: (element: HTMLDivElement | null) => void;
+  setTrailingToolbarHost?: (element: HTMLDivElement | null) => void;
   sidebarCollapsed: boolean;
   variant?: "standard" | "zero";
 }
@@ -38,6 +39,7 @@ export function TopBar({
   onToggleSidebar,
   onOpenPalette,
   setToolbarHost,
+  setTrailingToolbarHost,
   sidebarCollapsed,
   variant = "standard",
 }: TopBarProps) {
@@ -156,6 +158,7 @@ export function TopBar({
           {approvalsCount > 0 && <span className="notification-count" aria-hidden="true">{approvalsCount}</span>}
         </button>}
       </div>
+      <div className="top-bar-trailing-actions" ref={setTrailingToolbarHost} role="group" aria-label={`${page.label} primary action`} />
     </header>
     {addressOpen && createPortal(<ModalSurface labelledBy="terminal-address-title" onClose={() => setAddressOpen(false)}>
       <div className="dialog-heading"><h2 id="terminal-address-title">Terminal network address</h2><button className="icon-button subtle" type="button" aria-label="Close network address" onClick={() => setAddressOpen(false)}><X size={18} aria-hidden="true" /></button></div>
