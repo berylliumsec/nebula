@@ -1,17 +1,26 @@
 {
-  "reviewed_by": "Codex banner-removal review",
-  "reason": "Remove only the redundant Security Browser empty-state welcome banner and its unused CSS selectors. Reviewed the two-file diff; tool dock and selected assessment controls remain unchanged. This reversible presentation-only deletion receives source diff checks, with runtime verification outstanding.",
-  "exclusions": "No suites selected for this small static presentation removal. No backend, native, API, state ownership, or interaction changes. Shared CSS edit only removes selectors for deleted markup. Browser/mobile, production build and real workflow verification remain outstanding; no full suite authorized.",
-  "baseline": "ac2edefcd75351d2976e467476c4c4dbc2888995",
+  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
+  "change_digest": "1d6c1ec6b0fd58e25c0d44ade24d4dd044bafdab754c87da793ec219233816d1",
+  "reviewed_by": "Codex focused header layout review",
+  "reason": "Relocate existing tool controls; verify icon names, dimensions, selection, new chat entry and clipping across eight browser profiles.",
+  "exclusions": "No full suite. No backend/native/state changes; existing lifecycle handlers unchanged. Shared TabBar opt-in presentation reviewed. Component behavior exercised in focused browser test; physical devices unavailable.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [],
   "frontend": [],
   "native": [],
-  "playwright": [],
-  "change_digest": "f0093c9446cc07db19d62bbda0d3b7d2b196fe9667e17668ff8ec78acff267d1"
+  "playwright": [
+    "entry:compact-header/desktop",
+    "entry:compact-header/compact",
+    "entry:compact-header/mobile-chromium-small",
+    "entry:compact-header/mobile-chromium-ledger-390",
+    "entry:compact-header/mobile-chromium-wide",
+    "entry:compact-header/mobile-webkit-small",
+    "entry:compact-header/mobile-webkit",
+    "entry:compact-header/mobile-webkit-wide"
+  ]
 }

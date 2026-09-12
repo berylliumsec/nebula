@@ -19,6 +19,72 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "compact-header": [
+      {
+        "area": "compact-header",
+        "project": "desktop",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "compact",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-ledger-390",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      }
+    ],
     "harness-accounts": [
   {
     "area": "harness-accounts",

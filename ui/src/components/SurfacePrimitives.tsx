@@ -81,6 +81,7 @@ export interface TabItem<T extends string> {
 
 interface TabBarProps<T extends string> {
   items: readonly TabItem<T>[];
+  iconOnly?: boolean;
   value: T;
   onChange: (value: T) => void;
   label: string;
@@ -88,7 +89,7 @@ interface TabBarProps<T extends string> {
 }
 
 /** Quiet, keyboard-navigable tab anatomy shared by every tool switcher. */
-export function TabBar<T extends string>({ items, value, onChange, label, className = "" }: TabBarProps<T>) {
+export function TabBar<T extends string>({ items, value, onChange, label, className = "", iconOnly = false }: TabBarProps<T>) {
   const tabListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const selected = tabListRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
@@ -103,7 +104,7 @@ export function TabBar<T extends string>({ items, value, onChange, label, classN
     tabs[next]?.focus();
     tabs[next]?.click();
   };
-  return <div ref={tabListRef} className={`tab-bar ${className}`.trim()} role="tablist" aria-label={label}>{items.map((item) => <button key={item.id} type="button" role="tab" aria-label={item.ariaLabel} aria-selected={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={item.disabled} onKeyDown={moveFocus} onClick={() => onChange(item.id)}>{item.icon}{item.label}</button>)}</div>;
+  return <div ref={tabListRef} className={`tab-bar ${className}`.trim()} role="tablist" aria-label={label}>{items.map((item) => <button key={item.id} type="button" role="tab" title={iconOnly ? String(item.label) : undefined} aria-label={item.ariaLabel ?? (iconOnly ? String(item.label) : undefined)} aria-selected={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={item.disabled} onKeyDown={moveFocus} onClick={() => onChange(item.id)}>{iconOnly ? <span aria-hidden="true">{item.icon}</span> : item.icon}{!iconOnly && item.label}</button>)}</div>;
 }
 
 interface ListRowProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {

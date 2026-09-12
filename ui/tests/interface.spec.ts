@@ -6137,3 +6137,41 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
     await expect(page.getByRole("button", { name: "Review pending actions", exact: true })).toHaveCount(0);
   });
 }
+
+test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const header = page.locator('.top-bar-page-actions');
+  const newChat = header.getByRole('button', {name: 'New chat', exact: true});
+  await expect(newChat).toBeVisible();
+  await expect(newChat).toHaveAttribute('title', 'New chat');
+  expect(await newChat.innerText()).toBe('');
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (!mobile) {
+    const tabs = header.getByRole('tablist', {name: 'Workbench views'});
+    await expect(tabs.getByRole('tab')).toHaveCount(8);
+    for (const tab of await tabs.getByRole('tab').all()) {
+      expect(await tab.innerText()).toBe('');
+      await expect(tab).toHaveAttribute('title', /.+/);
+      const box = await tab.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+    await tabs.getByRole('tab', {name: 'Workspace code editor'}).click();
+    await expect(page).toHaveURL(/view=code/);
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
+    await expect(tabs.getByRole('tab', {name: 'Analyst chat'})).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.sessions-page > .session-toolbar')).toHaveCount(0);
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(tabs.getByRole('tab', {name: 'Workspace files'})).toBeFocused();
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
+    await header.getByRole('button', {name: 'More Workbench actions'}).click();
+    await page.getByRole('menuitem', {name: 'Enter focus mode'}).click();
+    await expect(page.locator('.sessions-page > .session-toolbar')).toBeVisible();
+    await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
+  }
+  await newChat.click();
+  await expect(page.locator('#analyst-message')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: `/tmp/nebula-compact-header-${testInfo.project.name}.png`});
+});

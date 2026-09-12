@@ -3230,17 +3230,9 @@ export function SessionsPage() {
             </div>
   );
 
-  return (
-    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
-      <PageHeader
-        title="Workbench"
-        description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
-        showIntroduction={false}
-        actions={view === "chat" ? <PageHeaderAction label="New chat" icon={<Plus size={16} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : undefined} onClick={newConversation} /> : view === "missions" ? <NewMissionButton showSetupGuidance={false} /> : undefined}
-      />
-
-      <Toolbar className="session-toolbar" label="Workbench controls">
-        <TabBar className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
+  const workbenchToolbar = (
+      <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls">
+        <TabBar iconOnly className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
           { id: "browser", label: "Browser", ariaLabel: "Project browser", icon: <Globe2 size={16} /> },
@@ -3251,19 +3243,22 @@ export function SessionsPage() {
           { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
         ] as const} />
         <div className="session-toolbar-actions">
+          {view === "chat" && <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} />}
+          {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
           {view === "chat" && <button
             className="button quiet session-conversations-toggle"
             type="button"
             aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
             aria-expanded={conversationPanelOpen}
+            title={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
             aria-controls="workbench-conversations"
             onClick={toggleConversationPanel}
           >
-            <MessageSquare size={15} aria-hidden="true" /> Conversations{sessions.length ? <span>{sessions.length}</span> : null}
+            <MessageSquare size={18} aria-hidden="true" />
           </button>}
           {fullScreen && <button className="icon-button subtle workbench-full-screen-toggle" type="button" aria-label="Exit full screen workbench" title="Exit focus mode" onClick={() => setFullScreen(false)}><Minimize2 size={17} aria-hidden="true" /></button>}
           <div className="workbench-actions">
-            <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>
+            <button ref={workbenchActionsButtonRef} className="icon-button subtle" type="button" title="More Workbench actions" aria-label="More Workbench actions" aria-haspopup="menu" aria-expanded={workbenchActionsOpen} aria-controls={workbenchActionsOpen ? "workbench-actions-menu" : undefined} onClick={() => setWorkbenchActionsOpen((open) => !open)}><MoreHorizontal size={18} aria-hidden="true" /></button>
             {workbenchActionsOpen && <div ref={workbenchActionsMenuRef} className="workbench-actions-menu" id="workbench-actions-menu" role="menu" aria-label="Workbench actions">
               {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
               {view === "chat" && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => {
@@ -3280,6 +3275,17 @@ export function SessionsPage() {
           </div>
         </div>
       </Toolbar>
+  );
+
+  return (
+    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
+      <PageHeader
+        title="Workbench"
+        description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
+        showIntroduction={false}
+        actions={fullScreen ? undefined : workbenchToolbar}
+      />
+      {fullScreen && workbenchToolbar}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
