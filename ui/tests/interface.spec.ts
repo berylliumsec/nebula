@@ -6167,3 +6167,98 @@ test("shared actions keep sleek geometry for direct Workbench toolbar icons", as
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const header = page.locator('.top-bar-page-actions');
+  const newChat = header.getByRole('button', {name: 'New chat', exact: true});
+  await expect(newChat).toBeVisible();
+  await expect(newChat).toHaveAttribute('title', 'New chat');
+  expect(await newChat.innerText()).toBe('');
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (!mobile) {
+    const plusBox = await newChat.boundingBox();
+    const focusBox = await header.getByRole('button', {name: 'Enter focus mode'}).boundingBox();
+    expect(plusBox!.x).toBeGreaterThanOrEqual(focusBox!.x + focusBox!.width);
+    const tabs = header.getByRole('tablist', {name: 'Workbench views'});
+    await expect(tabs.getByRole('tab')).toHaveCount(8);
+    for (const tab of await tabs.getByRole('tab').all()) {
+      expect(await tab.innerText()).toBe('');
+      await expect(tab).toHaveAttribute('title', /.+/);
+      const box = await tab.boundingBox();
+      expect(box!.width).toBeGreaterThanOrEqual(44);
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+    }
+    await tabs.getByRole('tab', {name: 'Workspace code editor'}).click();
+    await expect(page).toHaveURL(/view=code/);
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
+    await expect(tabs.getByRole('tab', {name: 'Analyst chat'})).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('.sessions-page > .session-toolbar')).toHaveCount(0);
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(tabs.getByRole('tab', {name: 'Workspace files'})).toBeFocused();
+    await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
+    await header.getByRole('button', {name: 'Enter focus mode'}).click();
+    await expect(page.locator('.sessions-page > .session-toolbar')).toBeVisible();
+    await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
+  }
+  await newChat.click();
+  await expect(page.locator('#analyst-message')).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: `/tmp/nebula-compact-header-${testInfo.project.name}.png`});
+});
+for (const vendor of ["grok_acp", "codex_app_server"]) {
+  reloadTest(`stabilization harness commands and thinking ${vendor}`, async ({ page }, info) => {
+    const chat = "chat-command-thinking", session = "session-command-thinking", turn = "turn-command-thinking";
+    const text = "Check the selected session.\n" + "Long retained thinking text. ".repeat(40);
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      const json = (value: unknown) => route.fulfill({ json: value });
+      if (path.endsWith("/harnesses")) return json([{ ...entity, id: "harness-command-thinking", name: "Harness", kind: vendor, connection_mode: "spawn", transport: "stdio", executable: vendor === "grok_acp" ? "grok" : "codex", auth_mode: "existing_session", default_model: "security-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["security-model"], checked_at: entity.updated_at } }]);
+      if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: chat, engagement_id: "scratch-project", title: "Command thinking", backend: "harness", harness_profile_id: "harness-command-thinking", harness_session_id: session, model: "security-model", metadata: {} }]);
+      if (path.endsWith(`/chat/sessions/${chat}/messages`)) return json([{ ...entity, id: "answer-command-thinking", engagement_id: "scratch-project", session_id: chat, sequence: 1, role: "assistant", content: "Saved response", citations: [], metadata: { harness_turn_id: turn } }]);
+      if (path.endsWith(`/harness-turns/${turn}/events`)) return json({ events: [{ id: "thought", type: "item_upsert", schema_version: "nebula.harness-activity/v2", sequence: 1, vendor, harness_session_id: session, harness_turn_id: turn, item_id: "thinking-1", item_kind: "reasoning", item_status: "completed", title: "Reasoning", payload: { reasoning_summary_state: "available", reasoning_summary_text: text }, artifact_ids: [] }], next_sequence: 1 });
+      if (path.endsWith(`/harness-turns/${turn}/interactions`)) return json([]);
+      if (path.endsWith(`/chat/sessions/${chat}/pending-turn`)) return json(null);
+      if (path.endsWith(`/harness-sessions/${session}/activity`)) return json({ session_id: session, session_status: "idle", busy: false, live: true, turn_id: turn, turn_status: "completed", turn_origin: "chat", detail: "Ready", commands_discovered: vendor === "grok_acp", commands: [{name: "usage", description: "Session usage", hint: "", source: "nebula"}, ...(vendor === "grok_acp" ? [{name: "vendor-check", description: "Check project", hint: "A long target argument hint ".repeat(8), source: "native"}] : [])] });
+      await route.fallback();
+    });
+    await openWorkspace(page, `/?view=chat&session=${chat}`, "Workbench");
+    const thinking = page.getByLabel("Harness thinking");
+    await expect(thinking).toBeVisible();
+    await expect(thinking).not.toHaveAttribute("open", "");
+    await thinking.locator("summary").focus();
+    await page.keyboard.press("Enter");
+    await expect(thinking.getByText(/Check the selected session/)).toBeVisible();
+    const geometry = await thinking.evaluate(element => ({ right: element.getBoundingClientRect().right, width: innerWidth, scroll: element.scrollWidth, client: element.clientWidth, target: element.querySelector("summary")!.getBoundingClientRect().height }));
+    expect(geometry.right).toBeLessThanOrEqual(geometry.width + 1);
+    expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+    expect(geometry.target).toBeGreaterThanOrEqual(44);
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    await composer.fill("/");
+    await page.getByRole("button", { name: "/usage Session usage" }).click();
+    await expect(composer).toHaveValue("/usage ");
+    await expect(composer).toBeFocused();
+    await composer.fill("/vendor");
+    if (vendor === "grok_acp") {
+      const command = page.getByRole("button", {name: "/vendor-check Check project"});
+      await expect(command).toBeVisible();
+      const box = await command.boundingBox();
+      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+      await command.focus();
+      await page.keyboard.press("Enter");
+      await expect(composer).toHaveValue("/vendor-check ");
+      await expect(composer).toBeFocused();
+    } else {
+      await expect(page.getByRole("status").filter({hasText: "Command unavailable"})).toBeVisible();
+    }
+    await composer.fill("/");
+    expect((await new AxeBuilder({ page }).include(".harness-command-hints").include(".harness-thinking").analyze()).violations).toEqual([]);
+    await page.screenshot({path: info.outputPath("command-picker.png")});
+
+    await page.reload();
+    await expect(thinking).toBeVisible();
+    await thinking.locator("summary").click();
+    await expect(thinking.getByText(/Check the selected session/)).toBeVisible();
+  });
+}

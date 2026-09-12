@@ -247,6 +247,26 @@ class ApiEntityValidator:
             and current.kind != candidate.kind
         ):
             raise ApiEntityValidationError("harness kind cannot be changed")
+        if (
+            isinstance(current, HarnessProfile)
+            and isinstance(candidate, HarnessProfile)
+            and current.home_directory != candidate.home_directory
+        ):
+            offset = 0
+            while True:
+                sessions = self.store.list_entities(
+                    HarnessSession, offset=offset, limit=1000
+                )
+                if any(
+                    session.harness_profile_id == current.id for session in sessions
+                ):
+                    raise ApiEntityValidationError(
+                        "This account folder is attached to existing sessions. "
+                        "Add a separate harness profile and select it in Assistant to switch accounts."
+                    )
+                if len(sessions) < 1000:
+                    break
+                offset += len(sessions)
         current_owner = entity_engagement_id(current)
         candidate_owner = entity_engagement_id(candidate)
         if current_owner != candidate_owner:

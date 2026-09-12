@@ -1,14 +1,14 @@
 {
-  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
-  "change_digest": "4873f0e69eb1544881ebe3acb102e2c9e0dad7408ad8a890f6b3075d6889efc5",
+  "baseline": "c5fd66d2d42c5f33d1776eb5706073791a9a627e",
+  "change_digest": "7248df98abac20562d4d77cdc31b40f0db4ed9c34330298a392f7c7587fc86f5",
   "reviewed_by": "Codex toolbar review",
-  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; existing transcript stability failure is documented.",
-  "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and full mobile boundary coverage unavailable.",
+  "reason": "Direct Workbench toolbar discovery, details toggle and focus entry/exit. Selected component files and four browser cases cover toolbar presentation; existing transcript stability failure is documented. Integrated current main header placement; additionally selected its eight compact-header cases to prove icon order, navigation and layout at 320/390/430 widths.",
+  "exclusions": "No backend or native changes. Unrelated browser work remains uncommitted. No full suite. No origin-sensitive behavior changed; physical devices and manual screen-reader checks unavailable.",
   "expected_tests": {
     "python": 0,
     "frontend": 38,
     "native": 0,
-    "playwright": 4
+    "playwright": 12
   },
   "python": [],
   "frontend": [
@@ -20,6 +20,14 @@
     "entry:toolbar-actions/desktop",
     "entry:toolbar-actions/compact",
     "entry:toolbar-actions/mobile-chromium",
-    "entry:toolbar-actions/mobile-webkit"
+    "entry:toolbar-actions/mobile-webkit",
+    "entry:compact-header/desktop",
+    "entry:compact-header/compact",
+    "entry:compact-header/mobile-chromium-small",
+    "entry:compact-header/mobile-chromium-ledger-390",
+    "entry:compact-header/mobile-chromium-wide",
+    "entry:compact-header/mobile-webkit-small",
+    "entry:compact-header/mobile-webkit",
+    "entry:compact-header/mobile-webkit-wide"
   ]
 }

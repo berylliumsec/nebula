@@ -23,3 +23,13 @@ review or live deployment check. Partially verified; no backend or origin-sensit
 behavior was changed. No CI upload was made; local selection receipt reviewed.
 Product rule: expose frequent secondary actions directly when toolbar space allows,
 with consistent icon geometry rather than an unnecessary overflow step.
+
+Integration against main c5fd66d: retained the shell-header toolbar and New chat
+action from #283; direct actions use the same 44px spacing. Mobile shell header
+keeps only New chat and retains More views for navigation/focus.
+Production build passed. All 12 selected browser checks passed: direct action
+journey (4 profiles) and existing compact-header journey (8 profiles, including
+320/390/430 Chromium/WebKit). Screenshots inspected for desktop layout.
+Component rerun: 37 passed, one existing transcript DOM-stability failure.
+Artifacts: /tmp/toolbar-integrated-{build,unit,browser,header}.log.
+Physical-device and manual screen-reader checks remain unavailable.

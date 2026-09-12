@@ -72,7 +72,7 @@
 
 /* Assistant controls share a bounded column; transcript and composer stay reachable. */
 .chat-panel > .chat-thread { flex: 1 1 0; min-height: 0; overflow: hidden; }
-.chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30dvh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
+.chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30cqh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
 .chat-operator-updates:empty { display: none; }
 .chat-operator-updates > * { margin: 6px 0; }
 .chat-operator-updates .chat-follow-up-queue, .chat-operator-updates .chat-catch-up { max-height: none; overflow: visible; }
@@ -102,7 +102,7 @@
   .chat-message-actions > button { min-width: 44px; min-height: 44px; }
   .chat-composer footer .chat-runtime-summary { max-width: 120px; }
   .chat-composer footer .chat-context-meter { min-width: 44px; }
-  .chat-operator-updates { max-height: min(200px, 30dvh); width: calc(100% - 12px); }
+  .chat-operator-updates { max-height: min(200px, 30cqh); width: calc(100% - 12px); }
   .assistant-search summary { min-height: 44px; display: flex; align-items: center; }
 }
 
@@ -163,3 +163,14 @@
 .activity-ledger-failure[open] > summary > svg { transform: rotate(180deg); }
 .activity-ledger-failure > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: inherit; }
 .activity-ledger-failure > .activity-ledger-entry-body { padding: 0 12px 10px; }
+
+.harness-thinking { margin-block: 8px; min-width: 0; }
+.harness-thinking > summary { cursor: pointer; min-height: 44px; padding: 10px 4px; }
+.harness-thinking > summary span { margin-inline-start: 12px; font-size: 0.85em; }
+.harness-thinking > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.harness-thinking .harness-reasoning-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.harness-command-hints { display: flex; flex-wrap: wrap; gap: 4px; max-height: min(8rem, 18cqh); overflow-y: auto; }
+.harness-command-hints button { min-height: 44px; gap: 8px; flex-wrap: wrap; }
+
+.harness-command-hints button > span { min-width: 0; overflow-wrap: anywhere; }
+.harness-command-hints small { display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; font-size: .75rem; color: var(--muted); }

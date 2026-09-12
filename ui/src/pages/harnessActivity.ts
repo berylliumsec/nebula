@@ -23,6 +23,8 @@ export function isSameHarnessSessionActivity(
     && current.startedAt === next.startedAt
     && current.lastActivityAt === next.lastActivityAt
     && current.detail === next.detail
+    && current.commandsDiscovered === next.commandsDiscovered
+    && JSON.stringify(current.commands) === JSON.stringify(next.commands)
     && current.mode === next.mode
     && JSON.stringify(current.plan) === JSON.stringify(next.plan)
     && JSON.stringify(current.goal) === JSON.stringify(next.goal);

@@ -13,10 +13,11 @@ interface FolderListing {
   nextOffset?: number;
 }
 
-export function HostFolderPicker({ api, value, onSelect }: {
+export function HostFolderPicker({ api, value, onSelect, purpose = "workspace" }: {
   api?: ApiClient;
   value?: string;
   onSelect: (path: string) => void;
+  purpose?: "workspace" | "account";
 }) {
   const [open, setOpen] = useState(false);
   const [listing, setListing] = useState<FolderListing>();
@@ -182,8 +183,8 @@ export function HostFolderPicker({ api, value, onSelect }: {
         <header>
           <div>
             <span className="host-folder-dialog-kicker"><Server size={14} /> Nebula host</span>
-            <h2 id="host-folder-dialog-title">Choose project folder</h2>
-            <p>This folder becomes the shared working directory for Grok, Codex, and Kali.</p>
+            <h2 id="host-folder-dialog-title">{purpose === "account" ? "Choose account folder" : "Choose project folder"}</h2>
+            <p>{purpose === "account" ? "This folder stores the selected harness account’s sign-in and settings on the Nebula host." : "This folder becomes the shared working directory for Grok, Codex, and Kali."}</p>
           </div>
           <button className="icon-button subtle" type="button" aria-label="Close folder browser" onClick={closeBrowser}><X size={18} /></button>
         </header>
