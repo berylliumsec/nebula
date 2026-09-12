@@ -1,6 +1,6 @@
 {
   "baseline": "72d1e13ef5e9923e1125eeb8f6b8d32438161d3f",
-  "change_digest": "00a1c1f0fd7f46f3d9d5b4d6b0130a81639debd40d29a72687af325cd77fa691",
+  "change_digest": "7fe971b22fa28aab29610256f6ffe6d39a31bedf5a0cded8e770c88cbc2e6de4",
   "reviewed_by": "Codex cross-harness goal-continuation implementation",
   "reason": "Focused adapter coverage proves that Grok active-goal events cause same-session continuation, terminal and attention states stop continuation, intermediate ACP turn completion is not surfaced as durable goal completion, and native goal notifications remain normalized. Codex coverage proves set/resume dispatch starts execution through its native thread goal API. Both verified harness probes advertise goal monitoring.",
   "exclusions": "No full suites. Python is limited to fifteen collected Codex and Grok goal-command and capability-probe cases. No frontend source changed, so component tests are excluded. No native source changed. Browser and real-Core Playwright are excluded from this local selection because no committed live-Grok goal fixture exists; live authenticated Grok, production bundle, LAN-origin, mobile-browser, reconnect, and physical-device evidence remain required before the operator workflow is called complete. Unrelated Claude, provider, mission, browser automation, terminal, project mutation, and packaging tests are excluded.",
