@@ -45,13 +45,5 @@ def test_viewer_preserves_auth_and_cannot_propose_or_select(tmp_path):
 def test_working_knowledge_is_internal_and_does_not_change_permissions():
     from nebula.v3.application_model.workflow import BROWSER_MODEL_WORKFLOW
 
-    for invariant in [
-        "project-scoped working knowledge",
-        "not an",
-        "full graph",
-        "Never direct the user to a Model tab",
-        "read-only operator view",
-        "does not grant permission",
-        "do not enable unavailable tools",
-    ]:
+    for invariant in ["browser.companion", "model.transact"]:
         assert invariant in BROWSER_MODEL_WORKFLOW

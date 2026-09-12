@@ -53,10 +53,7 @@ def decision_snapshot(store, session_id, project_id):
 def decision_instructions(snapshot):
     if not snapshot:
         return ""
-    return (
-        "\n\nOperator context — explicitly saved decisions and constraints:\nUnresolved assumptions remain questions, not established facts. If entries conflict, surface the conflict for the operator; do not silently pick a winner.\n"
-        + json.dumps(snapshot, ensure_ascii=False)
-    )
+    return "\n\nOperator-saved context:\n" + json.dumps(snapshot, ensure_ascii=False)
 
 
 def fork_decisions(store, source, fork, boundary_sequence):

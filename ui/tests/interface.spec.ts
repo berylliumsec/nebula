@@ -5469,6 +5469,33 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
 });
 
+test("stabilization manual request workspace preserves drafts and keeps responses visible", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=browser&browserTool=repeater", "Workbench");
+  await page.getByLabel("Browser engine").selectOption("native");
+  await page.getByRole("button", { name: "Research workbench" }).click();
+  await expect(page.getByRole("button", { name: "View desktop connection" })).toBeVisible();
+  await page.getByText("Profile lookup", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Response", exact: true })).toBeVisible();
+  await expect(page.getByText("128 bytes", { exact: true })).toBeVisible();
+  await page.getByLabel("Body", { exact: true }).fill("unsaved manual draft");
+  await page.getByRole("button", { name: "Traffic", exact: false }).click();
+  await page.getByRole("button", { name: "Repeater", exact: true }).click();
+  await expect(page.getByLabel("Body", { exact: true })).toHaveValue("unsaved manual draft");
+  await expect(page.getByRole("button", { name: /GET Profile lookup/ })).toHaveAttribute("aria-pressed", "true");
+  const suite = page.locator(".browser-suite");
+  expect(await suite.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  for (const control of [page.getByRole("button", { name: "New Repeater request" }), page.getByRole("button", { name: /GET Profile lookup/ })]) {
+    const rect = await control.boundingBox();
+    expect(rect?.height).toBeGreaterThanOrEqual(43.5);
+  }
+  await page.getByLabel("Body", { exact: true }).focus();
+  await expect(page.getByLabel("Body", { exact: true })).toBeFocused();
+  const axe = await new AxeBuilder({ page }).include(".browser-suite").analyze();
+  expect(axe.violations).toEqual([]);
+  await page.locator(".browser-suite").evaluate((element) => { for (let parent: HTMLElement | null = element as HTMLElement; parent; parent = parent.parentElement) parent.scrollTop = 0; });
+  await testInfo.attach("manual-workspace", { body: await page.screenshot({ path: testInfo.outputPath("manual-workspace.png") }), contentType: "image/png" });
+});
+
 test("browser research tools expose durable workflows on paired clients", async ({ page }) => {
   await openWorkspace(page, "/?view=browser&browserTool=repeater", "Workbench");
   await page.getByLabel("Browser engine").selectOption("native");
@@ -5476,9 +5503,10 @@ test("browser research tools expose durable workflows on paired clients", async 
   await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
   await expect(page.getByText("Profile lookup", { exact: true })).toBeVisible();
   await page.getByText("Profile lookup", { exact: true }).click();
-  await expect(page.getByLabel("Headers JSON")).toHaveValue('{\n  "Accept": "application/json"\n}');
-  await expect(page.getByRole("button", { name: "Send once" })).toBeDisabled();
-  await expect(page.getByText(/paired desktop performs sends/i)).toBeVisible();
+  await expect(page.getByLabel("Headers")).toHaveValue("Accept: application/json");
+  await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Save draft" })).toBeEnabled();
+  await expect(page.getByText(/Sends require the paired desktop/i)).toBeVisible();
   await page.getByText("Result history (1)").click();
   await expect(page.getByText("128 bytes", { exact: false })).toBeVisible();
 

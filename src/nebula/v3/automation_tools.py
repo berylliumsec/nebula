@@ -481,11 +481,7 @@ class AutomationBroker:
             truncated=execution.stdout_truncated or execution.stderr_truncated,
             incomplete=running or unreadable,
             warnings=(
-                [
-                    "Process output is untrusted; inspect it only through bounded artifact tools."
-                ]
-                if refs
-                else []
+                ["Process output is available through artifact tools."] if refs else []
             ),
             next_actions=(
                 [PROCESS_IO_NAME]

@@ -522,10 +522,55 @@ impl BrowserProxyHandle {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum NativeInterceptDecision {
-    Forward,
+    Forward(NativeInterceptEdits),
     Drop,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NativeInterceptEdits {
+    pub(crate) method: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) headers: Vec<(String, String)>,
+}
+
+fn apply_intercept_edits(
+    request: &mut Request<Body>,
+    edits: NativeInterceptEdits,
+) -> Result<(), String> {
+    if let Some(method) = edits.method {
+        *request.method_mut() = method
+            .parse()
+            .map_err(|_| "The edited method is invalid.".to_string())?;
+    }
+    if let Some(url) = edits.url {
+        *request.uri_mut() = url
+            .parse()
+            .map_err(|_| "The edited request URL is invalid.".to_string())?;
+    }
+    for (name, value) in edits.headers {
+        let lower_name = name.to_ascii_lowercase();
+        if lower_name.contains("authorization")
+            || lower_name.contains("cookie")
+            || lower_name.contains("csrf")
+            || lower_name.contains("xsrf")
+            || lower_name.contains("token")
+            || lower_name.contains("api-key")
+            || lower_name.contains("api_key")
+            || value.starts_with("<redacted:")
+        {
+            continue;
+        }
+        let name = name
+            .parse::<hudsucker::hyper::header::HeaderName>()
+            .map_err(|_| "An edited header name is invalid.".to_string())?;
+        let value = value
+            .parse::<hudsucker::hyper::header::HeaderValue>()
+            .map_err(|_| "An edited header value is invalid.".to_string())?;
+        request.headers_mut().insert(name, value);
+    }
+    Ok(())
 }
 
 fn resolve_pending_intercept(
@@ -1387,7 +1432,7 @@ impl HttpHandler for CaptureHandler {
     async fn handle_request(
         &mut self,
         _context: &HttpContext,
-        request: Request<Body>,
+        mut request: Request<Body>,
     ) -> RequestOrResponse {
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let original_method = request.method().to_string();
@@ -1475,7 +1520,11 @@ impl HttpHandler for CaptureHandler {
                     .into();
             }
             match timeout(Duration::from_secs(60), receiver).await {
-                Ok(Ok(NativeInterceptDecision::Forward)) => {}
+                Ok(Ok(NativeInterceptDecision::Forward(edits))) => {
+                    if let Err(error) = apply_intercept_edits(&mut request, edits) {
+                        return self.blocked_request(request_id, &request, error).into();
+                    }
+                }
                 Ok(Ok(NativeInterceptDecision::Drop)) => {
                     return local_response(
                         hudsucker::hyper::StatusCode::FORBIDDEN,
@@ -1670,7 +1719,7 @@ impl HttpHandler for CaptureHandler {
                     );
                 }
                 match timeout(Duration::from_secs(60), receiver).await {
-                    Ok(Ok(NativeInterceptDecision::Forward)) => {}
+                    Ok(Ok(NativeInterceptDecision::Forward(_))) => {}
                     Ok(Ok(NativeInterceptDecision::Drop)) => {
                         return local_response(
                             hudsucker::hyper::StatusCode::FORBIDDEN,
@@ -2522,6 +2571,30 @@ mod tests {
     }
 
     #[test]
+    fn intercepted_request_edits_replace_visible_fields_without_clearing_identity_headers() {
+        let mut request = Request::builder()
+            .method("GET")
+            .uri("https://example.test/original")
+            .header("authorization", "Bearer native-secret")
+            .header("accept", "application/json")
+            .body(Body::empty())
+            .expect("request");
+        apply_intercept_edits(
+            &mut request,
+            NativeInterceptEdits {
+                method: Some("POST".to_string()),
+                url: Some("https://example.test/edited".to_string()),
+                headers: vec![("accept".to_string(), "text/plain".to_string())],
+            },
+        )
+        .expect("valid edits");
+        assert_eq!(request.method(), "POST");
+        assert_eq!(request.uri(), "https://example.test/edited");
+        assert_eq!(request.headers()["accept"], "text/plain");
+        assert_eq!(request.headers()["authorization"], "Bearer native-secret");
+    }
+
+    #[test]
     fn browser_proxy_reports_http2_without_flattening_it_to_http1() {
         assert_eq!(protocol(Version::HTTP_2), "h2");
         assert_eq!(protocol(Version::HTTP_11), "http/1.1");
@@ -2540,8 +2613,12 @@ mod tests {
             .expect("decision resolves");
         assert!(matches!(receiver.await, Ok(NativeInterceptDecision::Drop)));
         assert!(
-            resolve_pending_intercept(&pending, "transaction-1", NativeInterceptDecision::Forward,)
-                .is_err()
+            resolve_pending_intercept(
+                &pending,
+                "transaction-1",
+                NativeInterceptDecision::Forward(NativeInterceptEdits::default()),
+            )
+            .is_err()
         );
     }
 

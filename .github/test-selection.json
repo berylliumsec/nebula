@@ -1,42 +1,33 @@
 {
-  "baseline": "b697282",
-  "reviewed_by": "Codex compact terminal workflow review",
-  "reason": "Compact terminal tabs and active-session controls into the companion toolbar; disclose runtime metadata and next-launch ports on demand while preserving errors and VPN/bridge notices. Correct terminal prompt clipping by extending viewport-fit layout to Terminal, moving padding to the element FitAddon measures, and putting fit geometry in the final unlayered CSS contract. Distinguish Project all-target permission from missing native scope; preserve research records and proxy enforcement. Shared SessionsPage, browser-assistant.css and ui.css changes reviewed as scoped presentation changes. Component coverage: terminal lifecycle/active-targeting/details (16), browser UI/native events (16), scope status classification (3). Browser coverage: five exact terminal journeys across eight profiles (40), plus one native-event desktop fixture (1). No unrelated test areas selected. Follow-up: install current Core scope before native webview creation; refresh native scope before manual navigation/reload, preserving fail-closed native validation. Add 3 component regressions (fresh scope, failed reload install/retry, revoked scope). Move desktop conversations icon to leading edge; reuse mobile bottom navigation with the same icon to avoid crowded headers. Cover reveal/close/geometry across eight profiles. Native selection checks existing exact scope restriction tests; no automation worker changes. Native CI integration also runs the existing fixed tests/v3/test_sandbox.py -k macos boundary filter (2 collected, 48 excluded); explicitly reviewed, no full Python suite.",
-  "exclusions": "No full suite. No automation execution or third-party traffic in tests. Backend records unchanged. Actual Core/native webview and physical-device acceptance unavailable; mocked evidence is partial. Component runtime bounded to five minutes; native compilation ten minutes; production build ten minutes; selected browser journeys ten minutes.",
+  "baseline": "a0be3fb2f1c505d391d1d54a4feaa48cad15b207",
+  "change_digest": "608b1216ee2a770a4867251ceb40f00d1ac1598f534a4583440a82ee529478e3",
+  "reviewed_by": "Codex manual workspace source review",
+  "reason": "Focused review covers the branch's persistent manual-request drafts and visible transport controls, plus the new minimal model-instruction contract across chat, harnesses, writing, browser attachments, tool results, and structured workflows. Four Python contract tests assert that Nebula retains only workspace, capability, citation, tool-call, and schema mechanics. The selected component files cover the existing manual-request journey and every changed browser attachment label; the catalogued browser entries retain responsive coverage for the earlier visible workspace changes.",
+  "exclusions": "No full suites. Five minute Python and component bounds, ten minute browser and production-build bounds. Native proxy/API edits predate the prompt work and remain unverified; omission is not native correctness evidence. Unrelated automation, scanning, replay execution, provider, Python, frontend, and shell journeys are excluded. Live Codex, Grok, Claude, and direct-provider precedence, Real-Core persistence, physical-device, LAN-origin, and manual screen-reader evidence remain release gates.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 38,
-    "native": 2,
-    "playwright": 49
+    "python": 4,
+    "frontend": 58,
+    "native": 0,
+    "playwright": 8
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_minimal_agent_instructions.py"
+  ],
   "frontend": [
-    "ui/src/components/ContainerTerminalPanel.test.tsx",
+    "ui/src/components/RepeaterWorkspace.test.tsx",
+    "ui/src/api/workbenchBrowser.test.ts",
     "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/browserScopeStatus.test.ts"
+    "ui/src/components/ManagedAssistantBrowser.test.tsx"
   ],
-  "native": [
-    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
-    "browser_proxy::tests::native_scope_rejects_credential_bearing_urls"
-  ],
+  "native": [],
   "playwright": [
-    "entry:compact-terminal/desktop",
-    "entry:compact-terminal/compact",
-    "entry:compact-terminal/mobile-chromium-small",
-    "entry:compact-terminal/mobile-chromium-ledger-390",
-    "entry:compact-terminal/mobile-chromium-wide",
-    "entry:compact-terminal/mobile-webkit-small",
-    "entry:compact-terminal/mobile-webkit",
-    "entry:compact-terminal/mobile-webkit-wide",
-    "entry:native-scope-status/desktop",
-    "entry:conversations-sidebar/desktop",
-    "entry:conversations-sidebar/compact",
-    "entry:conversations-sidebar/mobile-chromium-small",
-    "entry:conversations-sidebar/mobile-chromium-ledger-390",
-    "entry:conversations-sidebar/mobile-chromium-wide",
-    "entry:conversations-sidebar/mobile-webkit-small",
-    "entry:conversations-sidebar/mobile-webkit",
-    "entry:conversations-sidebar/mobile-webkit-wide"
-  ],
-  "change_digest": "eddcc9e8cd46e1f8cb7e4e01d48fded6055510f1474850ebdc78702b000c223a"
+    "entry:manual-request-workspace/desktop",
+    "entry:manual-request-workspace/compact",
+    "entry:manual-request-workspace/mobile-chromium-small",
+    "entry:manual-request-workspace/mobile-chromium-ledger-390",
+    "entry:manual-request-workspace/mobile-chromium-wide",
+    "entry:manual-request-workspace/mobile-webkit-small",
+    "entry:manual-request-workspace/mobile-webkit",
+    "entry:manual-request-workspace/mobile-webkit-wide"
+  ]
 }

@@ -64,20 +64,24 @@ describe("BrowserResearchSuite", () => {
         createdAt: new Date().toISOString(),
       }],
     };
-    const transition = vi.fn().mockResolvedValue({ ...workspace.repeaterTabs[0], state: "queued", revision: 3 });
+    const saved = { ...workspace.repeaterTabs[0], bodyTemplate: '{"role":"admin"}', revision: 3 };
+    const update = vi.fn().mockResolvedValue(saved);
+    const transition = vi.fn().mockResolvedValue({ ...saved, state: "queued", revision: 4 });
     const client = api({
       getSecurityBrowserResearch: vi.fn().mockResolvedValue(workspace),
+      updateSecurityBrowserRepeaterTab: update,
       transitionSecurityBrowserRepeaterTab: transition,
     });
     renderSuite(<BrowserResearchSuite api={client} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="repeater" />);
 
     expect(await screen.findByText("Profile")).toBeVisible();
-    fireEvent.click(screen.getByText("Result history (1)"));
-    expect(screen.getByText("200")).toBeVisible();
     fireEvent.click(screen.getByText("Profile").closest("button")!);
-    expect(screen.getByLabelText("Headers JSON")).toHaveValue('{\n  "Accept": "application/json"\n}');
-    fireEvent.click(screen.getByRole("button", { name: "Send once" }));
-    await waitFor(() => expect(transition).toHaveBeenCalledWith(expect.objectContaining({ id: "repeater-1" }), "queue", "operator"));
+    expect(screen.getByText("200")).toBeVisible();
+    expect(screen.getByLabelText("Headers")).toHaveValue("Accept: application/json");
+    fireEvent.change(screen.getByLabelText("Body"), { target: { value: '{"role":"admin"}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: "repeater-1" }), expect.objectContaining({ bodyTemplate: '{"role":"admin"}' })));
+    expect(transition).toHaveBeenCalledWith(saved, "queue", "operator");
   });
 
   it("keeps native Repeater sends disabled on a paired browser", async () => {
@@ -91,8 +95,59 @@ describe("BrowserResearchSuite", () => {
       }],
     };
     renderSuite(<BrowserResearchSuite api={api({ getSecurityBrowserResearch: vi.fn().mockResolvedValue(workspace) })} desktop={false} identity={identity} operatorId="operator" projectId="project-1" session={session} view="repeater" />);
-    expect(await screen.findByRole("button", { name: "Send once" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Send" })).toBeDisabled();
     expect(screen.getByText(/paired desktop performs sends/i)).toBeVisible();
+  });
+
+  it("copies a paused request into Repeater without deciding the live transaction", async () => {
+    const intercept = {
+      id: "intercept-1", revision: 1, sessionId: session.id, identityId: identity.id, tabId: "tab-1",
+      transactionId: "transaction-1", phase: "request", method: "POST", url: "https://app.example.test/api/profile",
+      headers: [["Content-Type", "application/json"]], editedHeaders: [], state: "paused", expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const created = {
+      id: "repeater-2", revision: 1, sessionId: session.id, identityId: identity.id, name: "POST /api/profile",
+      group: "Ungrouped", notes: "", protocol: "http", method: "POST", url: intercept.url,
+      headers: intercept.headers, bodyTemplate: "", historyExchangeIds: [], evidenceIds: [], state: "draft", requestCount: 0,
+    };
+    const create = vi.fn().mockResolvedValue(created);
+    const decide = vi.fn();
+    const client = api({
+      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], attacks: [], attackResults: [], tokenAnalyses: [] }),
+      createSecurityBrowserRepeaterTab: create,
+      decideSecurityBrowserIntercept: decide,
+    });
+    renderSuite(<BrowserResearchSuite api={client} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intercepts" />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy to Repeater" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith("project-1", expect.objectContaining({ method: "POST", url: intercept.url, headers: intercept.headers })));
+    expect(decide).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("live intercept is still paused");
+  });
+
+  it("forwards the visible intercept edits instead of a binary theatre decision", async () => {
+    const intercept = {
+      id: "intercept-edit", revision: 1, sessionId: session.id, identityId: identity.id, tabId: "tab-1",
+      transactionId: "transaction-edit", phase: "request", method: "GET", url: "https://app.example.test/api/profile",
+      headers: [["Accept", "application/json"], ["Authorization", "<redacted:sha256:abc>"]], editedHeaders: [], state: "paused",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    const decide = vi.fn().mockResolvedValue({ ...intercept, state: "forwarded" });
+    const client = api({
+      getSecurityBrowserResearch: vi.fn().mockResolvedValue({ siteNodes: [], crawlJobs: [], intercepts: [intercept], repeaterTabs: [], repeaterResults: [], attacks: [], attackResults: [], tokenAnalyses: [] }),
+      decideSecurityBrowserIntercept: decide,
+    });
+    renderSuite(<BrowserResearchSuite api={client} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="intercepts" />);
+
+    fireEvent.click(await screen.findByText("Edit request before forwarding"));
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://app.example.test/api/profile?role=admin" } });
+    fireEvent.change(screen.getByLabelText("Intercept headers"), { target: { value: "Accept: text/plain\nAuthorization: <redacted:sha256:abc>" } });
+    fireEvent.click(screen.getByRole("button", { name: "Forward edited request" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith(intercept, "forward", "operator", {
+      method: "GET",
+      url: "https://app.example.test/api/profile?role=admin",
+      headers: [["Accept", "text/plain"]],
+    }));
   });
 
   it("rejects an Intruder draft whose declared marker is absent", async () => {

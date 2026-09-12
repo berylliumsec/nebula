@@ -900,12 +900,10 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert decisions[0].category == "command"
         assert rpc.responses == [(41, {"decision": "accept"})]
         instructions = rpc.calls[1][1]["developerInstructions"]
-        assert "unrestricted vendor workspace agent" in instructions
-        assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES (JSON)\n[]" in instructions
-        assert '"name":"run_command"' in instructions
-        assert '"name":"knowledge.list"' in instructions
-        assert '"name":"knowledge.search"' in instructions
-        assert '"source":"nebula_core_gateway"' in instructions
+        assert instructions.startswith("Nebula Codex session.")
+        assert "cwd '.'" in instructions
+        assert "TRUSTED" not in instructions
+        assert "untrusted" not in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
 
     asyncio.run(scenario())
@@ -2024,7 +2022,11 @@ def test_claude_native_capabilities_exclude_project_files_and_shell(
             "Edit",
             "NotebookEdit",
         }.issubset(options["disallowed_tools"])
-        assert "BEGIN TRUSTED VENDOR-NATIVE CAPABILITIES" in options["system_prompt"]
+        assert options["system_prompt"].startswith("Nebula Claude session.")
+        assert (
+            "Project operations use the supplied Nebula tools"
+            in options["system_prompt"]
+        )
 
         pre_tool_use = options["hooks"]["PreToolUse"][0].hooks[0]
         read_result = await pre_tool_use(

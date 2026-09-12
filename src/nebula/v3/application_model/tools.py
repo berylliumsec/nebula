@@ -72,7 +72,7 @@ DESCRIPTIONS = {
     "model.list_evidence": "Browse original recorded evidence metadata, without creating objects or exposing secret values.",
     "model.get_evidence": "Read project-scoped evidence context and allowlisted observed facts. Cookie presence does not prove authentication; a 403 does not prove a firewall; data-related text does not establish database topology.",
     "model.get_updates": "Read incremental durable edit history after a revision. History retains supporting/conflicting evidence, source contexts, producers and timestamps.",
-    "model.transact": "Atomically submit meaningful objects, relationships, project schema definitions or dismissals. New objects require properties.purpose as a nonblank textual claim explaining a behavior, meaningful dependency or specific uncertainty. If there is no concrete contribution, keep the observation as evidence; do not invent a rationale or duplicate existing objects. Use current expected_revision and a stable idempotency_key for retries. Every property and relationship is an evidence-bearing claim; leave unknowns unspecified and secrets out. Review acceptance never upgrades a hypothesis. For model questions, propose interpretations before applying operator-requested corrections.",
+    "model.transact": "Submit application-model objects, relationships, schema definitions, or dismissals using current revisions and evidence.",
 }
 
 
@@ -148,7 +148,6 @@ class ModelBroker:
             recovery = {
                 "schema_tool": "model.discover_schema",
                 "relationship_tool": "model.relationship_options",
-                "instruction": "The transaction did not save. Discover valid types and directions, then correct and retry with the current revision. Do not abandon relationship updates and continue browsing.",
             }
             if invocation.tool_name == "model.transact":
                 for operation in body.operations:

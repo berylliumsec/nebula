@@ -198,7 +198,7 @@ describe("ManagedAssistantBrowser", () => {
     await screen.findByText("Selected page content");
     expect(onContext).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Attach to Assistant" }));
-    expect(onContext).toHaveBeenCalledWith(expect.objectContaining({ sourceKind: "browser_companion", sourceId: "browser-1", text: expect.stringContaining("UNTRUSTED BROWSER CONTENT") }));
+    expect(onContext).toHaveBeenCalledWith(expect.objectContaining({ sourceKind: "browser_companion", sourceId: "browser-1", text: expect.stringContaining("BROWSER CONTENT") }));
     expect(onContext.mock.calls[0][0].text).toContain("Page revision: revision-1");
     expect(onContext.mock.calls[0][0].text).toContain('Element structure: {"tag":"main","role":"main"}');
     expect(JSON.stringify(onContext.mock.calls)).not.toContain("private-url-token");

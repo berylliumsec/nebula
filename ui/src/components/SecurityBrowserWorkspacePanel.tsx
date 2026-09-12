@@ -36,6 +36,8 @@ interface SecurityBrowserWorkspacePanelProps {
   session?: SecurityBrowserSession;
   targetOptions: string[];
   toolNavigation: ReactNode;
+  transportControls?: ReactNode;
+  manualTools?: boolean;
   children: ReactNode;
   onClose: () => void;
   onWidthChange?: (width: number | undefined) => void;
@@ -69,6 +71,8 @@ export function SecurityBrowserWorkspacePanel({
   session,
   targetOptions,
   toolNavigation,
+  transportControls,
+  manualTools,
   children,
   onClose,
   onWidthChange,
@@ -394,12 +398,14 @@ export function SecurityBrowserWorkspacePanel({
     </section>,
   ];
 
-  return <aside ref={size.panelRef} style={size.panelStyle} className="browser-research-panel security-browser-workspace" aria-label="Security Browser workspace">
+  const manualOnly = manualTools && workspace?.assessments.length === 0;
+  return <aside ref={size.panelRef} style={manualOnly && !desktop ? { ...size.panelStyle, width: "100%" } : size.panelStyle} className={`browser-research-panel security-browser-workspace${manualOnly ? " manual-tools" : ""}`} aria-label="Security Browser workspace">
     {size.resizeHandle}
     <header>
       <div><strong>Security Browser</strong><small>Guided assessments, live browser, evidence, and expert tools</small></div>
       <div className="security-browser-header-actions"><span className={`security-browser-stream stream-${streamState}`}>{stateLabel(streamState)}</span><button type="button" aria-label="Close Security Browser" onClick={onClose}><X size={17} /></button></div>
     </header>
+    {transportControls}
     {error && <div className="security-browser-error" role="alert"><AlertTriangle size={16} /><span>{error}</span><button type="button" onClick={() => void refresh()}><RefreshCw size={14} /> Retry</button></div>}
     <div className="security-browser-layout">
       <aside className="security-browser-assessment-rail" aria-label="Assessments">
