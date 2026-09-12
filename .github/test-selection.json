@@ -1,20 +1,16 @@
 {
-  "baseline": "72d1e13ef5e9923e1125eeb8f6b8d32438161d3f",
-  "change_digest": "7fe971b22fa28aab29610256f6ffe6d39a31bedf5a0cded8e770c88cbc2e6de4",
-  "reviewed_by": "Codex cross-harness goal-continuation implementation",
-  "reason": "Focused adapter coverage proves that Grok active-goal events cause same-session continuation, terminal and attention states stop continuation, intermediate ACP turn completion is not surfaced as durable goal completion, and native goal notifications remain normalized. Codex coverage proves set/resume dispatch starts execution through its native thread goal API. Both verified harness probes advertise goal monitoring.",
-  "exclusions": "No full suites. Python is limited to fifteen collected Codex and Grok goal-command and capability-probe cases. No frontend source changed, so component tests are excluded. No native source changed. Browser and real-Core Playwright are excluded from this local selection because no committed live-Grok goal fixture exists; live authenticated Grok, production bundle, LAN-origin, mobile-browser, reconnect, and physical-device evidence remain required before the operator workflow is called complete. Unrelated Claude, provider, mission, browser automation, terminal, project mutation, and packaging tests are excluded.",
-  "expected_tests": {"python": 15, "frontend": 0, "native": 0, "playwright": 0},
-  "python": [
-    "tests/v3/test_harness_commands.py::test_grok_goal_continues_vendor_turns_until_goal_is_complete",
-    "tests/v3/test_harness_commands.py::test_grok_goal_does_not_continue_terminal_or_attention_states",
-    "tests/v3/test_harness_commands.py::test_grok_goal_prefix_precedes_but_preserves_core_context",
-    "tests/v3/test_harness_commands.py::test_grok_native_goal_notifications_are_not_lost",
-    "tests/v3/test_harness_commands.py::test_codex_goal_dispatch_and_continuation",
-    "tests/v3/test_harness_adapters.py::test_codex_probe_discovers_selectable_models",
-    "tests/v3/test_harness_adapters.py::test_grok_probe_negotiates_cached_token_without_credentials"
-  ],
+  "baseline": "18374005041309854cd0f12dee24217b651c8d75",
+  "change_digest": "5a33e780e80316c2faf0294b5373c2dfea0b2fdddc91b2d4679c22e03ed7b35d",
+  "reviewed_by": "Codex assistant-settings responsiveness fix",
+  "reason": "The focused Assistant settings journey verifies that harness discovery is usable while harness-session loading remains pending, harness/model-specific choices update immediately, effort selection remains selected, visible feedback confirms next-message application, and the existing accessibility and responsive geometry contract remains intact.",
+  "exclusions": "No full suites. No Python or native source changed. There is no isolated component for this page-owned workflow, so frontend unit tests are excluded in favor of its committed Playwright regression. Unrelated chat, provider, mission, browser automation, terminal, project mutation, and packaging journeys are excluded. Native harness execution, real-Core persistence, LAN-origin behavior, reconnect, and physical-device checks are unchanged by this request and are not part of the focused mocked state-loading regression.",
+  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 3},
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "branch-review/desktop",
+    "assistant/mobile-chromium",
+    "branch-review/mobile-webkit"
+  ]
 }
