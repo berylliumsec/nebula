@@ -85,6 +85,138 @@
         "shard": "1/1"
       }
     ],
+    "harness-commands-real": [
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-desktop",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-compact",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
+    "runtime": "real-core",
+    "shard": "1/1"
+  }
+],
+    "harness-commands": [
+  {
+    "area": "harness-commands",
+    "project": "desktop",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "compact",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-ledger-390",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  }
+],
     "harness-accounts": [
   {
     "area": "harness-accounts",

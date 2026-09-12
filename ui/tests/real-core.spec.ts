@@ -2985,3 +2985,71 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
     await info.attach("account-home-screen", {body: await page.screenshot(), contentType: "image/png"});
   } finally {await core.stop();}
 });
+
+reliabilityTest("assistant upgrade native commands retain thinking and replies across Core restart", async ({page}, info) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "commands");
+  try {
+    const profile = await core.api.post("harnesses", {data: {name: "Codex command fixture", kind: "codex_app_server", executable: "/bin/true", default_model: "fixture", enabled: true, privacy: {local_only: true, permits_sensitive_data: true}}});
+    expect(profile.ok(), await profile.text()).toBe(true);
+    const codex = await profile.json();
+    for (const id of ["inert-fixture", codex.id]) expect((await core.api.post(`harnesses/${id}/health`)).ok()).toBe(true);
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Command acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Command acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    for (const id of ["inert-fixture", codex.id]) {
+      await page.goto(`${core.origin}/?view=chat`);
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+      await page.getByLabel("Chat harness", {exact: true}).selectOption(id);
+      await page.getByRole("button", {name: "Close assistant settings"}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await composer.fill("/goal Clock");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal work completed.", {timeout: 20_000});
+      const thinking = page.getByLabel("Harness thinking").first();
+      await expect(thinking).toBeVisible();
+      await thinking.locator("summary").click();
+      await expect(thinking).toContainText("Retained thinking from the native peer.");
+      if (id === "inert-fixture") {
+        await composer.fill("/vendor");
+        await expect(page.getByRole("button", {name: "/vendor-check Check project"})).toBeVisible();
+        await page.screenshot({path: info.outputPath("discovered-command.png")});
+        await page.getByRole("button", {name: "/vendor-check Check project"}).click();
+        await expect(composer).toHaveValue("/vendor-check ");
+        await page.getByRole("button", {name: "Send message", exact: true}).click();
+        await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Vendor command received: /vendor-check", {timeout: 20_000});
+        await composer.fill("/vendor");
+        await expect(page.getByRole("button", {name: "/vendor-check Check project"})).toHaveCount(0, {timeout: 10_000});
+        await page.reload();
+        await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Vendor command received: /vendor-check");
+        await composer.fill("/vendor-check");
+        await page.getByRole("button", {name: "Send message", exact: true}).click();
+        await expect(page.getByText("/vendor-check is not available in this harness session.", {exact: false}).first()).toBeVisible({timeout: 20_000});
+      }
+      await composer.fill("/usage extra");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.getByText("Use /usage without arguments to read this session\'s usage.", {exact: false}).first()).toBeVisible({timeout: 20_000});
+      await composer.fill("/u");
+      await page.getByRole("button", {name: "/usage Session usage"}).click();
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
+      await core.restart();
+      await page.reload();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
+      await expect(thinking).toBeVisible();
+      await thinking.locator("summary").click();
+      await expect(thinking).toContainText("Retained thinking from the native peer.");
+      await composer.fill("/goal status");
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal: Clock", {timeout: 20_000});
+      const entries = (await readFile(path.join(core.dataDir, "command-requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
+      await thinking.scrollIntoViewIfNeeded();
+      await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
+    }
+    await info.attach("native-command-evidence", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), peer: "inert native protocol peer; real Core, production adapters, persistence and UI"}), contentType: "application/json"});
+  } finally {await core.stop();}
+});

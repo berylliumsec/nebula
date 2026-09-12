@@ -1294,7 +1294,7 @@ interface WireChatStreamEvent extends JsonObject {
   plan?: Array<{ id: string; title: string; status: "pending" | "in_progress" | "completed" | "blocked" }>;
   goal?: {
     objective: string;
-    status: "pending" | "running" | "complete" | "blocked" | "failed";
+    status: "pending" | "running" | "complete" | "blocked" | "failed" | "paused" | "usage_limited" | "budget_limited";
     progress?: number | null;
     current_step?: string | null;
     elapsed_ms?: number | null;
@@ -1468,6 +1468,8 @@ interface WireHarnessSession extends WireEntity {
 }
 
 interface WireHarnessSessionActivity extends JsonObject {
+  commands?: HarnessSessionActivity["commands"];
+  commands_discovered?: boolean;
   session_id: string;
   session_status: HarnessSessionSummary["status"];
   busy: boolean;
@@ -1486,7 +1488,7 @@ interface WireHarnessSessionActivity extends JsonObject {
   }>;
   goal?: {
     objective: string;
-    status: "pending" | "running" | "complete" | "blocked" | "failed";
+    status: "pending" | "running" | "complete" | "blocked" | "failed" | "paused" | "usage_limited" | "budget_limited";
     progress?: number | null;
     current_step?: string | null;
     elapsed_ms?: number | null;
@@ -3265,6 +3267,8 @@ function mapHarnessSessionActivity(
   return {
     sessionId: value.session_id,
     sessionStatus: value.session_status,
+    commands: value.commands,
+    commandsDiscovered: value.commands_discovered ?? false,
     busy: value.busy,
     live: value.live,
     turnId: value.turn_id ?? undefined,
