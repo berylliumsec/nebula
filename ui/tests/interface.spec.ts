@@ -3357,6 +3357,9 @@ test("conversation switching between projects detaches the provider viewer witho
 });
 
 test("harness model controls expose only the selected runtime's advertised options", async ({ page }, testInfo) => {
+  let harnessSessionsCompleted = false;
+  let releaseHarnessSessions!: () => void;
+  const harnessSessionsGate = new Promise<void>((resolve) => { releaseHarnessSessions = resolve; });
   const harnesses = [{
     ...entity,
     id: "harness-grok-options",
@@ -3438,6 +3441,12 @@ test("harness model controls expose only the selected runtime's advertised optio
   }];
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harness-sessions")) {
+      await harnessSessionsGate;
+      harnessSessionsCompleted = true;
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
     if (path.endsWith("/harnesses")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(harnesses) });
       return;
@@ -3501,7 +3510,9 @@ test("harness model controls expose only the selected runtime's advertised optio
   await expect(page.getByRole("dialog", { name: "Assistant settings" })).toBeInViewport({ ratio: 1 });
   expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+  expect(harnessSessionsCompleted).toBe(false);
   await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-grok-options");
+  releaseHarnessSessions();
   await expect.poll(() => settingsButton.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
   await page.screenshot({ path: testInfo.outputPath("assistant-settings.png") });
 
@@ -3512,6 +3523,9 @@ test("harness model controls expose only the selected runtime's advertised optio
   await expect(effort).toHaveValue("high");
   await expect(effort.locator("option")).toHaveText(["Harness default", "Extra high", "High", "Medium", "Low"]);
   await expect(page.getByRole("combobox", { name: "Harness speed" })).toHaveCount(0);
+  await effort.selectOption("xhigh");
+  await expect(settingsDialog.locator(".provider-dialog-note[role=status]")).toHaveText("Effort updated. Applies to your next message.");
+  await expect(effort).toHaveValue("xhigh");
 
   await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-codex-options");
   await expect(model).toHaveValue("gpt-5.6");
