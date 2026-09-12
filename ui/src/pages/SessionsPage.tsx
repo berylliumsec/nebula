@@ -64,7 +64,8 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { ApiClient } from "../api/client";
+import { ApiError, type ApiClient } from "../api/client";
+import { ChatPreviewCache } from "./chatPreviewCache";
 import { Link, useSearchParams } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
@@ -570,6 +571,15 @@ export function SessionsPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sending, setSending] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [sessionReadReady, setSessionReadReady] = useState(true);
+  const chatPreviews = useMemo(() => new ChatPreviewCache<{
+    messages: ConversationMessage[];
+    toolCards: ToolLifecycleCard[];
+    scrollTop: number;
+    followBottom: boolean;
+  }>(), [api, engagement?.id]);
+  const previewOwnerRef = useRef("");
+  const restoredScrollRef = useRef<{scrollTop: number; followBottom: boolean} | undefined>(undefined);
   const [reloadingConversation, setReloadingConversation] = useState(false);
   const [chatError, setChatError] = useState<string>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
@@ -593,6 +603,7 @@ export function SessionsPage() {
     if (element) { chatFollowBottomRef.current = false; element.scrollIntoView({block: "center"}); element.focus({preventScroll: true}); }
   }, [searchParams, loadingHistory, messages.length]);
   const chatFollowBottomRef = useRef(true);
+  const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
   const previousChatSendingRef = useRef(false);
@@ -623,8 +634,19 @@ export function SessionsPage() {
   }), [loadingHistory, messages, sending]);
   const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
-    chatFollowBottomRef.current = true;
-    setHasNewerMessages(false);
+    const position = restoredScrollRef.current;
+    chatFollowBottomRef.current = position?.followBottom ?? true;
+    setHasNewerMessages(!chatFollowBottomRef.current);
+    if (!position) return;
+    const restore = () => {
+      chatFollowBottomRef.current = position.followBottom;
+      setHasNewerMessages(!position.followBottom);
+      if (chatViewportRef.current && !position.followBottom) chatViewportRef.current.scrollTop = position.scrollTop;
+    };
+    restore();
+    // The external thread store commits its message rows after the parent render.
+    const frame = requestAnimationFrame(restore);
+    return () => cancelAnimationFrame(frame);
   }, [conversationOpen, sessionId]);
   useLayoutEffect(() => {
     const runStarted = sending && !previousChatSendingRef.current;
@@ -1093,6 +1115,10 @@ export function SessionsPage() {
 
   useEffect(() => {
     sessionLoadAbortRef.current?.abort();
+    sessionSelectionGenerationRef.current += 1;
+    previewOwnerRef.current = "";
+    restoredScrollRef.current = undefined;
+    setSessionReadReady(true);
     historicalActivityAbortRef.current.forEach((controller) => controller.abort());
     historicalActivityAbortRef.current.clear();
     detachActiveChatStream();
@@ -1227,6 +1253,9 @@ export function SessionsPage() {
   };
 
   const resetConversation = (open: boolean) => {
+    previewOwnerRef.current = "";
+    restoredScrollRef.current = undefined;
+    setSessionReadReady(true);
     sessionSelectionGenerationRef.current += 1;
     setApprovalDecisionBusy(false);
     pendingSessionNavigationRef.current = undefined;
@@ -1285,6 +1314,7 @@ export function SessionsPage() {
     setChatError(undefined);
     try {
       await api.deleteChatSession(session.id);
+      chatPreviews.delete(session.id);
       if (engagement) {
         clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, session.id));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, session.id));
@@ -1316,6 +1346,7 @@ export function SessionsPage() {
     setChatError(undefined);
     const results = await Promise.allSettled(targets.map((session) => api.deleteChatSession(session.id)));
     const deletedIds = new Set(targets.filter((_, index) => results[index]?.status === "fulfilled").map((session) => session.id));
+    deletedIds.forEach(id => chatPreviews.delete(id));
     if (engagement) {
       for (const deletedId of deletedIds) {
         clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, deletedId));
@@ -1522,6 +1553,24 @@ export function SessionsPage() {
       return;
     }
     if (!api) return;
+    if (previewOwnerRef.current === sessionId && !loadingHistory && sessionReadReady) {
+      const durable = messages.filter(message => message.durable);
+      const durableIds = new Set(durable.map(message => message.id));
+      // Mobile hides the transcript while Conversations is open; its DOM offset
+      // is then zero. Retain the last visible reading position instead.
+      const viewport = chatViewportRef.current;
+      const lastPosition = chatReadingPositionRef.current.sessionId === sessionId ? chatReadingPositionRef.current : undefined;
+      chatPreviews.set(sessionId, {
+        messages: durable,
+        toolCards: toolCards.filter(card => durableIds.has(card.assistantId)),
+        scrollTop: viewport?.clientHeight ? viewport.scrollTop : lastPosition?.scrollTop ?? 0,
+        followBottom: viewport?.clientHeight ? chatFollowBottomRef.current : lastPosition?.followBottom ?? true,
+      });
+    }
+    const preview = chatPreviews.get(id);
+    restoredScrollRef.current = preview;
+    previewOwnerRef.current = "";
+    setSessionReadReady(false);
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
     setApprovalDecisionBusy(false);
@@ -1546,8 +1595,9 @@ export function SessionsPage() {
     setChatError(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
-    if (!preserveTranscript) setMessages([]);
-    setToolCards([]);
+    if (!preserveTranscript) setMessages(preview?.messages ?? []);
+    setToolCards(preview?.toolCards ?? []);
+    setMobileListOpen(false);
     setActivityItems([]);
     setHarnessInteractions([]);
     setPendingResponse(undefined);
@@ -1569,7 +1619,7 @@ export function SessionsPage() {
         api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
           if (loadController.signal.aborted) return undefined;
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
-          return undefined;
+          throw caughtError;
         }),
       ]);
       if (!selectionIsCurrent()) return;
@@ -1764,9 +1814,16 @@ export function SessionsPage() {
 
       }
       if (!selectionIsCurrent()) return;
+      previewOwnerRef.current = id;
+      setSessionReadReady(true);
       setMobileListOpen(false);
     } catch (error) {
       if (!selectionIsCurrent() || loadController.signal.aborted) return;
+      if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+        chatPreviews.delete(id);
+        setMessages([]);
+        setToolCards([]);
+      }
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_10", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
@@ -1916,6 +1973,7 @@ export function SessionsPage() {
     // an approval. Polling/visibility recovery also covers missed stream events.
     if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) refreshSessionState();
     if (streamEvent.type === "started" && streamEvent.sessionId) {
+      previewOwnerRef.current = streamEvent.sessionId;
       setSessionId(streamEvent.sessionId);
       openSessionChatView(streamEvent.sessionId, true);
       void refreshSessions();
@@ -2236,6 +2294,7 @@ export function SessionsPage() {
 
   const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }) => {
     event?.preventDefault();
+    if (sessionId && !sessionReadReady) return;
     const activeTurn = composerBusy;
     if (activeTurn && !queuedFollowUp && !queueOptions) {
       const text = draft.trim();
@@ -2943,7 +3002,7 @@ export function SessionsPage() {
     };
   }, [assistantSettingsOpen]);
   const composerBusy = sending || Boolean(authoritativeState?.busy) || pendingResponseActive;
-  const canSend = Boolean(api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
+  const canSend = Boolean((!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
     && sending
@@ -3082,13 +3141,16 @@ export function SessionsPage() {
               </section>, document.body)}
               <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
                 <ThreadPrimitive.Root className="chat-thread">
+                  {loadingHistory && messages.length > 0 && <div className="chat-thinking" role="status"><LoaderCircle className="spin" size={14} /> Refreshing conversation…</div>}
                   <ThreadPrimitive.Viewport
                     ref={chatViewportRef}
                     className="chat-scroll"
                     aria-live="polite"
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
+                      if (!viewport.clientHeight) return;
                       const atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 4;
+                      chatReadingPositionRef.current = {sessionId, scrollTop: viewport.scrollTop, followBottom: atBottom};
                       chatFollowBottomRef.current = atBottom;
                       setHasNewerMessages(!atBottom);
                     }}
@@ -3097,13 +3159,13 @@ export function SessionsPage() {
                     onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined && y > chatTouchYRef.current) chatFollowBottomRef.current = false; chatTouchYRef.current = y;}}
                     onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) chatFollowBottomRef.current = false;}}
                     onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
-                    autoScroll
-                    scrollToBottomOnInitialize
+                    autoScroll={!restoredScrollRef.current || restoredScrollRef.current.followBottom}
+                    scrollToBottomOnInitialize={!restoredScrollRef.current}
                     scrollToBottomOnRunStart
-                    scrollToBottomOnThreadSwitch
+                    scrollToBottomOnThreadSwitch={!restoredScrollRef.current}
                     turnAnchor="bottom"
                   >
-                {loadingHistory ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
+                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
                   const message = messagesById.get(threadMessage.id);
                   if (!message) return null;
                   const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));

@@ -317,7 +317,7 @@ test("production mission defaults to unlimited duration through real Core", asyn
   }
 });
 
-test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }) => {
+test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
@@ -351,7 +351,13 @@ test("assistant upgrade conversation switching restores durable Core history pro
     const sourceId = await createConversation("Durable source conversation");
     const targetId = await createConversation("Durable target conversation");
 
-    await page.goto(`${core.origin}/?view=chat&session=${sourceId}#token=${encodeURIComponent(core.token)}`);
+    const pairingResponse = await api.post(`http://127.0.0.1:${new URL(core.origin).port}/api/v1/auth/pairings`, {data: {name: "Chat cache acceptance"}});
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as {secret: string; confirmation_code: string};
+    await page.goto(`${core.origin}/?view=chat&session=${sourceId}#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: "Nebula Core ready", exact: true})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Show conversations"}).click();
     const startedAt = Date.now();
@@ -359,6 +365,39 @@ test("assistant upgrade conversation switching restores durable Core history pro
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetId);
     await expect(page.getByText("Durable target conversation", {exact: true})).toBeVisible();
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+    let releaseHistory = () => {};
+    let failHistory = false;
+    const historyGate = new Promise<void>(resolve => {releaseHistory = resolve;});
+    await page.route(`**/chat/sessions/${sourceId}/messages`, async route => {
+      await historyGate;
+      if (failHistory) {
+        await route.fulfill({status: 503, json: {detail: "Temporary history outage"}});
+        return;
+      }
+      await route.continue();
+    });
+    await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
+    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    await expect(page.getByText("Refreshing conversation…", {exact: true})).toBeVisible();
+    releaseHistory();
+    await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+    await page.locator(`.session-select[data-session-id="${targetId}"]`).click();
+    await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+    failHistory = true;
+    await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
+    await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toBeVisible();
+    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    failHistory = false;
+    await page.getByRole("button", {name: "Reload conversation", exact: true}).click();
+    await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    const evidencePath = testInfo.outputPath("chat-cache-production-lan.json");
+    await writeFile(evidencePath, JSON.stringify({origin: core.origin, build: "ui/dist production", viewport: page.viewportSize(), workflow: "paired browser, durable A-B-A, held refresh, reload"}));
+    await testInfo.attach("chat-cache-production-lan", {path: evidencePath, contentType: "application/json"});
+    const screenshotPath = testInfo.outputPath("chat-cache-visible-result.png");
+    await page.screenshot({path: screenshotPath});
+    await testInfo.attach("chat-cache-visible-result", {path: screenshotPath, contentType: "image/png"});
   } finally {
     await api.dispose();
     await stopLocalModelStub(modelStub);
