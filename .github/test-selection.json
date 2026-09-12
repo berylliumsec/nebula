@@ -1,13 +1,13 @@
 {
   "baseline": "b697282",
   "reviewed_by": "Codex compact terminal workflow review",
-  "reason": "Compact terminal tabs and active-session controls into the companion toolbar; disclose runtime metadata and next-launch ports on demand while preserving errors and VPN/bridge notices. Correct terminal prompt clipping by extending viewport-fit layout to Terminal, moving padding to the element FitAddon measures, and putting fit geometry in the final unlayered CSS contract. Distinguish Project all-target permission from missing native scope; preserve research records and proxy enforcement. Shared SessionsPage, browser-assistant.css and ui.css changes reviewed as scoped presentation changes. Component coverage: terminal lifecycle/active-targeting/details (16), browser UI/native events (16), scope status classification (3). Browser coverage: five exact terminal journeys across eight profiles (40), plus one native-event desktop fixture (1). No unrelated test areas selected.",
-  "exclusions": "No backend/native/network-policy changes. No full suite. Existing server session and reconnect semantics unchanged. Physical-device and real-Core acceptance unavailable locally; mocked browser evidence is presentation-only. Component timeout five minutes; production build ten minutes; selected browser run ten minutes.",
+  "reason": "Compact terminal tabs and active-session controls into the companion toolbar; disclose runtime metadata and next-launch ports on demand while preserving errors and VPN/bridge notices. Correct terminal prompt clipping by extending viewport-fit layout to Terminal, moving padding to the element FitAddon measures, and putting fit geometry in the final unlayered CSS contract. Distinguish Project all-target permission from missing native scope; preserve research records and proxy enforcement. Shared SessionsPage, browser-assistant.css and ui.css changes reviewed as scoped presentation changes. Component coverage: terminal lifecycle/active-targeting/details (16), browser UI/native events (16), scope status classification (3). Browser coverage: five exact terminal journeys across eight profiles (40), plus one native-event desktop fixture (1). No unrelated test areas selected. Follow-up: install current Core scope before native webview creation; refresh native scope before manual navigation/reload, preserving fail-closed native validation. Add 3 component regressions (fresh scope, failed reload install/retry, revoked scope). Move desktop conversations icon to leading edge; reuse mobile bottom navigation with the same icon to avoid crowded headers. Cover reveal/close/geometry across eight profiles. Native selection checks existing exact scope restriction tests; no automation worker changes. Native CI integration also runs the existing fixed tests/v3/test_sandbox.py -k macos boundary filter (2 collected, 48 excluded); explicitly reviewed, no full Python suite.",
+  "exclusions": "No full suite. No automation execution or third-party traffic in tests. Backend records unchanged. Actual Core/native webview and physical-device acceptance unavailable; mocked evidence is partial. Component runtime bounded to five minutes; native compilation ten minutes; production build ten minutes; selected browser journeys ten minutes.",
   "expected_tests": {
     "python": 0,
-    "frontend": 35,
-    "native": 0,
-    "playwright": 41
+    "frontend": 38,
+    "native": 2,
+    "playwright": 49
   },
   "python": [],
   "frontend": [
@@ -15,7 +15,10 @@
     "ui/src/components/WorkbenchBrowser.test.tsx",
     "ui/src/components/browserScopeStatus.test.ts"
   ],
-  "native": [],
+  "native": [
+    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
+    "browser_proxy::tests::native_scope_rejects_credential_bearing_urls"
+  ],
   "playwright": [
     "entry:compact-terminal/desktop",
     "entry:compact-terminal/compact",
@@ -25,7 +28,15 @@
     "entry:compact-terminal/mobile-webkit-small",
     "entry:compact-terminal/mobile-webkit",
     "entry:compact-terminal/mobile-webkit-wide",
-    "entry:native-scope-status/desktop"
+    "entry:native-scope-status/desktop",
+    "entry:conversations-sidebar/desktop",
+    "entry:conversations-sidebar/compact",
+    "entry:conversations-sidebar/mobile-chromium-small",
+    "entry:conversations-sidebar/mobile-chromium-ledger-390",
+    "entry:conversations-sidebar/mobile-chromium-wide",
+    "entry:conversations-sidebar/mobile-webkit-small",
+    "entry:conversations-sidebar/mobile-webkit",
+    "entry:conversations-sidebar/mobile-webkit-wide"
   ],
-  "change_digest": "e35c9ecf6d907b30fab74ace8b3fa29343d107e649a16801de318483e7a03890"
+  "change_digest": "eddcc9e8cd46e1f8cb7e4e01d48fded6055510f1474850ebdc78702b000c223a"
 }

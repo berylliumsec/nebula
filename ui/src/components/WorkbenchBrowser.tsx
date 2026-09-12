@@ -386,9 +386,13 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     updateTab(id, { address: url, url, loading: true, error: undefined });
     try {
       if (!activeSession) throw new Error("The durable browser session is unavailable.");
+      const currentScope = await api.getEngagementScope(projectId);
+      onScopeUpdated?.(currentScope);
+      const currentDecision = evaluateBrowserScope(url, currentScope);
+      if (currentDecision.state !== "in_scope") throw new Error(`Navigation blocked. ${currentDecision.detail}`);
       const durableTabs = tabsRef.current.map((item, position) => {
         const nextUrl = item.id === id ? url : item.url;
-        const decision = evaluateBrowserScope(nextUrl, scope);
+        const decision = evaluateBrowserScope(nextUrl, currentScope);
         return {
           id: item.id,
           url: nextUrl,
@@ -404,7 +408,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         ...current,
         sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
       } : current);
-      if (tab.created) await workbenchBrowser.navigate(id, projectId, url);
+      if (tab.created) {
+        if (persistedSession.proxyEnabled) await workbenchBrowser.applyProxyScope(projectId, persistedSession.id, currentScope);
+        await workbenchBrowser.navigate(id, projectId, url);
+      }
       else {
         if (!activeIdentity) throw new Error("Select a healthy browser identity before opening a page.");
         await workbenchBrowser.create(
@@ -422,6 +429,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           },
           persistedSession.captureMode === "bodies",
           persistedSession.interceptionEnabled,
+          currentScope,
         );
         updateTab(id, { created: true });
       }
@@ -431,7 +439,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       updateTab(id, { loading: false, error: errorMessage(caught) });
       return false;
     }
-  }, [activeIdentity, activeSession, api, bounds, deviceId, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, api, bounds, deviceId, onScopeUpdated, projectId, scope, updateTab]);
 
   const addTab = useCallback((url?: string) => {
     if (tabsRef.current.length >= MAX_TABS) {
@@ -1067,7 +1075,14 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
 
   const runControl = async (action: "back" | "forward" | "stop" | "reload") => {
     if (!activeTab) return;
-    try { await workbenchBrowser.control(activeTab.id, projectId, action); }
+    try {
+      if (action !== "stop" && activeSession?.proxyEnabled) {
+        const currentScope = await api.getEngagementScope(projectId);
+        onScopeUpdated?.(currentScope);
+        await workbenchBrowser.applyProxyScope(projectId, activeSession.id, currentScope);
+      }
+      await workbenchBrowser.control(activeTab.id, projectId, action);
+    }
     catch (caught) {
       void logCaughtDiagnostic("interface.workbench_browser.control_failed", "An embedded browser control failed.", caught, "workbench_browser");
       setError(errorMessage(caught));
@@ -1757,7 +1772,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <button type="button" aria-label="Clear Project browser data" title="Clear Project browser data" onClick={() => void clearData()}><Trash2 size={15} /></button>
       </div>
       {capabilities?.projectStorage === "ephemeral" && <div className="browser-privacy-notice"><ShieldCheck size={14} /> macOS 13 browser data is isolated and cleared when Nebula closes.</div>}
-      {nativeScopeError && <div className="browser-notice error" role="alert"><span><strong>Navigation blocked: browser scope unavailable.</strong> The Project policy and native browser session are out of sync. Existing research records remain available. Reload to retry; if this persists, reopen the Browser. <small>{nativeScopeError}</small></span><button type="button" disabled={!activeTab?.created} onClick={() => void runControl("reload")}>Reload page</button></div>}
+      {nativeScopeError && <div className="browser-notice error" role="alert"><span><strong>Navigation blocked: browser scope unavailable.</strong> The Project policy and native browser session are out of sync. Existing research records remain available. Reload to refresh Project scope and retry. <small>{nativeScopeError}</small></span><button type="button" disabled={!activeTab?.created} onClick={() => void runControl("reload")}>Reload page</button></div>}
       {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
       {notice && <div className="browser-notice" role="status">
         {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}

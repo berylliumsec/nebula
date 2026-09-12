@@ -181,3 +181,17 @@
 .compact-terminal-live > .xterm-shell { padding: 0; }
 .compact-terminal-live > .xterm-shell > .xterm { padding: 10px 12px; }
 @media (max-width: 760px) { .compact-terminal-live > .xterm-shell > .xterm { padding-inline: 7px; } }
+
+/* Keep conversations discoverable at the leading edge of chat controls. */
+.compact-workbench-toolbar .session-conversations-toggle {
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
+  padding: 0;
+}
+
+@media (max-width: 760px) {
+  .compact-workbench-toolbar .session-conversations-toggle { display: none; }
+}

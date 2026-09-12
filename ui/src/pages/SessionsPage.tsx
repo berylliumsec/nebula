@@ -50,6 +50,7 @@ import {
   Minimize2,
   MoreHorizontal,
   NotebookPen,
+  PanelLeft,
   PanelLeftClose,
   PanelRight,
   Pencil,
@@ -3233,6 +3234,17 @@ export function SessionsPage() {
   const newChatAction = view === "chat" ? <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} /> : undefined;
   const workbenchToolbar = (
       <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
+          {view === "chat" && <button
+            className="icon-button subtle session-conversations-toggle"
+            type="button"
+            aria-label={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
+            title={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
+            aria-expanded={(conversationPanelOpen || mobileListOpen)}
+            aria-controls="workbench-conversations"
+            onClick={toggleConversationPanel}
+          >
+            {(conversationPanelOpen || mobileListOpen) ? <PanelLeftClose size={18} aria-hidden="true" /> : <PanelLeft size={18} aria-hidden="true" />}
+          </button>}
         <TabBar iconOnly className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
@@ -3246,17 +3258,6 @@ export function SessionsPage() {
         <div className="session-toolbar-actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
-          {view === "chat" && <button
-            className="icon-button subtle session-conversations-toggle"
-            type="button"
-            aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            title={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            aria-expanded={conversationPanelOpen}
-            aria-controls="workbench-conversations"
-            onClick={toggleConversationPanel}
-          >
-            <MessageSquare size={16} aria-hidden="true" />
-          </button>}
           {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />}
           {view === "chat" && <button className="icon-button subtle" type="button"
             aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
@@ -3445,7 +3446,7 @@ export function SessionsPage() {
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>
-        <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><GitFork size={19} aria-hidden="true" /><span>Conversations</span></button>
+        <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><PanelLeft size={19} aria-hidden="true" /><span>Conversations</span></button>
         <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><FileClock size={19} aria-hidden="true" /><span>Activity</span></button>
         <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
       </nav>

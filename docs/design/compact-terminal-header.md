@@ -58,7 +58,8 @@ end-to-end evidence will be reported separately from mocked UI evidence.
 - Missing evidence: actual Core/container execution and physical native-webview
   reproduction, physical touch/software keyboard, landscape rotation and manual
   screen-reader checks. This is verified UI behavior in the stated production
-  fixtures, not a claim that a missing native scope has been repaired.
+  fixtures. The subsequent native scope initialization/retry implementation and its
+  remaining acceptance gaps are recorded in browser-scope-sidebar-recovery.md.
 
 Product rules: secondary controls share an existing toolbar; canvas sizing must
 use its renderer's measured content box; Project permission and runtime readiness

@@ -909,6 +909,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
       address: { top: addressRect.top, bottom: addressRect.bottom, height: addressRect.height },
       surfaceTop: surfaceRect.top,
       panelBottom: panelRect.bottom,
+      scope: create?.args.scope,
       bounds: create?.args.bounds as { x: number; y: number; width: number; height: number },
       devicePixelRatio: window.devicePixelRatio,
     };
@@ -922,6 +923,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     Math.ceil(geometry.toolbar.bottom * geometry.devicePixelRatio),
   );
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
+  expect(geometry.scope).toEqual(expect.objectContaining({revision: 3, allowedDomains: ["example.com"], allowedPorts: [443], allowAllTargets: false}));
   expect(geometry.devicePixelRatio).toBe(2);
   await expect(page.getByText("In scope")).toBeVisible();
 
@@ -1854,6 +1856,27 @@ test("all assistant states remain fully visible inside mobile Workbench navigati
   expect(composerBounds.composerBottom, geometry).toBeLessThanOrEqual(composerBounds.workspaceBottom + 1);
   expect(composerBounds.composerBottom).toBeLessThanOrEqual(composerBounds.viewportHeight + 1);
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
+});
+
+test("stabilization conversations sidebar icon reveals the left pane", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const toggle = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
+  await expect(toggle).toBeVisible();
+  await expect(toggle.locator("svg.lucide-panel-left")).toBeVisible();
+  const box = await toggle.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  if (!mobile) expect(await toggle.evaluate(element => element.parentElement?.firstElementChild === element)).toBe(true);
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("complementary", {name: "Conversations"})).toBeVisible();
+  await expect(page.locator(".session-conversations-toggle")).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", {name: "Hide conversations", exact: true}).last().click();
+  await expect(page.getByRole("complementary", {name: "Conversations"})).not.toBeVisible();
+  await expect(toggle).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
 test("conversation pane defaults closed and restores its device preference without changing URL identity", async ({ page }) => {
