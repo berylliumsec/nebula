@@ -410,7 +410,7 @@ export function SecurityBrowserWorkspacePanel({
         </div>
       </aside>
       <section className="security-browser-main">
-        {selected ? <div className="security-browser-run-summary">
+        {selected && <div className="security-browser-run-summary">
           <header><div><span className={`security-browser-status status-${selected.status}`}>{stateLabel(selected.status)}</span><h2>{selected.name}</h2><p>{selected.objective}</p></div><div className="security-browser-run-controls">
             {selected.status === "ready" && <button className="button primary" type="button" disabled={!desktop || busy} onClick={() => void transition("start")}><CirclePlay size={15} /> Start</button>}
             {selected.status === "running" && <><button className="button secondary" type="button" disabled={busy} onClick={() => void transition("takeover", { reason: "Operator requested control of the live browser." })}><Hand size={15} /> Take over</button><button className="button secondary" type="button" disabled={busy} onClick={() => void transition("pause", { reason: "Paused by operator." })}><CirclePause size={15} /> Pause</button><button className="button danger" type="button" disabled={busy} onClick={() => void transition("stop")}><Square size={14} /> Stop</button></>}
@@ -441,7 +441,7 @@ export function SecurityBrowserWorkspacePanel({
             </div>
           </section>}
           {selected.status !== "running" && <button className="security-browser-delete" type="button" disabled={busy} onClick={() => void deleteSelected()}><Trash2 size={13} /> Delete assessment metadata</button>}
-        </div> : <div className="security-browser-welcome"><ShieldCheck size={28} /><h2>One workspace for manual and autonomous testing</h2><p>Select an assessment or start a guided test. Browser identity, traffic, frozen scope, evidence, and candidate review remain connected.</p></div>}
+        </div>}
         <div className="security-browser-tool-dock">
           {toolNavigation}
           <div className="security-browser-tool-content">{children}</div>

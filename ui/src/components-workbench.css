@@ -690,9 +690,9 @@ kbd { font-size: 11px; }
 .security-browser-assessment-list > button strong, .security-browser-assessment-list > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .security-browser-assessment-list > button small, .security-browser-assessment-list > button > span:last-child { color: var(--muted); font-size: 11px; }
 .security-browser-loading { display: flex; align-items: center; gap: 6px; padding: 12px 4px; color: var(--muted); font-size: 11px; }
-.security-browser-empty, .security-browser-welcome { display: grid; justify-items: center; gap: 7px; padding: 24px 12px; color: var(--muted); text-align: center; }
-.security-browser-empty strong, .security-browser-welcome h2 { margin: 0; color: var(--text); }
-.security-browser-empty span, .security-browser-welcome p { margin: 0; font-size: 11px; line-height: 1.5; }
+.security-browser-empty { display: grid; justify-items: center; gap: 7px; padding: 24px 12px; color: var(--muted); text-align: center; }
+.security-browser-empty strong { margin: 0; color: var(--text); }
+.security-browser-empty span { margin: 0; font-size: 11px; line-height: 1.5; }
 .security-browser-main { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
 .security-browser-run-summary { display: grid; max-height: 46%; flex: 0 1 auto; gap: 9px; padding: 12px; overflow: auto; border-bottom: 1px solid var(--border); background: var(--surface); }
 .security-browser-run-summary > header { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: 10px; }
