@@ -25,6 +25,8 @@ from nebula.v3.domain import (
     ToolCall,
 )
 from nebula.v3.harnesses import (
+    CodexAppServerConnection,
+    GrokAcpConnection,
     HarnessAdapter,
     HarnessConnection,
     HarnessRuntimeService,
@@ -173,6 +175,19 @@ class InertAdapter(HarnessAdapter):
         )
 
     async def open(self, request):
+        if self.runtime.scenario == "commands":
+            from command_peer import CommandPeer
+
+            cls = (
+                CodexAppServerConnection
+                if request.profile.kind == HarnessKind.CODEX_APP_SERVER
+                else GrokAcpConnection
+            )
+            return cls(
+                CommandPeer(self.runtime.fixture_root, request.session.id),
+                external_session_id=request.session.id,
+                permission_handler=None,
+            )
         return InertConnection(request, self.runtime)
 
 
@@ -198,6 +213,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--scenario",
         choices=[
+            "commands",
             "settings",
             "single",
             "two_requests",

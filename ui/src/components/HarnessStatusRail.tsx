@@ -41,7 +41,7 @@ export function HarnessStatusRail({ activity, pendingRequests, authoritativeStat
     <strong>{status}</strong>
     {elapsed !== undefined && activity.busy && <span>{Math.floor(elapsed / 60)}m {elapsed % 60}s</span>}
     {currentStep && !expanded && <span title={currentStep}>{currentStep}</span>}
-    {activity.goal && <span title={activity.goal.objective}>Goal: {activity.goal.status}{typeof activity.goal.progress === "number" ? ` · ${Math.round(activity.goal.progress * 100)}%` : ""}</span>}
+    {activity.goal && <span title={activity.goal.objective}>Goal: {activity.goal.status.replaceAll("_", " ")}{typeof activity.goal.progress === "number" ? ` · ${Math.round(activity.goal.progress * 100)}%` : ""}</span>}
     {plan.length > 0 && <span>{completed}/{plan.length} plan steps</span>}
     {pendingRequests > 0 && <span>{pendingRequests} request{pendingRequests === 1 ? "" : "s"}</span>}
   </>;

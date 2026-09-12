@@ -19,134 +19,398 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
-    "chat-reconnection": [
+  "chat-reconnection": [
+    {
+      "area": "chat-reconnection",
+      "project": "model-desktop",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-compact",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-chromium-320",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-webkit-320",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-chromium-390",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-webkit-390",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-chromium-430",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-reconnection",
+      "project": "model-webkit-430",
+      "test_match": "tests/chat-reconnection.spec.ts",
+      "grep": "chat reconnects",
+      "runtime": "real-core",
+      "shard": "1/1"
+    }
+  ],
+  "thinking-retention": [
+    {
+      "area": "thinking-retention",
+      "project": "model-desktop",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-compact",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-chromium-320",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-webkit-320",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-chromium-390",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-webkit-390",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-chromium-430",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    },
+    {
+      "area": "thinking-retention",
+      "project": "model-webkit-430",
+      "test_match": "tests/thinking.spec.ts",
+      "grep": "thinking episodes remain",
+      "runtime": "real-core",
+      "shard": "1/1"
+    }
+  ],
+    "compact-header": [
+      {
+        "area": "compact-header",
+        "project": "desktop",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "compact",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-ledger-390",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-chromium-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      },
+      {
+        "area": "compact-header",
+        "project": "mobile-webkit-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization compact Workbench header icons",
+        "runtime": "mocked",
+        "shard": "1/1"
+      }
+    ],
+    "harness-commands-real": [
   {
-    "area": "chat-reconnection",
-    "project": "model-desktop",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-desktop",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-compact",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-compact",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-chromium-320",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-webkit-320",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-chromium-390",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-webkit-390",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-chromium-430",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-chromium-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "chat-reconnection",
-    "project": "model-webkit-430",
-    "test_match": "tests/chat-reconnection.spec.ts",
-    "grep": "chat reconnects",
+    "area": "harness-commands-real",
+    "project": "assistant-real-webkit-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade native commands retain thinking",
     "runtime": "real-core",
     "shard": "1/1"
   }
 ],
-    "thinking-retention": [
+    "harness-commands": [
   {
-    "area": "thinking-retention",
-    "project": "model-desktop",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-commands",
+    "project": "desktop",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "compact",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-ledger-390",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-chromium-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit-small",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  },
+  {
+    "area": "harness-commands",
+    "project": "mobile-webkit-wide",
+    "test_match": "tests/interface.spec.ts",
+    "grep": "stabilization harness commands and thinking",
+    "runtime": "mock",
+    "shard": "1/1"
+  }
+],
+    "harness-accounts": [
+  {
+    "area": "harness-accounts",
+    "project": "assistant-real-desktop",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-compact",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-compact",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-chromium-320",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-webkit-320",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-320",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-chromium-390",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-webkit-390",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-390",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-chromium-430",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-chromium-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   },
   {
-    "area": "thinking-retention",
-    "project": "model-webkit-430",
-    "test_match": "tests/thinking.spec.ts",
-    "grep": "thinking episodes remain",
+    "area": "harness-accounts",
+    "project": "assistant-real-webkit-430",
+    "test_match": "tests/real-core.spec.ts",
+    "grep": "assistant upgrade account homes",
     "runtime": "real-core",
     "shard": "1/1"
   }

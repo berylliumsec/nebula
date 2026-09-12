@@ -46,6 +46,7 @@ describe("harness activity presentation", () => {
     expect(isSameHarnessSessionActivity(activityState, { ...activityState })).toBe(true);
     expect(isSameHarnessSessionActivity(activityState, { ...activityState, busy: true })).toBe(false);
     expect(isSameHarnessSessionActivity(undefined, activityState)).toBe(false);
+    expect(isSameHarnessSessionActivity(activityState, { ...activityState, commands: [{ name: "new", description: "New command", hint: "", source: "native" }] })).toBe(false);
   });
 
   it("keeps routine turn status out of the assistant timeline", () => {

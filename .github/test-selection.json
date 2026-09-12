@@ -1,6 +1,6 @@
 {
-  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
-  "change_digest": "0f22b39a6ff004a499797e67b37d096032cad09099ae987b19d2e1099a182598",
+  "baseline": "c5fd66d2d42c5f33d1776eb5706073791a9a627e",
+  "change_digest": "e32214d7eebafd6652c0767adab7581c0d28006136f0ddd8da693d8f83befcf7",
   "reviewed_by": "Codex reasoning retention review",
   "reason": "Reasoning retention plus read-only viewer reconnection for accepted chat turns. Reviewed shared API/client/Core changes: focused completion replay, cursor/deduplication, heartbeat cleanup, uncertain execution rejection, detach and transport loss tests. Browser journeys use the existing eight profiles with deterministic viewer faults against real Core. Earlier unchanged reasoning cases retain their prior verified results; new work runs only reconnection selections.",
   "exclusions": "No full suites. Unrelated features and native tests excluded. No live provider traffic or physical devices. New local run: 9 Python cases (120s), 9 UI cases (120s), 16 browser cases (60s each, 15min total), production build (180s). Cumulative branch selection also retains the previous 9 Python, 33 UI and 16 reasoning browser cases. Local Python 3.11; CI default 3.12.",

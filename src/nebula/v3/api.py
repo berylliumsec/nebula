@@ -10549,6 +10549,14 @@ def _provider_contract_fingerprint(profile: ProviderProfile) -> tuple[Any, ...]:
     )
 
 
+def _invalidate_harness_home_verification(
+    current: HarnessProfile, candidate: HarnessProfile
+) -> HarnessProfile:
+    if current.home_directory == candidate.home_directory:
+        return candidate
+    return candidate.model_copy(update={"capabilities": type(candidate.capabilities)()})
+
+
 def _invalidate_provider_verification(
     current: ProviderProfile,
     candidate: ProviderProfile,
@@ -10740,6 +10748,10 @@ def _register_crud_routes(
                 entity, ProviderProfile
             ):
                 entity = _invalidate_provider_verification(current, entity)
+            elif isinstance(current, HarnessProfile) and isinstance(
+                entity, HarnessProfile
+            ):
+                entity = _invalidate_harness_home_verification(current, entity)
             entity = enforce_harness_command_boundary(entity)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
@@ -10786,7 +10798,10 @@ def _register_crud_routes(
                     if key not in {"id", "created_at", "updated_at", "revision"}
                     and value != getattr(current, key)
                 }
-            elif isinstance(current, HarnessProfile):
+            elif isinstance(current, HarnessProfile) and isinstance(
+                candidate, HarnessProfile
+            ):
+                candidate = _invalidate_harness_home_verification(current, candidate)
                 changes = {
                     key: value
                     for key, value in candidate.model_dump(mode="python").items()
