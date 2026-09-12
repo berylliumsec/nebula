@@ -1,6 +1,6 @@
 {
-  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
-  "change_digest": "c33db2d6b09be6ff12d3ab87eb5054b87dadf29d43981eb12d58948dcc60019e",
+  "baseline": "f5c3b79be93708f76beafd3d9a9f32c2a0be97cb",
+  "change_digest": "911f6fcfd5da4dd889bc36fdfe64b1f58db78456a271cc3c634bcfa57c90dcfc",
   "reviewed_by": "Codex focused header layout review",
   "reason": "Focused compact header journey, including rightmost New chat placement, icon names, dimensions, keyboard/focus mode, selection and clipping across eight profiles.",
   "exclusions": "No full suite. No backend/native/state changes; existing lifecycle handlers unchanged. Shared TabBar opt-in presentation reviewed. Component behavior exercised in focused browser test; physical devices unavailable.",
