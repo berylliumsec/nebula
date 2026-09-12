@@ -1668,6 +1668,9 @@ pub(crate) fn browser_decide_session_intercept(
     session_id: String,
     transaction_id: String,
     decision: String,
+    method: Option<String>,
+    url: Option<String>,
+    headers: Vec<(String, String)>,
 ) -> Result<(), String> {
     if !valid_identifier(&project_id)
         || !valid_identifier(&session_id)
@@ -1684,7 +1687,13 @@ pub(crate) fn browser_decide_session_intercept(
         .cloned()
         .ok_or_else(|| "The live session proxy is no longer running.".to_string())?;
     let decision = match decision.as_str() {
-        "forward" => crate::browser_proxy::NativeInterceptDecision::Forward,
+        "forward" => crate::browser_proxy::NativeInterceptDecision::Forward(
+            crate::browser_proxy::NativeInterceptEdits {
+                method,
+                url,
+                headers,
+            },
+        ),
         "drop" => crate::browser_proxy::NativeInterceptDecision::Drop,
         _ => return Err("The intercept decision must be forward or drop.".to_string()),
     };

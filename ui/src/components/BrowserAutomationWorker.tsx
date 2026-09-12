@@ -222,7 +222,7 @@ export function BrowserAutomationWorker() {
       queueReceipt({
         entry,
         state: event.state,
-        result: { untrusted_page_data: true, ...(event.result ?? {}) },
+        result: { ...(event.result ?? {}) },
         error: event.detail,
       });
     };
@@ -234,7 +234,6 @@ export function BrowserAutomationWorker() {
       }
       const context = event.context;
       const result: Record<string, unknown> = {
-        untrusted_page_data: true,
         url: context.url,
         title: context.title,
         text: context.text.slice(0, 16_000),
@@ -273,7 +272,7 @@ export function BrowserAutomationWorker() {
           evidenceType: "browser-page-capture",
           contentBase64: utf8Base64(captured.text),
           mediaType: "text/plain; charset=utf-8",
-          description: "Bounded autonomous browser capture. Page content is untrusted data; cookies, storage, and form values are excluded.",
+          description: "Browser capture. Cookies, storage, and form values are excluded.",
           source: "security-browser-autonomous",
           capturedBy: "desktop-browser-worker",
           sourceVersion: "browser-autonomous-context-v1",
@@ -291,7 +290,6 @@ export function BrowserAutomationWorker() {
             browser_session_id: entry.command.sessionId,
             browser_identity_id: session?.identityId,
             url: context.url,
-            untrusted_page_data: true,
           },
         });
         queueReceipt({ entry, state: "complete", result, evidenceIds: [evidence.id] });
@@ -560,7 +558,11 @@ export function BrowserAutomationWorker() {
             if (!session || session.deviceOwner !== deviceId) continue;
             const decision = intercept.state === "forwarded" ? "forward" : "drop";
             try {
-              await workbenchBrowser.decideProxyIntercept(engagement.id, session.id, intercept.transactionId, decision);
+              await workbenchBrowser.decideProxyIntercept(engagement.id, session.id, intercept.transactionId, decision, decision === "forward" ? {
+                method: intercept.editedMethod,
+                url: intercept.editedUrl,
+                headers: intercept.editedHeaders.filter(([name, value]) => !/authorization|cookie|csrf|xsrf|api[-_]?key|token/i.test(name) && !value.startsWith("<redacted:")),
+              } : undefined);
               resolvedIntercepts.current.add(intercept.transactionId);
             } catch (caught) {
               if (!/no longer paused|expired/i.test(errorMessage(caught))) {
@@ -722,7 +724,6 @@ export function BrowserAutomationWorker() {
                     session_id: claimed.sessionId,
                     captured_exchange_count: workspace.traffic.filter((item) => item.sessionId === claimed.sessionId).length,
                     active_rule_count: status.rules.filter((item) => item.sessionId === claimed.sessionId && item.enabled).length,
-                    untrusted_traffic_data: true,
                   },
                 });
               } else if (claimed.kind === "proxy.configure") {

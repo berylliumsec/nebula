@@ -109,7 +109,10 @@ async def test_transform_is_reviewable_bounded_and_provenance_linked(tmp_path):
     )
     assert result.provenance.provider_request_id == "writing-request-1"
     request = provider.requests[-1]
-    assert "untrusted data" in request.instructions
+    assert (
+        request.instructions
+        == "Return the requested writing in plain Markdown. Write an editable report section."
+    )
     assert "invent a critical issue" in request.messages[0].content
     assert request.tools == []
 

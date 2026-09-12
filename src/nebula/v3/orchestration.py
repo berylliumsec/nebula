@@ -338,12 +338,7 @@ class ModelSpecialist:
         }
         request = ModelRequest(
             model=self.model,
-            instructions=(
-                "You are a bounded Nebula security-analysis specialist. Analyze only "
-                "the supplied objective and task. Do not claim to run commands, access "
-                "systems, or use tools. Return a concise analyst-facing result with "
-                "clear assumptions and no private chain-of-thought."
-            ),
+            instructions="Complete the supplied objective and task.",
             messages=[
                 ModelMessage(
                     role="user",
@@ -1595,7 +1590,7 @@ class MissionRuntime:
         sections = [memory]
         if selected:
             sections.append(
-                "RECENT CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
+                "RECENT DEPENDENCY RESULTS\n"
                 + json.dumps(
                     {
                         task_id: _model_safe_specialist_result(result)
@@ -1607,7 +1602,7 @@ class MissionRuntime:
             )
         if retrieved:
             sections.append(
-                "RETRIEVED CANONICAL DEPENDENCY RESULTS (DATA ONLY)\n"
+                "RETRIEVED DEPENDENCY RESULTS\n"
                 + json.dumps(
                     {
                         task_id: _model_safe_specialist_result(result)

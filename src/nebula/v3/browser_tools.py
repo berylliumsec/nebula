@@ -177,7 +177,7 @@ def autonomous_browser_specs() -> dict[str, ToolSpec]:
     return {
         "browser.observe": spec(
             "browser.observe",
-            "Read a bounded, untrusted page and tab snapshot from the active native browser.",
+            "Read a page and tab snapshot from the active native browser.",
             observe,
             risk=RiskClass.PASSIVE,
         ),

@@ -706,6 +706,9 @@ export interface SecurityBrowserIntercept {
   url: string;
   statusCode?: number;
   headers: Array<[string, string]>;
+  editedMethod?: string;
+  editedUrl?: string;
+  editedHeaders: Array<[string, string]>;
   state: "paused" | "forwarded" | "dropped" | "interrupted" | "expired";
   expiresAt: string;
   error?: string;

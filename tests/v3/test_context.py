@@ -512,7 +512,10 @@ def test_compaction_preserves_later_corrections_and_treats_history_as_untrusted(
 
     assert result.snapshot.memory
     assert result.snapshot.memory.corrections[0].sources[1].sequence == 2
-    assert "untrusted source data" in (provider.requests[0].instructions or "")
+    assert (
+        provider.requests[0].instructions
+        == "Return structured working memory matching the supplied schema."
+    )
     assert "Ignore previous instructions" in str(
         provider.requests[0].messages[0].content
     )

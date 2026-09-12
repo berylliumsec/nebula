@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { AlertTriangle, Braces, GitCompareArrows, LoaderCircle, Pause, Play, RefreshCw, Send, ShieldAlert, Square, Target, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { AlertTriangle, Braces, GitCompareArrows, LoaderCircle, Pause, Play, Plus, RefreshCw, Send, ShieldAlert, Square, Target, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../api/client";
 import type {
@@ -22,6 +22,17 @@ interface Props {
   projectId: string;
   session?: SecurityBrowserSession;
   view: BrowserResearchToolView;
+  draftStore?: RepeaterDraftStore;
+  onOpenRepeater?: () => void;
+}
+
+type RepeaterDraft = { name: string; method: string; url: string; headers: string; body: string; baseline: string };
+export type RepeaterDraftStore = Map<string, { selected?: string; drafts: Record<string, RepeaterDraft> }>;
+const draftValue = (draft: Omit<RepeaterDraft, "baseline">) => JSON.stringify([draft.name, draft.method, draft.url, draft.headers, draft.body]);
+
+export function BrowserResearchSuite(props: Props) {
+  const localStore = useRef<RepeaterDraftStore>(new Map());
+  return <ResearchSuiteSession key={`${props.projectId}:${props.session?.id ?? "none"}`} {...props} draftStore={props.draftStore ?? localStore.current} />;
 }
 
 function message(error: unknown): string {
@@ -29,27 +40,50 @@ function message(error: unknown): string {
 }
 
 function headerPairs(value: string): Array<[string, string]> {
-  const parsed = JSON.parse(value || "{}") as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-    || Object.values(parsed).some((item) => typeof item !== "string")) {
-    throw new Error("Headers must be a JSON object with string values.");
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+      || Object.values(parsed).some((item) => typeof item !== "string")) {
+      throw new Error("Headers must contain text values.");
+    }
+    return Object.entries(parsed) as Array<[string, string]>;
   }
-  return Object.entries(parsed) as Array<[string, string]>;
+  return trimmed.split(/\r?\n/).map((line, index) => {
+    const separator = line.indexOf(":");
+    if (separator <= 0) throw new Error(`Header line ${index + 1} must use Name: value.`);
+    const name = line.slice(0, separator).trim();
+    const headerValue = line.slice(separator + 1).trim();
+    if (!name) throw new Error(`Header line ${index + 1} needs a name.`);
+    return [name, headerValue];
+  });
 }
 
-export function BrowserResearchSuite({ api, desktop, identity, operatorId, projectId, session, view }: Props) {
+const formatHeaders = (headers: Array<[string, string]>) => headers.map(([name, value]) => `${name}: ${value}`).join("\n");
+const reusableSecretHeader = /authorization|cookie|csrf|xsrf|api[-_]?key|token/i;
+
+function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, session, view, draftStore, onOpenRepeater }: Props) {
+  const storeKey = `${projectId}:${session?.id ?? "none"}`;
+  const initialUrl = session?.tabs.find((tab) => tab.id === session.activeTabId)?.url ?? session?.tabs[0]?.url ?? "";
+  const emptyDraft = { name: "Repeater", method: "GET", url: initialUrl, headers: "", body: "" };
+  const entry = useRef(draftStore?.get(storeKey) ?? { selected: undefined as string | undefined, drafts: {} as Record<string, RepeaterDraft> }).current;
+  const initialDraft = entry.drafts[entry.selected ?? "new"] ?? { ...emptyDraft, baseline: draftValue(emptyDraft) };
+  const baseline = useRef(initialDraft.baseline);
   const confirm = useConfirmation();
   const [workspace, setWorkspace] = useState<SecurityBrowserResearchWorkspace>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [repeaterName, setRepeaterName] = useState("Repeater");
-  const [repeaterMethod, setRepeaterMethod] = useState("GET");
-  const [repeaterUrl, setRepeaterUrl] = useState("");
-  const [repeaterHeaders, setRepeaterHeaders] = useState("{}");
-  const [repeaterBody, setRepeaterBody] = useState("");
-  const [selectedRepeaterId, setSelectedRepeaterId] = useState<string>();
+  const [repeaterName, setRepeaterName] = useState(initialDraft.name);
+  const [repeaterMethod, setRepeaterMethod] = useState(initialDraft.method);
+  const [repeaterUrl, setRepeaterUrl] = useState(initialDraft.url);
+  const [repeaterHeaders, setRepeaterHeaders] = useState(initialDraft.headers);
+  const [repeaterBody, setRepeaterBody] = useState(initialDraft.body);
+  const [selectedRepeaterId, setSelectedRepeaterId] = useState<string | undefined>(entry.selected);
+  const [selectedResultId, setSelectedResultId] = useState<string>();
+  const [fetchError, setFetchError] = useState<string>();
   const [bodyPreviews, setBodyPreviews] = useState<Record<string, string>>({});
   const [attackName, setAttackName] = useState("Identifier boundaries");
   const [attackStrategy, setAttackStrategy] = useState<SecurityBrowserAttack["strategy"]>("sniper");
@@ -71,16 +105,21 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
   const [crawlDepth, setCrawlDepth] = useState(2);
   const [crawlRequests, setCrawlRequests] = useState(100);
 
+  const refreshSequence = useRef(0);
+  useEffect(() => () => { refreshSequence.current += 1; }, []);
   const refresh = useCallback(async (background = false) => {
+    const sequence = ++refreshSequence.current;
     if (!background) setLoading(true);
     try {
-      setWorkspace(await api.getSecurityBrowserResearch(projectId));
-      setError(undefined);
+      const next = await api.getSecurityBrowserResearch(projectId);
+      if (sequence !== refreshSequence.current) return;
+      setWorkspace(next);
+      setFetchError(undefined);
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.research_suite_load_failed", "Burp-parity browser research state could not be loaded.", caught, "workbench_browser");
-      setError(message(caught));
+      if (sequence === refreshSequence.current) setFetchError(message(caught));
     } finally {
-      setLoading(false);
+      if (sequence === refreshSequence.current) setLoading(false);
     }
   }, [api, projectId]);
 
@@ -97,21 +136,53 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
 
   useEffect(() => {
     const current = session?.tabs.find((tab) => tab.id === session.activeTabId)?.url ?? session?.tabs[0]?.url ?? "";
-    setRepeaterUrl(current);
     setAttackUrl(current ? `${current.replace(/\/$/, "")}/§id§` : "");
     setCrawlUrl(current);
-    setSelectedRepeaterId(undefined);
   }, [session?.id]);
+
+  const currentDraft = { name: repeaterName, method: repeaterMethod, url: repeaterUrl, headers: repeaterHeaders, body: repeaterBody, baseline: baseline.current };
+  const dirty = draftValue(currentDraft) !== baseline.current;
+  useEffect(() => {
+    entry.selected = selectedRepeaterId;
+    entry.drafts[selectedRepeaterId ?? "new"] = currentDraft;
+    draftStore?.set(storeKey, entry);
+  });
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if ([...(draftStore?.values() ?? [])].some((item) => Object.values(item.drafts).some((draft) => draftValue(draft) !== draft.baseline))) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [draftStore]);
+  const restoreDraft = (draft: RepeaterDraft) => {
+    baseline.current = draft.baseline;
+    setRepeaterName(draft.name);
+    setRepeaterMethod(draft.method);
+    setRepeaterUrl(draft.url);
+    setRepeaterHeaders(draft.headers);
+    setRepeaterBody(draft.body);
+    setSelectedResultId(undefined);
+  };
+
+  useEffect(() => {
+    if (!selectedResultId && selectedRepeaterId) {
+      const latest = workspace?.repeaterResults.filter((result) => result.tabId === selectedRepeaterId).sort((a, b) => b.sequence - a.sequence)[0];
+      if (latest) setSelectedResultId(latest.id);
+    }
+  }, [selectedResultId, selectedRepeaterId, workspace]);
 
   const sessionItems = <T extends { sessionId: string }>(items: T[] | undefined): T[] =>
     items?.filter((item) => item.sessionId === session?.id) ?? [];
 
-  const decideIntercept = async (id: string, decision: "forward" | "drop") => {
+  const decideIntercept = async (id: string, decision: "forward" | "drop", edits?: { method: string; url: string; headers: Array<[string, string]> }) => {
     const item = workspace?.intercepts.find((candidate) => candidate.id === id);
     if (!item) return;
     setBusy(true);
     try {
-      await api.decideSecurityBrowserIntercept(item, decision, operatorId);
+      await api.decideSecurityBrowserIntercept(item, decision, operatorId, edits);
       setNotice(decision === "forward" ? "The paused transaction was released." : "The paused transaction was dropped.");
       await refresh();
     } catch (caught) {
@@ -119,6 +190,22 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
       setError(message(caught));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const forwardEditedIntercept = (event: FormEvent<HTMLFormElement>, id: string) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const headers = headerPairs(String(data.get("headers") ?? ""))
+        .filter(([name, value]) => !reusableSecretHeader.test(name) && !value.startsWith("<redacted:"));
+      void decideIntercept(id, "forward", {
+        method: String(data.get("method") ?? "GET").toUpperCase(),
+        url: String(data.get("url") ?? ""),
+        headers,
+      });
+    } catch (caught) { // diagnostic-expected: invalid editable header input remains in the form.
+      setError(message(caught));
     }
   };
 
@@ -176,14 +263,15 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     }
   };
 
-  const createRepeater = async (event: FormEvent) => {
-    event.preventDefault();
+  const saveRepeater = async (sendAfterSave: boolean) => {
     if (!session || !identity) return;
+    if (sendAfterSave && !desktop) return;
     setBusy(true);
     setError(undefined);
     try {
       const headers = headerPairs(repeaterHeaders);
       const selected = workspace?.repeaterTabs.find((tab) => tab.id === selectedRepeaterId);
+      if (selectedRepeaterId && !selected) throw new Error("This saved request is no longer available. Your draft is preserved; select another request or start a new one.");
       const saved = selected
         ? await api.updateSecurityBrowserRepeaterTab(selected, {
             name: repeaterName,
@@ -201,8 +289,15 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
             headers,
             bodyTemplate: repeaterBody,
           });
+      baseline.current = draftValue(currentDraft);
+      if (!selectedRepeaterId) delete entry.drafts.new;
       setSelectedRepeaterId(saved.id);
-      setNotice(selected ? "Repeater request updated." : "Repeater request saved. Review it, then queue one native send.");
+      if (sendAfterSave) {
+        await api.transitionSecurityBrowserRepeaterTab(saved, "queue", operatorId);
+        setNotice("The visible request was saved and queued for one native send.");
+      } else {
+        setNotice(selected ? "Repeater draft saved." : "Repeater draft created.");
+      }
       await refresh();
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.repeater_create_failed", "The Repeater tab could not be saved.", caught, "browser_research_suite");
@@ -214,13 +309,56 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
 
   const selectRepeater = (tab: SecurityBrowserResearchWorkspace["repeaterTabs"][number]) => {
     setSelectedRepeaterId(tab.id);
-    setRepeaterName(tab.name);
-    setRepeaterMethod(tab.method);
-    setRepeaterUrl(tab.url);
-    setRepeaterHeaders(JSON.stringify(Object.fromEntries(tab.headers), null, 2));
-    setRepeaterBody(tab.bodyTemplate);
+    const saved = { name: tab.name, method: tab.method, url: tab.url, headers: formatHeaders(tab.headers), body: tab.bodyTemplate };
+    restoreDraft(entry.drafts[tab.id] ?? { ...saved, baseline: draftValue(saved) });
     setError(undefined);
     setNotice(undefined);
+  };
+
+  const newRepeater = () => {
+    setSelectedRepeaterId(undefined);
+    restoreDraft(entry.drafts.new ?? { ...emptyDraft, baseline: draftValue(emptyDraft) });
+    setError(undefined);
+    setNotice(undefined);
+  };
+
+  const discardRepeaterChanges = async () => {
+    if (!await confirm({ title: "Discard unsaved changes?", message: "The saved request and its responses will remain available.", confirmLabel: "Discard changes", tone: "danger" })) return;
+    delete entry.drafts[selectedRepeaterId ?? "new"];
+    const saved = workspace?.repeaterTabs.find((tab) => tab.id === selectedRepeaterId);
+    if (saved) selectRepeater(saved);
+    else newRepeater();
+  };
+
+  const copyInterceptToRepeater = async (item: SecurityBrowserResearchWorkspace["intercepts"][number]) => {
+    if (!session || !identity) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const saved = await api.createSecurityBrowserRepeaterTab(projectId, {
+        sessionId: session.id,
+        identityId: identity.id,
+        name: `${item.method} ${new URL(item.url).pathname || "/"}`,
+        method: item.method,
+        url: item.url,
+        headers: item.headers,
+        bodyTemplate: "",
+      });
+      baseline.current = draftValue({ name: saved.name, method: saved.method, url: saved.url, headers: formatHeaders(saved.headers), body: saved.bodyTemplate });
+      setSelectedRepeaterId(saved.id);
+      setRepeaterName(saved.name);
+      setRepeaterMethod(saved.method);
+      setRepeaterUrl(saved.url);
+      setRepeaterHeaders(formatHeaders(saved.headers));
+      setRepeaterBody(saved.bodyTemplate);
+      setNotice("Request copied to Repeater without a body. Unavailable or redacted content is not copied; the live intercept is still paused.");
+      await refresh();
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.intercept_repeater_copy_failed", "A paused request could not be copied to Repeater.", caught, "browser_research_suite");
+      setError(message(caught));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const transitionRepeater = async (
@@ -249,7 +387,8 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     setError(undefined);
     try {
       await api.deleteSecurityBrowserRepeaterTab(tab);
-      if (selectedRepeaterId === tab.id) setSelectedRepeaterId(undefined);
+      delete entry.drafts[tab.id];
+      if (selectedRepeaterId === tab.id) { setSelectedRepeaterId(undefined); restoreDraft(entry.drafts.new ?? { ...emptyDraft, baseline: draftValue(emptyDraft) }); }
       setNotice("Repeater request and its retained result history were deleted.");
       await refresh();
     } catch (caught) {
@@ -265,7 +404,8 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     setError(undefined);
     try {
       const blob = await api.getArtifactContent(artifactId);
-      const body = (await blob.text()).slice(0, 1_048_576);
+      const text = await blob.text();
+      const body = text.slice(0, 1_048_576) + (text.length > 1_048_576 ? "\n\n[Preview truncated at 1,048,576 characters]" : "");
       setBodyPreviews((current) => ({ ...current, [artifactId]: body }));
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.repeater_body_load_failed", "The retained Repeater response body could not be loaded.", caught, "browser_research_suite");
@@ -401,11 +541,12 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
   };
 
   if (loading && !workspace) return <div className="browser-research-empty"><LoaderCircle className="spin" size={18} /> Loading durable research tools…</div>;
-  if (error && !workspace) return <div className="browser-research-empty error" role="alert"><strong>Research tools are unavailable</strong><span>{error}</span><button className="button secondary" onClick={() => void refresh()} type="button">Try again</button></div>;
+  if (fetchError && !workspace) return <div className="browser-research-empty error" role="alert"><strong>Research tools are unavailable</strong><span>{fetchError}</span><button className="button secondary" onClick={() => void refresh()} type="button">Try again</button></div>;
 
   return <div className="browser-suite" aria-busy={busy}>
+    {fetchError && <div className="browser-notice error" role="alert"><span>{fetchError} Saved content remains visible.</span><button type="button" onClick={() => void refresh(true)}>Retry refresh</button></div>}
     {error && <div className="browser-notice error" role="alert"><AlertTriangle size={14} /><span>{error}</span><button type="button" aria-label="Dismiss research error" onClick={() => setError(undefined)}>×</button></div>}
-    {notice && <div className="browser-notice" role="status"><span>{notice}</span><button type="button" aria-label="Dismiss research notice" onClick={() => setNotice(undefined)}>×</button></div>}
+    {notice && <div className="browser-notice" role="status"><span>{notice}</span>{view === "intercepts" && notice.startsWith("Request copied") && onOpenRepeater && <button type="button" onClick={onOpenRepeater}>Open in Repeater</button>}<button type="button" aria-label="Dismiss research notice" onClick={() => setNotice(undefined)}>×</button></div>}
 
     {view === "target" && <section aria-labelledby="browser-target-heading">
       <header className="browser-suite-heading"><div><Target size={16} /><span><h3 id="browser-target-heading">Target map</h3><small>In-scope locations discovered by browsing, proxy capture, HAR, crawl, and automation.</small></span></div><button className="icon-button subtle" aria-label="Refresh target map" type="button" onClick={() => void refresh()}><RefreshCw size={14} /></button></header>
@@ -417,17 +558,36 @@ export function BrowserResearchSuite({ api, desktop, identity, operatorId, proje
     {view === "intercepts" && <section aria-labelledby="browser-intercept-heading">
       <header className="browser-suite-heading"><div><ShieldAlert size={16} /><span><h3 id="browser-intercept-heading">Intercept queue</h3><small>Paused native requests and responses fail closed on expiry or disconnect.</small></span></div></header>
       {!desktop && <p className="browser-automation-mobile-note">This paired device can decide durable items, but only the desktop owns the live transaction.</p>}
-      {sessionItems(workspace?.intercepts).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.intercepts)].reverse().map((item) => <li key={item.id}><span className={`browser-action-status ${item.state}`}>{item.state}</span><div><strong>{item.phase} · {item.method} {item.url}</strong><small>Expires {new Date(item.expiresAt).toLocaleTimeString()}{item.error ? ` · ${item.error}` : ""}</small>{item.state === "paused" && <span className="browser-suite-actions"><button className="button secondary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "drop")}>Drop</button><button className="button primary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "forward")}>Forward</button></span>}</div></li>)}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No paused traffic</strong><span>Enable interception in Session. Every in-scope request and response will pause here for an explicit decision.</span></div>}
+      {sessionItems(workspace?.intercepts).length ? [true, false].map((pending) => { const items = sessionItems(workspace?.intercepts).filter((item) => (item.state === "paused") === pending); const list = <ol className="browser-suite-list">{[...items].reverse().map((item) => <li key={item.id}><span className={`browser-action-status ${item.state}`}>{item.state}</span><div><strong>{item.phase} · {item.method} {item.url}</strong><small>{item.statusCode ? `${item.statusCode} · ` : ""}{item.state === "paused" ? `Expires ${new Date(item.expiresAt).toLocaleTimeString()} · ${Math.max(0, Math.ceil((new Date(item.expiresAt).getTime() - Date.now()) / 1000))}s remaining` : `Expired or decided · ${new Date(item.expiresAt).toLocaleTimeString()}`}{item.error ? ` · ${item.error}` : ""}</small><details><summary>Headers ({item.headers.length})</summary><pre>{formatHeaders(item.headers) || "No retained headers"}</pre></details>{item.state === "paused" && item.phase === "request" && <details><summary>Edit request before forwarding</summary><form className="browser-suite-form" onSubmit={(event) => forwardEditedIntercept(event, item.id)}><label>Method<input name="method" required defaultValue={item.method} /></label><label className="browser-suite-wide">URL<input name="url" required defaultValue={item.url} /></label><label className="browser-suite-wide">Headers<textarea aria-label="Intercept headers" name="headers" rows={5} defaultValue={formatHeaders(item.headers)} /><small>Edited values replace matching headers. Redacted secrets remain unchanged.</small></label><button className="button primary" disabled={busy} type="submit">Forward edited request</button></form></details>}{item.state === "paused" && <span className="browser-suite-actions"><button className="button secondary" disabled={busy} type="button" onClick={() => void copyInterceptToRepeater(item)}>Copy to Repeater</button><button className="button quiet danger" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "drop")}>Drop</button><button className="button primary" disabled={busy} type="button" onClick={() => void decideIntercept(item.id, "forward")}>Forward {item.phase}</button></span>}</div></li>)}</ol>; return pending ? <section key="pending"><h4>Paused requests ({items.length})</h4>{items.length ? list : <p>No requests waiting for a decision.</p>}</section> : items.length > 0 ? <details key="history"><summary>Completed history ({items.length})</summary>{list}</details> : null; }) : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No paused traffic</strong><span>Enable interception in Session. Every in-scope request and response will pause here for an explicit decision.</span></div>}
     </section>}
 
-    {view === "repeater" && <section aria-labelledby="browser-repeater-heading">
-      <header className="browser-suite-heading"><div><Send size={16} /><span><h3 id="browser-repeater-heading">Repeater</h3><small>Edit and send one scope-checked request through the selected desktop identity. Cookies remain native.</small></span></div></header>
-      {!desktop && <p className="browser-automation-mobile-note">This device can inspect, cancel, retry, and delete durable requests. The paired desktop performs sends.</p>}
-      <form className="browser-suite-form" onSubmit={createRepeater}><label>Name<input required value={repeaterName} onChange={(event) => setRepeaterName(event.target.value)} /></label><label>Method<input required maxLength={32} value={repeaterMethod} onChange={(event) => setRepeaterMethod(event.target.value.toUpperCase())} /></label><label className="browser-suite-wide">URL<input required value={repeaterUrl} onChange={(event) => setRepeaterUrl(event.target.value)} /></label><label className="browser-suite-wide">Headers JSON<textarea rows={5} value={repeaterHeaders} onChange={(event) => setRepeaterHeaders(event.target.value)} /></label><label className="browser-suite-wide">Body<textarea rows={6} maxLength={65536} value={repeaterBody} onChange={(event) => setRepeaterBody(event.target.value)} /></label><button className="button primary" disabled={busy || !session || !identity || !repeaterUrl} type="submit">{selectedRepeaterId ? "Save request changes" : "Save Repeater request"}</button></form>
-      {sessionItems(workspace?.repeaterTabs).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.repeaterTabs)].reverse().map((tab) => {
-        const results = (workspace?.repeaterResults ?? []).filter((result) => result.tabId === tab.id).sort((left, right) => right.sequence - left.sequence);
-        return <li key={tab.id} className={selectedRepeaterId === tab.id ? "selected" : ""}><span className={`browser-method method-${tab.method.toLowerCase()}`}>{tab.method}</span><div><button className="browser-suite-select" type="button" onClick={() => selectRepeater(tab)}><strong>{tab.name}</strong><small>{tab.url} · {results.length} retained result{results.length === 1 ? "" : "s"} · identity isolated</small></button><span className={`browser-action-status ${tab.state}`}>{tab.state}</span>{tab.error && <small className="browser-suite-error">{tab.error}</small>}<span className="browser-suite-actions">{["draft", "ready"].includes(tab.state) && <button className="button primary" disabled={busy || !desktop} title={!desktop ? "The paired desktop owns native sends." : undefined} type="button" onClick={() => void transitionRepeater(tab, "queue")}><Send size={13} /> Send once</button>}{["failed", "cancelled"].includes(tab.state) && <button className="button secondary" disabled={busy || !desktop} type="button" onClick={() => void transitionRepeater(tab, "retry")}>Retry send</button>}{["queued", "running"].includes(tab.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionRepeater(tab, "cancel")}><Square size={13} /> Cancel</button>}{!["queued", "running"].includes(tab.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete Repeater request ${tab.name}`} type="button" onClick={() => void deleteRepeater(tab)}><Trash2 size={13} /> Delete</button>}</span>{results.length > 0 && <details><summary>Result history ({results.length})</summary><ol className="browser-result-list">{results.map((result) => <li key={result.id}><strong>{result.error ? "Failed" : result.statusCode ?? "No status"}</strong><span>{result.durationMs === undefined ? "—" : `${result.durationMs} ms`} · {result.responseBytes === undefined ? "—" : `${result.responseBytes} bytes`}</span>{result.error && <small>{result.error}</small>}<pre>{JSON.stringify(Object.fromEntries(result.responseHeaders), null, 2)}</pre>{result.responseBodyArtifactId && <div className="browser-result-body"><button className="button secondary" disabled={busy} type="button" onClick={() => void loadRepeaterBody(result.responseBodyArtifactId!)}>Preview redacted body</button>{bodyPreviews[result.responseBodyArtifactId] !== undefined && <pre>{bodyPreviews[result.responseBodyArtifactId]}</pre>}</div>}</li>)}</ol></details>}</div></li>;
-      })}</ol> : <div className="browser-research-empty"><Send size={20} /><strong>No Repeater requests</strong><span>Save the current URL or import an in-scope request from Proxy traffic.</span></div>}
+    {view === "repeater" && <section className="repeater-workspace" aria-labelledby="browser-repeater-heading">
+      <header className="browser-suite-heading"><div><Send size={16} /><span><h3 id="browser-repeater-heading">Repeater</h3><small>{identity?.name ?? "No identity selected"} · {desktop ? "Desktop connected" : "Sends require the paired desktop"}</small></span></div><button className="icon-button subtle" aria-label="New Repeater request" title="New Repeater request" type="button" disabled={busy} onClick={newRepeater}><Plus size={14} /></button></header>
+      <nav className="repeater-requests" aria-label="Saved requests">
+        <button type="button" aria-pressed={!selectedRepeaterId} disabled={busy} onClick={newRepeater}>New request</button>
+        {[...sessionItems(workspace?.repeaterTabs)].reverse().map((tab) => <button key={tab.id} type="button" disabled={busy} aria-pressed={selectedRepeaterId === tab.id} aria-label={`${tab.method} ${tab.name}`} onClick={() => selectRepeater(tab)} title={tab.url}><span className="browser-method">{tab.method}</span><span>{tab.name}</span>{entry.drafts[tab.id] && draftValue(entry.drafts[tab.id]) !== entry.drafts[tab.id].baseline && <span aria-label="Unsaved changes"> •</span>}</button>)}
+      </nav>
+      <div className="repeater-message-grid">
+      <form className="browser-suite-form repeater-editor" onSubmit={(event) => { event.preventDefault(); void saveRepeater(desktop); }}><fieldset disabled={busy}><legend>Request {dirty ? "· Unsaved changes" : ""}</legend><span className="browser-suite-actions browser-suite-wide"><button className="button secondary" disabled={busy || !session || !identity || !repeaterUrl} type="button" onClick={() => void saveRepeater(false)}>Save draft</button><button className="button primary" disabled={busy || !desktop || !session || !identity || !repeaterUrl} title={!desktop ? "The paired desktop owns native sends." : undefined} type="submit"><Send size={13} /> Send</button>{dirty && <button className="button quiet" type="button" onClick={() => void discardRepeaterChanges()}>Discard changes</button>}</span><label>Name<input required value={repeaterName} onChange={(event) => setRepeaterName(event.target.value)} /></label><label>Method<input required maxLength={32} value={repeaterMethod} onChange={(event) => setRepeaterMethod(event.target.value.toUpperCase())} /></label><label className="browser-suite-wide">URL<input required value={repeaterUrl} onChange={(event) => setRepeaterUrl(event.target.value)} /></label><label className="browser-suite-wide">Headers<textarea aria-label="Headers" rows={5} placeholder={'Accept: application/json\nX-Request-ID: test-1'} value={repeaterHeaders} onChange={(event) => setRepeaterHeaders(event.target.value)} /><small>One <code>Name: value</code> per line. Existing JSON header objects are also accepted.</small></label><label className="browser-suite-wide">Body<textarea aria-label="Body" rows={6} maxLength={65536} value={repeaterBody} onChange={(event) => setRepeaterBody(event.target.value)} /></label></fieldset></form>
+      <section className="repeater-response" aria-labelledby="repeater-response-heading">
+        <h4 id="repeater-response-heading">Response</h4>
+        {selectedRepeaterId ? (() => {
+          const results = (workspace?.repeaterResults ?? []).filter((result) => result.tabId === selectedRepeaterId).sort((a, b) => b.sequence - a.sequence);
+          const result = results.find((item) => item.id === selectedResultId) ?? results[0];
+          const tab = workspace?.repeaterTabs.find((item) => item.id === selectedRepeaterId);
+          return <>
+            {tab && <div className="repeater-result-context"><span className={`browser-action-status ${tab.state}`}>{tab.state}</span>{tab.error && <p role="alert">{tab.error}</p>}<span className="browser-suite-actions">{["failed", "cancelled"].includes(tab.state) && <button className="button secondary" disabled={busy || !desktop} type="button" onClick={() => void transitionRepeater(tab, "retry")}>Retry unchanged request</button>}{["queued", "running"].includes(tab.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionRepeater(tab, "cancel")}><Square size={13} /> Cancel</button>}{!["queued", "running"].includes(tab.state) && <button className="icon-button subtle" disabled={busy} title={`Delete ${tab.name}`} aria-label={`Delete Repeater request ${tab.name}`} type="button" onClick={() => void deleteRepeater(tab)}><Trash2 size={14} aria-hidden="true" /></button>}</span></div>}
+            {result ? <>
+              <label>Result history ({results.length})<select aria-label="Response history" value={result.id} onChange={(event) => setSelectedResultId(event.target.value)}>{results.map((item) => <option key={item.id} value={item.id}>#{item.sequence + 1} · {item.error ? "Failed" : item.statusCode ?? "No status"} · {new Date(item.createdAt).toLocaleString()}</option>)}</select></label>
+              <div className="repeater-response-meta"><strong>{result.error ? "Failed" : result.statusCode ?? "No status"}</strong><span>{result.durationMs ?? "—"} ms</span><span>{result.responseBytes ?? "—"} bytes</span></div>
+              <small>Retained result #{result.sequence + 1}. This response does not represent unsaved edits. The submitted request revision is unavailable.</small>
+              {result.error && <p role="alert">{result.error}</p>}
+              <h5>Headers</h5><pre>{formatHeaders(result.responseHeaders) || "No retained response headers"}</pre>
+              <h5>Body</h5>{result.responseBodyArtifactId ? <div className="browser-result-body"><button className="button secondary" disabled={busy} type="button" onClick={() => void loadRepeaterBody(result.responseBodyArtifactId!)}>Preview redacted body</button>{bodyPreviews[result.responseBodyArtifactId] !== undefined && <pre>{bodyPreviews[result.responseBodyArtifactId] || "Empty response body"}</pre>}</div> : <p>No retained response body.</p>}
+            </> : <div className="browser-research-empty"><strong>No response yet</strong><span>Retained results for this request appear here.</span></div>}
+          </>;
+        })() : <div className="browser-research-empty"><strong>No request selected</strong><span>Select a saved request to inspect its response history.</span></div>}
+      </section></div>
     </section>}
 
     {view === "intruder" && <section aria-labelledby="browser-intruder-heading">

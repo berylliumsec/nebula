@@ -2546,6 +2546,41 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .compact-new-chat .page-header-action-label { display: none; }
 .compact-workbench-toolbar > .toolbar-actions { margin-left: auto; padding-left: 12px; }
 
+/* A selected message and its result share one quiet, responsive workspace. */
+.browser-interception-transport { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; flex: 0 0 auto; }
+.browser-interception-transport > span { font-size: 12px; color: var(--muted); }
+.browser-interception-transport button, .repeater-requests button { min-height: 44px; }
+.browser-suite, .browser-suite > section, .repeater-workspace { min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; }
+.browser-suite { overflow-x: hidden; }
+.browser-suite > section, .repeater-workspace { overflow-x: clip; }
+.repeater-requests { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 12px; position: sticky; top: 0; z-index: 1; background: var(--surface-overlay); }
+.repeater-requests button { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; max-width: 260px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: inherit; }
+.repeater-requests button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.repeater-requests button[aria-pressed="true"] { background: var(--surface-raised); border-color: var(--blue); }
+.repeater-requests button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.repeater-message-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.browser-suite-form.repeater-editor { display: block; margin: 0; padding: 0; border: 0; background: transparent; }
+.repeater-editor fieldset { min-width: 0; margin: 0; padding: 0; border: 0; display: grid; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; }
+.repeater-editor legend { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.repeater-editor input, .repeater-response select { min-height: 44px; }
+.repeater-response { min-width: 0; border-left: 1px solid var(--border); padding-left: 16px; }
+.repeater-response h4 { margin: 0 0 12px; }
+.repeater-response h5 { margin: 16px 0 8px; }
+.repeater-response > label { display: grid; gap: 6px; font-size: 12px; }
+.repeater-response select { max-width: 100%; width: 100%; background: var(--surface); color: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 6px; }
+.repeater-response pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 420px; overflow: auto; font-size: 12px; }
+.repeater-response small { color: var(--muted); }
+.repeater-response-meta { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; font-size: 12px; }
+.repeater-result-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.repeater-result-context .icon-button, .repeater-workspace .browser-suite-heading .icon-button { min-width: 44px; min-height: 44px; }
+.security-browser-workspace.manual-tools { grid-template-columns: minmax(0, 1fr); background: var(--surface-overlay); }
+.security-browser-workspace.manual-tools .security-browser-assessment-rail { display: none; }
+.web-browser-fallback .security-browser-workspace.manual-tools { width: 100%; max-width: 100%; min-width: 0; border-left: 0; }
+@media (max-width: 900px) {
+  .repeater-message-grid { grid-template-columns: minmax(0, 1fr); }
+  .repeater-response { border-left: 0; border-top: 1px solid var(--border); padding: 16px 0 0; }
+}
+
 .code-editor-sidebar-resize { position: absolute; z-index: 3; top: 50%; left: var(--editor-sidebar-width, 250px); transform: translate(-50%, -50%); display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; color: var(--muted); background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-control); cursor: col-resize; touch-action: none; user-select: none; }
 .code-editor-sidebar-resize:hover { color: var(--text); border-color: var(--blue); }
 .code-editor-sidebar-resize:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

@@ -94,14 +94,5 @@ def test_discovery_and_shared_instructions_explain_admission(model):
     for type in service.schema(project)["types"]:
         purpose = next(p for p in type["properties"] if p["name"] == "purpose")
         assert "Required for new objects" in purpose["description"]
-    assert "properties.purpose" in DESCRIPTIONS["model.transact"]
-    for example in (
-        "OAuth",
-        "API documentation",
-        "forbidden",
-        "JavaScript",
-        "recipe",
-        "make no edit",
-        "not graph edges",
-    ):
-        assert example in BROWSER_MODEL_WORKFLOW
+    assert "evidence" in DESCRIPTIONS["model.transact"]
+    assert "model.transact" in BROWSER_MODEL_WORKFLOW

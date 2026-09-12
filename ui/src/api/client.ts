@@ -629,6 +629,9 @@ interface WireBrowserIntercept extends WireEntity {
   url: string;
   status_code?: number | null;
   headers: Array<[string, string]>;
+  edited_method?: string | null;
+  edited_url?: string | null;
+  edited_headers?: Array<[string, string]>;
   state: SecurityBrowserIntercept["state"];
   expires_at: string;
   error?: string | null;
@@ -3990,6 +3993,9 @@ function mapBrowserResearchWorkspace(value: WireBrowserResearchWorkspace): Secur
       url: item.url,
       statusCode: item.status_code ?? undefined,
       headers: item.headers,
+      editedMethod: item.edited_method ?? undefined,
+      editedUrl: item.edited_url ?? undefined,
+      editedHeaders: item.edited_headers ?? [],
       state: item.state,
       expiresAt: item.expires_at,
       error: item.error ?? undefined,
@@ -8229,6 +8235,7 @@ export class ApiClient {
     intercept: SecurityBrowserIntercept,
     decision: "forward" | "drop",
     operatorId = "operator",
+    edits?: { method: string; url: string; headers: Array<[string, string]> },
   ): Promise<SecurityBrowserIntercept> {
     return this.request<WireBrowserIntercept>(
       `browser-intercepts/${encodeURIComponent(intercept.id)}/decision`,
@@ -8238,6 +8245,7 @@ export class ApiClient {
           expected_revision: intercept.revision,
           decision,
           operator_id: operatorId,
+          ...(decision === "forward" && edits ? edits : {}),
         }),
       },
     ).then((value) => mapBrowserResearchWorkspace({

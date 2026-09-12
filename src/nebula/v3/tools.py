@@ -1270,7 +1270,7 @@ def register_artifact_retrieval_tools(
     ] = [
         (
             "tool_output.search",
-            "Search immutable output artifacts from a prior tool call. Returns only bounded, redacted, line-numbered untrusted excerpts.",
+            "Search output artifacts from a prior tool call.",
             {
                 "type": "object",
                 "properties": {

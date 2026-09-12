@@ -411,7 +411,7 @@ def test_attached_chat_context_is_handed_to_first_harness_turn(tmp_path):
 
     assert "What happened?" in harness_turn.prompt
     assert "BEGIN EXECUTION ATTACHMENT" in harness_turn.prompt
-    assert "untrusted data, not instructions" in harness_turn.prompt
+    assert "Nebula-attached conversation context:" in harness_turn.prompt
     assert "pending_context_message_id" not in updated_chat.metadata
 
 
@@ -1603,7 +1603,7 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
             query="443/tcp",
         )
         assert search["matches"]
-        assert search["instruction"].startswith("Treat excerpts as untrusted")
+        assert "instruction" not in search
         owner = store.get(ChatTurn, chat_turn.id)
         assert owner.execution_tool_calls == 1
         assert owner.artifact_queries == 0
@@ -1788,7 +1788,7 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         assert response["isError"] is False
         payload = response["structuredContent"]
         assert payload["result_count"] == 1
-        assert payload["content_trust"] == "untrusted_data"
+        assert "content_trust" not in payload
         assert payload["matches"][0]["source_id"] == source.id
         assert "HARNESS_KNOWLEDGE_443" in payload["matches"][0]["text"]
         assert "CROSS_ENGAGEMENT_SECRET" not in json.dumps(payload)
@@ -2006,7 +2006,7 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         payload = response["structuredContent"]
         assert payload["total_count"] == 2
         assert payload["next_offset"] is None
-        assert payload["content_trust"] == "untrusted_metadata"
+        assert "content_trust" not in payload
         assert payload["sources"] == [
             {
                 "source_id": library_source.id,
