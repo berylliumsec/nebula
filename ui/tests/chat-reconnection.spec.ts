@@ -46,6 +46,8 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
     await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     await page.goto(`/projects/reconnect-project/workbench?view=chat&session=${id}`);
+    // Wait for session/runtime hydration before editing its restored draft.
+    await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toContainText("Test harness");
     const composer = page.locator(".chat-composer textarea");
     await composer.fill("Run the connection check once.");
     await page.getByRole("button", {name: "Send message", exact: true}).click();
