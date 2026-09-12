@@ -1,44 +1,17 @@
 {
-  "reviewed_by": "Codex account home and queue icon review",
-  "reason": "Profile-owned account homes across adapters, catalogs and skills; API create/update isolation and used-session identity guards; account settings host folder selection and persistence; Assistant switching and accessible queue icon. Shared files reviewed; only this workflow is selected.",
-  "exclusions": "No full suites authorized. Unrelated browser research edits excluded in isolated worktree. No native changes. No live vendor logins or physical devices; adapter fixtures and emulated mobile browsers explicitly qualify evidence.",
-  "baseline": "6f341bc45ad15ec5cef8a8f074b3c833283204ad",
-  "python_versions": [
-    "3.12"
-  ],
+  "reviewed_by": "Codex banner-removal review",
+  "reason": "Remove only the redundant Security Browser empty-state welcome banner and its unused CSS selectors. Reviewed the two-file diff; tool dock and selected assessment controls remain unchanged. This reversible presentation-only deletion receives source diff checks, with runtime verification outstanding.",
+  "exclusions": "No suites selected for this small static presentation removal. No backend, native, API, state ownership, or interaction changes. Shared CSS edit only removes selectors for deleted markup. Browser/mobile, production build and real workflow verification remain outstanding; no full suite authorized.",
+  "baseline": "ac2edefcd75351d2976e467476c4c4dbc2888995",
   "expected_tests": {
-    "python": 19,
-    "frontend": 10,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py::test_account_homes_isolate_spawn_without_changing_workspace",
-    "tests/v3/test_harness_adapters.py::test_missing_account_home_fails_before_launch",
-    "tests/v3/test_harness_adapters.py::test_grok_catalog_uses_selected_account_for_command_and_cache",
-    "tests/v3/test_harness_adapters.py::test_grok_process_removes_host_command_and_workspace_tools",
-    "tests/v3/test_harnesses.py::test_account_home_skill_discovery_does_not_cross_accounts",
-    "tests/v3/test_harnesses.py::test_account_home_api_persists_invalidates_health_and_preserves_used_identity",
-    "tests/v3/test_harnesses.py::test_account_home_requires_unambiguous_absolute_path",
-    "tests/v3/test_harnesses.py::test_remote_endpoint_rejects_local_account_home",
-    "tests/v3/test_harnesses.py::test_assistant_settings_keep_chat_history_and_replace_frozen_runtime"
-  ],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/HostFolderPicker.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:harness-accounts/assistant-real-desktop",
-    "entry:harness-accounts/assistant-real-compact",
-    "entry:harness-accounts/assistant-real-chromium-320",
-    "entry:harness-accounts/assistant-real-webkit-320",
-    "entry:harness-accounts/assistant-real-chromium-390",
-    "entry:harness-accounts/assistant-real-webkit-390",
-    "entry:harness-accounts/assistant-real-chromium-430",
-    "entry:harness-accounts/assistant-real-webkit-430"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "change_digest": "b078f1acaaeea2f78bb12f3dc8349cea02fdf843476007d85e8a4368ddfb23ff"
+  "playwright": [],
+  "change_digest": "f0093c9446cc07db19d62bbda0d3b7d2b196fe9667e17668ff8ec78acff267d1"
 }
