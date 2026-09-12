@@ -2507,3 +2507,19 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .chat-resolved-approval { width: calc(100% - 12px); flex-wrap: wrap; }
   .chat-resolved-actions { margin-left: auto; }
 }
+
+/* Workbench tools share the shell action row with New chat. */
+.top-bar-page-actions:has(.compact-workbench-toolbar) { overflow: visible; }
+.compact-workbench-toolbar.in-shell-header { border: 0; background: transparent; padding: 0; min-height: 44px; gap: 8px; }
+.compact-workbench-toolbar .session-tabs > button,
+.compact-workbench-toolbar .session-toolbar-actions > button,
+.compact-workbench-toolbar .workbench-actions > button { width: 44px; height: 44px; min-width: 44px; padding: 0; justify-content: center; }
+.compact-workbench-toolbar .session-tabs > button > span { display: inline-flex; }
+.compact-workbench-toolbar .compact-new-chat .page-header-action-label { display: none; }
+.compact-workbench-toolbar .session-toolbar-actions { padding-left: 0; }
+@media (max-width: 760px) {
+  .compact-workbench-toolbar.in-shell-header { display: flex; }
+  .compact-workbench-toolbar.in-shell-header .session-tabs,
+  .compact-workbench-toolbar.in-shell-header .session-conversations-toggle,
+  .compact-workbench-toolbar.in-shell-header .workbench-actions { display: none; }
+}
