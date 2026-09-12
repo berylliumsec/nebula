@@ -8203,6 +8203,7 @@ def create_app(
                         yield _server_sent_event(event_type, payload)
                     return
                 except (ChatError, ProviderError, ConflictError) as exc:
+                    # diagnostic-expected: recover a durable completion or surface the error frame.
                     if not store.get(ChatTurn, turn_id).final_message_id:
                         yield _server_sent_event(
                             "error", {"type": "error", "detail": str(exc)}
@@ -10238,6 +10239,7 @@ async def _with_heartbeats(
             try:
                 value = pending.result()
             except StopAsyncIteration:
+                # diagnostic-expected: normal source completion ends heartbeat delivery.
                 return
             pending = None
             yield value

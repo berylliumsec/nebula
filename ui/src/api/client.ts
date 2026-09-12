@@ -5216,7 +5216,7 @@ export class ApiClient {
       void waitForChatReconnect(attempts++, recovery.signal).then(() => {
         recovery = undefined;
         if (!stopped) connect();
-      }).catch(() => undefined); // Intentional viewer detachment cancels the wait.
+      }).catch(() => { /* diagnostic-expected: viewer detachment cancels recovery. */ });
     };
     const touch = () => { clearTimeout(watchdog); watchdog = setTimeout(retry, 45_000); };
     const connect = () => {
@@ -5229,7 +5229,7 @@ export class ApiClient {
       if (token) protocols.push(websocketAuthProtocol(token));
       let current: WebSocket;
       try { current = new WebSocket(endpoint, protocols); }
-      catch { retry(); return; }
+      catch { /* diagnostic-expected: constructor failure enters bounded viewer recovery. */ retry(); return; }
       socket = current;
       touch();
       current.addEventListener("open", () => { if (socket === current && !stopped) onConnection?.("connected"); });
@@ -5250,7 +5250,7 @@ export class ApiClient {
             detach();
             onComplete?.();
           }
-        } catch (error) { fail(error instanceof Error ? error : new Error("Malformed harness activity frame")); }
+        } catch (error) { /* diagnostic-expected: fail delivers this protocol error to the viewer and detaches. */ fail(error instanceof Error ? error : new Error("Malformed harness activity frame")); }
       });
       // close is authoritative (including clean closures before a complete frame).
       // error alone can precede an auth close; the watchdog covers a missing close.
@@ -7909,7 +7909,7 @@ export class ApiClient {
         attemptController.abort();
         if (reader) {
           // Cancel only the viewer; Core retains ownership of execution.
-          void reader.cancel().catch(() => undefined);
+          void reader.cancel().catch(() => { /* diagnostic-expected: an already closed viewer needs no further cancellation. */ });
         }
       }
       await waitForChatReconnect(attempts++, signal);
