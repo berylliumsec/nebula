@@ -14,6 +14,7 @@ const runtimeMocks = vi.hoisted(() => ({
 }));
 
 const browserMocks = vi.hoisted(() => ({
+  applyProxyScope: vi.fn(),
   bounds: vi.fn(),
   capabilities: vi.fn(),
   captureContext: vi.fn(),
@@ -197,6 +198,75 @@ describe("WorkbenchBrowser", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("passes fresh scope into tab creation before the first page request", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    const fresh = {...scope, revision: 9};
+    vi.mocked(api.getEngagementScope).mockResolvedValue(fresh);
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    await openPage();
+    expect(browserMocks.create.mock.calls[0][10]).toEqual(fresh);
+  });
+
+  it("refreshes native scope before reload and blocks the reload when installation fails", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    workspace.sessions[0].proxyEnabled = true;
+    vi.mocked(api.getSecurityBrowserWorkspace).mockResolvedValue(workspace);
+    vi.mocked(api.syncSecurityBrowserSession).mockImplementation(async (session, tabs, activeTabId) => ({...session, tabs, activeTabId}));
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    await openPage();
+    browserMocks.applyProxyScope.mockRejectedValueOnce(new Error("Scope installation failed"));
+    fireEvent.click(screen.getByRole("button", {name: "Reload"}));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Scope installation failed"));
+    expect(browserMocks.control).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {name: "Reload"}));
+    await waitFor(() => expect(browserMocks.control).toHaveBeenCalled());
+    expect(browserMocks.applyProxyScope).toHaveBeenLastCalledWith("project-1", "browser-session-1", scope);
+    expect(browserMocks.applyProxyScope.mock.invocationCallOrder.at(-1)).toBeLessThan(browserMocks.control.mock.invocationCallOrder[0]);
+  });
+
+  it("does not open a page after Core revokes its previously allowed scope", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    vi.mocked(api.getEngagementScope).mockResolvedValue({...scope, allowedDomains: [], revision: 10});
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    await waitFor(() => expect(screen.getByRole("button", {name: "Go"})).not.toBeDisabled());
+    fireEvent.input(screen.getByLabelText("Start browsing"), {target: {value: "https://docs.example.com/"}});
+    fireEvent.click(screen.getByRole("button", {name: "Go"}));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Navigation blocked"));
+    expect(browserMocks.create).not.toHaveBeenCalled();
+  });
+
+  it("shows missing native scope without claiming research state is unavailable", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    api.recordSecurityBrowserTraffic = vi.fn(async (sessionId, event) => ({...event, sessionId, id: "blocked-scope-event"} as never));
+    renderBrowser(undefined, undefined, {...scope, allowAllTargets: true}, undefined, api);
+    await openPage();
+    expect(screen.getByText("Project: all targets")).toBeVisible();
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await act(async () => eventMocks.handlers.get("nebula-browser-traffic")?.({payload: {
+      sessionId: "browser-session-1", tabId, url: "https://docs.example.com/guide", method: "GET", protocol: "http/1.1",
+      requestHeaders: {}, responseHeaders: {}, blocked: true, error: "no compiled Project scope is active for this browser session",
+    }}));
+    expect(screen.getByText("Browser scope unavailable")).toBeVisible();
+    expect(screen.getByText(/Navigation blocked: browser scope unavailable/)).toBeVisible();
+    expect(screen.queryByText("Research state is unavailable")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {name: "Reload"})).toBeEnabled();
+    await act(async () => eventMocks.handlers.get("nebula-browser-traffic")?.({payload: {
+      sessionId: "browser-session-1", tabId, url: "https://docs.example.com/guide", method: "GET", protocol: "http/1.1",
+      requestHeaders: {}, responseHeaders: {}, blocked: false, statusCode: 200,
+    }}));
+    expect(screen.queryByText(/Navigation blocked: browser scope unavailable/)).not.toBeInTheDocument();
+    expect(screen.getByText("Project: all targets")).toBeVisible();
   });
 
   it("hides the native browser while a settings lens is open and restores the active tab", async () => {
@@ -548,10 +618,10 @@ describe("WorkbenchBrowser", () => {
     });
     const api = browserApi();
     vi.mocked(api.updateEngagementScope).mockRejectedValueOnce(new Error("revision conflict"));
-    vi.mocked(api.getEngagementScope).mockResolvedValueOnce({ ...scope, allowedDomains: ["docs.example.com", "new.example"], revision: 5 });
     const onScopeUpdated = vi.fn();
     renderBrowser(vi.fn(async () => ({ id: "source-1", name: "Guide" })), vi.fn(), scope, onScopeUpdated, api);
     await openPage("https://outside.example.net/account");
+    vi.mocked(api.getEngagementScope).mockResolvedValueOnce({ ...scope, allowedDomains: ["docs.example.com", "new.example"], revision: 5 });
     const tabId = browserMocks.create.mock.calls[0][0] as string;
     act(() => {
       eventMocks.handlers.get("nebula-browser-scope-request")?.({

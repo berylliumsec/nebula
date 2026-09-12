@@ -1127,6 +1127,7 @@ pub(crate) fn browser_create_tab(
     upstream_proxy_credential_ref: Option<String>,
     capture_bodies: bool,
     interception_enabled: bool,
+    scope: Option<crate::browser_proxy::NativeProxyScopeInput>,
 ) -> Result<(), String> {
     if !valid_identifier(&tab_id)
         || !valid_identifier(&project_id)
@@ -1220,6 +1221,18 @@ pub(crate) fn browser_create_tab(
     } else {
         None
     };
+
+    // Scope must be compiled before the webview can issue its first request.
+    // Missing policy remains fail-closed, including for an existing proxy.
+    if let Some(proxy) = &proxy {
+        match scope {
+            Some(scope) => proxy.configure_scope(scope)?,
+            None => {
+                proxy.clear_scope()?;
+                return Err("Project scope is unavailable. Reconnect to Core and retry opening the page.".to_string());
+            }
+        }
+    }
 
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))
         .initialization_script(context_script)

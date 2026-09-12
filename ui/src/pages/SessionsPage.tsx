@@ -50,6 +50,7 @@ import {
   Minimize2,
   MoreHorizontal,
   NotebookPen,
+  PanelLeft,
   PanelLeftClose,
   PanelRight,
   Pencil,
@@ -3022,6 +3023,7 @@ export function SessionsPage() {
   const [browserAssistantOpen, setBrowserAssistantOpen] = useState(false);
   const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
+  const [terminalToolbarHost, setTerminalToolbarHost] = useState<HTMLDivElement | null>(null);
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
   const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
@@ -3232,6 +3234,17 @@ export function SessionsPage() {
   const newChatAction = view === "chat" ? <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} /> : undefined;
   const workbenchToolbar = (
       <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
+          {view === "chat" && <button
+            className="icon-button subtle session-conversations-toggle"
+            type="button"
+            aria-label={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
+            title={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
+            aria-expanded={(conversationPanelOpen || mobileListOpen)}
+            aria-controls="workbench-conversations"
+            onClick={toggleConversationPanel}
+          >
+            {(conversationPanelOpen || mobileListOpen) ? <PanelLeftClose size={18} aria-hidden="true" /> : <PanelLeft size={18} aria-hidden="true" />}
+          </button>}
         <TabBar iconOnly className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
           { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
@@ -3245,17 +3258,6 @@ export function SessionsPage() {
         <div className="session-toolbar-actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
-          {view === "chat" && <button
-            className="icon-button subtle session-conversations-toggle"
-            type="button"
-            aria-label={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            title={conversationPanelOpen ? "Hide conversations" : "Show conversations"}
-            aria-expanded={conversationPanelOpen}
-            aria-controls="workbench-conversations"
-            onClick={toggleConversationPanel}
-          >
-            <MessageSquare size={16} aria-hidden="true" />
-          </button>}
           {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />}
           {view === "chat" && <button className="icon-button subtle" type="button"
             aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
@@ -3348,8 +3350,8 @@ export function SessionsPage() {
         </aside>}
         <section className="session-workspace">
           {api && engagement && <div className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "terminal"}>
-            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar"><span><SquareTerminal size={16} aria-hidden="true" /> Terminal</span><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
+            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" /><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
             {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
               {assistantPanel}
             </BrowserAssistantPanel>}
@@ -3444,7 +3446,7 @@ export function SessionsPage() {
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>
-        <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><GitFork size={19} aria-hidden="true" /><span>Conversations</span></button>
+        <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><PanelLeft size={19} aria-hidden="true" /><span>Conversations</span></button>
         <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><FileClock size={19} aria-hidden="true" /><span>Activity</span></button>
         <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
       </nav>

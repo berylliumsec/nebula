@@ -1,3 +1,4 @@
+import { browserScopeStatus, proxyScopeSignal } from "./browserScopeStatus";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, BookOpenCheck, BookPlus, Bug, Check, Download, ExternalLink, GitCompareArrows, Globe2, History, LoaderCircle, MessageSquareText, Network, Plus, RefreshCw, Search, Send, ShieldCheck, Sparkles, Square, Trash2, UserRound, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
@@ -166,6 +167,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [workspaceLoading, setWorkspaceLoading] = useState(true);
   const [sessionHydrated, setSessionHydrated] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string>();
+  const [nativeScopeSignals, setNativeScopeSignals] = useState<Record<string, string | null>>({});
   const [sessionId, setSessionId] = useState<string | undefined>(() => searchParams.get("browserSession") ?? undefined);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchPanelWidth, setResearchPanelWidth] = useState<number>();
@@ -256,6 +258,11 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
     : evaluateBrowserScope(desktop ? activeTab?.url : deviceAddress?.url, scope);
+  const savedScopeSignal = workspace?.traffic.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)).find(item => item.sessionId === activeSession?.id && proxyScopeSignal(item) !== undefined);
+  const nativeScopeError = activeSession && Object.hasOwn(nativeScopeSignals, activeSession.id)
+    ? nativeScopeSignals[activeSession.id]
+    : savedScopeSignal ? proxyScopeSignal(savedScopeSignal) : undefined;
+  const scopeBadge = browserScopeStatus(scopeDecision, nativeScopeError);
   const researchCoversBrowser = researchOpen && window.matchMedia("(max-width: 1100px)").matches;
   const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
@@ -379,9 +386,13 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     updateTab(id, { address: url, url, loading: true, error: undefined });
     try {
       if (!activeSession) throw new Error("The durable browser session is unavailable.");
+      const currentScope = await api.getEngagementScope(projectId);
+      onScopeUpdated?.(currentScope);
+      const currentDecision = evaluateBrowserScope(url, currentScope);
+      if (currentDecision.state !== "in_scope") throw new Error(`Navigation blocked. ${currentDecision.detail}`);
       const durableTabs = tabsRef.current.map((item, position) => {
         const nextUrl = item.id === id ? url : item.url;
-        const decision = evaluateBrowserScope(nextUrl, scope);
+        const decision = evaluateBrowserScope(nextUrl, currentScope);
         return {
           id: item.id,
           url: nextUrl,
@@ -397,7 +408,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         ...current,
         sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
       } : current);
-      if (tab.created) await workbenchBrowser.navigate(id, projectId, url);
+      if (tab.created) {
+        if (persistedSession.proxyEnabled) await workbenchBrowser.applyProxyScope(projectId, persistedSession.id, currentScope);
+        await workbenchBrowser.navigate(id, projectId, url);
+      }
       else {
         if (!activeIdentity) throw new Error("Select a healthy browser identity before opening a page.");
         await workbenchBrowser.create(
@@ -415,6 +429,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           },
           persistedSession.captureMode === "bodies",
           persistedSession.interceptionEnabled,
+          currentScope,
         );
         updateTab(id, { created: true });
       }
@@ -424,7 +439,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       updateTab(id, { loading: false, error: errorMessage(caught) });
       return false;
     }
-  }, [activeIdentity, activeSession, api, bounds, deviceId, projectId, scope, updateTab]);
+  }, [activeIdentity, activeSession, api, bounds, deviceId, onScopeUpdated, projectId, scope, updateTab]);
 
   const addTab = useCallback((url?: string) => {
     if (tabsRef.current.length >= MAX_TABS) {
@@ -856,8 +871,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         }
       }),
       listen<BrowserTrafficEvent>("nebula-browser-traffic", ({ payload }) => {
-        if (payload.blocked) {
-          setWorkspaceError(`Native proxy blocked ${payload.url}. ${payload.error ?? "Review Project scope and active proxy rules."}`);
+        const signal = proxyScopeSignal(payload);
+        if (signal !== undefined) setNativeScopeSignals(current => ({...current, [payload.sessionId]: signal}));
+        if (payload.blocked && signal === undefined && payload.sessionId === activeSession?.id) {
+          setError(`Request blocked: ${payload.url}. ${payload.error ?? "Review Project scope and active proxy rules."}`);
         }
         const save = async () => {
           const artifactIds: { requestBodyArtifactId?: string; responseBodyArtifactId?: string } = {};
@@ -1058,7 +1075,14 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
 
   const runControl = async (action: "back" | "forward" | "stop" | "reload") => {
     if (!activeTab) return;
-    try { await workbenchBrowser.control(activeTab.id, projectId, action); }
+    try {
+      if (action !== "stop" && activeSession?.proxyEnabled) {
+        const currentScope = await api.getEngagementScope(projectId);
+        onScopeUpdated?.(currentScope);
+        await workbenchBrowser.applyProxyScope(projectId, activeSession.id, currentScope);
+      }
+      await workbenchBrowser.control(activeTab.id, projectId, action);
+    }
     catch (caught) {
       void logCaughtDiagnostic("interface.workbench_browser.control_failed", "An embedded browser control failed.", caught, "workbench_browser");
       setError(errorMessage(caught));
@@ -1718,7 +1742,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <Globe2 size={34} />
         <strong>Browse from this device</strong>
         <p>The isolated embedded webview is a desktop-app capability. From the web interface, open a page in a separate tab or add its URL directly to Project Sources.</p>
-        <span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span>
+        <span className={`browser-start-scope ${scopeBadge.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeBadge.label} · {scopeBadge.detail}</span>
         <form onSubmit={openWebAddress}>
           <Search size={16} />
           <input aria-label="Web address" autoFocus={active} value={deviceAddress?.address ?? ""} placeholder="Search or enter an address" onChange={(event) => setDeviceAddressDraft({ projectId, address: event.target.value })} />
@@ -1740,7 +1764,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <button type="button" aria-label="Back" disabled={!activeTab?.created} onClick={() => void runControl("back")}><ArrowLeft size={16} /></button>
         <button type="button" aria-label="Forward" disabled={!activeTab?.created} onClick={() => void runControl("forward")}><ArrowRight size={16} /></button>
         <button type="button" aria-label={activeTab?.loading ? "Stop loading" : "Reload"} disabled={!activeTab?.created} onClick={() => void runControl(activeTab?.loading ? "stop" : "reload")}>{activeTab?.loading ? <X size={15} /> : <RefreshCw size={15} />}</button>
-        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><span className={`browser-scope-badge ${scopeDecision.state}`} title={scopeDecision.detail}><ShieldCheck size={13} aria-hidden="true" /><span>{scopeDecision.label}</span></span></form>
+        <form onSubmit={submit}><Search size={15} aria-hidden="true" /><label className="sr-only" htmlFor="browser-address">Address or search</label><input id="browser-address" value={activeTab?.address ?? ""} placeholder="Search or enter an address" autoComplete="off" spellCheck={false} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><span className={`browser-scope-badge ${scopeBadge.state}`} title={scopeBadge.detail}><ShieldCheck size={13} aria-hidden="true" /><span>{scopeBadge.label}</span></span></form>
         <button type="button" aria-label="Ask Nebula about the live page" title={scopeDecision.state === "in_scope" ? "Capture rendered text, form metadata, and links for a reviewed chat attachment. Input values and cookies are excluded." : `Live-page AI capture is unavailable until this address is confirmed in scope. ${scopeDecision.detail}`} disabled={!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext || scopeDecision.state !== "in_scope"} onClick={() => void askNebulaAboutCurrentPage()}>{capturingContext ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}</button>
         {onUploadEvidence && <button type="button" aria-label="Preserve live page as Evidence" title="Preserve a scope-checked semantic page capture as immutable Evidence. Form values and cookies are excluded." disabled={!activeTab?.created || activeTab.loading || !activeTab.url || capturingContext || scopeDecision.state !== "in_scope"} onClick={() => void preserveCurrentPageEvidence()}><BookOpenCheck size={15} /></button>}
         <button type="button" aria-label="Add current page to Project Sources" title="Add this public page to Project Sources" disabled={!activeTab?.created || activeTab.loading || !activeTab.url || addingKnowledge} onClick={() => void addCurrentPageToKnowledge()}>{addingKnowledge ? <LoaderCircle className="spin" size={15} /> : <BookPlus size={15} />}</button>
@@ -1748,6 +1772,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         <button type="button" aria-label="Clear Project browser data" title="Clear Project browser data" onClick={() => void clearData()}><Trash2 size={15} /></button>
       </div>
       {capabilities?.projectStorage === "ephemeral" && <div className="browser-privacy-notice"><ShieldCheck size={14} /> macOS 13 browser data is isolated and cleared when Nebula closes.</div>}
+      {nativeScopeError && <div className="browser-notice error" role="alert"><span><strong>Navigation blocked: browser scope unavailable.</strong> The Project policy and native browser session are out of sync. Existing research records remain available. Reload to refresh Project scope and retry. <small>{nativeScopeError}</small></span><button type="button" disabled={!activeTab?.created} onClick={() => void runControl("reload")}>Reload page</button></div>}
       {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
       {notice && <div className="browser-notice" role="status">
         {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}
@@ -1775,7 +1800,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         {selectionSessionId && <footer><span>Saved as a durable conversation.</span><button className="button primary" type="button" onClick={() => onContinueConversation?.(selectionSessionId)}>Continue in Assistant</button></footer>}
       </section>}
       <div className={`browser-surface${activeTab?.created ? " is-live" : ""}`} ref={surfaceRef}>
-        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for the selected research identity. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeDecision.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeDecision.label} · {scopeDecision.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder={!sessionHydrated || !deviceId ? "Loading isolated identity…" : "Search or enter an address"} disabled={!sessionHydrated || !activeIdentity || !deviceId} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><button className="button primary" type="submit" disabled={!sessionHydrated || !activeIdentity || !deviceId}>Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
+        {!activeTab?.created && <div className="browser-start"><Globe2 size={34} /><strong>Browse from the Workbench</strong><p>Pages run in an isolated {capabilities?.engine ?? "system webview"} profile for the selected research identity. Nebula captures live page context only when you ask.</p><span className={`browser-start-scope ${scopeBadge.state}`}><ShieldCheck size={14} aria-hidden="true" /> {scopeBadge.label} · {scopeBadge.detail}</span><form onSubmit={submit}><Search size={16} /><input aria-label="Start browsing" autoFocus={active} value={activeTab?.address ?? ""} placeholder={!sessionHydrated || !deviceId ? "Loading isolated identity…" : "Search or enter an address"} disabled={!sessionHydrated || !activeIdentity || !deviceId} onChange={(event) => { if (activeTab) { addressDraftRef.current.set(activeTab.id, event.target.value); updateTab(activeTab.id, { address: event.target.value }); } }} /><button className="button primary" type="submit" disabled={!sessionHydrated || !activeIdentity || !deviceId}>Go</button></form>{activeTab?.error && <small role="alert">{activeTab.error}</small>}</div>}
       </div>
       {researchPanel}
     </div>

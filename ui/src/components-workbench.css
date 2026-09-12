@@ -2550,3 +2550,40 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .code-editor-sidebar-resize:hover { color: var(--text); border-color: var(--blue); }
 .code-editor-sidebar-resize:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 @media (max-width: 760px) { .code-editor-sidebar-resize { display: none; } }
+
+/* Terminal controls share the companion toolbar; only actionable notices sit
+   above the terminal canvas. Runtime metadata is available on demand. */
+.terminal-companion-toolbar { gap: 4px; padding: 0 4px 0 0; }
+.terminal-toolbar-host { min-width: 0; flex: 1 1 auto; }
+.terminal-toolbar-host > .terminal-tab-bar { border: 0; background: transparent; }
+.terminal-toolbar-host .terminal-tab-strip { align-items: center; padding-block: 2px; }
+.terminal-toolbar-host .terminal-tab-item { height: 44px; min-width: 90px; }
+.terminal-tab-actions, .terminal-active-actions, .terminal-header-actions { display: flex; align-items: center; gap: 3px; }
+.terminal-active-actions:empty { display: none; }
+.terminal-tab-actions .icon-button, .terminal-tab-actions .terminal-screenshot-button { flex: 0 0 44px; width: 44px; height: 44px; min-height: 44px; padding: 0; }
+.terminal-connection-status { display: flex; align-items: center; gap: 7px; padding-inline: 5px; color: var(--muted-strong); font-size: 11px; white-space: nowrap; }
+.terminal-stop { color: var(--red); border-color: transparent; background: transparent; }
+.terminal-stop:hover:not(:disabled) { background: var(--surface-hover); }
+.terminal-toolbar-details { width: min(460px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; }
+.terminal-toolbar-details > header { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--border-soft); }
+.terminal-toolbar-details-content { padding: 12px; font-size: 13px; }
+.terminal-toolbar-details-content code { overflow-wrap: anywhere; }
+.terminal-toolbar-details-content .terminal-port-control { display: grid; gap: 8px; }
+.terminal-toolbar-details-content .terminal-port-control > span { display: block; }
+.terminal-toolbar-details-content .terminal-port-control input { width: 100%; min-height: 44px; }
+@media (max-width: 1000px) {
+  .terminal-toolbar-host > .terminal-tab-bar { flex-wrap: wrap; }
+  .terminal-toolbar-host .terminal-tab-strip { flex-basis: 100%; }
+  .terminal-toolbar-host .terminal-tab-actions { flex: 1 1 auto; flex-wrap: wrap; border-left: 0; padding: 2px; }
+  .terminal-companion-toolbar > button { align-self: flex-start; margin-top: 2px; }
+  .terminal-active-actions { flex-wrap: wrap; }
+  .terminal-connection-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+.terminal-toolbar-details .icon-button { width: 44px; height: 44px; min-height: 44px; }
+/* The terminal's fit boundary is the remaining companion height, including
+   after notices appear or disappear; it must never extend behind the clip. */
+.terminal-companion-page > .terminal-workspace { display: flex; flex: 1 1 auto; flex-direction: column; height: auto; min-height: 0; }
+.terminal-companion-page .terminal-tab-panel { display: flex; flex: 1 1 auto; min-height: 0; }
+.terminal-companion-page .terminal-tab-panel > .compact-terminal-live { flex: 1 1 auto; height: auto; min-height: 0; }
+/* FitAddon subtracts padding on .xterm, not its parent. Host padding otherwise
+   overestimates the PTY rows and clips the final prompt and scrollbar edge. */

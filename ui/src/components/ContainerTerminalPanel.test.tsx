@@ -138,6 +138,31 @@ describe("ContainerTerminalPanel", () => {
     terminalSpies.selection = "";
   });
 
+  it("opens runtime and next-terminal network settings without changing the live session", async () => {
+    const user = userEvent.setup();
+    const api = {
+      baseUrl: "http://127.0.0.1:8765/api/v1", getToken: () => "test-token",
+      recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [{session: session("terminal-details"), runtime}] }),
+      containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({}),
+    } as unknown as ApiClient;
+    renderPanel(api);
+    const info = await screen.findByRole("button", {name: "Terminal details"});
+    expect(screen.queryByText(runtime.baseImageDigest)).not.toBeInTheDocument();
+    await user.click(info);
+    expect(screen.getByText(runtime.baseImageDigest)).toBeVisible();
+    await user.keyboard("{Escape}");
+    expect(info).toHaveFocus();
+    await user.click(screen.getByRole("button", {name: "Terminal network settings"}));
+    const input = screen.getByRole("textbox", {name: "Inbound ports for new terminals"});
+    await user.type(input, "8080/tcp");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", {name: "Terminal network settings"}));
+    expect(screen.getByRole("textbox", {name: "Inbound ports for new terminals"})).toHaveValue("8080/tcp");
+    expect(socketSpies.connect).toHaveBeenCalledTimes(1);
+    expect(socketSpies.dispose).not.toHaveBeenCalled();
+  });
+
   it("executes a requested command once in the active live terminal", async () => {
     const api = {
       baseUrl: "http://127.0.0.1:8765/api/v1",
@@ -410,12 +435,12 @@ describe("ContainerTerminalPanel", () => {
     const first = renderPanel(api);
     await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(2));
     expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[role='tabpanel']"))
-      .toHaveAttribute("id", "terminal-panel-terminal-2");
+    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[data-terminal-session]"))
+      .toHaveAttribute("data-terminal-session", "terminal-2");
     await user.click(screen.getByRole("tab", { name: /Terminal 1/ }));
     expect(screen.getByRole("tab", { name: /Terminal 1/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[role='tabpanel']"))
-      .toHaveAttribute("id", "terminal-panel-terminal-1");
+    expect(screen.getByRole("button", { name: "Screenshot" }).closest("[data-terminal-session]"))
+      .toHaveAttribute("data-terminal-session", "terminal-1");
     await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
     expect(socketSpies.dispose).not.toHaveBeenCalled();
@@ -533,7 +558,8 @@ describe("ContainerTerminalPanel", () => {
     expect(api.startContainerTerminal).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("tab", { name: /Terminal 2/ })).toHaveAttribute("aria-selected", "true");
     expect(socketSpies.dispose).not.toHaveBeenCalled();
-    expect(await screen.findByText("2 / 32")).toBeVisible();
+    await user.click(screen.getByRole("button", {name: "Terminal network settings"}));
+    expect(await screen.findByText(/2 \/ 32 terminal containers/)).toBeVisible();
   });
 
   it("retains a failed provisional tab and reuses its idempotency key on Retry", async () => {
@@ -608,7 +634,9 @@ describe("ContainerTerminalPanel", () => {
     } as unknown as ApiClient;
 
     renderPanel(api);
-    await waitFor(() => expect(screen.getByText("32 / 32")).toBeVisible());
+    await userEvent.click(await screen.findByRole("button", {name: "Terminal network settings"}));
+    await waitFor(() => expect(screen.getByText(/32 \/ 32 terminal containers/)).toBeVisible());
+    await userEvent.keyboard("{Escape}");
     expect(screen.getByRole("button", { name: "New terminal" })).toBeDisabled();
   });
 });

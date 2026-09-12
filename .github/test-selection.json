@@ -1,45 +1,42 @@
 {
-  "baseline": "d2fb9fa",
-  "reviewed_by": "Codex compact conversation search review",
-  "reason": "Move transcript search trigger to existing chat, terminal companion and browser companion headers; closed search renders no row. Shared SessionsPage and stylesheet impact reviewed as presentation-only. Four component cases cover filters, query retention, focus, close/Escape, busy, results and error/retry. Two exact production browser journeys across eight profiles cover header geometry and search accessibility, clipping, touch targets, close/reopen and refresh. Reviewed mobile toolbar visibility rules and removed obsolete details/summary CSS so search stays reachable on mobile and short windows. Additional user-reported editor Files clipping: sidebar flex sizing constrains the scrolling list; one long-directory journey covers last-entry access, refresh, Files/Changes switching and desktop focus mode across eight profiles. No unit tests for CSS geometry. User-requested sidebar resizing adds a device-local bounded width preference and accessible pointer/keyboard divider; selected sidebar journey now covers drag, clamp, reset, Files/Changes and reload. Two hook tests cover corrupt preferences, clamping and retention. Initial sidebar check reached the last entry but exact intersection ratio was 0.995 due to fractional border/scroll rounding; use 0.99 alongside explicit sidebar containment and successful activation. Rerun only these eight failed cases. Final review includes read-storage diagnostic classification and acceptance evidence only; rerun two width hook tests and build after that diagnostic fix.",
-  "exclusions": "No backend, native, packaging or search API changes. No full suite. Persistence, streaming and reconnect semantics are unchanged. Physical-device and manual screen-reader checks unavailable. Component runtime bounded to five minutes, browser run ten minutes, production build ten minutes.",
+  "baseline": "b697282",
+  "reviewed_by": "Codex compact terminal workflow review",
+  "reason": "Compact terminal tabs and active-session controls into the companion toolbar; disclose runtime metadata and next-launch ports on demand while preserving errors and VPN/bridge notices. Correct terminal prompt clipping by extending viewport-fit layout to Terminal, moving padding to the element FitAddon measures, and putting fit geometry in the final unlayered CSS contract. Distinguish Project all-target permission from missing native scope; preserve research records and proxy enforcement. Shared SessionsPage, browser-assistant.css and ui.css changes reviewed as scoped presentation changes. Component coverage: terminal lifecycle/active-targeting/details (16), browser UI/native events (16), scope status classification (3). Browser coverage: five exact terminal journeys across eight profiles (40), plus one native-event desktop fixture (1). No unrelated test areas selected. Follow-up: install current Core scope before native webview creation; refresh native scope before manual navigation/reload, preserving fail-closed native validation. Add 3 component regressions (fresh scope, failed reload install/retry, revoked scope). Move desktop conversations icon to leading edge; reuse mobile bottom navigation with the same icon to avoid crowded headers. Cover reveal/close/geometry across eight profiles. Native selection checks existing exact scope restriction tests; no automation worker changes. Native CI integration also runs the existing fixed tests/v3/test_sandbox.py -k macos boundary filter (2 collected, 48 excluded); explicitly reviewed, no full Python suite.",
+  "exclusions": "No full suite. No automation execution or third-party traffic in tests. Backend records unchanged. Actual Core/native webview and physical-device acceptance unavailable; mocked evidence is partial. Component runtime bounded to five minutes; native compilation ten minutes; production build ten minutes; selected browser journeys ten minutes.",
   "expected_tests": {
     "python": 0,
-    "frontend": 6,
-    "native": 0,
-    "playwright": 24
+    "frontend": 38,
+    "native": 2,
+    "playwright": 49
   },
   "python": [],
   "frontend": [
-    "ui/src/components/ChatSearchPanel.test.tsx",
-    "ui/src/components/useEditorSidebarWidth.test.tsx"
+    "ui/src/components/ContainerTerminalPanel.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/components/browserScopeStatus.test.ts"
   ],
-  "native": [],
+  "native": [
+    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
+    "browser_proxy::tests::native_scope_rejects_credential_bearing_urls"
+  ],
   "playwright": [
-    "entry:compact-header/desktop",
-    "entry:compact-header/compact",
-    "entry:compact-header/mobile-chromium-small",
-    "entry:compact-header/mobile-chromium-ledger-390",
-    "entry:compact-header/mobile-chromium-wide",
-    "entry:compact-header/mobile-webkit-small",
-    "entry:compact-header/mobile-webkit",
-    "entry:compact-header/mobile-webkit-wide",
-    "entry:transcript-search-layout/desktop",
-    "entry:transcript-search-layout/compact",
-    "entry:transcript-search-layout/mobile-chromium-small",
-    "entry:transcript-search-layout/mobile-chromium-ledger-390",
-    "entry:transcript-search-layout/mobile-chromium-wide",
-    "entry:transcript-search-layout/mobile-webkit-small",
-    "entry:transcript-search-layout/mobile-webkit",
-    "entry:transcript-search-layout/mobile-webkit-wide",
-    "entry:editor-files-scroll/desktop",
-    "entry:editor-files-scroll/compact",
-    "entry:editor-files-scroll/mobile-chromium-small",
-    "entry:editor-files-scroll/mobile-chromium-ledger-390",
-    "entry:editor-files-scroll/mobile-chromium-wide",
-    "entry:editor-files-scroll/mobile-webkit-small",
-    "entry:editor-files-scroll/mobile-webkit",
-    "entry:editor-files-scroll/mobile-webkit-wide"
+    "entry:compact-terminal/desktop",
+    "entry:compact-terminal/compact",
+    "entry:compact-terminal/mobile-chromium-small",
+    "entry:compact-terminal/mobile-chromium-ledger-390",
+    "entry:compact-terminal/mobile-chromium-wide",
+    "entry:compact-terminal/mobile-webkit-small",
+    "entry:compact-terminal/mobile-webkit",
+    "entry:compact-terminal/mobile-webkit-wide",
+    "entry:native-scope-status/desktop",
+    "entry:conversations-sidebar/desktop",
+    "entry:conversations-sidebar/compact",
+    "entry:conversations-sidebar/mobile-chromium-small",
+    "entry:conversations-sidebar/mobile-chromium-ledger-390",
+    "entry:conversations-sidebar/mobile-chromium-wide",
+    "entry:conversations-sidebar/mobile-webkit-small",
+    "entry:conversations-sidebar/mobile-webkit",
+    "entry:conversations-sidebar/mobile-webkit-wide"
   ],
-  "change_digest": "152b69a8c504aeeecaf91b05222086e8353fe1414cebf2c196db2cb1b459a187"
+  "change_digest": "eddcc9e8cd46e1f8cb7e4e01d48fded6055510f1474850ebdc78702b000c223a"
 }

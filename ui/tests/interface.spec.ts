@@ -87,6 +87,7 @@ async function installTruthfulCore(page: Page) {
       readonly bufferedAmount = 0;
       readonly binaryType = "blob";
       readyState = PreviewTerminalWebSocket.CONNECTING;
+      sequence = 1;
 
       constructor(url: string | URL) {
         super();
@@ -106,7 +107,7 @@ async function installTruthfulCore(page: Page) {
             type: "output",
             encoding: "base64",
             sequence: 1,
-            data: btoa("root@nebula:/workspace# "),
+            data: btoa((globalThis as typeof globalThis & {__terminalLongOutput?: boolean}).__terminalLongOutput ? Array.from({length: 150}, (_, i) => `listing-row-${i}\r\n`).join("") + "root@nebula:/workspace# " : "root@nebula:/workspace# "),
           }) }));
         }, 10);
       }
@@ -114,6 +115,10 @@ async function installTruthfulCore(page: Page) {
       send(value: string): void {
         try {
           (globalThis as typeof globalThis & { __terminalFrames?: unknown[] }).__terminalFrames?.push(JSON.parse(value));
+          const frame = JSON.parse(value);
+          if ((globalThis as typeof globalThis & {__terminalLongOutput?: boolean}).__terminalLongOutput && frame.type === "input") {
+            this.dispatchEvent(new MessageEvent("message", {data: JSON.stringify({type: "output", encoding: "base64", sequence: ++this.sequence, data: btoa(frame.data)})}));
+          }
         } catch {
           // The production transport sends JSON text frames only.
         }
@@ -627,8 +632,8 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   if (route === "/") {
     const liveTerminal = page.locator(".container-terminal-live");
     await expect(liveTerminal).toBeVisible({ timeout: 20_000 });
-    await expect(liveTerminal.getByText("Connected", { exact: true })).toBeVisible();
-    await expect(liveTerminal.getByRole("button", { name: "Screenshot" })).toBeVisible();
+    await expect(page.locator(".terminal-connection-status")).toHaveAttribute("title", "Connected");
+    await expect(page.getByRole("button", { name: "Screenshot" })).toBeVisible();
   }
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(120);
@@ -799,7 +804,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
       const handler = eventHandlers.get(event);
       if (handler !== undefined) callbacks.get(handler)?.({ event, id: 1, payload });
     };
-    Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls });
+    Object.assign(window, { __NEBULA_BROWSER_CALLS__: calls, __NEBULA_BROWSER_EMIT__: emit });
     Object.assign(window, {
       __TAURI_INTERNALS__: {
         invoke: async (command: string, args: Record<string, unknown> = {}) => {
@@ -904,6 +909,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
       address: { top: addressRect.top, bottom: addressRect.bottom, height: addressRect.height },
       surfaceTop: surfaceRect.top,
       panelBottom: panelRect.bottom,
+      scope: create?.args.scope,
       bounds: create?.args.bounds as { x: number; y: number; width: number; height: number },
       devicePixelRatio: window.devicePixelRatio,
     };
@@ -917,6 +923,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     Math.ceil(geometry.toolbar.bottom * geometry.devicePixelRatio),
   );
   expect(geometry.bounds.y + geometry.bounds.height).toBeLessThanOrEqual(geometry.panelBottom + 1);
+  expect(geometry.scope).toEqual(expect.objectContaining({revision: 3, allowedDomains: ["example.com"], allowedPorts: [443], allowAllTargets: false}));
   expect(geometry.devicePixelRatio).toBe(2);
   await expect(page.getByText("In scope")).toBeVisible();
 
@@ -973,10 +980,23 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   await expect(composer).toBeDisabled();
   await expect(composer).toHaveAttribute("placeholder", "Add a model or harness in Settings…");
   await expect(page.locator(".chat-message")).toHaveCount(0);
+  await page.route("**/browser-sessions/*/traffic", async route => {
+    const request = route.request().postDataJSON();
+    await route.fulfill({json: {...entity, ...request, id: "scope-blocked", session_id: "browser-session-preview", identity_id: "browser-identity-preview", scope_state: "unconfigured", scope_policy_revision: 1, started_at: entity.created_at, truncated: false}});
+  });
+  await page.evaluate(() => {
+    const win = window as Window & {__NEBULA_BROWSER_CALLS__: Array<{command: string; args: Record<string, unknown>}>; __NEBULA_BROWSER_EMIT__: (event: string, payload: unknown) => void};
+    const tabId = win.__NEBULA_BROWSER_CALLS__.find(call => call.command === "browser_create_tab")!.args.tabId;
+    win.__NEBULA_BROWSER_EMIT__("nebula-browser-traffic", {sessionId: "browser-session-preview", tabId, method: "GET", url: "https://example.com/", protocol: "http/1.1", requestHeaders: {}, responseHeaders: {}, blocked: true, error: "no compiled Project scope is active for this browser session"});
+  });
+  await expect(page.locator(".browser-scope-badge")).toHaveText("Browser scope unavailable");
+  await expect(page.getByText(/Navigation blocked: browser scope unavailable/)).toBeVisible();
+  await expect(page.getByText("Research state is unavailable")).toHaveCount(0);
+  await page.screenshot({path: testInfo.outputPath("native-scope-unavailable.png")});
   await context.close();
 });
 
-test("terminal screenshot capture opens a full-height integrated editor", async ({ page }, testInfo) => {
+test("stabilization terminal screenshot capture opens a full-height integrated editor", async ({ page }, testInfo) => {
   await openWorkspace(page, "/", "Workbench");
   const uploadRequest = page.waitForRequest((request) => request.url().endsWith("/evidence/upload") && request.method() === "POST");
   await page.getByRole("button", { name: "Screenshot" }).click();
@@ -1033,7 +1053,7 @@ test("terminal screenshot capture opens a full-height integrated editor", async 
   expect(dimensions.canvasHeight).toBeLessThanOrEqual(dimensions.viewportContentHeight + 1);
 });
 
-test("terminal VPN boundary stays visible in the live shell", async ({ page }) => {
+test("stabilization terminal VPN boundary stays visible in the live shell", async ({ page }) => {
   const vpnNetwork = {
     mode: "vpn",
     runtime_network: "private_namespace",
@@ -1836,6 +1856,27 @@ test("all assistant states remain fully visible inside mobile Workbench navigati
   expect(composerBounds.composerBottom, geometry).toBeLessThanOrEqual(composerBounds.workspaceBottom + 1);
   expect(composerBounds.composerBottom).toBeLessThanOrEqual(composerBounds.viewportHeight + 1);
   expect(composerBounds.workspaceScrollHeight).toBeLessThanOrEqual(composerBounds.clientHeight + 1);
+});
+
+test("stabilization conversations sidebar icon reveals the left pane", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const toggle = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
+  await expect(toggle).toBeVisible();
+  await expect(toggle.locator("svg.lucide-panel-left")).toBeVisible();
+  const box = await toggle.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(44);
+  expect(box!.height).toBeGreaterThanOrEqual(44);
+  if (!mobile) expect(await toggle.evaluate(element => element.parentElement?.firstElementChild === element)).toBe(true);
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("complementary", {name: "Conversations"})).toBeVisible();
+  await expect(page.locator(".session-conversations-toggle")).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", {name: "Hide conversations", exact: true}).last().click();
+  await expect(page.getByRole("complementary", {name: "Conversations"})).not.toBeVisible();
+  await expect(toggle).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
 test("conversation pane defaults closed and restores its device preference without changing URL identity", async ({ page }) => {
@@ -6411,4 +6452,76 @@ reloadTest("stabilization editor files scroll within the sidebar", async ({page}
   if (rememberedWidth) await expect(divider).toHaveAttribute("aria-valuenow", rememberedWidth);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({path: info.outputPath("editor-files-scroll.png")});
+});
+
+reloadTest("stabilization terminal toolbar reclaims space and keeps controls reachable", async ({page}, info) => {
+  await openWorkspace(page, "/", "Workbench");
+  const toolbar = page.locator(".terminal-companion-toolbar");
+  const live = page.locator(".container-terminal-live");
+  await expect(toolbar.getByRole("tab", {name: "Terminal 1", exact: true})).toBeVisible();
+  await expect(toolbar.getByRole("button", {name: "Stop terminal", exact: true})).toBeVisible();
+  await expect(toolbar.getByRole("button", {name: "Screenshot", exact: true})).toBeVisible();
+  await expect(live.locator(":scope > header")).toHaveCount(0);
+  await expect(live.locator(":scope > footer")).toHaveCount(0);
+  await expect(page.getByRole("textbox", {name: "Inbound ports for new terminals"})).toHaveCount(0);
+  await expect(live.getByText(/Bridge networking is permitted/)).toBeVisible();
+  const details = toolbar.getByRole("button", {name: "Terminal details", exact: true});
+  await details.click();
+  const dialog = page.getByRole("dialog", {name: "Terminal details", exact: true});
+  await expect(dialog).toContainText("sha256:");
+  await expect(dialog).toContainText("disappear");
+  await page.keyboard.press("Escape");
+  await expect(details).toBeFocused();
+  const network = toolbar.getByRole("button", {name: "Terminal network settings"});
+  await network.click();
+  await page.getByRole("textbox", {name: "Inbound ports for new terminals"}).fill("8080/tcp");
+  await expect(page.getByRole("dialog", {name: "Terminal network settings"})).toContainText("Running terminals keep their existing ports");
+  await page.keyboard.press("Escape");
+  await expect(network).toBeFocused();
+  await network.click();
+  await expect(page.getByRole("textbox", {name: "Inbound ports for new terminals"})).toHaveValue("8080/tcp");
+  await page.keyboard.press("Escape");
+  const geometry = await toolbar.evaluate(element => ({
+    height: element.getBoundingClientRect().height,
+    clipped: element.scrollWidth > element.clientWidth,
+    controls: [...element.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).map(button => ({name: button.getAttribute('aria-label'), width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height, right: button.getBoundingClientRect().right})),
+  }));
+  expect(geometry.clipped).toBe(false);
+  expect(geometry.height).toBeLessThan((page.viewportSize()?.width ?? 0) > 1000 ? 70 : 200);
+  for (const control of geometry.controls) {
+    expect(control.width, control.name ?? "terminal tab").toBeGreaterThanOrEqual(44);
+    expect(control.height, control.name ?? "terminal tab").toBeGreaterThanOrEqual(44);
+    expect(control.right).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
+  }
+  expect((await new AxeBuilder({page}).include(".terminal-companion-toolbar").analyze()).violations).toEqual([]);
+  await page.mouse.move(0, 0);
+  await page.screenshot({path: info.outputPath("compact-terminal.png")});
+});
+
+reloadTest("stabilization terminal long output keeps the prompt and typed input visible", async ({page}, info) => {
+  await page.addInitScript(() => { (globalThis as typeof globalThis & {__terminalLongOutput?: boolean}).__terminalLongOutput = true; });
+  await openWorkspace(page, "/", "Workbench");
+  const shell = page.locator(".xterm-shell");
+  const rows = shell.locator(".xterm-rows");
+  await expect(rows).toContainText("listing-row-149");
+  const screenBounds = await shell.locator(".xterm-screen").boundingBox();
+  const shellBounds = (await shell.boundingBox())!;
+  expect(screenBounds!.y + screenBounds!.height).toBeLessThanOrEqual(shellBounds.y + shellBounds.height + 1);
+  expect(shellBounds.y + shellBounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  const input = page.getByRole("textbox", {name: "Terminal input"});
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    await shell.locator(".xterm-screen").hover({position: {x: 20, y: 20}});
+    await page.mouse.wheel(0, -3000);
+    await expect(rows).not.toContainText("listing-row-149");
+  }
+  await input.focus();
+  for (let index = 0; index < 20; index++) await page.keyboard.press("Shift+PageUp");
+  await expect(rows).toContainText("listing-row-0");
+  await page.keyboard.type("visible-input");
+  await expect(shell.locator(".xterm-rows")).toContainText("visible-input");
+  await expect(rows).toContainText("listing-row-149");
+  const cursor = shell.locator(".xterm-cursor");
+  await page.screenshot({path: info.outputPath("terminal-prompt-visible.png")});
+  await info.attach("terminal-geometry", {body: JSON.stringify(await cursor.evaluate(element => { const chain = []; for (let node: HTMLElement | null = element as HTMLElement; node; node = node.parentElement) {const r = node.getBoundingClientRect(); chain.push({className: node.className, top:r.top, bottom:r.bottom, height:r.height, overflow:getComputedStyle(node).overflow});} return chain; })), contentType: "application/json"});
+  await expect(cursor).toBeInViewport({ratio: 0.98});
 });
