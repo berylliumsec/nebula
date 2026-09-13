@@ -1,11 +1,18 @@
 {
-  "change_digest": "2fb1ad76beaad47abc75aca18c217dc543fc4a1a3b53f31e807c73338d319ad0",
-  "reviewed_by": "Codex chat preview cache implementation review",
-  "reason": "Conversation selection restores a bounded memory preview while Core refreshes. Cache unit tests cover retention, invalidation and isolation. The conversation-switch journey covers held network responses, authoritative replacement, failure/retry, disabled submission and rapid switching across eight desktop/mobile profiles. The real-Core LAN journey creates durable chats, switches back before a held history response, then refreshes and reloads the production UI.",
-  "exclusions": "No full suites. No Python or native source changes. Only conversation-switch-performance browser coverage is selected; unrelated mission, browser, packaging, terminal and provider execution journeys are excluded. Physical devices are unavailable; mobile results are emulated. Boundaries: three unit tests, eight mocked browser cases (60 seconds per case for multiple refresh/retry cycles and accessibility analysis), one real-Core case (60 seconds), production build.",
-  "expected_tests": {"python": 0, "frontend": 3, "native": 0, "playwright": 9},
+  "change_digest": "e24518758f812dcb6e96df7a0771029b0cbd7098d0ba413a5451e7be7e1ff349",
+  "reviewed_by": "Codex conversation scroll regression review",
+  "reason": "Conversation load and deferred final-message layout must retain bottom-follow intent while intentional reading positions survive cached switching and authoritative refresh. Three geometry unit cases and the existing focused switch journey with late-layout regression cover the changed UI boundary; real Core checks durable selection and reload. WebKit exposed rows mounting after observer setup; observe row replacement as well as row size. Coverage selection remains the same focused journey.",
+  "exclusions": "No full suites. No Python/native changes. Unrelated provider execution, terminal, missions and packaging excluded. Three unit cases, eight mocked browser cases at 60 seconds each, one real-Core case at 60 seconds, and production build. Physical devices unavailable.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 3,
+    "native": 0,
+    "playwright": 9
+  },
   "python": [],
-  "frontend": ["ui/src/pages/chatPreviewCache.test.ts"],
+  "frontend": [
+    "ui/src/pages/chatScrollPosition.test.ts"
+  ],
   "native": [],
   "playwright": [
     "area:conversation-switch-performance"

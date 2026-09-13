@@ -3260,6 +3260,10 @@ test("conversation switching commits URL identity and keeps prefetched work deta
 
   await openWorkspace(page, `/?view=chat&session=${sourceSessionId}`, "Workbench");
   await expect(page.getByText("Source transcript")).toBeVisible();
+  await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
+  // Rich content can grow after the transcript has initially reached the bottom.
+  await page.locator(".chat-message").last().evaluate(element => {element.style.minHeight = "1200px";});
+  await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(4);
   await page.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Unsent source draft");
   await page.locator(".chat-scroll").evaluate(element => {element.scrollTop = 150; element.dispatchEvent(new Event("scroll"));});
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
