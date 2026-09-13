@@ -145,6 +145,8 @@ import {
 } from "./chatFollowUpStorage";
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
+import { followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
+
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
@@ -603,6 +605,7 @@ export function SessionsPage() {
     if (element) { chatFollowBottomRef.current = false; element.scrollIntoView({block: "center"}); element.focus({preventScroll: true}); }
   }, [searchParams, loadingHistory, messages.length]);
   const chatFollowBottomRef = useRef(true);
+  const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
@@ -634,6 +637,7 @@ export function SessionsPage() {
   }), [loadingHistory, messages, sending]);
   const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
+    chatScrollGeometryRef.current = undefined;
     const position = restoredScrollRef.current;
     chatFollowBottomRef.current = position?.followBottom ?? true;
     setHasNewerMessages(!chatFollowBottomRef.current);
@@ -659,11 +663,25 @@ export function SessionsPage() {
       if (chatFollowBottomRef.current) viewport.scrollTop = viewport.scrollHeight;
     };
     scrollToLatest();
+    // Message rows and rich content can finish laying out after the parent frame.
+    const observer = new ResizeObserver(scrollToLatest);
+    observer.observe(viewport);
+    const observeRows = () => {
+      observer.disconnect();
+      observer.observe(viewport);
+      for (const child of viewport.children) observer.observe(child);
+      scrollToLatest();
+    };
+    const rowsObserver = new MutationObserver(observeRows);
+    rowsObserver.observe(viewport, {childList: true});
+    observeRows();
     const frame = globalThis.requestAnimationFrame?.(scrollToLatest);
     return () => {
+      rowsObserver.disconnect();
+      observer.disconnect();
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
     };
-  }, [conversationOpen, messages, sending, view]);
+  }, [conversationOpen, messages, sending, sessionId, view]);
   useEffect(() => {
     if (!import.meta.env.DEV || (view !== "chat" && view !== "browser") || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
@@ -3149,7 +3167,9 @@ export function SessionsPage() {
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
                       if (!viewport.clientHeight) return;
-                      const atBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 4;
+                      const geometry = {scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight};
+                      const atBottom = followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
+                      chatScrollGeometryRef.current = geometry;
                       chatReadingPositionRef.current = {sessionId, scrollTop: viewport.scrollTop, followBottom: atBottom};
                       chatFollowBottomRef.current = atBottom;
                       setHasNewerMessages(!atBottom);
