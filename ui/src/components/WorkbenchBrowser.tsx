@@ -1423,6 +1423,11 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     }
     setWorkspaceError(undefined);
     try {
+      await workbenchBrowser.configureProxy(projectId, activeSession.id, {
+        enabled: activeSession.upstreamProxyEnabled,
+        url: activeSession.upstreamProxyUrl,
+        credentialRef: activeSession.upstreamProxyCredentialRef,
+      }, activeSession.captureMode === "bodies", interceptionEnabled);
       const updated = await api.updateSecurityBrowserCapture(activeSession, {
         captureMode: activeSession.captureMode,
         proxyEnabled: activeSession.proxyEnabled,
@@ -1432,11 +1437,6 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         upstreamProxyUrl: activeSession.upstreamProxyUrl,
         upstreamProxyCredentialRef: activeSession.upstreamProxyCredentialRef,
       });
-      await workbenchBrowser.configureProxy(projectId, updated.id, {
-        enabled: updated.upstreamProxyEnabled,
-        url: updated.upstreamProxyUrl,
-        credentialRef: updated.upstreamProxyCredentialRef,
-      }, updated.captureMode === "bodies", updated.interceptionEnabled);
       setWorkspace((current) => current ? {
         ...current,
         sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
@@ -1663,7 +1663,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     bytes: selectedExchanges[0].responseBytes === selectedExchanges[1].responseBytes ? "same" : `${selectedExchanges[0].responseBytes ?? "—"} → ${selectedExchanges[1].responseBytes ?? "—"}`,
   } : undefined;
 
-  const transportControls = <InterceptionTransport enabled={!!activeSession?.interceptionEnabled} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!activeSession?.interceptionEnabled)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;
+  const scopeReady = !!scope && (scope.allowAllTargets || scope.allowedCidrs.length > 0 || scope.allowedDomains.length > 0 || scope.allowedUrls.length > 0)
+    && (!scope.notBefore || new Date(scope.notBefore).getTime() <= Date.now())
+    && (!scope.notAfter || new Date(scope.notAfter).getTime() > Date.now());
+  const transportControls = <InterceptionTransport enabled={!!activeSession?.interceptionEnabled} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} scopeReady={scopeReady} nativeReady={!!activeTab?.created} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!activeSession?.interceptionEnabled)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;
 
   const researchPanel = researchOpen ? <SecurityBrowserWorkspacePanel
     api={api}

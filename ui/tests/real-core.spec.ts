@@ -812,10 +812,10 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByRole("heading", { name: "Repeater" })).toBeVisible();
     await page.getByLabel("Name").fill("Durable account request");
     await page.getByLabel("URL", { exact: true }).fill("https://example.com/account");
-    await page.getByRole("button", { name: "Save Repeater request" }).click();
-    await expect(page.getByRole("status").filter({ hasText: "Repeater request saved" })).toBeVisible();
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Repeater draft created" })).toBeVisible();
     await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Send once" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
     await page.getByLabel("Browser engine").selectOption("native");
