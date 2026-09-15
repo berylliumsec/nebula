@@ -25,7 +25,11 @@ use objc2::{MainThreadMarker, MainThreadOnly, rc::Retained};
 #[cfg(target_os = "macos")]
 use objc2_app_kit::NSView;
 #[cfg(target_os = "macos")]
-use objc2_foundation::{NSPoint, NSRect, NSSize};
+use objc2_foundation::{
+    NSArray, NSObject, NSObjectNSKeyValueCoding, NSPoint, NSRect, NSSize, NSString, NSUUID,
+};
+#[cfg(target_os = "macos")]
+use objc2_web_kit::WKWebsiteDataStore;
 
 use crate::{
     diagnostics::{DiagnosticLevel, DiagnosticsState},
@@ -887,6 +891,41 @@ fn macos_supports_project_store() -> bool {
         >= 14
 }
 
+#[cfg(target_os = "macos")]
+fn clear_macos_identity_proxy(
+    app: &AppHandle,
+    project_id: &str,
+    identity_partition: &str,
+) -> Result<(), String> {
+    if !macos_supports_project_store() {
+        return Ok(());
+    }
+    let identifier = identity_key(project_id, identity_partition);
+    let main = app
+        .get_webview("main")
+        .ok_or_else(|| "The Nebula webview is unavailable.".to_string())?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    main.with_webview(move |_| {
+        let result = (|| {
+            let marker = MainThreadMarker::new().ok_or_else(|| {
+                "The browser data store must be updated on the main thread.".to_string()
+            })?;
+            let uuid = NSUUID::from_bytes(identifier);
+            // SAFETY: Custom website data stores are available on macOS 14 and later.
+            let store = unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&uuid, marker) };
+            let empty = NSArray::<NSObject>::array();
+            // SAFETY: Wry uses this same WebKit key to configure the identity proxy.
+            unsafe {
+                store.setValue_forKey(Some(&empty), &NSString::from_str("proxyConfigurations"));
+            }
+            Ok(())
+        })();
+        let _ = sender.send(result);
+    })
+    .map_err(|error| format!("cannot access the macOS browser data store: {error}"))?;
+    wait_for_native_browser_result(receiver)
+}
+
 #[cfg(not(target_os = "macos"))]
 fn macos_supports_project_store() -> bool {
     true
@@ -1229,9 +1268,33 @@ pub(crate) fn browser_create_tab(
             Some(scope) => proxy.configure_scope(scope)?,
             None => {
                 proxy.clear_scope()?;
-                return Err("Project scope is unavailable. Reconnect to Core and retry opening the page.".to_string());
+                return Err(
+                    "Project scope is unavailable. Reconnect to Core and retry opening the page."
+                        .to_string(),
+                );
             }
         }
+    }
+
+    // Wry sets the proxy on the persistent WKWebsiteDataStore. Closing a proxied
+    // tab does not clear that setting, so a new direct tab can still use the
+    // stopped local proxy unless we reset this identity before its first load.
+    #[cfg(target_os = "macos")]
+    if !proxy_enabled {
+        let shared_proxy_active = state
+            .tabs
+            .lock()
+            .map_err(|_| "Browser state is unavailable.".to_string())?
+            .values()
+            .any(|tab| {
+                tab.project_id == project_id
+                    && tab.identity_partition == identity_partition
+                    && tab.proxy.is_some()
+            });
+        if shared_proxy_active {
+            return Err("Another open tab in this browser identity is using capture. Close it before browsing directly.".to_string());
+        }
+        clear_macos_identity_proxy(&app, &project_id, &identity_partition)?;
     }
 
     let mut builder = WebviewBuilder::new(&label, WebviewUrl::External(url))

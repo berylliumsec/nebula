@@ -1,11 +1,18 @@
 {
-  "change_digest": "8edf34f383b29f2eb4b7425a6635b61cac743831677d188e4bf6502b09531eb3",
-  "reviewed_by": "Codex mobile Coding action-rail review",
-  "reason": "Reviewed the mobile Coding action-rail and focused browser assertion diff after rebasing onto the Security Browser update; its shared CSS and test edits are unrelated to this Coding delta. The secondary workflow actions expand as full-width rows at 320/390/430 px, Review and More actions stay inside the rail, and choosing a handoff closes the menu before returning to the editor. Selected the existing Coding desktop/mobile Chromium/WebKit area, editor component file, and real-Core Code save journey to protect the shared toolbar and workspace draft flow.",
-  "exclusions": "No full suites. Core routes, native code, mission execution, unrelated Workbench views, and physical-device testing are unchanged or unavailable. Python and native layers have no relevant implementation change.",
-  "expected_tests": {"python": 0, "frontend": 22, "native": 0, "playwright": 10},
-  "python": [],
-  "frontend": ["ui/src/components/CodeEditorPanel.test.tsx"],
+  "change_digest": "79d921501fa174906dabd9623b779ea48919876d789d873c3a1477a064c0dce3",
+  "reviewed_by": "Codex macOS stale browser proxy review",
+  "reason": "On macOS 14+, Wry writes capture proxy settings to the identity WKWebsiteDataStore. A direct tab must clear that setting before first navigation when capture is disabled; another proxied tab in the same identity must remain protected. Select the three existing native-browser security contracts and an arm64 macOS compile check. The affected client journey requires a rebuilt Mac app and remains a manual release gate.",
+  "exclusions": "No full suites. Core routes, frontend controls, and Playwright web-interface behavior are unchanged. No focused Rust test exercises WKWebsiteDataStore on Linux CI. The affected Mac client is not remotely controllable, so live navigation, production Mac package, physical-device, and reconnect gates are unavailable for this PR; do not claim the operator workflow is complete from these checks.",
+  "expected_tests": {
+    "python": 3,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python": [
+    "tests/v3/test_tauri_browser_security.py"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:coding-makeover", "area:coding-makeover-core"]
+  "playwright": []
 }
