@@ -1134,7 +1134,7 @@ test("assistant context pack stays exact, compact, and accessible", async ({ pag
       clientY: bounds.top + bounds.height / 2,
     }));
   });
-  await page.getByRole("button", { name: "Ask Nebula" }).click();
+  await page.getByRole("button", { name: "Add context to chat" }).click();
 
   const pack = page.getByRole("region", { name: "Selected context pack" });
   await expect(pack).toBeVisible();
@@ -1235,7 +1235,7 @@ test("assistant context pack preserves the active conversation identity", async 
       clientY: bounds.top + bounds.height / 2,
     }));
   });
-  await page.getByRole("button", { name: "Ask Nebula" }).click();
+  await page.getByRole("button", { name: "Add context to chat" }).click();
 
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionId);
   await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).toBe("handoff-selection-preserved");
@@ -6663,4 +6663,46 @@ reloadTest("stabilization terminal long output keeps the prompt and typed input 
   await page.screenshot({path: info.outputPath("terminal-prompt-visible.png")});
   await info.attach("terminal-geometry", {body: JSON.stringify(await cursor.evaluate(element => { const chain = []; for (let node: HTMLElement | null = element as HTMLElement; node; node = node.parentElement) {const r = node.getBoundingClientRect(); chain.push({className: node.className, top:r.top, bottom:r.bottom, height:r.height, overflow:getComputedStyle(node).overflow});} return chain; })), contentType: "application/json"});
   await expect(cursor).toBeInViewport({ratio: 0.98});
+});
+
+test("assistant popup asks privately and discards without navigating", async ({ page }, testInfo) => {
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [{
+    ...entity, id: "provider-1", name: "Popup model", provider_type: "vllm", endpoint: "http://localhost:8001/v1", enabled: true, is_local: true,
+    model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true }, metadata: { default_model: "model-1" },
+  }] }));
+  const requests: Record<string, unknown>[] = [];
+  let discarded = false;
+  await page.route("**/api/v1/chat/temporary-sessions", route => route.fulfill({ status: 201, json: {
+    ...entity, id: "popup-private", engagement_id: "project-1", title: "Ask Nebula", backend: "provider", provider_profile_id: "provider-1", model: "model-1", metadata: { temporary_assistant: true },
+  } }));
+  await page.route("**/api/v1/chat/temporary-sessions/popup-private", async route => { discarded = true; await route.fulfill({ status: 204 }); });
+  await page.route("**/api/v1/chat/completions", async route => {
+    requests.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "text/event-stream", body: 'event: done\ndata: {"type":"done","session_id":"popup-private","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"A private answer with a follow-up."},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6},"finish_reason":"stop","citations":[]}\n\n' });
+  });
+  await openWorkspace(page, "/project", "Scratch Project");
+  const originalUrl = page.url();
+  await page.getByRole("heading", { name: "Scratch Project", exact: true }).evaluate(element => {
+    const range = document.createRange(); range.selectNodeContents(element);
+    const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  await expect(page.getByRole("button", { name: "Add context to chat", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
+  const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
+  await expect(popup).toBeVisible();
+  await expect(page).toHaveURL(originalUrl);
+  await popup.getByRole("textbox").fill("Explain the selected title");
+  await popup.getByRole("button", { name: "Ask question" }).click();
+  await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
+  expect(requests[0].session_id).toBe("popup-private");
+  const bounds = await popup.boundingBox(); const viewport = page.viewportSize()!;
+  expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
+  expect(bounds!.width).toBeLessThanOrEqual(560);
+  await popup.screenshot({ path: testInfo.outputPath("popup.png") });
+  expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
+  await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
+  await expect(popup).toHaveCount(0); await expect.poll(() => discarded).toBe(true);
+  await expect(page).toHaveURL(originalUrl);
+  await expect(page.getByText("A private answer with a follow-up.")).toHaveCount(0);
 });

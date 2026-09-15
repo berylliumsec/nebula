@@ -7454,6 +7454,20 @@ export class ApiClient {
     ).then(mapChatSession);
   }
 
+  createTemporaryChat(body: Omit<ChatCompletionRequest, "messages">): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>("chat/temporary-sessions", {
+      method: "POST", body: JSON.stringify({
+        engagement_id: body.engagementId, session_id: body.sessionId,
+        backend: body.backend, provider_id: body.providerId,
+        harness_profile_id: body.harnessProfileId, model: body.model,
+      }),
+    }).then(mapChatSession);
+  }
+
+  discardTemporaryChat(sessionId: string): Promise<void> {
+    return this.request<void>(`chat/temporary-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", keepalive: true });
+  }
+
   forkChatSession(
     sessionId: string,
     throughMessageId: string | undefined,

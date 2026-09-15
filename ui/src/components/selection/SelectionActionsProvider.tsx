@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Clipboard, MessageSquareText, NotebookPen, Play } from "lucide-react";
+import { Clipboard, MessageSquarePlus, MessageSquareText, NotebookPen, Play } from "lucide-react";
 import styles from "./SelectionActionsProvider.module.css";
 import {
   copySelectionText,
@@ -36,6 +36,7 @@ export interface SelectionActionsProviderProps extends DomSelectionOptions {
   /** Opens an editable assistant draft. The provider never submits a turn. */
   onAsk: (draft: SelectionActionDraft) => void;
   /** Captures selected text as a project note. Omit to hide Take note. */
+  onAddContext?: (draft: SelectionActionDraft) => void;
   onAddNote?: (draft: SelectionActionDraft) => void;
   /** Opens mandatory reviewed execution for explicitly runnable selections. */
   onRun?: (draft: SelectionActionDraft) => void;
@@ -56,6 +57,7 @@ export function useOptionalSelectionActions(): SelectionActionsContextValue | un
 export function SelectionActionsProvider({
   children,
   onAsk,
+  onAddContext,
   onAddNote,
   onRun,
   onCopyError,
@@ -107,6 +109,12 @@ export function SelectionActionsProvider({
       const next = isSelectableTextControl(event.target)
         ? readTextControlSelection(event.target, domOptions)
         : readDomSelection(document.getSelection(), domOptions);
+      if (next) {
+        // A new selection supersedes an earlier action's exit animation.
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = undefined;
+        setIsExiting(false);
+      }
       setDraft(next);
     };
     const dismissForPointer = (event: PointerEvent) => {
@@ -137,7 +145,7 @@ export function SelectionActionsProvider({
   const center = draft ? (draft.anchor.left + draft.anchor.right) / 2 : 0;
   const showAbove = draft ? draft.anchor.bottom + 64 > viewportHeight : false;
   const position = draft ? {
-    left: Math.max(12, Math.min(center || 120, viewportWidth - 12)),
+    left: viewportWidth <= 520 ? viewportWidth / 2 : Math.max(220, Math.min(center || 220, viewportWidth - 220)),
     top: showAbove ? Math.max(12, draft.anchor.top - 8) : Math.max(12, draft.anchor.bottom + 8),
   } : undefined;
 
@@ -167,6 +175,10 @@ export function SelectionActionsProvider({
           onCopyError?.(reason instanceof Error ? reason : new Error("The selected text could not be copied."));
         });
       }}><Clipboard size={14} /> Copy</button>
+      {onAddContext && <button className={styles.action} type="button" onClick={() => {
+        dismissSelectionElegantly();
+        onAddContext(draft);
+      }}><MessageSquarePlus size={14} /> Add context to chat</button>}
       {onAddNote && <button className={styles.action} type="button" onClick={() => {
         dismissSelectionElegantly();
         onAddNote(draft);

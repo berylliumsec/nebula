@@ -660,12 +660,20 @@ class NebulaStore:
         automation_expires_before: datetime | None = None,
         offset: int = 0,
         limit: int = 100,
+        include_temporary: bool = False,
     ) -> list[EntityT]:
         if offset < 0:
             raise ValueError("offset cannot be negative")
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
+        if model.entity_kind == "chat_sessions" and not include_temporary:
+            statement = statement.where(
+                func.coalesce(
+                    EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
+                    False,
+                ).is_(False)
+            )
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -696,6 +704,13 @@ class NebulaStore:
         statement = select(func.count(EntityRow.id)).where(
             EntityRow.kind == model.entity_kind
         )
+        if model.entity_kind == "chat_sessions":
+            statement = statement.where(
+                func.coalesce(
+                    EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
+                    False,
+                ).is_(False)
+            )
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         with self.database.session() as session:

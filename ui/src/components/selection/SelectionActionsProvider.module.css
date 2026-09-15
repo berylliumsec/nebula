@@ -46,7 +46,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  min-height: 1.9rem;
+  min-height: 44px;
   padding: 0.3rem 0.55rem;
   color: inherit;
   font: inherit;
@@ -76,7 +76,9 @@
 @media (max-width: 520px) {
   .popover {
     max-width: calc(100vw - 1rem);
-    overflow-x: auto;
+    width: calc(100vw - 24px);
+    flex-wrap: wrap;
+    justify-content: center;
   }
 }
 

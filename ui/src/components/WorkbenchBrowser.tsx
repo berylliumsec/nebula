@@ -826,7 +826,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
             selectedText,
           ].join("\n");
           if (onAttachContext) {
-            onAttachContext({ text: contextText, sourceKind: "browser_selection", sourceId: activeSession?.id,
+            onAskNebula({ text: contextText, sourceKind: "browser_selection", sourceId: activeSession?.id,
               sourceLabel: `Browser selection · ${payload.context.title || hostname}`.slice(0, 500),
               truncated: payload.context.selectedText.length >= 4_000 });
             return;
