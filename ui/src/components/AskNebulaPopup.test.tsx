@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
+import type { ChatStreamEvent } from "../api/types";
 import { AskNebulaPopup } from "./AskNebulaPopup";
 import { createSelectionDraft } from "./selection";
 
@@ -184,4 +185,70 @@ it("retains a question typed before Core finishes opening the branch", async () 
   await user.click(screen.getByRole("button", { name: "Ask question" }));
   expect(api.streamChat).toHaveBeenCalledOnce();
   expect(api.streamChat.mock.calls[0][0].messages[0].content).toBe("A quick question");
+});
+
+it("hides and restores the same branch, transcript, unsent draft and position", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  const { unmount } = render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {} } />);
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "First question");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  expect(await screen.findByText("A separate answer")).toBeVisible();
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "An unsent follow-up");
+  const popup = screen.getByRole("dialog", { name: "Ask Nebula" });
+  const before = popup.style.top;
+  await user.click(screen.getByRole("button", { name: "Hide Ask Nebula" }));
+  expect(screen.queryByRole("dialog", { name: "Ask Nebula" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /Show Ask Nebula, Response ready/ })).toBeVisible();
+  expect(screen.getByRole("button", { name: /Show Ask Nebula, Response ready/ })).toHaveFocus();
+  expect(api.discardTemporaryChat).not.toHaveBeenCalled();
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => expect(api.keepTemporaryChatAlive).toHaveBeenCalledWith("popup"));
+  await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
+  expect(screen.getByRole("dialog", { name: "Ask Nebula" }).style.top).toBe(before);
+  expect(screen.getByText("A separate answer")).toBeVisible();
+  expect(screen.getByRole("textbox", { name: "Question for Nebula" })).toHaveValue("An unsent follow-up");
+  expect(api.createTemporaryChat).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  expect(api.streamChat.mock.calls[1][0].sessionId).toBe("popup");
+  unmount();
+  expect(api.discardTemporaryChat).toHaveBeenCalledExactlyOnceWith("popup");
+});
+
+it("keeps a harness response running while hidden and restores Stop", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  let sendEvent!: (event: ChatStreamEvent) => void;
+  api.streamChat.mockImplementation((_body, onEvent, signal) => new Promise((_resolve, reject) => {
+    sendEvent = onEvent;
+    onEvent({ type: "started", harnessTurnId: "harness-hidden", model: "m" });
+    signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")));
+  }));
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {} } />);
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "Waiting question");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  await user.click(screen.getByRole("button", { name: "Hide Ask Nebula" }));
+  expect(screen.getByRole("button", { name: /Show Ask Nebula, Responding/ })).toBeVisible();
+  expect(api.discardTemporaryChat).not.toHaveBeenCalled();
+  await act(async () => sendEvent({ type: "output_delta", stream: "commentary", delta: "Still working.", harnessTurnId: "harness-hidden",
+    schemaVersion: "nebula.harness-activity/v2", artifactIds: [], payload: {} }));
+  await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
+  expect(screen.getByRole("status")).toHaveTextContent("Still working.");
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(api.stopHarnessTurn).toHaveBeenCalledExactlyOnceWith("harness-hidden");
+  expect(screen.getByRole("textbox", { name: "Question for Nebula" })).toHaveValue("Waiting question");
+});
+
+it("shows a completed private answer when a hidden response finishes", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  let complete!: (response: unknown) => void;
+  api.streamChat.mockReturnValue(new Promise(done => { complete = done; }));
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {} } />);
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "Finish in the background");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  await user.click(screen.getByRole("button", { name: "Hide Ask Nebula" }));
+  expect(screen.getByRole("button", { name: /Show Ask Nebula, Responding/ })).toBeVisible();
+  await act(async () => complete({ message: { role: "assistant", content: "The private answer is ready." } }));
+  expect(screen.getByRole("button", { name: /Show Ask Nebula, Response ready/ })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
+  expect(screen.getByText("The private answer is ready.")).toBeVisible();
+  expect(api.createTemporaryChat).toHaveBeenCalledTimes(1);
 });

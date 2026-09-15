@@ -84,6 +84,46 @@ conversation label; final sizing and that label await design approval.
 Product rule: an auxiliary question window must not acquire modal ownership of
 the workspace. Page navigation and focus changes are not dismissal actions.
 
+## Hide and restore design
+
+Journey: select context → Ask Nebula → ask or wait → Hide → use another
+workbench view → Show → continue the same temporary conversation → Close.
+The Figma states are [hidden](https://www.figma.com/design/R9gGLFaL3Ag2ATNv8oOObV?node-id=9-42)
+and [restored](https://www.figma.com/design/R9gGLFaL3Ag2ATNv8oOObV?node-id=9-81),
+with a [phone view](https://www.figma.com/design/R9gGLFaL3Ag2ATNv8oOObV?node-id=10-59).
+
+| Step | Observable invariant | Authority | Test layer |
+| --- | --- | --- | --- |
+| Hide | A compact launcher remains visible; the question draft, response and branch survive | React presentation; Core branch | component, browser, real Core |
+| Work elsewhere | Other page controls remain usable; the launcher stays reachable across in-app routes and viewport changes | React provider; browser viewport | production Chromium/WebKit |
+| Stream while hidden | The response continues; the launcher shows short progress or an actionable problem | Core turn; React summary | component, real Core |
+| Show | The same source snapshot, branch, transcript, draft and window position return; no branch creation | Core branch; React presentation | component, browser, real Core |
+| Close after Show | Close discards the branch immediately and removes both window and launcher | Core deletion; React | real Core |
+| Refresh | Full browser reload keeps the existing disposable cleanup behavior | Core lease | real Core |
+
+Hide is a presentation choice, not cancellation or deletion. The compact
+launcher uses a single Show target with an accessible name and status. Close
+remains the explicit discard action in the expanded window. The source chat,
+draft and navigation never change because of Hide or Show.
+When the mobile Workbench navigation is present, the launcher sits above it.
+Hide moves keyboard focus to Show; Show restores focus to the question field.
+
+### Branch validation — September 15, 2026
+
+- Popup component tests: 14 passed, including hidden response completion,
+  draft retention, keyboard focus, branch identity and Stop.
+- Focused production LAN browser journey: 8 passed at
+  `http://192.168.1.155:19467`. Desktop Chromium 1440/1024, emulated
+  Android Chromium 320/390/430, and emulated iPhone WebKit 320/390/430.
+  The launcher clears the mobile navigation, remains available across
+  in-app routes, permits Activity/Chat navigation by touch, passes a focused
+  accessibility scan, and restores the same transcript and unsent text.
+- Real-Core popup journeys: 2 passed with production assets and inert local
+  provider/harness adapters. They verify branch persistence, a hidden active
+  harness turn, cleanup after a hidden reload, explicit Stop and Close.
+- Production build and diff-bound test-selection validation passed.
+  Physical-device software keyboards and live vendor inference were not run.
+
 ### Reported no-response / Stop failure
 
 The live temporary chat used a harness. Its stored events included startup,

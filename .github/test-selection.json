@@ -1,20 +1,17 @@
 {
-  "change_digest": "1e1a1d9b2b645a7753bfe7711b6ce48dc7e49d2a6c5a3437a6e7ebbd911a509e",
-  "reviewed_by": "Codex popup and temporary conversation review",
-  "reason": "Reviewed shared API client and temporary Core router: non-modal popup persists across page navigation, shows harness progress, stops the authoritative harness turn and retries. Added a 24-hour inactivity lease with periodic UI renewal and immediate Close cleanup. Selected backend lease tests, popup component/navigation tests, and bounded production browser and real-Core journeys that cover create, renewal, Stop, follow-up and discard. Rebased onto main #302, which changed SessionsPage and the interface journey; reviewed the overlapping Workbench navigation and retained the eight popup browser profiles plus both real-Core journeys. A 320 px WebKit opening race was diagnosed: a typed draft was cleared while the branch became ready. Added an early-typing component regression and used the selected mobile journey to verify stable draft and move behavior.",
-  "exclusions": "No full suites. Native runtime unchanged. Shared API/client changes are limited to the temporary assistant route and popup; unrelated chats are excluded except isolation checks. Physical devices and live vendor inference unavailable; real Core uses inert adapters.",
+  "change_digest": "cd0c51fcd002b1badb3699a85d393da4d18e268db04dee8fe8a24c7e123e5ee2",
+  "reviewed_by": "Codex Ask Nebula Hide/Show review",
+  "reason": "Reviewed the popup-only presentation and test diff. Hide keeps the same mounted temporary branch, in-flight provider/harness stream, transcript, unsent question and position; a persistent launcher survives in-app page navigation and Show restores the same conversation. Selected all 14 popup component tests, the existing one popup journey across eight permanent production desktop/mobile Chromium/WebKit profiles, and both real-Core provider/harness popup journeys for branch identity, Stop, hidden response completion, keyboard focus, mobile launcher clearance and touch navigation above the Workbench controls, focused accessibility, refresh cleanup and Close. Workbench provider and Core API/storage are unchanged.",
+  "exclusions": "No full suites. Python/Core, native runtime, unrelated Workbench views and main-chat tests are unchanged. Real Core uses inert local provider/harness adapters; physical devices, software keyboard and live vendor inference are unavailable.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 17,
+    "python": 0,
+    "frontend": 14,
     "native": 0,
     "playwright": 10
   },
-  "python": [
-    "tests/v3/test_temporary_chat.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/AskNebulaPopup.test.tsx",
-    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
+    "ui/src/components/AskNebulaPopup.test.tsx"
   ],
   "native": [],
   "playwright": [

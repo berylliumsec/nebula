@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { GripHorizontal, LoaderCircle, Send, Square, X } from "lucide-react";
+import { GripHorizontal, LoaderCircle, Minimize2, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
@@ -17,6 +17,8 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const launcher = useRef<HTMLButtonElement>(null);
+  const [hidden, setHidden] = useState(false);
   const [position, setPosition] = useState({ x: Math.max(12, window.innerWidth - 584), y: 80 });
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const move = (x: number, y: number) => {
@@ -30,6 +32,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     });
   };
   useLayoutEffect(() => {
+    if (hidden) { launcher.current?.focus(); return; }
     const clamp = () => {
       const rect = panel.current?.getBoundingClientRect();
       if (rect) move(rect.left, rect.top);
@@ -39,14 +42,17 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     window.addEventListener("resize", clamp);
     window.visualViewport?.addEventListener("resize", clamp);
     window.visualViewport?.addEventListener("scroll", clamp);
-    input.current?.focus();
+    if (input.current) {
+      input.current.value = question;
+      input.current.focus();
+    }
     clamp();
     return () => {
       observer.disconnect(); window.removeEventListener("resize", clamp);
       window.visualViewport?.removeEventListener("resize", clamp);
       window.visualViewport?.removeEventListener("scroll", clamp);
     };
-  }, []);
+  }, [hidden]);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
@@ -108,7 +114,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     };
   }, [api, snapshot, attempt]);
 
-  useEffect(() => { output.current?.scrollTo?.({ top: output.current.scrollHeight }); }, [messages, answer]);
+  useEffect(() => { output.current?.scrollTo?.({ top: output.current.scrollHeight }); }, [hidden, messages, answer]);
 
   const stop = async () => {
     if (!api || stopping) return;
@@ -191,7 +197,15 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     } finally { setBusy(needsAction.current && !abort.signal.aborted); }
   };
 
-  return createPortal(<div ref={panel} className={styles.popup} role="dialog" aria-labelledby="ask-nebula-title" style={{ left: position.x, top: position.y }}>
+  const launcherStatus = stopping ? "Stopping…" : busy ? needsAction.current ? "Action needed" : "Responding…" :
+    error ? "Needs attention" : messages.length ? "Response ready" : ready ? "Ready to ask" : "Preparing…";
+  return createPortal(hidden ?
+    <button ref={launcher} type="button" className={styles.launcher} aria-label={`Show Ask Nebula, ${launcherStatus}`} title="Show the same temporary conversation"
+      onClick={() => setHidden(false)}>
+      <span className={styles.launcherText}><strong>Ask Nebula</strong><small role="status">{launcherStatus}</small></span>
+      <span className={styles.show}>Show</span>
+    </button> :
+    <div ref={panel} className={styles.popup} role="dialog" aria-labelledby="ask-nebula-title" style={{ left: position.x, top: position.y }}>
     <div data-selection-actions-disabled>
       <div className={styles.header}>
         <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
@@ -200,6 +214,8 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
           onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }} onLostPointerCapture={() => { drag.current = undefined; }}
           onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); move(position.x + direction[0] * 24, position.y + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
         <div className={styles.title}><h2 id="ask-nebula-title">Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
+        <button className="icon-button subtle" type="button" aria-label="Hide Ask Nebula" title="Hide and keep this conversation"
+          onClick={() => { setQuestion(input.current?.value ?? question); setHidden(true); }}><Minimize2 size={18} aria-hidden="true" /></button>
         <button className="icon-button subtle" type="button" aria-label="Close Ask Nebula" title="Close and discard" onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <details className={styles.context}><summary>{context.source.label}{context.truncated ? " · shortened" : ""}</summary><pre>{context.text}</pre></details>
       <div className={styles.transcript} ref={output}>
