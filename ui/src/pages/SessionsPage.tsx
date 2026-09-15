@@ -38,10 +38,12 @@ import {
   Copy,
   Download,
   FileClock,
+  Files,
   FolderOpen,
   Globe2,
   Gauge,
   GitFork,
+  History,
   LoaderCircle,
   ListTodo,
   Maximize2,
@@ -3138,6 +3140,31 @@ export function SessionsPage() {
   };
   const transcriptSearchAction = <button ref={transcriptSearchButtonRef} type="button" className="icon-button subtle transcript-search-toggle" aria-label="Search messages and bookmarks" title="Search messages and bookmarks" aria-expanded={transcriptSearchOpen} aria-controls={transcriptSearchOpen ? "assistant-transcript-search" : undefined} onClick={() => setTranscriptSearchOpen(open => !open)}><Search size={18} aria-hidden="true" /></button>;
 
+  const toolAssistanceAction = api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />;
+  const focusAction = <button className="icon-button subtle workbench-full-screen-toggle" type="button"
+            aria-label={fullScreen ? "Exit full screen workbench" : "Enter focus mode"}
+            title={fullScreen ? "Exit focus mode" : "Enter focus mode"}
+            aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
+            {fullScreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}
+          </button>;
+  const conversationTitle = sessions.find(session => session.id === sessionId)?.title
+    ?? (loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
+  const conversationActions = (
+        <div className="session-toolbar-actions" role="toolbar" aria-label="Conversation actions">
+          {view === "chat" && conversationOpen && transcriptSearchAction}
+          {toolAssistanceAction}
+          {view === "chat" && <button className="icon-button subtle" type="button"
+            aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
+            title={sessionInspectorOpen ? "Hide session details" : "Show session details"}
+            aria-expanded={sessionInspectorOpen}
+            onClick={() => setSessionInspectorOpen((open) => {
+              localStorage.setItem("nebula.session-inspector.open", String(!open));
+              return !open;
+            })}><PanelRight size={18} aria-hidden="true" /></button>}
+          {focusAction}
+        </div>
+  );
+
   const assistantPanel = (
             <div className="chat-panel">
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
@@ -3325,7 +3352,7 @@ export function SessionsPage() {
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})}><FileClock size={18} aria-hidden="true" /></button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => setSearchParams(current => {const next = new URLSearchParams(current); next.set("drawer", "results"); return next;})}><Files size={18} aria-hidden="true" /></button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>
@@ -3334,46 +3361,21 @@ export function SessionsPage() {
   const newChatAction = view === "chat" ? <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} /> : undefined;
   const workbenchToolbar = (
       <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
-          {view === "chat" && <button
-            className="icon-button subtle session-conversations-toggle"
-            type="button"
-            aria-label={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
-            title={(conversationPanelOpen || mobileListOpen) ? "Hide conversations" : "Show conversations"}
-            aria-expanded={(conversationPanelOpen || mobileListOpen)}
-            aria-controls="workbench-conversations"
-            onClick={toggleConversationPanel}
-          >
-            {(conversationPanelOpen || mobileListOpen) ? <PanelLeftClose size={18} aria-hidden="true" /> : <PanelLeft size={18} aria-hidden="true" />}
-          </button>}
-        <TabBar iconOnly className="session-tabs" label="Workbench views" value={view} onChange={setView} items={[
-          { id: "terminal", label: "Terminal", icon: <SquareTerminal size={16} /> },
-          { id: "code", label: "Code", ariaLabel: "Workspace code editor", icon: <Braces size={16} /> },
-          { id: "browser", label: "Browser", ariaLabel: "Project browser", icon: <Globe2 size={16} /> },
-          { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", icon: <MessageSquare size={16} /> },
-          { id: "workspace", label: "Files", ariaLabel: "Workspace files", icon: <FolderOpen size={16} /> },
-          { id: "notes", label: "Notes", ariaLabel: "Project notes", icon: <NotebookPen size={16} /> },
-          { id: "missions", label: "Missions", ariaLabel: "Autonomous missions", icon: <Bot size={16} /> },
-          { id: "activity", label: "Activity", ariaLabel: "Activity history", icon: <FileClock size={16} /> },
+        <TabBar className="session-tabs workbench-view-tabs" label="Workbench views" value={view} onChange={setView} items={[
+          { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", className: "workbench-primary-tab", icon: <MessageSquare size={18} /> },
+          { id: "terminal", label: "Terminal", className: "workbench-primary-tab", icon: <SquareTerminal size={18} /> },
+          { id: "code", label: "Code", ariaLabel: "Workspace code editor", className: "workbench-primary-tab", icon: <Braces size={18} /> },
+          { id: "browser", label: "Browser", ariaLabel: "Project browser", className: "workbench-primary-tab", icon: <Globe2 size={18} /> },
+          { id: "workspace", label: "Files", ariaLabel: "Workspace files", iconOnly: true, className: "workbench-resource-start", icon: <FolderOpen size={18} /> },
+          { id: "notes", label: "Notes", ariaLabel: "Project notes", iconOnly: true, icon: <NotebookPen size={18} /> },
+          { id: "missions", label: "Missions", ariaLabel: "Autonomous missions", iconOnly: true, icon: <Bot size={18} /> },
+          { id: "activity", label: "Activity", ariaLabel: "Activity history", iconOnly: true, icon: <History size={18} /> },
         ] as const} />
-        <div className="session-toolbar-actions">
-          {view === "chat" && conversationOpen && transcriptSearchAction}
+        {view !== "chat" && <div className="session-toolbar-actions">
           {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
-          {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />}
-          {view === "chat" && <button className="icon-button subtle" type="button"
-            aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
-            title={sessionInspectorOpen ? "Hide session details" : "Show session details"}
-            aria-expanded={sessionInspectorOpen}
-            onClick={() => setSessionInspectorOpen((open) => {
-              localStorage.setItem("nebula.session-inspector.open", String(!open));
-              return !open;
-            })}><PanelRight size={16} aria-hidden="true" /></button>}
-          <button className="icon-button subtle workbench-full-screen-toggle" type="button"
-            aria-label={fullScreen ? "Exit full screen workbench" : "Enter focus mode"}
-            title={fullScreen ? "Exit focus mode" : "Enter focus mode"}
-            aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
-            {fullScreen ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}
-          </button>
-        </div>
+          {toolAssistanceAction}
+          {focusAction}
+        </div>}
       </Toolbar>
   );
 
@@ -3390,7 +3392,7 @@ export function SessionsPage() {
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
-          <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle" type="button" aria-label="New conversation" disabled={!engagement} onClick={newConversation}><Plus size={16} /></button><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
+          <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search title or runtime" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
             <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
@@ -3449,6 +3451,22 @@ export function SessionsPage() {
           </nav>
         </aside>}
         <section className="session-workspace">
+          {view === "chat" && <header className="conversation-toolbar">
+          {!conversationPanelOpen && !mobileListOpen && <button
+            className="icon-button subtle session-conversations-toggle"
+            type="button"
+            aria-label="Show conversations"
+            title="Show conversations"
+            aria-expanded="false"
+            aria-controls="workbench-conversations"
+            onClick={toggleConversationPanel}
+          >
+            <PanelLeft size={18} aria-hidden="true" />
+          </button>}
+            <strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong>
+            {conversationActions}
+          </header>}
+
           {api && engagement && <div className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "terminal"}>
             <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" /><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
@@ -3547,7 +3565,7 @@ export function SessionsPage() {
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">
         <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>
         <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><PanelLeft size={19} aria-hidden="true" /><span>Conversations</span></button>
-        <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><FileClock size={19} aria-hidden="true" /><span>Activity</span></button>
+        <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><History size={19} aria-hidden="true" /><span>Activity</span></button>
         <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
       </nav>
       {mobileMoreOpen && <div className="mobile-more-backdrop">

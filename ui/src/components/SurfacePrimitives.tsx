@@ -72,6 +72,8 @@ export function Toolbar({ children, label, primaryAction, overflowAction, classN
 }
 
 export interface TabItem<T extends string> {
+  iconOnly?: boolean;
+  className?: string;
   id: T;
   label: ReactNode;
   icon?: ReactNode;
@@ -104,7 +106,7 @@ export function TabBar<T extends string>({ items, value, onChange, label, classN
     tabs[next]?.focus();
     tabs[next]?.click();
   };
-  return <div ref={tabListRef} className={`tab-bar ${className}`.trim()} role="tablist" aria-label={label}>{items.map((item) => <button key={item.id} type="button" role="tab" title={iconOnly ? String(item.label) : undefined} aria-label={item.ariaLabel ?? (iconOnly ? String(item.label) : undefined)} aria-selected={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={item.disabled} onKeyDown={moveFocus} onClick={() => onChange(item.id)}>{iconOnly ? <span aria-hidden="true">{item.icon}</span> : item.icon}{!iconOnly && item.label}</button>)}</div>;
+  return <div ref={tabListRef} className={`tab-bar ${className}`.trim()} role="tablist" aria-label={label}>{items.map((item) => <button key={item.id} type="button" role="tab" className={item.className} title={typeof item.label === "string" ? item.label : undefined} aria-label={item.ariaLabel ?? ((item.iconOnly ?? iconOnly) ? String(item.label) : undefined)} aria-selected={value === item.id} tabIndex={value === item.id ? 0 : -1} disabled={item.disabled} onKeyDown={moveFocus} onClick={() => onChange(item.id)}>{item.icon && <span aria-hidden="true">{item.icon}</span>}{!(item.iconOnly ?? iconOnly) && <span className="tab-label">{item.label}</span>}</button>)}</div>;
 }
 
 interface ListRowProps extends Omit<HTMLAttributes<HTMLElement>, "title"> {

@@ -4,7 +4,7 @@ import {
   FileText,
   FolderKanban,
   Settings,
-  SquareTerminal,
+  PanelsTopLeft,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,7 +28,7 @@ export const navigationItems: NavigationItem[] = [
     legacyLabel: "Sessions",
     aliases: ["Sessions", "Chat", "Terminal", "Files", "Activity"],
     description: "Terminal, assistant, files, and activity",
-    icon: SquareTerminal,
+    icon: PanelsTopLeft,
     shortcut: "G O",
     group: "workspace",
   },

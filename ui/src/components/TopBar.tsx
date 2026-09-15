@@ -142,7 +142,7 @@ export function TopBar({
         </button>
         <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />
-          <span>Search</span>
+          <span>Commands</span>
           <kbd>⌘K</kbd>
         </button>
         {approvalsCount > 0 && <button

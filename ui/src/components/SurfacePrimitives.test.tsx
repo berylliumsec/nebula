@@ -50,3 +50,26 @@ describe("shared surface primitives", () => {
     expect(onChange).toHaveBeenCalledWith("code");
   });
 });
+
+
+describe("mixed navigation labels", () => {
+  it("keeps icon-only resources named and keyboard reachable across the group boundary", async () => {
+    const onChange = vi.fn();
+    render(<TabBar label="Workbench views" value="chat" onChange={onChange} items={[
+      {id: "chat", label: "Assistant", icon: <svg />, className: "primary"},
+      {id: "files", label: "Files", icon: <svg />, iconOnly: true, className: "resources"},
+    ]} />);
+    const assistant = screen.getByRole("tab", {name: "Assistant"});
+    const files = screen.getByRole("tab", {name: "Files"});
+    expect(assistant).toHaveTextContent("Assistant");
+    expect(files).toHaveTextContent("");
+    expect(files).toHaveAttribute("title", "Files");
+    expect(files).toHaveClass("resources");
+    assistant.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(files).toHaveFocus();
+    expect(onChange).toHaveBeenLastCalledWith("files");
+    await userEvent.keyboard("{Home}");
+    expect(assistant).toHaveFocus();
+  });
+});

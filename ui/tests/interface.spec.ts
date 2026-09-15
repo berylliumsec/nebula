@@ -1871,7 +1871,7 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await toggle.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("complementary", {name: "Conversations"})).toBeVisible();
-  await expect(page.locator(".session-conversations-toggle")).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("button", {name: "Hide conversations", exact: true})).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("button", {name: "Hide conversations", exact: true}).last().click();
   await expect(page.getByRole("complementary", {name: "Conversations"})).not.toBeVisible();
   await expect(toggle).toBeVisible();
@@ -6368,12 +6368,14 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (!mobile) {
     const plusBox = await newChat.boundingBox();
-    const focusBox = await header.getByRole('button', {name: 'Enter focus mode'}).boundingBox();
-    expect(plusBox!.x).toBeGreaterThanOrEqual(focusBox!.x + focusBox!.width);
+    const focusBox = await page.locator('.conversation-toolbar').getByRole('button', {name: 'Enter focus mode'}).boundingBox();
+    expect(focusBox!.y).toBeGreaterThanOrEqual(plusBox!.y + plusBox!.height);
+    await expect(header.getByRole('button', {name: 'Enter focus mode'})).toHaveCount(0);
     const tabs = header.getByRole('tablist', {name: 'Workbench views'});
     await expect(tabs.getByRole('tab')).toHaveCount(8);
     for (const tab of await tabs.getByRole('tab').all()) {
-      expect(await tab.innerText()).toBe('');
+      if ((page.viewportSize()?.width ?? 1440) > 1250 && await tab.evaluate(el => el.classList.contains('workbench-primary-tab'))) expect(await tab.innerText()).not.toBe('');
+      else expect(await tab.innerText()).toBe('');
       await expect(tab).toHaveAttribute('title', /.+/);
       const box = await tab.boundingBox();
       expect(box!.width).toBeGreaterThanOrEqual(44);
@@ -6386,18 +6388,60 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
     await expect(page.locator('.sessions-page > .session-toolbar')).toHaveCount(0);
     await tabs.getByRole('tab', {name: 'Analyst chat'}).focus();
     await page.keyboard.press('ArrowRight');
+    await expect(tabs.getByRole('tab', {name: 'Terminal', exact: true})).toHaveAttribute('aria-selected', 'true');
+    await tabs.getByRole('tab', {name: 'Project browser'}).focus();
+    await page.keyboard.press('ArrowRight');
     await expect(tabs.getByRole('tab', {name: 'Workspace files'})).toBeFocused();
     await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
-    await header.getByRole('button', {name: 'Enter focus mode'}).click();
+    await page.locator('.conversation-toolbar').getByRole('button', {name: 'Enter focus mode'}).click();
     const focusedToolbar = page.locator('.sessions-page > .session-toolbar');
     await expect(focusedToolbar).toBeVisible();
     await expect(focusedToolbar.getByRole('button', {name: 'New chat', exact: true})).toBeVisible();
     await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
   }
+  await expect(header.getByRole('button', {name: 'Search messages and bookmarks'})).toHaveCount(0);
+  await expect(header.locator('.command-trigger')).toHaveAttribute('aria-label', 'Search pages, actions, and settings');
   await newChat.click();
   await expect(page.locator('#analyst-message')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({path: `/tmp/nebula-compact-header-${testInfo.project.name}.png`});
+  const context = page.locator('.conversation-toolbar');
+  await expect(context.getByRole('button', {name: 'Search messages and bookmarks'})).toBeVisible();
+  await context.getByRole('button', {name: 'Search messages and bookmarks'}).click();
+  await expect(page.locator('#assistant-transcript-search')).toBeVisible();
+  await page.keyboard.press('Escape');
+  if (!mobile) {
+    await page.getByRole('button', {name: 'Show conversations', exact: true}).click();
+    await expect(page.getByRole('button', {name: 'Hide conversations', exact: true})).toHaveCount(1);
+    await expect(page.locator('.session-list-header-actions').getByRole('button', {name: 'New conversation', exact: true})).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('complementary', {name: 'Conversations'})).toBeVisible();
+    await page.getByRole('button', {name: 'Hide conversations', exact: true}).click();
+    await expect(page.getByRole('button', {name: 'Show conversations', exact: true})).toBeVisible();
+  }
+  const axe = await new AxeBuilder({page}).include('.top-bar').include('.conversation-toolbar').analyze();
+  expect(axe.violations).toEqual([]);
+  if (!mobile) {
+    // The navigation must also fit beside non-chat actions and in plain themes.
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate(value => localStorage.setItem("nebula.theme", value), theme);
+      await page.reload();
+      const tabs = header.getByRole('tablist', {name: 'Workbench views'});
+      for (const name of ['Workspace code editor', 'Analyst chat']) {
+        await tabs.getByRole('tab', {name}).click();
+        const geometry = await header.evaluate(element => {
+          const box = element.getBoundingClientRect();
+          return [...element.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width > 0).every(button => {
+            const b = button.getBoundingClientRect();
+            const tablist = button.closest('[role=tablist]')?.getBoundingClientRect();
+            return b.left >= box.left && b.right <= box.right + 1 && (!tablist || (b.left >= tablist.left - 1 && b.right <= tablist.right + 1));
+          });
+        });
+        expect(geometry).toBe(true);
+      }
+    }
+  }
+  await page.mouse.move(0, 0);
+  await page.screenshot({path: testInfo.outputPath('workbench-navigation.png')});
 });
 for (const vendor of ["grok_acp", "codex_app_server"]) {
   reloadTest(`stabilization harness commands and thinking ${vendor}`, async ({ page }, info) => {
