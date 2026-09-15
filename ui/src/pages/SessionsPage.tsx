@@ -621,6 +621,8 @@ export function SessionsPage() {
   const explicitNewConversationRef = useRef(false);
   const pendingSessionNavigationRef = useRef<string | undefined>(undefined);
   const sessionSelectionGenerationRef = useRef(0);
+  const reconciledTerminalHarnessTurnsRef = useRef(new Set<string>());
+  const reconcilingTerminalHarnessTurnsRef = useRef(new Set<string>());
   const sessionLoadAbortRef = useRef<AbortController | undefined>(undefined);
   const historicalActivityAbortRef = useRef(new Map<string, AbortController>());
   const assistantSettingsButtonRef = useRef<HTMLButtonElement>(null);
@@ -971,6 +973,35 @@ export function SessionsPage() {
       globalThis.clearInterval(interval);
     };
   }, [api, coreState, harnessSessionId, runtimeKind]);
+
+  useEffect(() => {
+    if (!api || !sessionId || !harnessActivity?.lastTurnId
+      || harnessActivity.lastTurnOrigin !== "chat" || harnessActivity.lastTurnStatus !== "complete") return;
+    const turnId = harnessActivity.lastTurnId;
+    if (sending && harnessProgress?.turnId !== turnId) return;
+    const key = `${sessionId}:${turnId}`;
+    if (reconciledTerminalHarnessTurnsRef.current.has(key)
+      || reconcilingTerminalHarnessTurnsRef.current.has(key)) return;
+    const generation = sessionSelectionGenerationRef.current;
+    reconcilingTerminalHarnessTurnsRef.current.add(key);
+    void api.listChatMessages(sessionId).then(async authoritative => {
+      if (!authoritative.some(message => message.role === "assistant"
+        && message.harnessTurnId === turnId)) return;
+      const recovered = await recoverHarnessHistory(
+        authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
+      );
+      if (sessionSelectionGenerationRef.current !== generation) return;
+      setMessages(recovered);
+      if (harnessProgress?.turnId === turnId) {
+        setSending(false);
+        setChatReconnecting(false);
+      }
+      reconciledTerminalHarnessTurnsRef.current.add(key);
+    }).catch(error => {
+      void logCaughtDiagnostic("interface.sessions_page.terminal_harness_reconcile_failed",
+        "A completed harness turn could not be read from Core.", error, "sessions_page");
+    }).finally(() => reconcilingTerminalHarnessTurnsRef.current.delete(key));
+  }, [api, sessionId, harnessActivity, sending, harnessProgress?.turnId]);
 
   useEffect(() => {
     if (!harnessActivity) return;
@@ -2528,6 +2559,14 @@ export function SessionsPage() {
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
+        if (runtimeKind === "harness") {
+          const authoritative = await api.listChatMessages(returnedSessionId);
+          const recovered = await recoverHarnessHistory(
+            authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
+          );
+          setMessages(current => current.some(message => message.id === userId)
+            ? recovered : current);
+        }
       }
     } catch (error) {
       const detached = detachedStreamsRef.current.has(controller);

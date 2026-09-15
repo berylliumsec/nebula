@@ -442,6 +442,36 @@ def test_health_reconciles_a_retired_default_model_with_the_advertised_catalog(
     assert persisted.capabilities.models == ["current-model", "alternate-model"]
 
 
+def test_failed_turn_persists_profile_failure_reason(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        mcp_server_ids=[],
+    )
+    _chat, _chat_turn, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Trigger a provider failure",
+        chat_session_id=None,
+        harness_session_id=session.id,
+        mcp_server_ids=[],
+    )
+
+    runtime._fail_turn(
+        turn.id,
+        HarnessTurnStatus.FAILED,
+        "Provider balance exhausted",
+        diagnostic={"reason_code": "quota_exhausted"},
+    )
+
+    persisted = store.get(HarnessProfile, profile.id)
+    assert persisted.capabilities.turn_state == "failed"
+    assert persisted.capabilities.last_turn_failure_reason == "quota_exhausted"
+
+
 def test_harness_skill_catalog_is_bounded_and_invocation_is_validated(tmp_path):
     store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
     skill_dir = tmp_path / ".agents" / "skills" / "review"
@@ -736,6 +766,9 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert available.busy is False
         assert available.live is False
         assert available.turn_id is None
+        assert available.last_turn_id == harness_turn.id
+        assert available.last_turn_status == HarnessTurnStatus.COMPLETE
+        assert available.last_turn_origin.value == "chat"
         assert available.detail == "This harness session is ready for another turn."
 
         # Editing a profile cannot mutate the immutable session snapshot.

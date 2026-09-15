@@ -1,11 +1,24 @@
 {
-  "change_digest": "73851cac632f35ccf0adece876187b1c121270f09fec14fa118c1743310c9139",
-  "reviewed_by": "Codex advanced session binding review",
-  "reason": "Advanced Session Binding now receives a Core-owned display name for sessions without a Nebula chat attachment. Select the harness API integration test, the focused selector journey in desktop Chromium, 320px mobile Chromium, and 320px mobile WebKit, and the real-Core harness isolation journey with a durable catalog assertion. Also compile the production UI locally.",
-  "exclusions": "No full suites. No frontend unit test is selected because the regression crosses the Core list response, API mapper, and rendered native select and is covered at API, mocked Playwright, and real-Core layers. Native shell, provider execution semantics, streaming, mutation, LAN-origin behavior, and filesystem behavior are unchanged. Physical devices are unavailable; the mobile projects are emulated.",
-  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 4},
-  "python": ["tests/v3/test_harnesses.py::test_harness_api_chat_mission_handoff_and_catalog"],
-  "frontend": [],
+  "change_digest": "9a78480a38d6256c32e266a424c16a064571c03c2a08982aeb9c32ad568842a2",
+  "reviewed_by": "Codex harness connection implementation review",
+  "reason": "Selected the changed Codex/Grok adapter, runtime session activity and provider-error contracts, the Settings component, and the eight catalogued real-Core harness account journeys through production LAN UI.",
+  "exclusions": "No full suites, unrelated Coding/Workbench/browser work, native runtime or live paid-provider turns. Physical devices unavailable. The real-Core browser journey uses a deterministic inert provider for both harness kinds.",
+  "expected_tests": {
+    "python": 142,
+    "frontend": 8,
+    "native": 0,
+    "playwright": 8
+  },
+  "python": [
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_diagnostic_guidance.py",
+    "tests/v3/test_harnesses.py"
+  ],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx"
+  ],
   "native": [],
-  "playwright": ["entry:advanced-session-binding/desktop", "entry:advanced-session-binding/mobile-chromium-small", "entry:advanced-session-binding/mobile-webkit-small", "entry:advanced-session-binding/real-core"]
+  "playwright": [
+    "area:harness-accounts"
+  ]
 }

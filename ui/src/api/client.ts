@@ -1392,6 +1392,12 @@ interface WireHarnessProfile extends WireEntity {
     subagents?: boolean;
   };
   capabilities?: {
+    authentication_state?: "verified" | "failed" | "unverified";
+    session_state?: "verified" | "failed" | "unverified";
+    turn_state?: "verified" | "failed" | "unverified";
+    last_successful_turn_at?: string | null;
+    last_turn_failure_reason?: string | null;
+    exercised_capabilities?: string[];
     checked_at?: string | null;
     harness_version?: string | null;
     protocol_version?: string | null;
@@ -1482,6 +1488,9 @@ interface WireHarnessSessionActivity extends JsonObject {
   turn_id?: string | null;
   turn_status?: HarnessSessionActivity["turnStatus"] | null;
   turn_origin?: HarnessSessionActivity["turnOrigin"] | null;
+  last_turn_id?: string | null;
+  last_turn_status?: HarnessSessionActivity["lastTurnStatus"] | null;
+  last_turn_origin?: HarnessSessionActivity["lastTurnOrigin"] | null;
   started_at?: string | null;
   last_activity_at: string;
   detail: string;
@@ -3135,6 +3144,12 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     authMode: value.auth_mode,
     secretRef: value.secret_ref ?? undefined,
     defaultModel: value.default_model ?? undefined,
+    authenticationState: value.capabilities?.authentication_state ?? "unverified",
+    sessionState: value.capabilities?.session_state ?? "unverified",
+    turnState: value.capabilities?.turn_state ?? "unverified",
+    lastSuccessfulTurnAt: value.capabilities?.last_successful_turn_at ?? undefined,
+    lastTurnFailureReason: value.capabilities?.last_turn_failure_reason ?? undefined,
+    exercisedCapabilities: value.capabilities?.exercised_capabilities ?? [],
     models: value.capabilities?.models ?? [],
     modelOptions: (value.capabilities?.model_options ?? []).map((option) => ({
       model: option.model,
@@ -3167,7 +3182,9 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
       subagents: value.native_capabilities?.subagents === true,
     },
     healthy: Boolean(
-      value.capabilities?.checked_at && !value.capabilities?.detail,
+      value.capabilities?.checked_at && !value.capabilities?.detail
+      && value.capabilities?.authentication_state === "verified"
+      && value.capabilities?.last_turn_failure_reason !== "quota_exhausted",
     ),
     version:
       value.capabilities?.harness_version ??
@@ -3283,6 +3300,9 @@ function mapHarnessSessionActivity(
     turnId: value.turn_id ?? undefined,
     turnStatus: value.turn_status ?? undefined,
     turnOrigin: value.turn_origin ?? undefined,
+    lastTurnId: value.last_turn_id ?? undefined,
+    lastTurnStatus: value.last_turn_status ?? undefined,
+    lastTurnOrigin: value.last_turn_origin ?? undefined,
     startedAt: value.started_at ?? undefined,
     lastActivityAt: value.last_activity_at,
     detail: value.detail,
@@ -5121,6 +5141,13 @@ export class ApiClient {
       .then(() =>
         this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`),
       )
+      .then(mapHarnessProfile);
+  }
+
+  testHarnessTurn(id: string): Promise<HarnessProfile> {
+    return this.request<Record<string, unknown>>(
+      `harnesses/${encodeURIComponent(id)}/test-turn`, { method: "POST" },
+    ).then(() => this.request<WireHarnessProfile>(`harnesses/${encodeURIComponent(id)}`))
       .then(mapHarnessProfile);
   }
 

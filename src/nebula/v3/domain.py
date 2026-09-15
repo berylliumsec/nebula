@@ -2678,6 +2678,12 @@ class HarnessModelOptions(NebulaModel):
 
 
 class HarnessCapabilities(NebulaModel):
+    exercised_capabilities: list[str] = Field(default_factory=list, max_length=64)
+    authentication_state: Literal["verified", "failed", "unverified"] = "unverified"
+    session_state: Literal["verified", "failed", "unverified"] = "unverified"
+    turn_state: Literal["verified", "failed", "unverified"] = "unverified"
+    last_successful_turn_at: datetime | None = None
+    last_turn_failure_reason: str | None = Field(default=None, max_length=100)
     sessions: bool = True
     resume: bool = True
     steering: bool = False

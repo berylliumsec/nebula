@@ -304,6 +304,9 @@ def test_codex_probe_discovers_selectable_models():
         health = await adapter.probe(profile, CredentialStore())
 
         assert health.healthy is True
+        assert health.authentication_state == "verified"
+        assert health.session_state == "unverified"
+        assert health.turn_state == "unverified"
         assert health.capabilities.models == ["gpt-5.4", "gpt-5.3-codex"]
         assert health.capabilities.goal_monitoring is True
         options = health.capabilities.model_options[0]
@@ -336,6 +339,8 @@ def test_grok_probe_negotiates_cached_token_without_credentials():
         health = await adapter.probe(profile, CredentialStore())
 
         assert health.healthy is True
+        assert health.authentication_state == "verified"
+        assert health.turn_state == "unverified"
         assert health.harness_version == "1.0.5"
         assert health.capabilities.plans is True
         assert health.capabilities.goal_monitoring is True

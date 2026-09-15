@@ -1810,6 +1810,12 @@ export interface HarnessProfile {
   permitsSensitiveData: boolean;
   nativeCapabilities: HarnessNativeCapabilities;
   healthy?: boolean;
+  authenticationState?: "verified" | "failed" | "unverified";
+  sessionState?: "verified" | "failed" | "unverified";
+  turnState?: "verified" | "failed" | "unverified";
+  lastSuccessfulTurnAt?: string;
+  lastTurnFailureReason?: string;
+  exercisedCapabilities?: string[];
   version?: string;
   detail?: string;
   capabilities?: HarnessCapabilities;
@@ -1957,6 +1963,9 @@ export interface HarnessSessionActivity {
     | "cancelled"
     | "interrupted";
   turnOrigin?: "chat" | "mission";
+  lastTurnId?: Identifier;
+  lastTurnStatus?: HarnessSessionActivity["turnStatus"];
+  lastTurnOrigin?: "chat" | "mission";
   startedAt?: string;
   lastActivityAt: string;
   detail: string;

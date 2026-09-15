@@ -11,6 +11,19 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 
 const approvalOptions = ["risk_based", "ask", "allow", "deny"] as const;
 
+function harnessRecovery(profile: HarnessProfile): string | undefined {
+  if (profile.authenticationState === "failed") return `Sign in with ${profile.kind === "grok_acp" ? "grok" : "codex"} on the Nebula host, then use Check.`;
+  switch (profile.lastTurnFailureReason) {
+    case "quota_exhausted": return "Provider balance exhausted. Restore balance or wait for reset before another turn.";
+    case "session_not_found": return "The provider session is missing. The saved transcript remains available; start a new conversation.";
+    case "rate_limited": return "The provider limited requests. Wait for its reset, then try a new turn.";
+    case "timeout": return "The harness timed out. Check its host runtime, then retry the failed turn.";
+    case "protocol_invalid": return "The harness response was invalid. Check its installed version before another turn.";
+    case "transport_closed": return "The harness connection closed. Use Check, then retry the failed turn after it reconnects.";
+    default: return undefined;
+  }
+}
+
 export function HarnessSettings() {
   const { api, coreState, engagement, previewMode } = useWorkspace();
   const [kind, setKind] = useState<HarnessProfile["kind"]>("codex_app_server");
@@ -91,6 +104,26 @@ export function HarnessSettings() {
     }
     if (failures.length) setError(`The profile is saved. ${failures.join(". ")}. Use Check to retry.`);
     return failures.length === 0;
+  };
+
+  const testSavedHarness = async (profile: HarnessProfile) => {
+    if (!api) return;
+    setBusy(profile.id);
+    setError(undefined);
+    try {
+      await api.testHarnessTurn(profile.id);
+      setHarnesses(await api.listHarnesses());
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.harness_settings.test_turn_failed", "A diagnostic harness turn failed.", failure, "harness_settings");
+      setError(failure instanceof Error ? failure.message : "Test turn failed.");
+      try {
+        setHarnesses(await api.listHarnesses());
+      } catch (reloadFailure) {
+        void logCaughtDiagnostic("interface.harness_settings.test_turn_reload_failed", "Harness status could not be refreshed after a failed diagnostic turn.", reloadFailure, "harness_settings");
+      }
+    } finally {
+      setBusy(undefined);
+    }
   };
 
   useEffect(() => {
@@ -302,6 +335,9 @@ export function HarnessSettings() {
       {harnesses.length ? <div className="provider-grid">{harnesses.map((profile) => <article className="panel provider-card integration-card" key={profile.id}>
         <header className="integration-card-heading"><span className={`status-dot ${profile.enabled ? profile.healthy ? "healthy" : "warning" : "unavailable"}`} /><div><small>{profile.kind === "grok_acp" ? "Grok Build · ACP" : "Codex App Server"}</small><h3>{profile.name}</h3></div></header>
         <p className="integration-card-summary">{profile.detail ?? `${profile.connectionMode} · ${profile.transport}${profile.transport === "websocket" ? " · experimental" : ""}`}</p>
+        <p className="integration-card-summary" role="status">Sign-in: {profile.authenticationState ?? "unverified"} · Session: {profile.sessionState ?? "unverified"} · Model turn: {profile.turnState ?? "unverified"}{profile.lastSuccessfulTurnAt ? ` · Last success ${new Date(profile.lastSuccessfulTurnAt).toLocaleString()}` : ""}{profile.lastTurnFailureReason ? ` · ${profile.lastTurnFailureReason.replaceAll("_", " ")}` : ""}</p>
+        {!!profile.exercisedCapabilities?.length && <p className="integration-card-summary">Verified in use: {profile.exercisedCapabilities.map(item => item.replaceAll("_", " ")).join(", ")}.</p>}
+        {harnessRecovery(profile) && <p role="alert" className="integration-card-summary">{harnessRecovery(profile)}</p>}
         <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
         <details className="provider-capability-policy">
           <summary>Vendor-native capabilities</summary>
@@ -311,7 +347,7 @@ export function HarnessSettings() {
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.subagents} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { subagents: event.target.checked })} /><span><strong>Subagents</strong><small>Delegated analysis in the bounded session.</small></span></label>
         </details>
-        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
+        <footer><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void checkSavedHarness(profile).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === profile.id ? "spin" : undefined} size={14} /> Check</button><button className="button quiet" type="button" title="Runs a small real model turn and uses provider quota" disabled={busy === profile.id || !profile.enabled} onClick={() => void testSavedHarness(profile)}>Test turn</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${profile.name}`} type="button" onClick={() => openHarness(profile)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === profile.id} onClick={() => void updateHarness(profile, { enabled: !profile.enabled })}>{profile.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${profile.name}`} type="button" disabled={busy === profile.id} onClick={() => { setBusy(profile.id); void api?.deleteHarness(profile.id, profile.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_07", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings">

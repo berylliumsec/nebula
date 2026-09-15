@@ -97,6 +97,9 @@ class InertConnection(HarnessConnection):
         return decision
 
     async def run_turn(self, prompt, **kwargs):
+        if self.request.session.engagement_id == "diagnostic":
+            yield HarnessEvent(type="completed", message="OK")
+            return
         if self.runtime.scenario == "settings" and "Popup wait for stop" in prompt:
             yield HarnessEvent(
                 type="output_delta",
@@ -161,6 +164,7 @@ class InertAdapter(HarnessAdapter):
             profile_id=profile.id,
             healthy=True,
             kind=self.kind,
+            authentication_state="verified",
             capabilities=HarnessCapabilities(
                 models=["fixture", "fixture-next"]
                 if self.runtime.scenario == "settings"

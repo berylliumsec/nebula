@@ -6,8 +6,46 @@ from nebula.v3.diagnostic_guidance import (
     reason_code_for,
     resolve_incidents,
 )
+
+from nebula.v3.harnesses import HarnessProviderError
 from nebula.v3.diagnostics import FEATURE_FILES
 from nebula.v3.harnesses import HarnessTransportError
+
+
+def test_correlated_provider_errors_keep_quota_and_session_recovery_distinct() -> None:
+    quota = HarnessProviderError(
+        "Grok ACP",
+        {
+            "code": -32603,
+            "message": "Internal error",
+            "data": {"http_status": 402, "message": "usage balance exhausted"},
+        },
+    )
+    assert quota.http_status == 402
+    assert reason_code_for(quota, feature="harnesses") == "quota_exhausted"
+    assert load_catalog()["reason_families"]["quota_exhausted"]["retryable"] is False
+    missing = HarnessProviderError(
+        "Codex app-server",
+        {
+            "code": -32603,
+            "data": {"code": "FS_NOT_FOUND", "http_status": 404},
+        },
+    )
+    assert reason_code_for(missing, feature="harnesses") == "session_not_found"
+    assert (
+        reason_code_for(
+            HarnessProviderError("Grok ACP", {"data": {"http_status": 401}}),
+            feature="harnesses",
+        )
+        == "authentication_failed"
+    )
+    assert (
+        reason_code_for(
+            HarnessProviderError("Grok ACP", {"data": {"http_status": 429}}),
+            feature="harnesses",
+        )
+        == "rate_limited"
+    )
 
 
 def test_catalog_covers_every_feature_and_reason_with_verification() -> None:

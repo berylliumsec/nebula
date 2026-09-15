@@ -2,6 +2,30 @@
 export const diagnosticRemediationCatalog = {
   "schema": "nebula.diagnostic-remediation-catalog/v1",
   "reason_families": {
+    "quota_exhausted": {
+      "title": "Provider usage balance exhausted",
+      "cause": "The selected harness account cannot fund another model turn.",
+      "impact": "The turn did not complete; saved conversation content remains available.",
+      "confirmed_safe_state": "Nebula retained the conversation and did not retry the provider request.",
+      "steps": [
+        "Restore provider balance or wait for its reset.",
+        "Run Test turn only after the account is available again."
+      ],
+      "verification": "An opt-in Test turn completes using the same harness account.",
+      "retryable": false
+    },
+    "session_not_found": {
+      "title": "Provider session no longer available",
+      "cause": "The provider could not load the saved session identity.",
+      "impact": "The current turn did not complete; Nebula's saved transcript remains available.",
+      "confirmed_safe_state": "Nebula did not replace the saved conversation with a new provider session.",
+      "steps": [
+        "Reload the saved conversation.",
+        "Start a new conversation if the provider session has been removed."
+      ],
+      "verification": "A new conversation completes while the prior transcript remains readable.",
+      "retryable": false
+    },
     "transport_closed": {
       "title": "Connection closed before the operation finished",
       "cause": "The connection to a required local or remote runtime closed before Nebula received a complete response.",
