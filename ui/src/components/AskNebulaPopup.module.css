@@ -1,0 +1,27 @@
+.popup {
+  width: min(560px, calc(100vw - 24px));
+  max-height: min(720px, calc(100dvh - 32px));
+  padding: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  background: var(--surface-strong);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 24%);
+  overflow: auto;
+}
+.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.header h2 { margin: 0; font-size: 1rem; }
+.header small, .status { color: var(--text-secondary); font-size: .78rem; }
+.popup button { min-width: 44px; min-height: 44px; }
+.context { margin: 14px 0; color: var(--text-secondary); font-size: .8rem; }
+.context summary { cursor: pointer; overflow-wrap: anywhere; padding: 8px 0; }
+.context pre { max-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.transcript { max-height: min(380px, 45dvh); overflow: auto; overflow-wrap: anywhere; font-size: .9rem; }
+.transcript pre { overflow: auto; max-width: 100%; }
+.transcript img { max-width: 100%; }
+.question { color: var(--text-secondary); padding-top: 12px; }
+.answer { line-height: 1.6; }
+.composer { display: flex; align-items: flex-end; gap: 8px; border-top: 1px solid var(--border-subtle); padding-top: 12px; }
+.composer textarea { width: 100%; min-width: 0; resize: vertical; max-height: 160px; background: transparent; border: 0; color: inherit; font: inherit; padding: 10px 4px; }
+.error { color: var(--text-primary); font-size: .85rem; padding: 8px 0; }
+.popup :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 520px) { .popup { padding: 16px; } .composer textarea { font-size: 16px; } }

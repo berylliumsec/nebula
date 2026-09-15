@@ -95,6 +95,9 @@ def project_search_document(
             ),
         )
     if kind == "chat_sessions":
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("temporary_assistant") is True:
+            return None
         return SearchProjection(
             ResourceKind.CONVERSATION,
             _text(payload.get("title"), 500) or "Conversation",

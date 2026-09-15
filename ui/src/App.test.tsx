@@ -503,7 +503,7 @@ describe("Nebula workspace", () => {
 
     const heading = await screen.findByRole("heading", { name: "Selection review" });
     selectElementText(heading);
-    await user.click(await screen.findByRole("button", { name: "Ask Nebula" }));
+    await user.click(await screen.findByRole("button", { name: "Add context to chat" }));
 
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
     const attachment = screen.getByRole("region", { name: "Selected context pack" });

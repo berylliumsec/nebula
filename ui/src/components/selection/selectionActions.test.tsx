@@ -266,3 +266,17 @@ describe("selection actions", () => {
     expect(present).toHaveBeenCalledTimes(2);
   });
 });
+
+it("keeps a new selection usable while the previous context action exits", () => {
+  const onAsk = vi.fn(); const onAddContext = vi.fn();
+  render(<SelectionActionsProvider onAsk={onAsk} onAddContext={onAddContext}><p>first selection</p><p>next selection</p></SelectionActionsProvider>);
+  const first = screen.getByText("first selection");
+  selectNodeText(first.firstChild as Text); fireEvent.pointerUp(first);
+  fireEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
+  expect(onAddContext).toHaveBeenCalledWith(expect.objectContaining({ text: "first selection" }));
+  const next = screen.getByText("next selection");
+  selectNodeText(next.firstChild as Text); fireEvent.pointerUp(next);
+  expect(screen.getByRole("toolbar").className).not.toContain("exiting");
+  fireEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+  expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "next selection" }));
+});

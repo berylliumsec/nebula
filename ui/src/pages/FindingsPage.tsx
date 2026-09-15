@@ -277,13 +277,13 @@ export function FindingsPage() {
   };
 
   const askNebulaAboutFinding = async () => {
-    if (!selected || !await allowDiscardFinding()) return;
-    edit.discard();
+    if (!selected) return;
+    const context = editDraft ?? selected;
     requestNebulaDraft({
-      text: `${selected.title}\n\n${selected.description || "No description recorded."}\n\nSeverity: ${selected.severity}\nStatus: ${selected.status.replaceAll("_", " ")}`,
+      text: `${context.title}\n\n${context.description || "No description recorded."}\n\nSeverity: ${context.severity}\nStatus: ${context.status.replaceAll("_", " ")}`,
       sourceKind: "finding",
       sourceId: selected.id,
-      sourceLabel: selected.title,
+      sourceLabel: context.title,
     });
   };
 

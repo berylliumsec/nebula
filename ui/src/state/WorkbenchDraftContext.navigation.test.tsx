@@ -29,16 +29,16 @@ function LateNavigation() {
 }
 
 function AskFromAssistant({ view = "chat" }: { view?: "chat" | "browser" }) {
-  const { requestNebulaDraft, clearAssistantDrafts } = useWorkbenchDrafts();
-  return <><button type="button" onClick={() => requestNebulaDraft({
+  const { requestChatContext, clearAssistantDrafts } = useWorkbenchDrafts();
+  return <><button type="button" onClick={() => requestChatContext({
     text: "Keep this conversation visible",
     sourceKind: "assistant_message",
     sourceId: "message-1",
     sourceLabel: "Assistant response",
-  }, view)}>Ask Nebula</button><button onClick={clearAssistantDrafts}>Clear context</button></>;
+  }, view)}>Add context to chat</button><button onClick={clearAssistantDrafts}>Clear context</button></>;
 }
 
-describe("Ask Nebula conversation navigation", () => {
+describe("Add context to chat conversation navigation", () => {
   beforeEach(() => {
     state.createHandoff.mockReset();
     state.cancelHandoff.mockClear();
@@ -49,7 +49,7 @@ describe("Ask Nebula conversation navigation", () => {
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
       <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
     </MemoryRouter>);
-    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-1"));
     await userEvent.click(screen.getByRole("button", { name: "Clear context" }));
     expect(screen.getByTestId("location")).toHaveTextContent("?view=browser&session=conversation-1");
@@ -63,7 +63,7 @@ describe("Ask Nebula conversation navigation", () => {
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
       <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
     </MemoryRouter>);
-    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
     await userEvent.click(screen.getByRole("button", { name: "Clear context" }));
     await act(async () => resolve({ id: "late-handoff", revision: 2 }));
     expect(screen.getByTestId("location")).not.toHaveTextContent("handoff=");
@@ -74,7 +74,7 @@ describe("Ask Nebula conversation navigation", () => {
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
       <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /><LateNavigation /></WorkbenchDraftProvider>
     </MemoryRouter>);
-    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-1"));
     await userEvent.click(screen.getByRole("button", { name: "Clear context" }));
     await userEvent.click(screen.getByRole("button", { name: "Replay old navigation" }));
@@ -88,7 +88,7 @@ describe("Ask Nebula conversation navigation", () => {
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&session=conversation-1"]}>
       <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /><LateNavigation /></WorkbenchDraftProvider>
     </MemoryRouter>);
-    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-1"));
     await userEvent.click(screen.getByRole("button", { name: "Clear and replay together" }));
     expect(screen.getByTestId("location")).not.toHaveTextContent("handoff=");
@@ -105,7 +105,7 @@ describe("Ask Nebula conversation navigation", () => {
       </MemoryRouter>,
     );
 
-    await user.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await user.click(screen.getByRole("button", { name: "Add context to chat" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-1"));
     const destination = new URL(screen.getByTestId("location").textContent ?? "", "http://nebula.test");
     expect(destination.pathname).toBe("/projects/project-1/workbench");
@@ -121,7 +121,7 @@ describe("Ask Nebula conversation navigation", () => {
     render(<MemoryRouter initialEntries={["/projects/project-1/workbench?view=browser&browserEngine=native&session=conversation-1"]}>
       <WorkbenchDraftProvider><LocationProbe /><AskFromAssistant view="browser" /></WorkbenchDraftProvider>
     </MemoryRouter>);
-    await userEvent.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add context to chat" }));
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("handoff=handoff-browser"));
     const destination = new URL(screen.getByTestId("location").textContent ?? "", "http://nebula.test");
     expect(destination.searchParams.get("view")).toBe("browser");

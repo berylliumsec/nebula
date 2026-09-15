@@ -10,6 +10,8 @@ import {
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import type { ResourceKind, ResourceRef } from "../api/types";
+import { AskNebulaPopup, type AssistantSnapshot } from "../components/AskNebulaPopup";
+import { defaultModelRuntime } from "../api/runtimeDefaults";
 import { desktopDeviceId } from "../api/runtime";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { projectSurface } from "../resourceRoutes";
@@ -44,6 +46,8 @@ interface WorkbenchDraftContextValue {
   executionDraft?: SelectionActionDraft;
   findingDraft?: FindingDraftRequest;
   activeHandoffIds: string[];
+  registerAssistantSnapshot(snapshot: AssistantSnapshot): void;
+  requestChatContext(request: NebulaDraftRequest, view?: "chat" | "browser"): void;
   requestNebulaDraft(request: NebulaDraftRequest, view?: "chat" | "browser"): void;
   requestNoteDraft(request: NebulaDraftRequest): void;
   requestFindingDraft(request: FindingDraftRequest): void;
@@ -206,7 +210,10 @@ function sourceForRoute(pathname: string, element: Element | null): SelectionSou
 }
 
 export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
-  const { api, engagement } = useWorkspace();
+  const { api, engagement, providers = [], harnesses = [] } = useWorkspace();
+  const assistantSnapshot = useRef<AssistantSnapshot | undefined>(undefined);
+  const registerAssistantSnapshot = useCallback((snapshot: AssistantSnapshot) => { assistantSnapshot.current = snapshot; }, []);
+  const [popup, setPopup] = useState<{ draft: SelectionActionDraft; snapshot?: AssistantSnapshot }>();
   const location = useLocation();
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -289,16 +296,33 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     }
   }, [api, engagement, navigate, cancelSelectionHandoff]);
 
-  const requestNebulaDraft = useCallback((request: NebulaDraftRequest, view: "chat" | "browser" = "chat") => {
+  const requestChatContext = useCallback((request: NebulaDraftRequest, view: "chat" | "browser" = "chat") => {
     const next = toSelectionDraft(request);
     if (!next) return;
     const currentSessionId = engagement
       ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+        ?? (assistantSnapshot.current?.engagementId === engagement.id ? assistantSnapshot.current.sessionId : undefined)
       : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, next));
     if (view !== "browser") navigate(engagement ? assistantHandoffPath(engagement.id, currentSessionId, undefined, view) : `/?view=${view}`);
     void persistSelectionHandoff(next, "ask_nebula", view, currentSessionId);
   }, [engagement, location.pathname, location.search, navigate, persistSelectionHandoff]);
+
+  const openPopup = useCallback((draft: SelectionActionDraft) => {
+    const current = assistantSnapshot.current;
+    const runtime = defaultModelRuntime(providers, harnesses);
+    const snapshot = current?.engagementId === engagement?.id ? current : engagement && runtime ? {
+      engagementId: engagement.id, backend: runtime.kind, model: runtime.model,
+      providerId: runtime.kind === "provider" ? runtime.id : undefined,
+      harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
+    } : undefined;
+    setPopup({ draft, snapshot: snapshot ? { ...snapshot } : undefined });
+  }, [engagement, providers, harnesses]);
+  const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
+    const draft = toSelectionDraft(request);
+    if (draft) openPopup(draft);
+  }, [openPopup]);
+  useLayoutEffect(() => { setPopup(undefined); }, [location.pathname, engagement?.id]);
 
   const requestNoteDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
@@ -333,6 +357,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const openAssistantSelection = useCallback((draft: SelectionActionDraft) => {
     const currentSessionId = engagement
       ? assistantHandoffSessionId(engagement.id, location.pathname, location.search)
+        ?? (assistantSnapshot.current?.engagementId === engagement.id ? assistantSnapshot.current.sessionId : undefined)
       : undefined;
     setAssistantContext((current) => mergeAssistantDraft(current.drafts, draft));
     const currentView = new URLSearchParams(location.search).get("view");
@@ -393,6 +418,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     findingDraft,
     activeHandoffIds,
     requestNebulaDraft,
+    requestChatContext,
+    registerAssistantSnapshot,
     requestNoteDraft,
     requestFindingDraft,
     removeAssistantDraft,
@@ -415,18 +442,22 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     noteDraft,
     removeAssistantDraft,
     requestNebulaDraft,
+    requestChatContext,
+    registerAssistantSnapshot,
     requestNoteDraft,
     requestFindingDraft,
   ]);
 
   return <WorkbenchDraftContext.Provider value={value}>
     <SelectionActionsProvider
-      onAsk={openAssistantSelection}
+      onAsk={openPopup}
+      onAddContext={openAssistantSelection}
       onAddNote={openNoteSelection}
       onRun={openRunSelection}
       resolveSource={resolveSource}
     >
       {children}
+      {popup && <AskNebulaPopup api={api} snapshot={popup.snapshot} context={popup.draft} onClose={() => setPopup(undefined)} />}
     </SelectionActionsProvider>
   </WorkbenchDraftContext.Provider>;
 }

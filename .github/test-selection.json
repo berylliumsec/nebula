@@ -1,22 +1,29 @@
 {
-  "change_digest": "8506a3fe51f57e6dae56ef5c6a377ac72d1aa4e5da019efd0443548eed668845",
-  "reviewed_by": "Codex Assistant browser restart recovery review",
-  "reason": "Core must report lost live tabs once without pausing control again on reconnect, while the Assistant viewer clears the delivered warning on reconnect or successful resume. The selected Core lost-tab case uses durable BrowserSession state; the component cases cover warning lifecycle and failure; the bounded Assistant-viewer matrix covers visible recovery, responsive states, and adjacent approval/upload controls.",
-  "exclusions": "No full suites. No native Rust change. Unrelated chat/provider, terminal, native browser and release packaging tests excluded. The catalogued Assistant-viewer area includes its adjacent upload case. The real managed-Chromium restart journey and physical-device validation are unavailable from selected mocked Playwright coverage; production build and local Core staging will be reviewed separately.",
+  "change_digest": "571b4332178e67f042b657088b520dac200c73dbf5e0bc3ead948873a1eeafa0",
+  "reviewed_by": "Codex popup and temporary conversation review",
+  "reason": "Reviewed shared API, store, draft provider and browser configuration changes: selected temporary branch isolation, search, deletion/expiry, popup lifecycle and context handoff journeys only. Production browser matrix uses one bounded popup journey. Two real-Core production LAN journeys verify snapshot inheritance, follow-ups, source invariance, close/delete and reload with an inert local model server and harness adapter. The provider journey also exercises response failure/retry and closing by page reload; the popup component verifies cancellation targets only its own turn. A new selection cancels the previous menu exit animation so consecutive context/Ask actions remain usable.",
+  "exclusions": "No full suites. Native runtime code unchanged. Existing main-chat, notes and editor runtime behavior excluded except the context entry points. Physical devices and live vendor inference unavailable; browser acceptance uses real Core with inert adapters. Finding draft preservation is a direct control-flow change checked by production compilation.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 18,
+    "python": 11,
+    "frontend": 24,
     "native": 0,
-    "playwright": 24
+    "playwright": 10
   },
   "python": [
-    "tests/v3/test_browser_companion.py::test_background_tab_poll_reports_lost_state_once_without_repausing_on_reconnect"
+    "tests/v3/test_temporary_chat.py",
+    "tests/v3/test_chat_workspace.py"
   ],
   "frontend": [
-    "ui/src/components/ManagedAssistantBrowser.test.tsx"
+    "ui/src/components/AskNebulaPopup.test.tsx",
+    "ui/src/components/selection/selectionActions.test.tsx",
+    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:assistant-viewer"
+    "area:ask-nebula-popup",
+    "area:ask-nebula-real-core"
+  ],
+  "python_versions": [
+    "3.11"
   ]
 }

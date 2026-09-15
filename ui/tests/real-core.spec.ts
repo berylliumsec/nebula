@@ -516,7 +516,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
         clientY: bounds.top + bounds.height / 2,
       }));
     });
-    await page.getByRole("button", { name: "Ask Nebula" }).click();
+    await page.getByRole("button", { name: "Add context to chat" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(completion.session_id);
     await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).not.toBeNull();
     await expect(durableAnswer).toBeVisible();
@@ -3140,4 +3140,129 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
     }
     await info.attach("native-command-evidence", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), peer: "inert native protocol peer; real Core, production adapters, persistence and UI"}), contentType: "application/json"});
   } finally {await core.stop();}
+});
+
+test("assistant upgrade popup forks history and discards on real Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 20 });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json();
+    const projectId = projects[0].id;
+    const providerResponse = await api.post("providers", { data: {
+      name: "Popup acceptance", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json();
+    const sourceResponse = await api.post("chat/completions", { data: {
+      provider_id: provider.id, engagement_id: projectId, model: "security-model", messages: [{ role: "user", content: "Main conversation stays here" }], include_knowledge: false,
+    } });
+    expect(sourceResponse.ok(), await sourceResponse.text()).toBe(true);
+    const sourceId = (await sourceResponse.json()).session_id;
+    const originalHistory = await (await api.get(`chat/sessions/${sourceId}/messages`)).json();
+    const pairing = await (await api.post(`http://127.0.0.1:${new URL(core.origin).port}/api/v1/auth/pairings`, { data: { name: "Popup acceptance" } })).json();
+    await page.goto(`${core.origin}/?view=chat&session=${sourceId}#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByRole("button", { name: "Pair device", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready", exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant", exact: true });
+    await expect(page.getByText("Main conversation stays here", { exact: true }).first()).toBeVisible();
+    await composer.fill("Keep my main draft");
+    const selectSource = async () => {
+      await page.getByText("Main conversation stays here", { exact: true }).first().evaluate(element => {
+        const range = document.createRange(); range.selectNodeContents(element);
+        const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+        element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+      });
+    };
+    await selectSource();
+    const opened = page.waitForResponse(response => response.url().endsWith("/chat/temporary-sessions") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
+    const branchResponse = await opened;
+    expect(branchResponse.ok(), await branchResponse.text()).toBe(true);
+    const branch = await branchResponse.json();
+    const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
+    await popup.getByRole("textbox").fill("A side question about that history");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toBeVisible();
+    await popup.getByRole("textbox").fill("A private follow-up");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toHaveCount(2);
+    expect(modelStub.requests.some(body => JSON.stringify(body.messages).includes("Main conversation stays here") && JSON.stringify(body.messages).includes("A side question about that history") && JSON.stringify(body.messages).includes("A private follow-up"))).toBe(true);
+    modelStub.fail = true;
+    await popup.getByRole("textbox").fill("Retry this side question");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.getByRole("alert")).toBeVisible();
+    modelStub.fail = false;
+    await expect(popup.getByRole("textbox")).toHaveValue("Retry this side question");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toHaveCount(3);
+    const listed = await (await api.get("chat-sessions", { params: { engagement_id: projectId } })).json();
+    expect(listed.map((row: { id: string }) => row.id)).toEqual([sourceId]);
+    expect(await (await api.get(`chat/sessions/${sourceId}/messages`)).json()).toEqual(originalHistory);
+    expect((await (await api.get(`chat/projects/${projectId}/search?q=private`)).json()).items).toEqual([]);
+    await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
+    await expect.poll(async () => (await api.get(`chat-sessions/${branch.id}`)).status()).toBe(404);
+    await expect(composer).toHaveValue("Keep my main draft");
+    expect(new URL(page.url()).searchParams.get("session")).toBe(sourceId);
+    await selectSource();
+    await page.getByRole("button", { name: "Add context to chat", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
+    await expect(composer).toHaveValue("Keep my main draft");
+    expect(new URL(page.url()).searchParams.get("session")).toBe(sourceId);
+    await selectSource();
+    const reopening = page.waitForResponse(response => response.url().endsWith("/chat/temporary-sessions") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
+    const reopened = await (await reopening).json();
+    await expect(page.getByRole("dialog", { name: "Ask Nebula", exact: true })).toBeVisible();
+    await page.reload();
+    await expect.poll(async () => (await api.get(`chat-sessions/${reopened.id}`)).status()).toBe(404);
+    await expect(page.getByRole("dialog", { name: "Ask Nebula", exact: true })).toHaveCount(0);
+    expect(await (await api.get(`chat/sessions/${sourceId}/messages`)).json()).toEqual(originalHistory);
+    await testInfo.attach("popup-origin", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), runtime: "real Core with local model stub", branchDeleted: branch.id }), contentType: "application/json" });
+  } finally {
+    await api.dispose(); await stopLocalModelStub(modelStub); await stopRealCore(core);
+  }
+});
+
+reliabilityTest("assistant upgrade popup isolates a harness session on real Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, { data: { name: "Harness popup acceptance" } })).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByRole("button", { name: "Pair device", exact: true }).click();
+    await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("textbox", { name: "Message the analyst assistant", exact: true }).fill("Keep this harness conversation");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", { timeout: 20_000 });
+    const sourceId = new URL(page.url()).searchParams.get("session")!;
+    const source = await (await core.api.get(`chat-sessions/${sourceId}`)).json();
+    const history = await (await core.api.get(`chat/sessions/${sourceId}/messages`)).json();
+    await page.getByText("Keep this harness conversation", { exact: true }).first().evaluate(element => {
+      const range = document.createRange(); range.selectNodeContents(element);
+      const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+      element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    });
+    const opening = page.waitForResponse(response => response.url().endsWith("/chat/temporary-sessions") && response.request().method() === "POST");
+    await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
+    const branchResponse = await opening; expect(branchResponse.ok(), await branchResponse.text()).toBe(true);
+    const branch = await branchResponse.json();
+    expect(branch.harness_session_id).not.toBe(source.harness_session_id);
+    const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
+    await popup.getByRole("textbox").fill("Explain this in the popup");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup).toContainText("SETTINGS fixture low", { timeout: 20_000 });
+    await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
+    await expect.poll(async () => (await core.api.get(`chat-sessions/${branch.id}`)).status()).toBe(404);
+    expect((await core.api.get(`harness-sessions/${source.harness_session_id}`)).ok()).toBe(true);
+    expect(await (await core.api.get(`chat/sessions/${sourceId}/messages`)).json()).toEqual(history);
+    expect(new URL(page.url()).searchParams.get("session")).toBe(sourceId);
+    await testInfo.attach("harness-popup-origin", { body: JSON.stringify({ origin: core.origin, build: "production", runtime: "real Core with inert harness adapter", source: sourceId, branchDeleted: branch.id }), contentType: "application/json" });
+  } finally { await core.stop(); }
 });
