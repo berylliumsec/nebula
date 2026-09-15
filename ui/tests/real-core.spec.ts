@@ -3187,13 +3187,21 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
     await popup.getByRole("textbox").fill("A side question about that history");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
     await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toBeVisible();
-    // Client-side navigation keeps the same temporary branch and transcript alive.
+    await popup.getByRole("textbox").fill("An unsent follow-up");
+    await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
+    const launcher = page.getByRole("button", { name: /Show Ask Nebula, Response ready/ });
+    await expect(launcher).toBeVisible();
+    expect((await api.get(`chat-sessions/${branch.id}`)).ok()).toBe(true);
+    // Hide and client-side navigation keep the same temporary branch and draft alive.
     await page.evaluate(() => {
       history.pushState({}, "", "/settings");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
     await expect(page).toHaveURL(/\/settings$/);
-    await expect(popup).toBeVisible();
+    await expect(launcher).toBeVisible();
+    await launcher.click();
+    await expect(popup.getByRole("textbox")).toHaveValue("An unsent follow-up");
+    await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toBeVisible();
     expect((await api.get(`chat-sessions/${branch.id}`)).ok()).toBe(true);
     await popup.getByRole("textbox").fill("A private follow-up");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
@@ -3227,6 +3235,8 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
     await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
     const reopened = await (await reopening).json();
     await expect(page.getByRole("dialog", { name: "Ask Nebula", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Hide Ask Nebula" }).click();
+    await expect(page.getByRole("button", { name: /Show Ask Nebula/ })).toBeVisible();
     await page.reload();
     await expect.poll(async () => (await api.get(`chat-sessions/${reopened.id}`)).status()).toBe(404);
     await expect(page.getByRole("dialog", { name: "Ask Nebula", exact: true })).toHaveCount(0);
@@ -3270,6 +3280,11 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
     await popup.getByRole("textbox").fill("Popup wait for stop");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.getByRole("status")).toContainText("Checking the selected context before answering.");
+    await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
+    const launcher = page.getByRole("button", { name: /Show Ask Nebula, Responding/ });
+    await expect(launcher).toBeVisible();
+    await launcher.click();
     await expect(popup.getByRole("status")).toContainText("Checking the selected context before answering.");
     const pending = await (await core.api.get(`chat/sessions/${branch.id}/pending-turn`)).json();
     expect(pending.harness_turn_id).toBeTruthy();

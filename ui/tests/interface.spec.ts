@@ -6709,7 +6709,7 @@ reloadTest("stabilization terminal long output keeps the prompt and typed input 
   await expect(cursor).toBeInViewport({ratio: 0.98});
 });
 
-test("assistant popup asks privately and discards without navigating", async ({ page }, testInfo) => {
+test("assistant popup hides, restores and discards without changing the main conversation", async ({ page }, testInfo) => {
   await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [{
     ...entity, id: "provider-1", name: "Popup model", provider_type: "vllm", endpoint: "http://localhost:8001/v1", enabled: true, is_local: true,
     model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true }, metadata: { default_model: "model-1" },
@@ -6741,6 +6741,35 @@ test("assistant popup asks privately and discards without navigating", async ({ 
   await popup.getByRole("button", { name: "Ask question" }).click();
   await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
   expect(requests[0].session_id).toBe("popup-private");
+  await popup.getByRole("textbox").fill("Keep this follow-up unsent");
+  await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
+  await expect(popup).toHaveCount(0);
+  const launcher = page.getByRole("button", { name: /Show Ask Nebula, Response ready/ });
+  await expect(launcher).toBeVisible();
+  const launcherBounds = await launcher.boundingBox();
+  expect(launcherBounds!.x).toBeGreaterThanOrEqual(0);
+  expect(launcherBounds!.x + launcherBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect((await new AxeBuilder({ page }).include('[aria-label^="Show Ask Nebula"]').analyze()).violations).toEqual([]);
+  await page.evaluate(() => { history.pushState({}, "", "/settings"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(launcher).toBeVisible();
+  await page.evaluate(() => { history.pushState({}, "", "/?view=chat"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  if ((page.viewportSize()?.width ?? 1000) <= 760) {
+    const navigation = page.getByRole("navigation", { name: "Mobile operator navigation" });
+    await expect(navigation).toBeVisible();
+    const navBounds = await navigation.boundingBox();
+    const pillBounds = await launcher.boundingBox();
+    expect(pillBounds!.y + pillBounds!.height).toBeLessThanOrEqual(navBounds!.y - 8);
+    await navigation.getByRole("button", { name: "Activity", exact: true }).click();
+    await expect(page).toHaveURL(/view=activity/);
+    await expect(launcher).toBeVisible();
+    await navigation.getByRole("button", { name: "Chat", exact: true }).click();
+  }
+  await page.evaluate(() => { history.pushState({}, "", "/project"); window.dispatchEvent(new PopStateEvent("popstate")); });
+  await launcher.click();
+  await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
+  await expect(popup.getByRole("textbox")).toHaveValue("Keep this follow-up unsent");
+  expect(requests).toHaveLength(1);
   const bounds = await popup.boundingBox(); const viewport = page.viewportSize()!;
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
   expect(bounds!.width).toBeLessThanOrEqual(560);
