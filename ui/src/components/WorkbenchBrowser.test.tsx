@@ -269,6 +269,45 @@ describe("WorkbenchBrowser", () => {
     expect(screen.getByText("Project: all targets")).toBeVisible();
   });
 
+  it("ignores a saved missing-scope block from an older Project revision", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    workspace.sessions[0].proxyEnabled = true;
+    workspace.traffic = [{
+      id: "old-block", sessionId: "browser-session-1", tabId: "tab-durable",
+      startedAt: "2026-09-12T13:21:24Z", scopePolicyRevision: 2,
+      blocked: true, error: "no compiled Project scope is active for this browser session",
+    } as never];
+    let resolveWorkspace!: (value: typeof workspace) => void;
+    vi.mocked(api.getSecurityBrowserWorkspace).mockImplementation(() => new Promise(resolve => { resolveWorkspace = resolve; }));
+    const currentScope = {...scope, revision: 3, allowAllTargets: true};
+    renderBrowser(undefined, undefined, currentScope, undefined, api);
+    await act(async () => { resolveWorkspace(workspace); });
+    expect(screen.queryByText("Browser scope unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Navigation blocked: browser scope unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("clears a live missing-scope warning after native scope is installed on reload", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    workspace.sessions[0].proxyEnabled = true;
+    vi.mocked(api.getSecurityBrowserWorkspace).mockResolvedValue(workspace);
+    renderBrowser(undefined, undefined, {...scope, allowAllTargets: true}, undefined, api);
+    await openPage();
+    const tabId = browserMocks.create.mock.calls[0][0] as string;
+    await act(async () => eventMocks.handlers.get("nebula-browser-traffic")?.({payload: {
+      sessionId: "browser-session-1", tabId, url: "https://docs.example.com/guide", method: "GET", protocol: "http/1.1",
+      requestHeaders: {}, responseHeaders: {}, blocked: true, error: "no compiled Project scope is active for this browser session",
+    }}));
+    expect(screen.getByText(/Navigation blocked: browser scope unavailable/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", {name: "Reload"}));
+    await waitFor(() => expect(browserMocks.applyProxyScope).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(/Navigation blocked: browser scope unavailable/)).not.toBeInTheDocument());
+  });
+
   it("hides the native browser while a settings lens is open and restores the active tab", async () => {
     runtimeMocks.isTauriRuntime.mockReturnValue(true);
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {

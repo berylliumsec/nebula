@@ -1,20 +1,21 @@
 {
-  "change_digest": "e24518758f812dcb6e96df7a0771029b0cbd7098d0ba413a5451e7be7e1ff349",
-  "reviewed_by": "Codex conversation scroll regression review",
-  "reason": "Conversation load and deferred final-message layout must retain bottom-follow intent while intentional reading positions survive cached switching and authoritative refresh. Three geometry unit cases and the existing focused switch journey with late-layout regression cover the changed UI boundary; real Core checks durable selection and reload. WebKit exposed rows mounting after observer setup; observe row replacement as well as row size. Coverage selection remains the same focused journey.",
-  "exclusions": "No full suites. No Python/native changes. Unrelated provider execution, terminal, missions and packaging excluded. Three unit cases, eight mocked browser cases at 60 seconds each, one real-Core case at 60 seconds, and production build. Physical devices unavailable.",
+  "change_digest": "30f0bbcf4a36fdbf11421b92b499117deeedb4eae103e733bbe7e0c831fca6ce",
+  "reviewed_by": "Codex native browser stale scope review",
+  "reason": "The Native browser status must ignore saved proxy blocks from an older Project scope revision and clear a live block after native scope installation succeeds. Focused browser component cases cover saved and live signals, reload ordering, and failure; the catalogued desktop native-scope case covers the visible warning and recovery control.",
+  "exclusions": "No full suites. No Python or native Rust changes. Mobile browser projects do not run the Tauri Native browser and are outside this journey. Provider, chat, terminal, and unrelated browser automation tests excluded. Real Mac webview acceptance is unavailable from the Linux workspace; production build and read-only Core revision evidence are checked locally.",
   "expected_tests": {
     "python": 0,
-    "frontend": 3,
+    "frontend": 24,
     "native": 0,
-    "playwright": 9
+    "playwright": 1
   },
   "python": [],
   "frontend": [
-    "ui/src/pages/chatScrollPosition.test.ts"
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/components/browserScopeStatus.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:conversation-switch-performance"
+    "area:native-scope-status"
   ]
 }

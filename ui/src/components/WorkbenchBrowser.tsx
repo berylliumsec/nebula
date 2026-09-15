@@ -270,7 +270,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const scopeDecision = scopeLoading
     ? { state: "unknown" as const, label: "Checking scope", detail: "Loading the durable Project scope." }
     : evaluateBrowserScope(desktop ? activeTab?.url : deviceAddress?.url, scope);
-  const savedScopeSignal = workspace?.traffic.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)).find(item => item.sessionId === activeSession?.id && proxyScopeSignal(item) !== undefined);
+  // A saved proxy block describes the policy that was active when it happened.
+  // Do not turn traffic from an older Project revision into a current warning.
+  const savedScopeSignal = scope && workspace?.traffic.slice().sort((a, b) => b.startedAt.localeCompare(a.startedAt)).find(item =>
+    item.sessionId === activeSession?.id && item.scopePolicyRevision === scope.revision && proxyScopeSignal(item) !== undefined);
   const nativeScopeError = activeSession && Object.hasOwn(nativeScopeSignals, activeSession.id)
     ? nativeScopeSignals[activeSession.id]
     : savedScopeSignal ? proxyScopeSignal(savedScopeSignal) : undefined;
@@ -421,7 +424,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
       } : current);
       if (tab.created) {
-        if (persistedSession.proxyEnabled) await workbenchBrowser.applyProxyScope(projectId, persistedSession.id, currentScope);
+        if (persistedSession.proxyEnabled) {
+          await workbenchBrowser.applyProxyScope(projectId, persistedSession.id, currentScope);
+          setNativeScopeSignals(current => ({...current, [persistedSession.id]: null}));
+        }
         await workbenchBrowser.navigate(id, projectId, url);
       }
       else {
@@ -443,6 +449,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           persistedSession.interceptionEnabled,
           currentScope,
         );
+        if (persistedSession.proxyEnabled) setNativeScopeSignals(current => ({...current, [persistedSession.id]: null}));
         updateTab(id, { created: true });
       }
       return true;
@@ -1092,6 +1099,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         const currentScope = await api.getEngagementScope(projectId);
         onScopeUpdated?.(currentScope);
         await workbenchBrowser.applyProxyScope(projectId, activeSession.id, currentScope);
+        setNativeScopeSignals(current => ({...current, [activeSession.id]: null}));
       }
       await workbenchBrowser.control(activeTab.id, projectId, action);
     }
