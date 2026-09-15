@@ -2622,3 +2622,45 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .terminal-companion-page .terminal-tab-panel > .compact-terminal-live { flex: 1 1 auto; height: auto; min-height: 0; }
 /* FitAddon subtracts padding on .xterm, not its parent. Host padding otherwise
    overestimates the PTY rows and clips the final prompt and scrollbar edge. */
+
+/* Primary destinations read as navigation; conversation tools stay in context. */
+.top-bar-page-actions:has(.workbench-view-tabs) { justify-content: flex-start; }
+.compact-workbench-toolbar .workbench-view-tabs { gap: 4px; flex-wrap: nowrap; }
+.compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab { width: auto; gap: 7px; padding-inline: 12px; white-space: nowrap; }
+.compact-workbench-toolbar .workbench-view-tabs > button { position: relative; flex: 0 0 auto; border: 0; }
+.compact-workbench-toolbar .workbench-view-tabs > button[aria-selected="true"] { background: var(--blue-muted); color: var(--blue-bright); box-shadow: none; }
+.compact-workbench-toolbar .workbench-view-tabs > .workbench-resource-start { margin-left: 17px; }
+.workbench-view-tabs > .workbench-resource-start::before { content: ""; position: absolute; left: -11px; top: 12px; height: 20px; width: 1px; background: var(--border-soft); }
+.conversation-toolbar { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; min-width: 0; min-height: 52px; padding: 0 8px 8px; }
+.conversation-toolbar-title { min-width: 0; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: var(--weight-medium); color: var(--muted-strong); }
+.conversation-toolbar .session-toolbar-actions { margin-left: auto; }
+.conversation-toolbar .icon-button { width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 0; }
+.conversation-toolbar svg { width: 18px; height: 18px; }
+@media (min-width: 761px) and (max-width: 1250px) {
+  .compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab { width: 44px; padding: 0; }
+  .compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab > .tab-label { display: none; }
+  .top-bar:has(.workbench-view-tabs) .top-bar-leading { min-width: 110px; }
+}
+@media (max-width: 760px) {
+  .conversation-toolbar { gap: 4px; padding: 0 0 4px; min-height: 44px; }
+  .conversation-toolbar-title { font-size: 12px; }
+  .conversation-toolbar .session-conversations-toggle { display: none; }
+  .sessions-page:not(.full-screen) .conversation-toolbar .workbench-full-screen-toggle { display: none; }
+  .sessions-page.full-screen .conversation-toolbar .session-toolbar-actions { flex: 0 0 auto; }
+  .sessions-page.full-screen .conversation-toolbar .session-toolbar-actions > * { display: inline-flex; }
+}
+
+/* Fit the available shell width, including an expanded project sidebar. */
+.top-bar { container: workbench-header / inline-size; }
+@container workbench-header (max-width: 1100px) {
+  .compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab { width: 44px; padding: 0; }
+  .compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab > .tab-label { display: none; }
+}
+@container workbench-header (max-width: 1280px) {
+  .top-bar-leading { min-width: 110px; }
+  .command-trigger > span, .command-trigger > kbd, .top-bar-public-ip > code, .top-bar-public-ip > svg { display: none; }
+  .command-trigger, .top-bar-public-ip { width: 44px; min-width: 44px; padding: 0; justify-content: center; }
+}
+@media (max-width: 760px) {
+  .top-bar-leading { min-width: 0; }
+}
