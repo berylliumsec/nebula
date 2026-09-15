@@ -81,3 +81,24 @@ conversation label; final sizing and that label await design approval.
 
 Product rule: an auxiliary question window must not acquire modal ownership of
 the workspace. Page navigation and focus changes are not dismissal actions.
+
+### Reported no-response / Stop failure
+
+The live temporary chat used a harness. Its stored events included startup,
+reasoning and commentary while the popup only showed Thinking. The popup
+tracked only `started.turnId`, so harness events with `harnessTurnId` left Stop
+without a target. The saved live turn was eventually cancelled by popup discard.
+
+The revision tracks harness identity across status/activity/start events, uses
+the harness Stop endpoint, and falls back to the temporary session's pending
+turn when the first event is missing. Cancellation failure remains retryable;
+an unconfirmed Stop becomes an actionable error after ten seconds. It shows
+compact progress/commentary and reconnect status while retaining the question.
+
+Final validation: 15 component/navigation tests, eight production LAN browser
+checks, and two real-Core journeys passed (25 selected tests). The harness
+journey now stalls before an answer, verifies visible commentary, stops the
+authoritative harness turn, edits/resends the retained question and receives a
+response, then verifies cleanup and unchanged source history. Logs are under
+`/tmp/nebula-movable-stop-*`. Physical devices and live vendor inference remain
+unverified. No merge or live deployment of this revision was performed.

@@ -12,6 +12,8 @@ function fixture() {
     createTemporaryChat: vi.fn().mockResolvedValue({ id: "popup", backend: "provider", providerId: "provider", model: "m" }),
     discardTemporaryChat: vi.fn().mockResolvedValue(undefined),
     cancelChatTurn: vi.fn().mockResolvedValue({}),
+    stopHarnessTurn: vi.fn().mockResolvedValue(undefined),
+    getPendingChatTurn: vi.fn().mockResolvedValue({ id: "accepted-turn" }),
     streamChat: vi.fn().mockResolvedValue({ message: { role: "assistant", content: "A separate answer" } }),
   };
   return api;
@@ -89,3 +91,70 @@ it("leaves the page interactive and supports keyboard repositioning without dism
   await user.click(screen.getByRole("button", { name: "Close Ask Nebula" }));
   expect(close).toHaveBeenCalledOnce();
 });
+
+
+it("shows harness progress and stops using its harness turn identity before any answer", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  api.streamChat.mockImplementation((_body, onEvent, signal) => new Promise((_resolve, reject) => {
+    onEvent({ type: "status", phase: "running", detail: "Preparing context", harnessTurnId: "harness-only" });
+    onEvent({ type: "output_delta", stream: "commentary", delta: "Checking the selected context.", harnessTurnId: "harness-only" });
+    signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")));
+  }));
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "Explain");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  expect(await screen.findByRole("status")).toHaveTextContent("Checking the selected context.");
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(api.stopHarnessTurn).toHaveBeenCalledExactlyOnceWith("harness-only");
+  expect(api.cancelChatTurn).not.toHaveBeenCalled();
+  expect(screen.getByRole("textbox")).toBeEnabled();
+  expect(screen.getByRole("textbox")).toHaveValue("Explain");
+});
+
+it("finds the accepted popup turn when its first stream event has not arrived", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  api.streamChat.mockImplementation((_body, _onEvent, signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")));
+  }));
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "Waiting");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(api.getPendingChatTurn).toHaveBeenCalledExactlyOnceWith("popup");
+  expect(api.cancelChatTurn).toHaveBeenCalledExactlyOnceWith("accepted-turn");
+  expect(screen.getByRole("textbox")).toBeEnabled();
+});
+
+it("keeps Stop retryable after cancellation fails", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  api.stopHarnessTurn.mockRejectedValueOnce(new Error("Stop connection lost"));
+  api.streamChat.mockImplementation((_body, onEvent, signal) => new Promise((_resolve, reject) => {
+    onEvent({ type: "started", harnessTurnId: "harness-only", model: "m" });
+    signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")));
+  }));
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "Question");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Stop connection lost");
+  expect(screen.getByRole("textbox")).toBeDisabled();
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(screen.getByRole("textbox")).toBeEnabled();
+});
+
+it("reports an unconfirmed stop instead of leaving the control disabled forever", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  api.stopHarnessTurn.mockReturnValue(new Promise(() => {}));
+  api.streamChat.mockImplementation((_body, onEvent) => {
+    onEvent({ type: "started", harnessTurnId: "harness-only", model: "m" });
+    return new Promise(() => {});
+  });
+  const { unmount } = render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox"), "Question");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  await user.click(screen.getByRole("button", { name: "Stop response" }));
+  expect(screen.getByRole("button", { name: "Stop response" })).toBeDisabled();
+  await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Core has not confirmed Stop"), { timeout: 11_000 });
+  expect(screen.getByRole("button", { name: "Stop response" })).toBeEnabled();
+  unmount();
+}, 15_000);

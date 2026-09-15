@@ -3265,6 +3265,15 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     const branch = await branchResponse.json();
     expect(branch.harness_session_id).not.toBe(source.harness_session_id);
     const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
+    await popup.getByRole("textbox").fill("Popup wait for stop");
+    await popup.getByRole("button", { name: "Ask question", exact: true }).click();
+    await expect(popup.getByRole("status")).toContainText("Checking the selected context before answering.");
+    const pending = await (await core.api.get(`chat/sessions/${branch.id}/pending-turn`)).json();
+    expect(pending.harness_turn_id).toBeTruthy();
+    await popup.getByRole("button", { name: "Stop response", exact: true }).click();
+    await expect(popup.getByRole("textbox")).toBeEnabled();
+    await expect.poll(async () => (await (await core.api.get(`harness-turns/${pending.harness_turn_id}`)).json()).status).toBe("cancelled");
+    await expect(popup.getByRole("textbox")).toHaveValue("Popup wait for stop");
     await popup.getByRole("textbox").fill("Explain this in the popup");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
     await expect(popup).toContainText("SETTINGS fixture low", { timeout: 20_000 });

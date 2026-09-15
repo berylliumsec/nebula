@@ -33,3 +33,5 @@
 .move { cursor: grab; touch-action: none; flex-shrink: 0; }
 .move:active { cursor: grabbing; }
 .title { flex: 1; }
+
+.status { max-height: 96px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; }

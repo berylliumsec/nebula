@@ -51,6 +51,10 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [progress, setProgress] = useState("Thinking…");
+  const commentary = useRef("");
+  const harnessTurnId = useRef<string | undefined>(undefined);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
@@ -94,19 +98,41 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   useEffect(() => { output.current?.scrollTo?.({ top: output.current.scrollHeight }); }, [messages, answer]);
 
   const stop = async () => {
-    if (!api || !turnId.current) return;
-    try { await api.cancelChatTurn(turnId.current); controller.current?.abort(); setBusy(false); }
-    catch (reason) {
+    if (!api || stopping) return;
+    const activeController = controller.current;
+    setStopping(true);
+    setError(undefined);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const cancel = async () => {
+        if (harnessTurnId.current) return api.stopHarnessTurn(harnessTurnId.current);
+        if (turnId.current) return api.cancelChatTurn(turnId.current);
+        const pending = branch.current && await api.getPendingChatTurn(branch.current.id);
+        if (!pending) throw new Error("Core has not confirmed this response yet. Try Stop again, or close the popup to discard it.");
+        return pending.harnessTurnId ? api.stopHarnessTurn(pending.harnessTurnId) : api.cancelChatTurn(pending.id);
+      };
+      await Promise.race([cancel(), new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Core has not confirmed Stop. Try Stop again, or close the popup to discard it.")), 10_000);
+      })]);
+      activeController?.abort();
+      needsAction.current = false;
+      setBusy(false);
+      setProgress("Stopped");
+    } catch (reason) {
       void logCaughtDiagnostic("interface.ask_nebula.stop_failed", "The temporary response could not be stopped.", reason, "chat");
-      setError(reason instanceof Error ? reason.message : "Could not stop the response. Try Stop again."); }
+      setError(reason instanceof Error ? reason.message : "Could not stop the response. Try Stop again.");
+    } finally { clearTimeout(timeout); setStopping(false); }
   };
   const ask = async () => {
     const session = branch.current;
-    if (!api || !session || !question.trim() || busy) return;
+    if (!api || !session || !question.trim() || busy || stopping) return;
     const prompt = question.trim();
     const abort = new AbortController();
     controller.current = abort;
     turnId.current = undefined;
+    harnessTurnId.current = undefined;
+    commentary.current = "";
+    setProgress("Connecting…");
     needsAction.current = false;
     setBusy(true); setError(undefined); setAnswer("");
     try {
@@ -119,7 +145,19 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
           sourceLabel: context.source.label, text: context.text, sha256: sha256Hex(context.text), truncated: context.truncated }],
       }, event => {
         if (abort.signal.aborted) return;
-        if (event.type === "started") turnId.current = event.turnId;
+        if ("harnessTurnId" in event && event.harnessTurnId) harnessTurnId.current = event.harnessTurnId;
+        if (event.type === "started") { if (event.turnId) turnId.current = event.turnId; setProgress("Thinking…"); }
+        if (event.type === "connection") setProgress(event.state === "reconnecting" ? "Reconnecting… You can still stop this response." : "Connected");
+        if (event.type === "status") setProgress(event.detail);
+        if (event.type === "output_delta" && event.stream === "commentary" && event.delta) {
+          commentary.current = (commentary.current + event.delta).slice(-1200);
+          setProgress(commentary.current);
+        }
+        if (event.type === "output_delta" && event.stream === "reasoning_summary" && !commentary.current) setProgress("Thinking through the context…");
+        if (event.type === "turn_status" && ["cancelled", "interrupted", "failed"].includes(event.itemStatus ?? "")) {
+          needsAction.current = false; abort.abort(); setBusy(false);
+          setError(event.itemStatus === "failed" ? "The response failed. You can try your question again." : "Response stopped. Your question is ready to edit or resend.");
+        }
         if (event.type === "delta" || event.type === "message_delta") setAnswer(current => current + event.delta);
         if (event.type === "approval_required" || event.type === "approval" || event.type === "interaction") {
           needsAction.current = true;
@@ -156,10 +194,10 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       </div>
       {!api || !snapshot ? <p role="alert">Connect an assistant runtime to ask a question.</p> : !ready && !error ? <p role="status"><LoaderCircle size={14} className="spin" /> Preparing a temporary copy of the conversation…</p> : null}
       {error && <div role="alert" className={styles.error}>{error}{!ready && <button type="button" className="button quiet" onClick={() => setAttempt(value => value + 1)}>Try again</button>}</div>}
-      {busy && <p role="status" className={styles.status}>{needsAction.current ? "Action needed" : "Thinking…"}</p>}
+      {busy && <p role="status" className={styles.status}>{stopping ? "Stopping…" : needsAction.current ? "Action needed" : progress}</p>}
       <form className={styles.composer} onSubmit={event => { event.preventDefault(); void ask(); }}>
-        <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} value={question} disabled={busy} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
-        {busy ? <button className="icon-button subtle" type="button" aria-label="Stop response" title="Stop response" onClick={() => void stop()}><Square size={17} /></button> : <button className="icon-button subtle" type="submit" aria-label="Ask question" title="Ask question" disabled={!ready || !question.trim()}><Send size={18} /></button>}
+        <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} value={question} disabled={busy || stopping} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
+        {busy ? <button className="icon-button subtle" type="button" aria-label="Stop response" title="Stop response" disabled={stopping} onClick={() => void stop()}><Square size={17} /></button> : <button className="icon-button subtle" type="submit" aria-label="Ask question" title="Ask question" disabled={stopping || !ready || !question.trim()}><Send size={18} /></button>}
       </form>
     </div>
   </div>, document.body);

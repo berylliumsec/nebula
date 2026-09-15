@@ -1,11 +1,11 @@
 {
-  "change_digest": "44acb4285ce1b1b28e15a18dfbb3fc23acdeb9f1f8a80964e5b9b2c67c8b6213",
+  "change_digest": "109e9c7b21fbbf41db3792fc2d65639b32722e4b984b3ae2c05abdaa80d38516",
   "reviewed_by": "Codex popup and temporary conversation review",
-  "reason": "Non-modal movable popup, background interaction and cross-page lifetime. Review of provider scope confirms the frozen source snapshot stays with the popup. Selected component navigation regressions and production popup browser and real-Core journeys only.",
-  "exclusions": "No full suites. Python and native implementation unchanged. Physical devices and live vendor inference unavailable; real Core uses inert adapters.",
+  "reason": "Movable non-modal popup and cross-page lifetime, plus reported harness no-response and Stop failure. Popup now tracks harness IDs, shows progress, looks up a pending turn before acceptance, and makes failed or timed-out cancellation retryable. Real-Core harness fixture deliberately stalls a popup response to verify real cancellation and resend. Selected journeys only.",
+  "exclusions": "No full suites. Production Python and native implementation unchanged. Python fixture is exercised by the selected real-Core browser journey. Physical devices and live vendor inference unavailable; real Core uses inert adapters.",
   "expected_tests": {
     "python": 0,
-    "frontend": 11,
+    "frontend": 15,
     "native": 0,
     "playwright": 10
   },

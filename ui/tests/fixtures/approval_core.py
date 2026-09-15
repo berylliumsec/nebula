@@ -97,6 +97,14 @@ class InertConnection(HarnessConnection):
         return decision
 
     async def run_turn(self, prompt, **kwargs):
+        if self.runtime.scenario == "settings" and "Popup wait for stop" in prompt:
+            yield HarnessEvent(
+                type="output_delta",
+                item_kind="reasoning",
+                stream="commentary",
+                delta="Checking the selected context before answering.",
+            )
+            await asyncio.Event().wait()
         if self.runtime.scenario == "settings":
             options = self.request.session.metadata.get("runtime_options", {})
             answer = f"SETTINGS {self.request.session.model} {options.get('reasoning_effort')}"
