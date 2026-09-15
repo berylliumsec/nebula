@@ -480,6 +480,7 @@ export function BrowserAutomationWorker() {
         url: session.upstreamProxyUrl,
         credentialRef: session.upstreamProxyCredentialRef,
         captureBodies: session.captureMode === "bodies",
+        interceptionEnabled: session.interceptionEnabled,
       });
       if (appliedProxyConfigs.current.get(session.id) !== proxySignature) {
         try {

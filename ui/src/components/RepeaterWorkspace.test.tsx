@@ -106,7 +106,7 @@ describe("manual request workspace presentation", () => {
     await choose("First"); expect(screen.getByText("200", { exact: true })).toBeVisible();
   });
   it("exposes pause and resume as labeled controls and disables repeat submissions", () => {
-    const onToggle = vi.fn(); const props = { available: true, desktop: true, pending: false, onToggle, onSetup: vi.fn() };
+    const onToggle = vi.fn(); const props = { available: true, desktop: true, scopeReady: true, nativeReady: true, pending: false, onToggle, onSetup: vi.fn() };
     const view = render(<InterceptionTransport {...props} enabled={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Pause requests" })); expect(onToggle).toHaveBeenCalledOnce();
     view.rerender(<InterceptionTransport {...props} enabled pending />);
@@ -114,8 +114,17 @@ describe("manual request workspace presentation", () => {
     expect(screen.getByText(/Interception on/)).toBeVisible();
   });
   it("provides an explicit setup path when interception is unavailable", () => {
-    const onSetup = vi.fn(); render(<InterceptionTransport available={false} enabled={false} desktop pending={false} onToggle={vi.fn()} onSetup={onSetup} />);
+    const onSetup = vi.fn(); render(<InterceptionTransport available={false} enabled={false} desktop scopeReady nativeReady pending={false} onToggle={vi.fn()} onSetup={onSetup} />);
     fireEvent.click(screen.getByRole("button", { name: "Set up interception" })); expect(onSetup).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Pause requests" })).not.toBeInTheDocument();
+  });
+  it("does not offer pause until a Project target and native tab are ready", () => {
+    const onToggle = vi.fn();
+    const view = render(<InterceptionTransport available desktop enabled={false} scopeReady={false} nativeReady pending={false} onToggle={onToggle} onSetup={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pause requests" })).toBeDisabled();
+    expect(screen.getByText(/No Project target/)).toBeVisible();
+    view.rerender(<InterceptionTransport available desktop enabled={false} scopeReady nativeReady={false} pending={false} onToggle={onToggle} onSetup={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pause requests" })).toBeDisabled();
+    expect(screen.getByText(/Open a native tab/)).toBeVisible();
   });
 });

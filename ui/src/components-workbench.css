@@ -851,9 +851,10 @@ kbd { font-size: 11px; }
 .browser-traffic-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; }
 .browser-traffic-list li { border-bottom: 1px solid var(--border-soft); background: var(--surface); }
 .browser-traffic-list li.selected { background: var(--blue-muted); }
-.browser-traffic-list label { display: grid; min-height: 42px; grid-template-columns: 18px 42px 30px minmax(0, 1fr); gap: 5px; align-items: center; padding: 6px 9px; cursor: pointer; }
+.browser-traffic-list label { display: grid; min-height: 56px; grid-template-columns: 24px 80px 74px minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px 12px; cursor: pointer; }
+.browser-traffic-list label > :where(code, .browser-method) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-traffic-list label > span:not(.browser-method) { overflow: hidden; font: 11px var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
-.browser-traffic-list label small { grid-column: 4; color: var(--muted); font-size: 11px; }
+.browser-traffic-list label small { grid-column: 4; min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .browser-method { font: 11px var(--font-mono); font-weight: var(--weight-bold); }
 .browser-traffic-list details { padding: 0 10px 9px 34px; }
 .browser-traffic-list summary { color: var(--blue); font-size: 11px; cursor: pointer; }
@@ -2576,8 +2577,13 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .repeater-response-meta { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; font-size: 12px; }
 .repeater-result-context { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .repeater-result-context .icon-button, .repeater-workspace .browser-suite-heading .icon-button { min-width: 44px; min-height: 44px; }
-.security-browser-workspace.manual-tools { grid-template-columns: minmax(0, 1fr); background: var(--surface-overlay); }
+.security-browser-workspace.manual-tools { background: var(--surface-overlay); }
+.security-browser-workspace.manual-tools .security-browser-layout { grid-template-columns: minmax(0, 1fr); }
 .security-browser-workspace.manual-tools .security-browser-assessment-rail { display: none; }
+.security-browser-workspace.manual-tools .security-browser-tool-content { background: var(--canvas); }
+.security-browser-workspace.manual-tools .browser-suite > section { padding: 18px 20px; }
+.security-browser-workspace.manual-tools .browser-suite-heading h3 { font-size: 17px; }
+.security-browser-workspace.manual-tools .browser-suite-heading small { font-size: 12px; }
 .web-browser-fallback .security-browser-workspace.manual-tools { width: 100%; max-width: 100%; min-width: 0; border-left: 0; }
 @media (max-width: 900px) {
   .repeater-message-grid { grid-template-columns: minmax(0, 1fr); }

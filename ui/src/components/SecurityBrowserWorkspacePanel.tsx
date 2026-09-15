@@ -398,7 +398,7 @@ export function SecurityBrowserWorkspacePanel({
     </section>,
   ];
 
-  const manualOnly = manualTools && workspace?.assessments.length === 0;
+  const manualOnly = !!manualTools;
   return <aside ref={size.panelRef} style={manualOnly && !desktop ? { ...size.panelStyle, width: "100%" } : size.panelStyle} className={`browser-research-panel security-browser-workspace${manualOnly ? " manual-tools" : ""}`} aria-label="Security Browser workspace">
     {size.resizeHandle}
     <header>

@@ -5619,6 +5619,15 @@ test("stabilization manual request workspace preserves drafts and keeps response
   await expect(page.getByText("128 bytes", { exact: true })).toBeVisible();
   await page.getByLabel("Body", { exact: true }).fill("unsaved manual draft");
   await page.getByRole("button", { name: "Traffic", exact: false }).click();
+  const panel = page.getByRole("complementary", { name: "Security Browser workspace", exact: true });
+  await expect(panel).toHaveClass(/manual-tools/);
+  const layout = panel.locator(".security-browser-layout");
+  const layoutStyle = await layout.evaluate((element) => ({ display: getComputedStyle(element).display, columns: getComputedStyle(element).gridTemplateColumns }));
+  if (layoutStyle.display === "grid") expect(layoutStyle.columns.split(" ").length).toBe(1);
+  else expect(layoutStyle.display).toBe("flex");
+  const trafficWidth = await panel.locator(".browser-traffic-workbench").evaluate((element) => element.getBoundingClientRect().width);
+  if (testInfo.project.name === "desktop") expect(trafficWidth).toBeGreaterThan(500);
+  else expect(trafficWidth).toBeGreaterThan(250);
   await page.getByRole("button", { name: "Repeater", exact: true }).click();
   await expect(page.getByLabel("Body", { exact: true })).toHaveValue("unsaved manual draft");
   await expect(page.getByRole("button", { name: /GET Profile lookup/ })).toHaveAttribute("aria-pressed", "true");
