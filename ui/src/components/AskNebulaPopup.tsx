@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, Send, Square, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { GripHorizontal, LoaderCircle, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
 import type { ChatCompletionRequest, ChatMessage, ChatSessionSummary } from "../api/types";
 import type { SelectionActionDraft } from "./selection";
-import { ModalSurface } from "./DialogSystem";
+import { createPortal } from "react-dom";
 import { sha256Hex } from "../sha256";
 import { logCaughtDiagnostic } from "../diagnostics";
 import styles from "./AskNebulaPopup.module.css";
@@ -15,6 +15,38 @@ export type AssistantSnapshot = Omit<ChatCompletionRequest, "messages" | "contex
 export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; onClose(): void;
 }) {
+  const panel = useRef<HTMLDivElement>(null);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const [position, setPosition] = useState({ x: Math.max(12, window.innerWidth - 584), y: 80 });
+  const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
+  const move = (x: number, y: number) => {
+    const rect = panel.current?.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    setPosition({
+      x: Math.max(left + 12, Math.min(x, left + (viewport?.width ?? window.innerWidth) - (rect?.width ?? 560) - 12)),
+      y: Math.max(top + 12, Math.min(y, top + (viewport?.height ?? window.innerHeight) - (rect?.height ?? 220) - 12)),
+    });
+  };
+  useLayoutEffect(() => {
+    const clamp = () => {
+      const rect = panel.current?.getBoundingClientRect();
+      if (rect) move(rect.left, rect.top);
+    };
+    const observer = new ResizeObserver(clamp);
+    if (panel.current) observer.observe(panel.current);
+    window.addEventListener("resize", clamp);
+    window.visualViewport?.addEventListener("resize", clamp);
+    window.visualViewport?.addEventListener("scroll", clamp);
+    input.current?.focus();
+    clamp();
+    return () => {
+      observer.disconnect(); window.removeEventListener("resize", clamp);
+      window.visualViewport?.removeEventListener("resize", clamp);
+      window.visualViewport?.removeEventListener("scroll", clamp);
+    };
+  }, []);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
@@ -107,9 +139,15 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     } finally { setBusy(needsAction.current && !abort.signal.aborted); }
   };
 
-  return <ModalSurface className={styles.popup} labelledBy="ask-nebula-title" onClose={onClose}>
+  return createPortal(<div ref={panel} className={styles.popup} role="dialog" aria-labelledby="ask-nebula-title" style={{ left: position.x, top: position.y }}>
     <div data-selection-actions-disabled>
-      <div className={styles.header}><div><h2 id="ask-nebula-title">Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
+      <div className={styles.header}>
+        <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
+          onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }}
+          onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }}
+          onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }} onLostPointerCapture={() => { drag.current = undefined; }}
+          onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); move(position.x + direction[0] * 24, position.y + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
+        <div className={styles.title}><h2 id="ask-nebula-title">Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
         <button className="icon-button subtle" type="button" aria-label="Close Ask Nebula" title="Close and discard" onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <details className={styles.context}><summary>{context.source.label}{context.truncated ? " · shortened" : ""}</summary><pre>{context.text}</pre></details>
       <div className={styles.transcript} ref={output}>
@@ -120,9 +158,9 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       {error && <div role="alert" className={styles.error}>{error}{!ready && <button type="button" className="button quiet" onClick={() => setAttempt(value => value + 1)}>Try again</button>}</div>}
       {busy && <p role="status" className={styles.status}>{needsAction.current ? "Action needed" : "Thinking…"}</p>}
       <form className={styles.composer} onSubmit={event => { event.preventDefault(); void ask(); }}>
-        <textarea data-autofocus aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} value={question} disabled={busy} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
+        <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} value={question} disabled={busy} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
         {busy ? <button className="icon-button subtle" type="button" aria-label="Stop response" title="Stop response" onClick={() => void stop()}><Square size={17} /></button> : <button className="icon-button subtle" type="submit" aria-label="Ask question" title="Ask question" disabled={!ready || !question.trim()}><Send size={18} /></button>}
       </form>
     </div>
-  </ModalSurface>;
+  </div>, document.body);
 }

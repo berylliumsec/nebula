@@ -1,21 +1,25 @@
 {
-  "change_digest": "27ec650f01d3a6a06e207a6c8a108271a2e28756aba9fc27aa8677e87e036999",
-  "reviewed_by": "Codex workbench navigation review",
-  "reason": "Reviewed shared tab primitive, shell label, CSS and SessionsPage changes against the approved Figma concept. Seven component tests cover existing tab behavior and mixed labels; two focused production browser journeys across eight desktop/mobile profiles cover header hierarchy, New chat, keyboard selection, focus, search, pane close/reopen and reload. One real-Core LAN conversation journey covers durable selection, retained history and history failure/recovery. Desktop navigation also checks plain light/dark themes and non-chat action geometry; mobile remains the Zero default. New tests retain Terminal selection while respecting its existing shell autofocus and verify retained tab focus across Browser to Files. Available-header-width rules prevent clipped tabs beside expanded navigation or global status. The selected matrix checks all eight tab bounds, desktop themes and compact global controls.",
-  "exclusions": "No full suites. No Python/native changes or runtime contract changes, so no Python/native tests. No live provider calls or container execution; real Core uses a local inert model. Physical devices unavailable; mobile browsers are emulated.",
+  "change_digest": "44acb4285ce1b1b28e15a18dfbb3fc23acdeb9f1f8a80964e5b9b2c67c8b6213",
+  "reviewed_by": "Codex popup and temporary conversation review",
+  "reason": "Non-modal movable popup, background interaction and cross-page lifetime. Review of provider scope confirms the frozen source snapshot stays with the popup. Selected component navigation regressions and production popup browser and real-Core journeys only.",
+  "exclusions": "No full suites. Python and native implementation unchanged. Physical devices and live vendor inference unavailable; real Core uses inert adapters.",
   "expected_tests": {
     "python": 0,
-    "frontend": 7,
+    "frontend": 11,
     "native": 0,
-    "playwright": 17
+    "playwright": 10
   },
   "python": [],
   "frontend": [
-    "ui/src/components/SurfacePrimitives.test.tsx"
+    "ui/src/components/AskNebulaPopup.test.tsx",
+    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:workbench-navigation",
-    "area:workbench-navigation-core"
+    "area:ask-nebula-popup",
+    "area:ask-nebula-real-core"
+  ],
+  "python_versions": [
+    "3.11"
   ]
 }

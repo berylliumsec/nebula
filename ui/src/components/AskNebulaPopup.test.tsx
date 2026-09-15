@@ -71,3 +71,21 @@ it("stops only the popup turn and keeps the question editable", async () => {
   await expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByRole("textbox")).toHaveValue("Explain slowly");
 });
+
+
+it("leaves the page interactive and supports keyboard repositioning without dismissal", async () => {
+  const api = fixture(); const user = userEvent.setup(); const close = vi.fn();
+  render(<><button>Underlying page action</button><AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={close} /></>);
+  const popup = screen.getByRole("dialog", { name: "Ask Nebula" });
+  expect(popup).not.toHaveAttribute("aria-modal", "true");
+  await user.click(screen.getByRole("button", { name: "Underlying page action" }));
+  expect(screen.getByRole("button", { name: "Underlying page action" })).toHaveFocus();
+  await user.keyboard("{Escape}");
+  expect(close).not.toHaveBeenCalled();
+  const top = Number.parseFloat(popup.style.top);
+  screen.getByRole("button", { name: "Move Ask Nebula" }).focus();
+  await user.keyboard("{ArrowDown}");
+  expect(Number.parseFloat(popup.style.top)).toBe(top + 24);
+  await user.click(screen.getByRole("button", { name: "Close Ask Nebula" }));
+  expect(close).toHaveBeenCalledOnce();
+});

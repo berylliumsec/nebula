@@ -11,10 +11,10 @@ A separate Add context to chat action queues the selected bytes in the main comp
 | Stop/failure/retry | Stop cancels only the temporary turn; errors stay visible | Core + React | component/real Core |
 | Close/refresh | Discard branch; abandoned branches expire; no reload restoration | Core lease + React | Python/real Core |
 | Add context | Existing bounded context pack receives exact selection for next main turn | draft context/Core on send | component/browser |
-| Mobile/keyboard | Floating dialog fits small screens; focus contained/restored; controls reachable | native dialog/CSS | Chromium/WebKit production |
+| Mobile/keyboard | Floating dialog fits small screens; focus moves freely between popup and page; controls reachable | non-modal dialog/CSS | Chromium/WebKit production |
 
 No split pane, automatic main-chat submission, or saved sidebar entry. Backgrounding
-keeps the popup within its lease; closing, navigation and reload discard it. Tests
+keeps the popup within its lease; closing and reload discard it; in-app navigation preserves it. Tests
 will select only popup, selection handoff, and temporary-branch journeys. Physical
 device evidence is required to claim physical-keyboard/mobile behavior.
 
@@ -45,3 +45,39 @@ client disappears or cannot deliver cleanup, Core collects abandoned branches
 one hour after creation, checking once per minute while running. Normal service
 audit retention is unchanged; this is a disposable chat, not a zero-retention
 inference mode. Nothing from the popup is promoted to the main conversation.
+
+## Non-modal popup correction
+
+Journey: open Ask Nebula, keep using the underlying page, drag the header (or
+use arrow keys on its move handle), navigate to another page, continue the same
+side conversation, and explicitly close it. React at the application provider
+owns the popup position and frozen source snapshot; Core owns the temporary
+branch. Navigation must never discard or replace that branch. No backdrop,
+scroll lock, focus trap, or outside-click dismissal. Resize keeps the window
+reachable. Closing and full browser reload retain disposable cleanup semantics.
+
+Verification: selected popup component/navigation tests, the existing eight
+production browser profiles extended with movement and background interaction,
+and the real-Core popup journey extended with route persistence and follow-up.
+Backend and native code remain unchanged; physical devices unavailable.
+
+### Approval candidate — non-modal revision
+
+Figma: https://www.figma.com/design/R9gGLFaL3Ag2ATNv8oOObV
+Branch: `codex/movable-ask-popup`. This revision awaits the requested design
+approval before PR merge or live deployment. Mockup proposes a visible source
+conversation label; final sizing and that label await design approval.
+
+- 11 popup/component navigation tests passed.
+- Eight production LAN browser profiles passed across Chromium and WebKit.
+  Three initial failures clicked a heading covered by the moved popup; moving
+  the window clear of that heading fixed the test sequence.
+- Two real-Core popup journeys passed: provider follow-up across navigation,
+  preserved main draft/history, harness isolation, and explicit-close deletion.
+- Production build and frontend diagnostics audit passed.
+- Evidence: `/tmp/nebula-movable-browser`, `/tmp/nebula-movable-browser-retry`,
+  `/tmp/nebula-movable-real-core`, `/tmp/nebula-movable-build.log`.
+- Physical-device keyboards and live vendor inference were not exercised.
+
+Product rule: an auxiliary question window must not acquire modal ownership of
+the workspace. Page navigation and focus changes are not dismissal actions.

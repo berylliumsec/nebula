@@ -6743,6 +6743,24 @@ test("assistant popup asks privately and discards without navigating", async ({ 
   const bounds = await popup.boundingBox(); const viewport = page.viewportSize()!;
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
   expect(bounds!.width).toBeLessThanOrEqual(560);
+  await expect(popup).not.toHaveAttribute("aria-modal", "true");
+  const handle = popup.getByRole("button", { name: "Move Ask Nebula" });
+  const handleBounds = (await handle.boundingBox())!;
+  const beforeMove = (await popup.boundingBox())!;
+  await page.mouse.move(handleBounds.x + 20, handleBounds.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(handleBounds.x + 20, handleBounds.y + 100, { steps: 8 });
+  await page.mouse.up();
+  expect((await popup.boundingBox())!.y).toBeGreaterThan(beforeMove.y);
+  await handle.focus();
+  await page.keyboard.press("ArrowUp");
+  // Move the floating window away from the heading before interacting with it.
+  for (let step = 0; step < 6; step++) await page.keyboard.press("ArrowDown");
+  // The underlying page remains available to pointer and keyboard interaction.
+  await page.getByRole("heading", { name: "Scratch Project", exact: true }).click();
+  await expect(popup).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(popup).toBeVisible();
   await popup.screenshot({ path: testInfo.outputPath("popup.png") });
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await popup.getByRole("button", { name: "Close Ask Nebula" }).click();

@@ -3187,9 +3187,19 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
     await popup.getByRole("textbox").fill("A side question about that history");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
     await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toBeVisible();
+    // Client-side navigation keeps the same temporary branch and transcript alive.
+    await page.evaluate(() => {
+      history.pushState({}, "", "/settings");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(popup).toBeVisible();
+    expect((await api.get(`chat-sessions/${branch.id}`)).ok()).toBe(true);
     await popup.getByRole("textbox").fill("A private follow-up");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();
     await expect(popup.locator("p").filter({ hasText: "finished after the viewer detached." })).toHaveCount(2);
+    await page.goBack();
+    await expect(composer).toHaveValue("Keep my main draft");
     expect(modelStub.requests.some(body => JSON.stringify(body.messages).includes("Main conversation stays here") && JSON.stringify(body.messages).includes("A side question about that history") && JSON.stringify(body.messages).includes("A private follow-up"))).toBe(true);
     modelStub.fail = true;
     await popup.getByRole("textbox").fill("Retry this side question");
