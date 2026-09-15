@@ -138,8 +138,8 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   };
   const ask = async () => {
     const session = branch.current;
-    if (!api || !session || !question.trim() || busy || stopping) return;
-    const prompt = question.trim();
+    const prompt = input.current?.value.trim() ?? question.trim();
+    if (!api || !session || !prompt || busy || stopping) return;
     const abort = new AbortController();
     controller.current = abort;
     turnId.current = undefined;
@@ -180,6 +180,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       if (!abort.signal.aborted && result) {
         needsAction.current = false;
         setMessages(current => [...current, { role: "user", content: prompt }, result.message]);
+        if (input.current) input.current.value = "";
         setQuestion(""); setAnswer("");
       }
     } catch (reason) {
@@ -209,7 +210,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       {error && <div role="alert" className={styles.error}>{error}{!ready && <button type="button" className="button quiet" onClick={() => setAttempt(value => value + 1)}>Try again</button>}</div>}
       {busy && <p role="status" className={styles.status}>{stopping ? "Stopping…" : needsAction.current ? "Action needed" : progress}</p>}
       <form className={styles.composer} onSubmit={event => { event.preventDefault(); void ask(); }}>
-        <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} value={question} disabled={busy || stopping} onChange={event => setQuestion(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
+        <textarea ref={input} aria-label="Question for Nebula" placeholder={messages.length ? "Ask a follow-up…" : "What would you like to know?"} rows={2} maxLength={4000} disabled={busy || stopping} onInput={event => setQuestion(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void ask(); } }} />
         {busy ? <button className="icon-button subtle" type="button" aria-label="Stop response" title="Stop response" disabled={stopping} onClick={() => void stop()}><Square size={17} /></button> : <button className="icon-button subtle" type="submit" aria-label="Ask question" title="Ask question" disabled={stopping || !ready || !question.trim()}><Send size={18} /></button>}
       </form>
     </div>

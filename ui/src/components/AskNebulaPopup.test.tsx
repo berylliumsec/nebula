@@ -171,3 +171,17 @@ it("renews only while the same popup remains open", async () => {
   window.dispatchEvent(new Event("focus"));
   expect(api.keepTemporaryChatAlive).toHaveBeenCalledTimes(1);
 });
+
+
+it("retains a question typed before Core finishes opening the branch", async () => {
+  const api = fixture(); let resolve!: (session: unknown) => void;
+  api.createTemporaryChat.mockReturnValue(new Promise(done => { resolve = done; }));
+  const user = userEvent.setup();
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.type(screen.getByRole("textbox", { name: "Question for Nebula" }), "A quick question");
+  await act(async () => resolve({ id: "popup", backend: "provider", providerId: "provider", model: "m" }));
+  expect(screen.getByRole("textbox", { name: "Question for Nebula" })).toHaveValue("A quick question");
+  await user.click(screen.getByRole("button", { name: "Ask question" }));
+  expect(api.streamChat).toHaveBeenCalledOnce();
+  expect(api.streamChat.mock.calls[0][0].messages[0].content).toBe("A quick question");
+});
