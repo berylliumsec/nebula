@@ -1,5 +1,5 @@
 {
-  "change_digest": "329a7f72afae8a1ee8616d61cbcd616f655a34c4d5f0ffbaf9bda155d15ffa85",
+  "change_digest": "d7c2c503d664600ced1259edd28f969f1aad197772274edf465c59019c35ece6",
   "reviewed_by": "Codex popup and temporary conversation review",
   "reason": "Reviewed shared API client and temporary Core router: non-modal popup persists across page navigation, shows harness progress, stops the authoritative harness turn and retries. Added a 24-hour inactivity lease with periodic UI renewal and immediate Close cleanup. Selected backend lease tests, popup component/navigation tests, and bounded production browser and real-Core journeys that cover create, renewal, Stop, follow-up and discard.",
   "exclusions": "No full suites. Native runtime unchanged. Shared API/client changes are limited to the temporary assistant route and popup; unrelated chats are excluded except isolation checks. Physical devices and live vendor inference unavailable; real Core uses inert adapters.",
