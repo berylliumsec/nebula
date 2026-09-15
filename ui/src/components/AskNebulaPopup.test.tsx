@@ -94,6 +94,20 @@ it("leaves the page interactive and supports keyboard repositioning without dism
   expect(close).toHaveBeenCalledOnce();
 });
 
+it("moves the hidden launcher by keyboard while keeping Show separate", async () => {
+  const api = fixture(); const user = userEvent.setup();
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await user.click(screen.getByRole("button", { name: "Hide Ask Nebula" }));
+  const moveButton = screen.getByRole("button", { name: "Move hidden Ask Nebula" });
+  const launcher = moveButton.parentElement!;
+  moveButton.focus();
+  await user.keyboard("{ArrowLeft}");
+  expect(launcher.style.left).not.toBe("");
+  expect(screen.getByRole("button", { name: /Show Ask Nebula/ })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
+  expect(screen.getByRole("dialog", { name: "Ask Nebula" })).toBeVisible();
+});
+
 
 it("shows harness progress and stops using its harness turn identity before any answer", async () => {
   const api = fixture(); const user = userEvent.setup();

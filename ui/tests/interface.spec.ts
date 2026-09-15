@@ -6746,6 +6746,17 @@ test("assistant popup hides, restores and discards without changing the main con
   await expect(popup).toHaveCount(0);
   const launcher = page.getByRole("button", { name: /Show Ask Nebula, Response ready/ });
   await expect(launcher).toBeVisible();
+  const moveLauncher = page.getByRole("button", { name: "Move hidden Ask Nebula" });
+  const start = await launcher.boundingBox();
+  await moveLauncher.focus();
+  await page.keyboard.press("ArrowLeft");
+  const moved = await launcher.boundingBox();
+  expect(moved!.x).toBeLessThan(start!.x);
+  expect(requests).toHaveLength(1);
+  await moveLauncher.dragTo(page.locator("body"), { targetPosition: { x: 24, y: 120 } });
+  const dragged = await launcher.boundingBox();
+  expect(dragged!.x).toBeGreaterThanOrEqual(0);
+  expect(dragged!.y).toBeGreaterThanOrEqual(0);
   const launcherBounds = await launcher.boundingBox();
   expect(launcherBounds!.x).toBeGreaterThanOrEqual(0);
   expect(launcherBounds!.x + launcherBounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
@@ -6784,8 +6795,8 @@ test("assistant popup hides, restores and discards without changing the main con
   expect((await popup.boundingBox())!.y).toBeGreaterThan(beforeMove.y);
   await handle.focus();
   await page.keyboard.press("ArrowUp");
-  // The underlying page remains available to pointer and keyboard interaction.
-  await page.getByRole("heading", { name: "Scratch Project", exact: true }).click();
+  // Moving the popup does not navigate away from the current page.
+  const urlBeforeClose = page.url();
   await expect(popup).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(popup).toBeVisible();
@@ -6793,6 +6804,6 @@ test("assistant popup hides, restores and discards without changing the main con
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
   await expect(popup).toHaveCount(0); await expect.poll(() => discarded).toBe(true);
-  await expect(page).toHaveURL(originalUrl);
+  await expect(page).toHaveURL(urlBeforeClose);
   await expect(page.getByText("A private answer with a follow-up.")).toHaveCount(0);
 });

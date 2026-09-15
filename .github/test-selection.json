@@ -1,11 +1,11 @@
 {
-  "change_digest": "cd0c51fcd002b1badb3699a85d393da4d18e268db04dee8fe8a24c7e123e5ee2",
-  "reviewed_by": "Codex Ask Nebula Hide/Show review",
-  "reason": "Reviewed the popup-only presentation and test diff. Hide keeps the same mounted temporary branch, in-flight provider/harness stream, transcript, unsent question and position; a persistent launcher survives in-app page navigation and Show restores the same conversation. Selected all 14 popup component tests, the existing one popup journey across eight permanent production desktop/mobile Chromium/WebKit profiles, and both real-Core provider/harness popup journeys for branch identity, Stop, hidden response completion, keyboard focus, mobile launcher clearance and touch navigation above the Workbench controls, focused accessibility, refresh cleanup and Close. Workbench provider and Core API/storage are unchanged.",
-  "exclusions": "No full suites. Python/Core, native runtime, unrelated Workbench views and main-chat tests are unchanged. Real Core uses inert local provider/harness adapters; physical devices, software keyboard and live vendor inference are unavailable.",
+  "change_digest": "bd6425abc00af8a737a20d6ea4eeea190ebeffbe3f70dee85fde99775105adb5",
+  "reviewed_by": "Codex hidden Ask Nebula launcher movement review",
+  "reason": "Reviewed popup presentation, component and browser test diff. The hidden launcher gets a dedicated drag/arrow-key move handle separate from Show, stays within the visible viewport, and preserves the temporary conversation during movement. Selected the popup component tests, one popup journey across eight catalogued desktop/mobile Chromium/WebKit profiles, and existing real-Core provider/harness popup journeys for temporary branch and stream continuity.",
+  "exclusions": "No full suites. Python/Core, native runtime, unrelated Workbench views and main-chat tests are unchanged. Physical devices and software keyboard are unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 14,
+    "frontend": 15,
     "native": 0,
     "playwright": 10
   },
