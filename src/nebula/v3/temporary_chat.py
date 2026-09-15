@@ -64,7 +64,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
                     row.id
                     for row in rows
                     if row.metadata.get("temporary_assistant")
-                    and row.created_at + timedelta(hours=1) < utc_now()
+                    and row.updated_at + timedelta(days=1) < utc_now()
                 )
                 if len(rows) < 1000:
                     break
@@ -153,6 +153,16 @@ def temporary_chat_router(store, chat_service, harness_runtime):
 
             fork_decisions(store, source, chat, messages[-1].sequence)
         return chat
+
+    @router.post("/chat/temporary-sessions/{session_id}/keepalive", status_code=204)
+    async def keepalive(session_id: str):
+        chat = store.get(ChatSession, session_id)
+        if not chat.metadata.get("temporary_assistant"):
+            raise HTTPException(
+                409, "Only temporary assistant conversations can be renewed here"
+            )
+        store.update(ChatSession, chat.id, {"metadata": chat.metadata})
+        return Response(status_code=204)
 
     @router.delete("/chat/temporary-sessions/{session_id}", status_code=204)
     async def delete(session_id: str):

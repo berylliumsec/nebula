@@ -322,7 +322,6 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     const draft = toSelectionDraft(request);
     if (draft) openPopup(draft);
   }, [openPopup]);
-  useLayoutEffect(() => { setPopup(undefined); }, [location.pathname, engagement?.id]);
 
   const requestNoteDraft = useCallback((request: NebulaDraftRequest) => {
     const next = toSelectionDraft(request);
