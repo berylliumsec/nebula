@@ -7464,6 +7464,10 @@ export class ApiClient {
     }).then(mapChatSession);
   }
 
+  keepTemporaryChatAlive(sessionId: string): Promise<void> {
+    return this.request<void>(`chat/temporary-sessions/${encodeURIComponent(sessionId)}/keepalive`, { method: "POST" });
+  }
+
   discardTemporaryChat(sessionId: string): Promise<void> {
     return this.request<void>(`chat/temporary-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", keepalive: true });
   }

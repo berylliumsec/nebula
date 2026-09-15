@@ -42,7 +42,9 @@ or deployed; acceptance used isolated Core processes and the production bundle.
 
 Temporary branches use Core storage while open and are deleted when closed. If the
 client disappears or cannot deliver cleanup, Core collects abandoned branches
-one hour after creation, checking once per minute while running. Normal service
+one day after the last activity, checking once per minute while running.
+The open popup renews its lease every five minutes and when the browser
+regains focus. Normal service
 audit retention is unchanged; this is a disposable chat, not a zero-retention
 inference mode. Nothing from the popup is promoted to the main conversation.
 
@@ -102,3 +104,12 @@ authoritative harness turn, edits/resends the retained question and receives a
 response, then verifies cleanup and unchanged source history. Logs are under
 `/tmp/nebula-movable-stop-*`. Physical devices and live vendor inference remain
 unverified. No merge or live deployment of this revision was performed.
+
+### Open-popup lifetime correction
+
+The original created-at cleanup could discard a popup while an operator was
+still using it. Core now collects after 24 hours without activity; the
+non-modal popup renews every five minutes and on browser focus. Explicit Close
+remains immediate. An orphaned temporary branch may remain in Core storage
+for up to a day, while never appearing in chats or search. This is a UI
+lifetime guarantee during an active session, not zero-retention inference.

@@ -59,6 +59,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const branch = useRef<ChatSessionSummary | undefined>(undefined);
+  const renewLease = useRef<(() => void) | undefined>(undefined);
   const controller = useRef<AbortController | undefined>(undefined);
   const needsAction = useRef(false);
   const turnId = useRef<string | undefined>(undefined);
@@ -68,6 +69,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     if (!api || !snapshot) return;
     let closed = false;
     let created: ChatSessionSummary | undefined;
+    let leaseTimer: ReturnType<typeof setInterval> | undefined;
     const discard = (id: string) => {
       void api.discardTemporaryChat(id).catch(reason => {
         void logCaughtDiagnostic("interface.ask_nebula.cleanup_failed", "The popup closed; Core will expire its temporary conversation.", reason, "chat");
@@ -79,6 +81,14 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       created = session;
       if (closed) { discard(session.id); return; }
       branch.current = session;
+      const renew = () => {
+        void api.keepTemporaryChatAlive(session.id).catch(reason => {
+          void logCaughtDiagnostic("interface.ask_nebula.keepalive_failed", "The temporary assistant could not renew its active lease.", reason, "chat");
+        });
+      };
+      leaseTimer = setInterval(renew, 5 * 60_000);
+      window.addEventListener("focus", renew);
+      renewLease.current = renew;
       setReady(true);
     }).catch(reason => {
       void logCaughtDiagnostic("interface.ask_nebula.open_failed", "The temporary assistant could not open.", reason, "chat");
@@ -89,6 +99,9 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     return () => {
       closed = true;
       controller.current?.abort();
+      clearInterval(leaseTimer);
+      if (renewLease.current) window.removeEventListener("focus", renewLease.current);
+      renewLease.current = undefined;
       window.removeEventListener("pagehide", unload);
       if (created) discard(created.id);
       branch.current = undefined;

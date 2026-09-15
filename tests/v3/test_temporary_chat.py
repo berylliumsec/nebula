@@ -178,7 +178,8 @@ def test_expired_branch_is_collected_after_restart(popup):
             title="Expired",
             provider_profile_id="provider",
             model="m",
-            created_at=utc_now() - timedelta(hours=2),
+            created_at=utc_now() - timedelta(days=2),
+            updated_at=utc_now() - timedelta(days=2),
             metadata={"temporary_assistant": True},
         )
     )
@@ -193,3 +194,24 @@ def test_expired_branch_is_collected_after_restart(popup):
         else:
             pytest.fail("Expired popup was not collected")
     assert store.get(ChatSession, "main")
+
+
+def test_open_branch_renews_until_explicit_close(popup):
+    from datetime import timedelta
+    from nebula.v3.domain import utc_now
+
+    store, client, _ = popup
+    branch = create(client)
+    before = store.get(ChatSession, branch)
+    assert client.post("/chat/temporary-sessions/main/keepalive").status_code == 409
+    assert (
+        client.post(f"/chat/temporary-sessions/{branch}/keepalive").status_code == 204
+    )
+    renewed = store.get(ChatSession, branch)
+    assert renewed.updated_at >= before.updated_at
+    assert renewed.revision == before.revision + 1
+    assert renewed.updated_at + timedelta(days=1) > utc_now()
+    assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
+    assert client.delete(f"/chat/temporary-sessions/{branch}").status_code == 204
+    with pytest.raises(NotFoundError):
+        store.get(ChatSession, branch)

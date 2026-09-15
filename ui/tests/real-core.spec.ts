@@ -3264,6 +3264,9 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     const branchResponse = await opening; expect(branchResponse.ok(), await branchResponse.text()).toBe(true);
     const branch = await branchResponse.json();
     expect(branch.harness_session_id).not.toBe(source.harness_session_id);
+    const renewed = page.waitForResponse(response => response.url().endsWith(`/chat/temporary-sessions/${branch.id}/keepalive`) && response.request().method() === "POST");
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    expect((await renewed).ok()).toBe(true);
     const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
     await popup.getByRole("textbox").fill("Popup wait for stop");
     await popup.getByRole("button", { name: "Ask question", exact: true }).click();

@@ -11,6 +11,7 @@ function fixture() {
   const api = {
     createTemporaryChat: vi.fn().mockResolvedValue({ id: "popup", backend: "provider", providerId: "provider", model: "m" }),
     discardTemporaryChat: vi.fn().mockResolvedValue(undefined),
+    keepTemporaryChatAlive: vi.fn().mockResolvedValue(undefined),
     cancelChatTurn: vi.fn().mockResolvedValue({}),
     stopHarnessTurn: vi.fn().mockResolvedValue(undefined),
     getPendingChatTurn: vi.fn().mockResolvedValue({ id: "accepted-turn" }),
@@ -158,3 +159,15 @@ it("reports an unconfirmed stop instead of leaving the control disabled forever"
   expect(screen.getByRole("button", { name: "Stop response" })).toBeEnabled();
   unmount();
 }, 15_000);
+
+
+it("renews only while the same popup remains open", async () => {
+  const api = fixture();
+  const { unmount } = render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  await waitFor(() => expect(api.createTemporaryChat).toHaveBeenCalledOnce());
+  window.dispatchEvent(new Event("focus"));
+  await waitFor(() => expect(api.keepTemporaryChatAlive).toHaveBeenCalledExactlyOnceWith("popup"));
+  unmount();
+  window.dispatchEvent(new Event("focus"));
+  expect(api.keepTemporaryChatAlive).toHaveBeenCalledTimes(1);
+});
