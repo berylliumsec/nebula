@@ -18,9 +18,22 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   const panel = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const launcher = useRef<HTMLButtonElement>(null);
+  const launcherShell = useRef<HTMLDivElement>(null);
   const [hidden, setHidden] = useState(false);
+  const [launcherPosition, setLauncherPosition] = useState<{ x: number; y: number }>();
   const [position, setPosition] = useState({ x: Math.max(12, window.innerWidth - 584), y: 80 });
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
+  const launcherDrag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
+  const moveLauncher = (x: number, y: number) => {
+    const rect = launcherShell.current?.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const left = viewport?.offsetLeft ?? 0;
+    const top = viewport?.offsetTop ?? 0;
+    setLauncherPosition({
+      x: Math.max(left + 12, Math.min(x, left + (viewport?.width ?? window.innerWidth) - (rect?.width ?? 288) - 12)),
+      y: Math.max(top + 12, Math.min(y, top + (viewport?.height ?? window.innerHeight) - (rect?.height ?? 64) - 12)),
+    });
+  };
   const move = (x: number, y: number) => {
     const rect = panel.current?.getBoundingClientRect();
     const viewport = window.visualViewport;
@@ -53,6 +66,21 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       window.visualViewport?.removeEventListener("scroll", clamp);
     };
   }, [hidden]);
+  useLayoutEffect(() => {
+    if (!hidden || !launcherPosition) return;
+    const clamp = () => {
+      const rect = launcherShell.current?.getBoundingClientRect();
+      if (rect) moveLauncher(rect.left, rect.top);
+    };
+    window.addEventListener("resize", clamp);
+    window.visualViewport?.addEventListener("resize", clamp);
+    window.visualViewport?.addEventListener("scroll", clamp);
+    return () => {
+      window.removeEventListener("resize", clamp);
+      window.visualViewport?.removeEventListener("resize", clamp);
+      window.visualViewport?.removeEventListener("scroll", clamp);
+    };
+  }, [hidden, Boolean(launcherPosition)]);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
@@ -200,11 +228,18 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   const launcherStatus = stopping ? "Stopping…" : busy ? needsAction.current ? "Action needed" : "Responding…" :
     error ? "Needs attention" : messages.length ? "Response ready" : ready ? "Ready to ask" : "Preparing…";
   return createPortal(hidden ?
-    <button ref={launcher} type="button" className={styles.launcher} aria-label={`Show Ask Nebula, ${launcherStatus}`} title="Show the same temporary conversation"
-      onClick={() => setHidden(false)}>
-      <span className={styles.launcherText}><strong>Ask Nebula</strong><small role="status">{launcherStatus}</small></span>
-      <span className={styles.show}>Show</span>
-    </button> :
+    <div ref={launcherShell} className={styles.launcher} style={launcherPosition ? { left: launcherPosition.x, top: launcherPosition.y, right: "auto", bottom: "auto" } : undefined}>
+      <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move hidden Ask Nebula" title="Drag to move · arrow keys to reposition"
+        onPointerDown={event => { if (event.button !== 0) return; const rect = launcherShell.current?.getBoundingClientRect(); if (!rect) return; event.currentTarget.setPointerCapture(event.pointerId); launcherDrag.current = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top }; }}
+        onPointerMove={event => { if (launcherDrag.current) moveLauncher(launcherDrag.current.left + event.clientX - launcherDrag.current.x, launcherDrag.current.top + event.clientY - launcherDrag.current.y); }}
+        onPointerUp={() => { launcherDrag.current = undefined; }} onPointerCancel={() => { launcherDrag.current = undefined; }} onLostPointerCapture={() => { launcherDrag.current = undefined; }}
+        onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); const rect = launcherShell.current?.getBoundingClientRect(); if (rect) moveLauncher(rect.left + direction[0] * 24, rect.top + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
+      <button ref={launcher} type="button" className={styles.launcherShow} aria-label={`Show Ask Nebula, ${launcherStatus}`} title="Show the same temporary conversation"
+        onClick={() => setHidden(false)}>
+        <span className={styles.launcherText}><strong>Ask Nebula</strong><small role="status">{launcherStatus}</small></span>
+        <span className={styles.show}>Show</span>
+      </button>
+    </div> :
     <div ref={panel} className={styles.popup} role="dialog" aria-labelledby="ask-nebula-title" style={{ left: position.x, top: position.y }}>
     <div data-selection-actions-disabled>
       <div className={styles.header}>
