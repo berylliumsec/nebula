@@ -1,24 +1,11 @@
 {
-  "change_digest": "bd6425abc00af8a737a20d6ea4eeea190ebeffbe3f70dee85fde99775105adb5",
-  "reviewed_by": "Codex hidden Ask Nebula launcher movement review",
-  "reason": "Reviewed popup presentation, component and browser test diff. The hidden launcher gets a dedicated drag/arrow-key move handle separate from Show, stays within the visible viewport, and preserves the temporary conversation during movement. Selected the popup component tests, one popup journey across eight catalogued desktop/mobile Chromium/WebKit profiles, and existing real-Core provider/harness popup journeys for temporary branch and stream continuity.",
-  "exclusions": "No full suites. Python/Core, native runtime, unrelated Workbench views and main-chat tests are unchanged. Physical devices and software keyboard are unavailable.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 15,
-    "native": 0,
-    "playwright": 10
-  },
+  "change_digest": "3234e6a3ebf1b0846222b6b2073adc8b131b94315883eb37ca1a74a0a2460d0e",
+  "reviewed_by": "Codex Coding makeover and Workbench header review",
+  "reason": "Reviewed the Coding panel layout, shared Workbench header CSS, and focused regression diff. Selected editor component behavior, two crowded desktop geometry/discovery checks, desktop 1024 and mobile Chromium/WebKit 320/390/430 discovery checks, and the real-Core editor save journey. Test additions under ui/tests were reviewed explicitly rather than treated as permission for broad coverage.",
+  "exclusions": "No full suites. Python/Core route behavior, native runtime, unrelated Workbench views, and mission execution logic are unchanged. Physical devices and software keyboard are unavailable.",
+  "expected_tests": {"python": 0, "frontend": 22, "native": 0, "playwright": 10},
   "python": [],
-  "frontend": [
-    "ui/src/components/AskNebulaPopup.test.tsx"
-  ],
+  "frontend": ["ui/src/components/CodeEditorPanel.test.tsx"],
   "native": [],
-  "playwright": [
-    "area:ask-nebula-popup",
-    "area:ask-nebula-real-core"
-  ],
-  "python_versions": [
-    "3.11"
-  ]
+  "playwright": ["area:coding-makeover", "area:coding-makeover-core"]
 }
