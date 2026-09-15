@@ -784,6 +784,46 @@ test.beforeEach(async ({ page }, testInfo) => {
   }
 });
 
+test("stabilization Workbench keeps Automate task clear at a crowded desktop width", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "This checks the crowded desktop shell.");
+  await page.setViewportSize({ width: 1586, height: 900 });
+  await page.goto("/?view=missions");
+  const header = page.locator(".top-bar");
+  const action = page.getByRole("region", { name: "Mission controls" }).getByRole("button", { name: "Automate task" });
+  await expect(action).toBeVisible();
+  const [headerBox, actionBox, navBox] = await Promise.all([
+    header.boundingBox(),
+    action.boundingBox(),
+    header.getByRole("tablist", { name: "Workbench views" }).boundingBox(),
+  ]);
+  expect(headerBox && actionBox && navBox).toBeTruthy();
+  expect(actionBox!.y).toBeGreaterThanOrEqual(navBox!.y + navBox!.height - 1);
+  expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(headerBox!.x + headerBox!.width);
+  const nav = header.getByRole("tablist", { name: "Workbench views" });
+  const tools = header.getByRole("button", { name: "Tool assistance" });
+  const [navRight, toolsLeft] = await Promise.all([nav.boundingBox(), tools.boundingBox()]);
+  expect(navRight && toolsLeft).toBeTruthy();
+  expect(navRight!.x + navRight!.width).toBeLessThanOrEqual(toolsLeft!.x + 1);
+});
+
+test("stabilization Coding keeps Save and reviewed actions discoverable", async ({ page }) => {
+  await page.goto("/?view=code");
+  await expect(page.locator(".code-editor-panel")).toBeVisible();
+  await page.getByRole("button", { name: "New file", exact: true }).first().click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await expect(page.getByText("Unsaved", { exact: true })).toBeVisible();
+  const rail = page.locator(".code-editor-action-rail");
+  await expect(rail.getByRole("button", { name: "Review & run" })).toBeVisible();
+  await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await page.getByRole("button", { name: "More editor tools" }).click();
+    await expect(page.getByLabel("Editor tools").getByRole("button", { name: "Find", exact: true })).toBeVisible();
+  } else {
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await expect(page.getByLabel("Editor options").getByRole("button", { name: "Find", exact: true })).toBeVisible();
+  }
+});
+
 test("browser keeps native bounds and opens scoped live context as a reviewed AI draft", async ({ browser }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "Native browser geometry needs one explicit desktop run.");
   const context = await browser.newContext({
@@ -4524,6 +4564,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     }
     await editorOptions.getByRole("button", { name: "Find", exact: true }).click();
   } else {
+    await page.getByRole("button", { name: "More editor tools" }).click();
     await page.getByRole("button", { name: "Find", exact: true }).click();
   }
   const findInput = page.getByRole("textbox", { name: "Find", exact: true });

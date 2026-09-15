@@ -2523,8 +2523,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 }
 
 /* Workbench tools share the shell action row with New chat. */
-.top-bar-page-actions:has(.compact-workbench-toolbar) { overflow: visible; }
+.top-bar-page-actions:has(.compact-workbench-toolbar) { overflow: hidden; }
 .compact-workbench-toolbar.in-shell-header { border: 0; background: transparent; padding: 0; min-height: 44px; gap: 8px; }
+.compact-workbench-toolbar.in-shell-header { min-width: 0; max-width: 100%; }
+.compact-workbench-toolbar.in-shell-header .workbench-view-tabs { min-width: 0; flex: 1 1 auto; overflow-x: auto; overscroll-behavior-x: contain; }
+.compact-workbench-toolbar.in-shell-header .session-toolbar-actions { flex: 0 0 auto; }
 .compact-workbench-toolbar .session-tabs > button,
 .compact-workbench-toolbar .session-toolbar-actions > button,
 .compact-workbench-toolbar .workbench-actions > button { width: 44px; height: 44px; min-width: 44px; padding: 0; justify-content: center; }
@@ -2627,6 +2630,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .top-bar-page-actions:has(.workbench-view-tabs) { justify-content: flex-start; }
 .compact-workbench-toolbar .workbench-view-tabs { gap: 4px; flex-wrap: nowrap; }
 .compact-workbench-toolbar .workbench-view-tabs > .workbench-primary-tab { width: auto; gap: 7px; padding-inline: 12px; white-space: nowrap; }
+.compact-workbench-toolbar .workbench-view-tabs > button { min-width: 44px; }
 .compact-workbench-toolbar .workbench-view-tabs > button { position: relative; flex: 0 0 auto; border: 0; }
 .compact-workbench-toolbar .workbench-view-tabs > button[aria-selected="true"] { background: var(--blue-muted); color: var(--blue-bright); box-shadow: none; }
 .compact-workbench-toolbar .workbench-view-tabs > .workbench-resource-start { margin-left: 17px; }
@@ -2663,4 +2667,34 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 }
 @media (max-width: 760px) {
   .top-bar-leading { min-width: 0; }
+}
+
+/* Coding keeps file context and reviewed work visible while secondary tools stay in a menu. */
+.code-editor-panel { border-radius: var(--radius-panel); --editor-sidebar-width: 270px; }
+.code-editor-sidebar > header { min-height: 54px; padding-inline: 16px 12px; }
+.code-editor-sidebar-tabs { padding: 7px 10px; gap: 5px; }
+.code-editor-files > button:not(.button) { width: calc(100% - 16px); margin: 2px 8px; border-bottom: 0; border-radius: var(--radius-control); }
+.code-editor-tabs { min-height: 44px; }
+.code-editor-tabs > div.active { border-top: 0; box-shadow: inset 0 2px var(--blue); }
+.code-editor-toolbar { position: relative; min-height: 54px; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 8px 14px; }
+.code-editor-actions { overflow: visible; }
+.code-editor-secondary-actions { position: absolute; z-index: 4; top: calc(100% - 1px); right: 14px; display: none; width: min(390px, calc(100% - 28px)); max-height: 420px; flex-wrap: wrap; gap: 6px; padding: 10px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface-raised); box-shadow: var(--shadow-lg); }
+.code-editor-secondary-actions.open { display: flex; }
+.code-editor-secondary-actions .button { min-height: 40px; }
+.code-editor-tools-trigger { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+.code-editor-dirty { padding: 5px 8px; border-radius: var(--radius-control); background: var(--green-muted); }
+.code-editor-dirty.dirty { background: var(--yellow-muted); }
+.code-editor-main > footer { min-height: 34px; padding-inline: 12px; }
+.code-editor-action-rail { display: flex; min-height: 54px; align-items: center; gap: 7px; padding: 5px 12px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
+.code-editor-action-rail > span { flex: 0 0 auto; margin-right: 6px; color: var(--muted); font-size: 10px; font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
+.code-editor-action-rail .button { min-height: 40px; }
+.code-editor-security-actions { margin-left: 0; }
+@media (max-width: 760px) {
+  .code-editor-panel { --editor-sidebar-width: 100%; }
+  .code-editor-toolbar { grid-template-columns: minmax(0, 1fr); padding: 8px; }
+  .code-editor-tools-trigger { display: none; }
+  .code-editor-action-rail { flex-wrap: wrap; }
+  .code-editor-action-rail > span { width: 100%; }
+  .code-editor-security-actions { width: 100%; }
+  .code-editor-security-actions .button { min-height: 44px; }
 }
