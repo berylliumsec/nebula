@@ -36,11 +36,20 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             EntityRow.kind == "chat_messages", EntityRow.engagement_id == project_id
         )
         visible_chat = aliased(EntityRow)
-        statement = statement.where(exists(select(visible_chat.id).where(
-            visible_chat.kind == "chat_sessions",
-            visible_chat.id == EntityRow.payload["session_id"].as_string(),
-            func.coalesce(visible_chat.payload["metadata"]["temporary_assistant"].as_boolean(), False).is_(False),
-        )))
+        statement = statement.where(
+            exists(
+                select(visible_chat.id).where(
+                    visible_chat.kind == "chat_sessions",
+                    visible_chat.id == EntityRow.payload["session_id"].as_string(),
+                    func.coalesce(
+                        visible_chat.payload["metadata"][
+                            "temporary_assistant"
+                        ].as_boolean(),
+                        False,
+                    ).is_(False),
+                )
+            )
+        )
         if session_id:
             session = store.get(ChatSession, session_id)
             if session.engagement_id != project_id:

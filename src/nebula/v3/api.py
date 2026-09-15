@@ -8401,7 +8401,8 @@ def create_app(
 
     app.include_router(
         temporary_chat_router(store, chat_service, harness_runtime),
-        prefix=API_PREFIX, dependencies=[Depends(require_auth)],
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
     )
 
     from .chat_workspace import workspace_router

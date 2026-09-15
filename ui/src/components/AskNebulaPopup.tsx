@@ -45,6 +45,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
       branch.current = session;
       setReady(true);
     }).catch(reason => {
+      void logCaughtDiagnostic("interface.ask_nebula.open_failed", "The temporary assistant could not open.", reason, "chat");
       if (!closed) setError(reason instanceof Error ? reason.message : "Could not open a temporary conversation. Try again.");
     });
     const unload = () => { if (created) discard(created.id); };
@@ -63,7 +64,9 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
   const stop = async () => {
     if (!api || !turnId.current) return;
     try { await api.cancelChatTurn(turnId.current); controller.current?.abort(); setBusy(false); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not stop the response. Try Stop again."); }
+    catch (reason) {
+      void logCaughtDiagnostic("interface.ask_nebula.stop_failed", "The temporary response could not be stopped.", reason, "chat");
+      setError(reason instanceof Error ? reason.message : "Could not stop the response. Try Stop again."); }
   };
   const ask = async () => {
     const session = branch.current;
@@ -97,7 +100,10 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
         setQuestion(""); setAnswer("");
       }
     } catch (reason) {
-      if (!abort.signal.aborted) setError(reason instanceof Error ? reason.message : "The response failed. You can try your question again.");
+      if (!abort.signal.aborted) {
+        void logCaughtDiagnostic("interface.ask_nebula.response_failed", "The temporary assistant response failed.", reason, "chat");
+        setError(reason instanceof Error ? reason.message : "The response failed. You can try your question again.");
+      }
     } finally { setBusy(needsAction.current && !abort.signal.aborted); }
   };
 
