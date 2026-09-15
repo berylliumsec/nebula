@@ -1,17 +1,18 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import { ManagedAssistantBrowser } from "./ManagedAssistantBrowser";
 
-function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean; approval_policy?: "always" | "on_boundary" | "never" }>) {
+function fixture(active = true, fail = false, protectedField = false, fileField = false, controlRead?: Promise<{ paused: boolean; approval_policy?: "always" | "on_boundary" | "never" }>, pageReset = false) {
   let savedFiles: { reference: string; filename: string; size: number; media_type: string }[] = [];
   let actions: { id: string; status: string; expires_at: string; operator_requested: boolean; request: Record<string, unknown> }[] = [];
   let savedCredentials: { reference: string; label: string; available: boolean }[] = [];
   let liveTab = { id: "tab-1", url: "https://example.test/", title: "Example" };
+  let resetNoticePending = pageReset;
   const connection: { close: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn>; readyState: number; onopen?: () => void } = { close: vi.fn(), send: vi.fn(), readyState: 1 };
   const request = vi.fn(async (path: string, options?: RequestInit) => {
     if (fail) throw new Error("Managed Chromium is unavailable. Prepare the host and retry.");
-    if (path.endsWith("/browser-companion")) return { session_id: "browser-1", conversation_id: "chat-1", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] };
+    if (path.endsWith("/browser-companion")) { const reset = resetNoticePending; resetNoticePending = false; return { session_id: "browser-1", conversation_id: "chat-1", page_state_reset: reset, tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] }; }
     if (path.endsWith("/control") && controlRead) return controlRead;
     if (path.endsWith("/files")) {
       if (options?.method === "POST") savedFiles = [{ reference: "file-1", filename: JSON.parse(String(options.body)).filename, size: 12, media_type: "text/plain" }];
@@ -40,6 +41,21 @@ function fixture(active = true, fail = false, protectedField = false, fileField 
 }
 
 describe("ManagedAssistantBrowser", () => {
+  it("clears a delivered restart notice on a successful reconnect", async () => {
+    fixture(true, false, false, false, undefined, true);
+    await screen.findByText(/The browser restarted/);
+    fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "Reconnect view" }));
+    await waitFor(() => expect(screen.queryByText(/The browser restarted/)).not.toBeInTheDocument());
+  });
+
+  it("clears the restart notice after assistant control resumes", async () => {
+    const { request } = fixture(true, false, false, false, undefined, true);
+    await screen.findByText(/The browser restarted/);
+    fireEvent.click(screen.getByRole("button", { name: "Resume assistant control" }));
+    await waitFor(() => expect(screen.queryByText(/The browser restarted/)).not.toBeInTheDocument());
+    expect(request).toHaveBeenCalledWith(expect.stringContaining("control?paused=false"), expect.anything());
+  });
+
   it("is an Assistant browser viewer, not a second page controller", async () => {
     fixture();
     await waitFor(() => expect(screen.getByRole("button", { name: "Ask about page" })).toBeEnabled());

@@ -18,6 +18,8 @@ interface BrowserCredential { reference: string; label: string; available: boole
 interface BrowserFile { reference: string; filename: string; size: number; media_type: string }
 interface Action { operator_requested?: boolean; id: string; status: string; expires_at: string; request: { operation: string; text: string; tab_id: string; page_revision: string; element_id: string; url?: string; credential_ref?: string; file_ref?: string }; }
 
+const BROWSER_RESTART_NOTICE = "The browser restarted. Your conversation is saved, but the previous live tabs were lost. Resume assistant control and ask the Assistant to reopen the page.";
+
 export function ManagedAssistantBrowser({ api, projectId, active, conversationId, onConversation, onContext, onImage, imageSupported, onControlChange, actionContainer, controlsOpen = true }: {
   api: ApiClient; projectId: string; active: boolean; conversationId?: string;
   onConversation: (id: string) => void; onContext: (request: NebulaDraftRequest) => void;
@@ -74,7 +76,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       if (!mounted.current) return;
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
       setSession(next); setTabs(next.tabs); setTabId(selected?.id ?? ""); setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
-      if (next.page_state_reset) { controlRevision.current += 1; setPaused(true); setError("The browser restarted. Your conversation is saved, but the previous live tabs were lost. Resume assistant control and ask the Assistant to reopen the page."); }
+      if (next.page_state_reset) { controlRevision.current += 1; setPaused(true); setError(BROWSER_RESTART_NOTICE); }
       if (!conversationRef.current && next.conversation_id) onConversationRef.current(next.conversation_id);
     } catch (caught) { if (mounted.current) logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
@@ -200,7 +202,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
         const revision = ++controlRevision.current;
         setControlBusy(true);
         void request(`browser-companion/${session.session_id}/control?paused=${nextPaused}`, undefined, "PUT")
-          .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); } })
+          .then(() => { if (revision === controlRevision.current) { controlRevision.current += 1; setPaused(nextPaused); if (!nextPaused) setError(current => current === BROWSER_RESTART_NOTICE ? "" : current); } })
           .catch(caught => logCaughtDiagnosticFailure(caught)).finally(() => setControlBusy(false));
       }}>{paused ? <Play size={18} aria-hidden="true" /> : <Hand size={18} aria-hidden="true" />}</button>
     </div>
