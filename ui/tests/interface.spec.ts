@@ -814,11 +814,25 @@ test("stabilization Coding keeps Save and reviewed actions discoverable", async 
   await expect(page.getByText("Unsaved", { exact: true })).toBeVisible();
   const rail = page.locator(".code-editor-action-rail");
   await expect(rail.getByRole("button", { name: "Review & run" })).toBeVisible();
-  await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 1440) > 760) {
+    await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeVisible();
     await page.getByRole("button", { name: "More editor tools" }).click();
     await expect(page.getByLabel("Editor tools").getByRole("button", { name: "Find", exact: true })).toBeVisible();
   } else {
+    const moreActions = rail.getByRole("button", { name: "More code actions" });
+    await expect(moreActions).toBeVisible();
+    await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeHidden();
+    const [railBounds, reviewBounds, moreBounds] = await Promise.all([
+      rail.boundingBox(),
+      rail.getByRole("button", { name: "Review & run" }).boundingBox(),
+      moreActions.boundingBox(),
+    ]);
+    expect(railBounds && reviewBounds && moreBounds).toBeTruthy();
+    expect(reviewBounds!.x + reviewBounds!.width).toBeLessThanOrEqual(moreBounds!.x + 1);
+    expect(moreBounds!.x + moreBounds!.width).toBeLessThanOrEqual(railBounds!.x + railBounds!.width);
+    await moreActions.click();
+    await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeVisible();
+    await expect(rail.getByRole("button", { name: "Preserve as Evidence" })).toBeVisible();
     await page.getByRole("button", { name: "More editor actions" }).click();
     await expect(page.getByLabel("Editor options").getByRole("button", { name: "Find", exact: true })).toBeVisible();
   }

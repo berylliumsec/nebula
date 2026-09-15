@@ -1,22 +1,11 @@
 {
-  "change_digest": "185fdb271a4d47d52b868cf353b8d2d02b27fc6851fa070162e83f30657d5c1a",
-  "reviewed_by": "Codex Security Browser interception and manual workspace review",
-  "reason": "Reviewed the isolated browser-only diff. Selected 21 WorkbenchBrowser component cases, 13 RepeaterWorkspace cases, eight permanent desktop/mobile Chromium/WebKit manual-workspace journeys, and one real-Core LAN Repeater persistence/handoff journey. Native proxy synchronization is changed only in the UI worker and is not executable in this Linux browser test environment.",
-  "exclusions": "No full suites. Backend route and durable storage behavior are unchanged. Native WKWebView interception requires a connected Tauri desktop and remains unverified here. Physical mobile devices and unrelated Coding, assistant, harness, and Python workflows are excluded.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 34,
-    "native": 0,
-    "playwright": 9
-  },
+  "change_digest": "8edf34f383b29f2eb4b7425a6635b61cac743831677d188e4bf6502b09531eb3",
+  "reviewed_by": "Codex mobile Coding action-rail review",
+  "reason": "Reviewed the mobile Coding action-rail and focused browser assertion diff after rebasing onto the Security Browser update; its shared CSS and test edits are unrelated to this Coding delta. The secondary workflow actions expand as full-width rows at 320/390/430 px, Review and More actions stay inside the rail, and choosing a handoff closes the menu before returning to the editor. Selected the existing Coding desktop/mobile Chromium/WebKit area, editor component file, and real-Core Code save journey to protect the shared toolbar and workspace draft flow.",
+  "exclusions": "No full suites. Core routes, native code, mission execution, unrelated Workbench views, and physical-device testing are unchanged or unavailable. Python and native layers have no relevant implementation change.",
+  "expected_tests": {"python": 0, "frontend": 22, "native": 0, "playwright": 10},
   "python": [],
-  "frontend": [
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/RepeaterWorkspace.test.tsx"
-  ],
+  "frontend": ["ui/src/components/CodeEditorPanel.test.tsx"],
   "native": [],
-  "playwright": [
-    "area:manual-request-workspace",
-    "area:real-core-browser-handoff"
-  ]
+  "playwright": ["area:coding-makeover", "area:coding-makeover-core"]
 }

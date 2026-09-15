@@ -1170,7 +1170,9 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await textSearch.getByRole("option", { name: /scanner\.py.*Line 1/ }).click();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
 
+    await page.getByRole("button", { name: "More code actions" }).click();
     await page.getByRole("button", { name: "Preserve as Evidence" }).click();
+    await expect(page.getByRole("button", { name: "More code actions" })).toHaveAttribute("aria-expanded", "false");
     const preserveDialog = page.getByRole("dialog", { name: "Preserve scanner.py as Evidence?" });
     await preserveDialog.getByRole("button", { name: "Preserve as Evidence" }).click();
     await expect(page.getByText(/Preserved scanner\.py as Evidence/)).toBeVisible();
@@ -1212,6 +1214,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await expect(references).toBeVisible();
     await expect(references.getByRole("option")).toHaveCount(2);
 
+    await page.getByRole("button", { name: "More code actions" }).click();
     await page.getByRole("button", { name: "Candidate finding" }).click();
     const findingHandoff = page.getByRole("dialog", { name: "Draft an evidence-backed candidate finding?" });
     await expect(findingHandoff).toContainText("Nothing is validated or confirmed automatically");
