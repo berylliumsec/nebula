@@ -825,7 +825,7 @@ def test_attached_files_are_scoped_revocable_and_integrity_checked(tmp_path):
         service.file_payload(session.id, reference)
 
 
-def test_background_tab_poll_preserves_lost_state_until_navigation(
+def test_background_tab_poll_reports_lost_state_once_without_repausing_on_reconnect(
     tmp_path, monkeypatch
 ):
     import httpx
@@ -875,7 +875,10 @@ def test_background_tab_poll_preserves_lost_state_until_navigation(
         assert saved.metadata["assistant_paused"] is True
         assert store.get(CompanionAction, pending.id).status == "revoked"
         assert (await service.open(project.id))["page_state_reset"] is True
-        assert (await service.open(project.id))["page_state_reset"] is True
+        assert service.session(session.id).metadata["browser_page_state_reset"] is False
+        service.takeover(session.id, False)
+        assert (await service.open(project.id))["page_state_reset"] is False
+        assert service.session(session.id).metadata["assistant_paused"] is False
         await service.request(
             session.id,
             CompanionRequest(

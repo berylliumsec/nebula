@@ -5814,6 +5814,7 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
 for (const degradedBrowserCore of [false, true]) {
 test(`browser Assistant stays beside the page through an answer and follow-up${degradedBrowserCore ? " with degraded Core" : ""}`, async ({ page, browserName }) => {
   test.setTimeout(browserName === "webkit" ? 180000 : 90000);
+  let restartNoticePending = !degradedBrowserCore;
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (degradedBrowserCore && path.endsWith("/health")) {
@@ -5825,7 +5826,9 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
     } else if (path.endsWith("/handoffs") && route.request().method() === "POST") {
       await route.fulfill({ json: { ...entity, id: "browser-selection-handoff", ...route.request().postDataJSON(), status: "pending" } });
     } else if (path.endsWith("/browser-companion")) {
-      await route.fulfill({ json: { session_id: "browser-session", tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
+      const pageStateReset = restartNoticePending;
+      restartNoticePending = false;
+      await route.fulfill({ json: { session_id: "browser-session", page_state_reset: pageStateReset, tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
     } else if (path.endsWith("/browser-companion/browser-session/operations")) {
       if (route.request().postDataJSON()?.operation === "tabs") {
         await route.fulfill({ json: { tabs: [{ id: "tab-1", url: "https://example.test/", title: "Example" }] } });
@@ -5860,6 +5863,10 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await toggleAssistant.click();
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "true");
   const openedAssistant = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
+  if (!degradedBrowserCore) {
+    const browserViewer = page.getByRole("region", { name: "Assistant browser", exact: true });
+    await expect(browserViewer.getByText(/The browser restarted/)).toBeVisible();
+  }
   const assistantResize = openedAssistant.getByRole("separator", { name: "Resize Browser Assistant" });
   if (await openedAssistant.locator(".browser-assistant-sheet").count() === 0 && await openedAssistant.evaluate((element) => !element.classList.contains("browser-assistant-sheet"))) {
     await expect(assistantResize).toBeVisible();
@@ -5876,6 +5883,11 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
 
   if (await page.locator(".browser-assistant-sheet").count()) await page.getByRole("button", { name: "Collapse browser Assistant" }).click();
+  if (!degradedBrowserCore) {
+    const browserViewer = page.getByRole("region", { name: "Assistant browser", exact: true });
+    await browserViewer.getByRole("alert").getByRole("button", { name: "Reconnect view", exact: true }).click();
+    await expect(browserViewer.getByText(/The browser restarted/)).toHaveCount(0);
+  }
   const browserToolbar = page.locator(".managed-browser-toolbar");
   for (const name of ["Reconnect view", "Ask about page"]) {
     const action = browserToolbar.getByRole("button", { name, exact: true });

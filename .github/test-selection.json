@@ -1,21 +1,22 @@
 {
-  "change_digest": "30f0bbcf4a36fdbf11421b92b499117deeedb4eae103e733bbe7e0c831fca6ce",
-  "reviewed_by": "Codex native browser stale scope review",
-  "reason": "The Native browser status must ignore saved proxy blocks from an older Project scope revision and clear a live block after native scope installation succeeds. Focused browser component cases cover saved and live signals, reload ordering, and failure; the catalogued desktop native-scope case covers the visible warning and recovery control.",
-  "exclusions": "No full suites. No Python or native Rust changes. Mobile browser projects do not run the Tauri Native browser and are outside this journey. Provider, chat, terminal, and unrelated browser automation tests excluded. Real Mac webview acceptance is unavailable from the Linux workspace; production build and read-only Core revision evidence are checked locally.",
+  "change_digest": "8506a3fe51f57e6dae56ef5c6a377ac72d1aa4e5da019efd0443548eed668845",
+  "reviewed_by": "Codex Assistant browser restart recovery review",
+  "reason": "Core must report lost live tabs once without pausing control again on reconnect, while the Assistant viewer clears the delivered warning on reconnect or successful resume. The selected Core lost-tab case uses durable BrowserSession state; the component cases cover warning lifecycle and failure; the bounded Assistant-viewer matrix covers visible recovery, responsive states, and adjacent approval/upload controls.",
+  "exclusions": "No full suites. No native Rust change. Unrelated chat/provider, terminal, native browser and release packaging tests excluded. The catalogued Assistant-viewer area includes its adjacent upload case. The real managed-Chromium restart journey and physical-device validation are unavailable from selected mocked Playwright coverage; production build and local Core staging will be reviewed separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 24,
+    "python": 1,
+    "frontend": 18,
     "native": 0,
-    "playwright": 1
+    "playwright": 24
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_browser_companion.py::test_background_tab_poll_reports_lost_state_once_without_repausing_on_reconnect"
+  ],
   "frontend": [
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/browserScopeStatus.test.ts"
+    "ui/src/components/ManagedAssistantBrowser.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:native-scope-status"
+    "area:assistant-viewer"
   ]
 }

@@ -436,6 +436,19 @@ class BrowserCompanion:
             if page_state_reset:
                 self.takeover(session.id, True)
                 session = self.session(session.id)
+                # Report the lost live page once. A reconnect must not replay the
+                # notice or pause control again after the operator resumes it.
+                session = self.store.update(
+                    BrowserSession,
+                    session.id,
+                    {
+                        "metadata": {
+                            **session.metadata,
+                            "browser_page_state_reset": False,
+                        }
+                    },
+                    expected_revision=session.revision,
+                )
             if session.active_tab_id not in available and tabs["tabs"]:
                 session = self.store.update(
                     BrowserSession,
