@@ -2695,12 +2695,16 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .code-editor-action-rail > span { flex: 0 0 auto; margin-right: 6px; color: var(--muted); font-size: 10px; font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
 .code-editor-action-rail .button { min-height: 40px; }
 .code-editor-security-actions { margin-left: 0; }
+.code-editor-mobile-action-toggle { display: none; }
 @media (max-width: 760px) {
   .code-editor-panel { --editor-sidebar-width: 100%; }
   .code-editor-toolbar { grid-template-columns: minmax(0, 1fr); padding: 8px; }
   .code-editor-tools-trigger { display: none; }
   .code-editor-action-rail { flex-wrap: wrap; }
   .code-editor-action-rail > span { width: 100%; }
-  .code-editor-security-actions { width: 100%; }
-  .code-editor-security-actions .button { min-height: 44px; }
+  .code-editor-security-actions { width: 100%; flex-wrap: wrap; overflow-x: hidden; }
+  .code-editor-security-actions > .button:first-child { min-width: 0; flex: 1 1 0; }
+  .code-editor-mobile-action-toggle { display: inline-flex; min-width: 130px; min-height: 44px; flex: 0 0 auto; justify-content: center; }
+  .code-editor-security-actions > .code-editor-secondary-workflow-action { display: none; }
+  .code-editor-action-rail.mobile-actions-open .code-editor-security-actions > .code-editor-secondary-workflow-action { display: inline-flex; width: 100%; min-height: 44px; flex: 0 0 100%; }
 }
