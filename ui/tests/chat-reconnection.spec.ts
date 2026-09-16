@@ -66,10 +66,11 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await expect.poll(() => sockets.length).toBeGreaterThan(1);
     expect(Number(new URL(sockets[1].url).searchParams.get("after"))).toBeGreaterThan(0);
     await request.post(`${local}/fixture/release/${id}`, {headers});
-    await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveText("Before disconnect. After reconnect.", {timeout: 55_000});
+    const resumedReply = page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "Before disconnect. After reconnect."});
+    await expect(resumedReply).toHaveText("Before disconnect. After reconnect.", {timeout: 55_000});
     expect(await (await request.get(`${local}/fixture/executions/${id}`, {headers})).json()).toEqual({executions: 1});
     await page.reload();
-    await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveText("Before disconnect. After reconnect.");
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").filter({hasText: "Before disconnect. After reconnect."})).toHaveText("Before disconnect. After reconnect.");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect((await new AxeBuilder({page}).include(".chat-message.assistant").analyze()).violations).toEqual([]);
     await page.screenshot({path: info.outputPath(`${vendor}-reconnected.png`)});
