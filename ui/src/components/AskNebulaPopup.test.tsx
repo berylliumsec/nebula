@@ -95,9 +95,10 @@ it("leaves the page interactive and supports keyboard repositioning without dism
 });
 
 it("moves the hidden launcher by keyboard while keeping Show separate", async () => {
-  const api = fixture(); const user = userEvent.setup();
-  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+  const api = fixture(); const user = userEvent.setup(); const onVisibilityChange = vi.fn();
+  render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} onVisibilityChange={onVisibilityChange} />);
   await user.click(screen.getByRole("button", { name: "Hide Ask Nebula" }));
+  expect(onVisibilityChange).toHaveBeenLastCalledWith(false);
   const moveButton = screen.getByRole("button", { name: "Move hidden Ask Nebula" });
   const launcher = moveButton.parentElement!;
   moveButton.focus();
@@ -106,6 +107,7 @@ it("moves the hidden launcher by keyboard while keeping Show separate", async ()
   expect(screen.getByRole("button", { name: /Show Ask Nebula/ })).toBeVisible();
   await user.click(screen.getByRole("button", { name: /Show Ask Nebula/ }));
   expect(screen.getByRole("dialog", { name: "Ask Nebula" })).toBeVisible();
+  expect(onVisibilityChange).toHaveBeenLastCalledWith(true);
 });
 
 

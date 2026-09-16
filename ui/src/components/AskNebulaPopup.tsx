@@ -12,14 +12,21 @@ import styles from "./AskNebulaPopup.module.css";
 
 export type AssistantSnapshot = Omit<ChatCompletionRequest, "messages" | "contextAttachments">;
 
-export function AskNebulaPopup({ api, snapshot, context, onClose }: {
-  api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; onClose(): void;
+export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityChange }: {
+  api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; onClose(): void; onVisibilityChange?: (visible: boolean) => void;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const launcher = useRef<HTMLButtonElement>(null);
   const launcherShell = useRef<HTMLDivElement>(null);
   const [hidden, setHidden] = useState(false);
+  const previousContext = useRef(context);
+  useEffect(() => {
+    if (previousContext.current !== context) {
+      previousContext.current = context;
+      setHidden(false);
+    }
+  }, [context]);
   const [launcherPosition, setLauncherPosition] = useState<{ x: number; y: number }>();
   const [position, setPosition] = useState({ x: Math.max(12, window.innerWidth - 584), y: 80 });
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
@@ -29,9 +36,13 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     const viewport = window.visualViewport;
     const left = viewport?.offsetLeft ?? 0;
     const top = viewport?.offsetTop ?? 0;
+    const nativeSurface = document.querySelector('.persistent-browser:not([hidden]) .workbench-browser .browser-surface')?.getBoundingClientRect();
+    const launcherHeight = rect?.height ?? 64;
+    const maxY = Math.min(top + (viewport?.height ?? window.innerHeight) - launcherHeight - 12,
+      nativeSurface ? nativeSurface.top - launcherHeight - 12 : Infinity);
     setLauncherPosition({
       x: Math.max(left + 12, Math.min(x, left + (viewport?.width ?? window.innerWidth) - (rect?.width ?? 288) - 12)),
-      y: Math.max(top + 12, Math.min(y, top + (viewport?.height ?? window.innerHeight) - (rect?.height ?? 64) - 12)),
+      y: Math.max(top + 12, Math.min(y, maxY)),
     });
   };
   const move = (x: number, y: number) => {
@@ -45,7 +56,11 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
     });
   };
   useLayoutEffect(() => {
-    if (hidden) { launcher.current?.focus(); return; }
+    if (hidden) {
+      const rect = launcherShell.current?.getBoundingClientRect();
+      if (rect) moveLauncher(rect.left, rect.top);
+      launcher.current?.focus(); return;
+    }
     const clamp = () => {
       const rect = panel.current?.getBoundingClientRect();
       if (rect) move(rect.left, rect.top);
@@ -235,7 +250,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
         onPointerUp={() => { launcherDrag.current = undefined; }} onPointerCancel={() => { launcherDrag.current = undefined; }} onLostPointerCapture={() => { launcherDrag.current = undefined; }}
         onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); const rect = launcherShell.current?.getBoundingClientRect(); if (rect) moveLauncher(rect.left + direction[0] * 24, rect.top + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
       <button ref={launcher} type="button" className={styles.launcherShow} aria-label={`Show Ask Nebula, ${launcherStatus}`} title="Show the same temporary conversation"
-        onClick={() => setHidden(false)}>
+        onClick={() => { setHidden(false); onVisibilityChange?.(true); }}>
         <span className={styles.launcherText}><strong>Ask Nebula</strong><small role="status">{launcherStatus}</small></span>
         <span className={styles.show}>Show</span>
       </button>
@@ -250,7 +265,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose }: {
           onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); move(position.x + direction[0] * 24, position.y + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
         <div className={styles.title}><h2 id="ask-nebula-title">Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
         <button className="icon-button subtle" type="button" aria-label="Hide Ask Nebula" title="Hide and keep this conversation"
-          onClick={() => { setQuestion(input.current?.value ?? question); setHidden(true); }}><Minimize2 size={18} aria-hidden="true" /></button>
+          onClick={() => { setQuestion(input.current?.value ?? question); setHidden(true); onVisibilityChange?.(false); }}><Minimize2 size={18} aria-hidden="true" /></button>
         <button className="icon-button subtle" type="button" aria-label="Close Ask Nebula" title="Close and discard" onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <details className={styles.context}><summary>{context.source.label}{context.truncated ? " · shortened" : ""}</summary><pre>{context.text}</pre></details>
       <div className={styles.transcript} ref={output}>

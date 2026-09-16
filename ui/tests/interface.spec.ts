@@ -1027,13 +1027,24 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   })).toBeGreaterThan(narrowedBrowserWidth);
   await page.getByRole("button", { name: "Ask Nebula about the live page" }).click();
   await expect(page).toHaveURL(/view=browser/);
-  const attachment = page.getByRole("region", { name: "Selected context pack" });
-  await expect(attachment).toContainText("Browser · Mock target account");
-  await expect(attachment).toContainText("characters");
-  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
-  await expect(composer).toBeDisabled();
-  await expect(composer).toHaveAttribute("placeholder", "Add a model or harness in Settings…");
-  await expect(page.locator(".chat-message")).toHaveCount(0);
+  const popup = page.getByRole("dialog", { name: "Ask Nebula" });
+  await expect(popup).toBeVisible();
+  await expect(popup).toContainText("Browser · Mock target account");
+  const nativeVisible = () => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    return calls.filter(call => call.command === "browser_set_visible").at(-1)?.args.visible;
+  });
+  await expect.poll(nativeVisible).toBe(false);
+  await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
+  await expect.poll(nativeVisible).toBe(true);
+  const launcher = page.getByRole("button", { name: /Show Ask Nebula/ });
+  await expect(launcher).toBeVisible();
+  expect((await launcher.boundingBox())!.y + (await launcher.boundingBox())!.height).toBeLessThanOrEqual(geometry.surfaceTop);
+  await launcher.click();
+  await expect(popup).toBeVisible();
+  await expect.poll(nativeVisible).toBe(false);
+  await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
+  await expect.poll(nativeVisible).toBe(true);
   await page.route("**/browser-sessions/*/traffic", async route => {
     const request = route.request().postDataJSON();
     await route.fulfill({json: {...entity, ...request, id: "scope-blocked", session_id: "browser-session-preview", identity_id: "browser-identity-preview", scope_state: "unconfigured", scope_policy_revision: 1, started_at: entity.created_at, truncated: false}});

@@ -61,6 +61,7 @@ interface WorkbenchBrowserProps {
   scopeLoading?: boolean;
   onAddKnowledgeUrl: (url: string) => Promise<{ id: string; name: string }>;
   onAskNebula: (request: NebulaDraftRequest) => void;
+  askNebulaPopupVisible?: boolean;
   onAttachContext?: (request: NebulaDraftRequest) => void;
   assistantRuntimeLabel?: string;
   onAskSelection?: (
@@ -134,7 +135,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onAttachContext, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, askNebulaPopupVisible = false, onAttachContext, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
@@ -279,7 +280,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     : savedScopeSignal ? proxyScopeSignal(savedScopeSignal) : undefined;
   const scopeBadge = browserScopeStatus(scopeDecision, nativeScopeError);
   const researchCoversBrowser = researchOpen && window.matchMedia("(max-width: 1100px)").matches;
-  const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen
+  const browserVisible = desktop && active && !researchCoversBrowser && !activityOpen && !paletteOpen && !settingLensOpen && !dialogOpen && !askNebulaPopupVisible
     && (sidebarCollapsed || !window.matchMedia("(max-width: 760px)").matches);
 
   const bounds = useCallback((): BrowserBounds | undefined => {

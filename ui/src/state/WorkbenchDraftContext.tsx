@@ -40,6 +40,7 @@ export interface FindingDraftRequest {
 }
 
 interface WorkbenchDraftContextValue {
+  askNebulaPopupVisible: boolean;
   assistantDrafts: SelectionActionDraft[];
   assistantDraftNotice?: string;
   noteDraft?: SelectionActionDraft;
@@ -214,6 +215,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const assistantSnapshot = useRef<AssistantSnapshot | undefined>(undefined);
   const registerAssistantSnapshot = useCallback((snapshot: AssistantSnapshot) => { assistantSnapshot.current = snapshot; }, []);
   const [popup, setPopup] = useState<{ draft: SelectionActionDraft; snapshot?: AssistantSnapshot }>();
+  const [popupVisible, setPopupVisible] = useState(false);
   const location = useLocation();
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -317,6 +319,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
     } : undefined;
     setPopup({ draft, snapshot: snapshot ? { ...snapshot } : undefined });
+    setPopupVisible(true);
   }, [engagement, providers, harnesses]);
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const draft = toSelectionDraft(request);
@@ -410,6 +413,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   );
 
   const value = useMemo<WorkbenchDraftContextValue>(() => ({
+    askNebulaPopupVisible: Boolean(popup) && popupVisible,
     assistantDrafts,
     assistantDraftNotice,
     noteDraft,
@@ -428,6 +432,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     clearExecutionDraft,
     clearFindingDraft,
   }), [
+    popup,
+    popupVisible,
     assistantDrafts,
     assistantDraftNotice,
     clearAssistantDraftNotice,
@@ -456,7 +462,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       resolveSource={resolveSource}
     >
       {children}
-      {popup && <AskNebulaPopup api={api} snapshot={popup.snapshot} context={popup.draft} onClose={() => setPopup(undefined)} />}
+      {popup && <AskNebulaPopup api={api} snapshot={popup.snapshot} context={popup.draft}
+        onVisibilityChange={setPopupVisible} onClose={() => { setPopup(undefined); setPopupVisible(false); }} />}
     </SelectionActionsProvider>
   </WorkbenchDraftContext.Provider>;
 }
