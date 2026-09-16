@@ -3028,14 +3028,23 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       await dialog.getByRole("button", {name: "Save harness"}).click();
       await expect(page.getByRole("heading", {name: `${vendor} Work`, exact: true})).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByText(/Sign-in: verified · Session: unverified · Model turn: unverified/).last()).toBeVisible();
+      await page.getByRole("button", {name: "Test turn"}).last().click();
+      await expect(page.getByText(/Sign-in: verified · Session: verified · Model turn: verified/).last()).toBeVisible();
       const profiles = await (await core.api.get("harnesses")).json();
       const saved = profiles.find((p: {name: string}) => p.name === `${vendor} Work`);
       expect(saved.home_directory).toBe(home);
       ids.push(saved.id);
       await page.reload();
-      await page.getByRole("button", {name: `Edit ${vendor} Work`, exact: true}).click();
-      await expect(page.getByLabel("Account home folder", {exact: true})).toHaveValue(home);
-      await page.getByRole("button", {name: "Close harness dialog"}).click();
+      await expect(page.getByText(/Sign-in: verified · Session: verified · Model turn: verified/).last()).toBeVisible();
+      const editHarness = page.getByRole("button", {name: `Edit ${vendor} Work`, exact: true});
+      const editDialog = page.getByRole("dialog");
+      await expect(async () => {
+        await editHarness.click();
+        await expect(editDialog).toBeVisible();
+      }).toPass({timeout: 10_000});
+      await expect(editDialog.getByLabel("Account home folder", {exact: true})).toHaveValue(home);
+      await editDialog.getByRole("button", {name: "Close harness dialog"}).click();
     }
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
@@ -3046,7 +3055,11 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       await page.getByRole("button", {name: "Close assistant settings"}).click();
       await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill(`Remember account ${id}`);
       await page.getByRole("button", {name: "Send message", exact: true}).click();
-      await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(ids.indexOf(id) + 1, {timeout: 20_000});
+      try {
+        await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(ids.indexOf(id) + 1, {timeout: 20_000});
+      } catch (assertion) {
+        throw new Error(`Assistant text did not render; Core exited=${core.exited()}\n${core.logs().slice(-3000)}`, {cause: assertion});
+      }
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS", {timeout: 20_000});
       if (chatId) expect(new URL(page.url()).searchParams.get("session")).toBe(chatId);
       chatId = new URL(page.url()).searchParams.get("session");

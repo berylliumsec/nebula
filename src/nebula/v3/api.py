@@ -3394,6 +3394,14 @@ def create_app(
     async def check_harness_health(profile_id: str) -> Any:
         return await harness_runtime.health(profile_id)
 
+    @app.post(
+        f"{API_PREFIX}/harnesses/{{profile_id}}/test-turn",
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def test_harness_turn(profile_id: str) -> Any:
+        return await harness_runtime.test_turn(profile_id)
+
     @app.get(
         f"{API_PREFIX}/harnesses/{{profile_id}}/skills",
         response_model=list[HarnessSkillSummary],

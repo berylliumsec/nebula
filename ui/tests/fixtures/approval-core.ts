@@ -39,6 +39,7 @@ export async function startApprovalCore(host: string, scenario: string) {
   try {await launch();} catch (error) {await kill(); await api.dispose(); throw error;}
   return {origin, port, dataDir, api,
     exited: () => processHandle.exitCode !== null || processHandle.signalCode !== null,
+    logs: () => logs,
     disconnect: kill,
     restart: async () => {await kill(); await launch();},
     stop: async () => {await kill(); await api.dispose();},

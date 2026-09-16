@@ -406,10 +406,20 @@ def _harness_developer_instructions(
     vendor: str,
     gateway_tools: tuple[dict[str, Any], ...] = (),
 ) -> str:
-    del session, capabilities, gateway_tools
+    del session
+    tool_names = ", ".join(
+        str(item.get("name") or "")[:100] for item in gateway_tools[:64]
+    )
     return (
-        f"Nebula {vendor} session. Project operations use the supplied Nebula tools; "
-        "their project root is cwd '.'." + BROWSER_MODEL_WORKFLOW
+        f"Nebula {vendor} session. The process cwd is private scratch, not the project workspace. "
+        "Project operations use the supplied Nebula tools; their project root is cwd '.'. "
+        + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
+        + (
+            "The knowledge capability state governs only knowledge.list and knowledge.search; it does not constrain explicitly invoked installed skills. "
+            if capabilities.skills
+            else ""
+        )
+        + BROWSER_MODEL_WORKFLOW
     )
 
 
@@ -486,6 +496,24 @@ class HarnessStateError(HarnessError):
 
 class HarnessTransportError(HarnessError):
     """A transport ended or returned a malformed message."""
+
+
+class HarnessProviderError(HarnessTransportError):
+    """A correlated provider RPC failure with its bounded wire details."""
+
+    def __init__(self, provider: str, value: Any) -> None:
+        self.provider = provider
+        self.data = _bounded(value, limit=1_000)
+        self.code = self.data.get("code") if isinstance(self.data, dict) else None
+        nested = self.data.get("data") if isinstance(self.data, dict) else None
+        self.http_status = (
+            nested.get("http_status")
+            if isinstance(nested, dict)
+            else self.data.get("http_status")
+            if isinstance(self.data, dict)
+            else None
+        )
+        super().__init__(f"{provider} request failed: {self.data}")
 
 
 class HarnessPlanEntry(NebulaModel):
@@ -717,6 +745,10 @@ class HarnessHealth(NebulaModel):
     capabilities: HarnessCapabilities
     detail: str | None = Field(default=None, max_length=1_000)
     checked_at: Any = Field(default_factory=utc_now)
+    authentication_state: Literal["verified", "failed", "unverified"] = "unverified"
+    session_state: Literal["verified", "failed", "unverified"] = "unverified"
+    turn_state: Literal["verified", "failed", "unverified"] = "unverified"
+    last_successful_turn_at: datetime | None = None
 
 
 class HarnessSessionActivity(NebulaModel):
@@ -727,6 +759,9 @@ class HarnessSessionActivity(NebulaModel):
     turn_id: str | None = None
     turn_status: HarnessTurnStatus | None = None
     turn_origin: HarnessTurnOrigin | None = None
+    last_turn_id: str | None = None
+    last_turn_status: HarnessTurnStatus | None = None
+    last_turn_origin: HarnessTurnOrigin | None = None
     started_at: datetime | None = None
     last_activity_at: datetime
     detail: str = Field(max_length=1_000)
@@ -1373,10 +1408,7 @@ class _CodexRpc:
                 return
             if "error" in message:
                 pending.set_exception(
-                    HarnessTransportError(
-                        f"{self.transport_name} request failed: "
-                        + str(_bounded(message["error"], limit=1_000))
-                    )
+                    HarnessProviderError(self.transport_name, message["error"])
                 )
             else:
                 pending.set_result(message.get("result"))
@@ -2150,6 +2182,8 @@ class CodexAppServerConnection(HarnessConnection):
                     return
                 if status != "completed":
                     error = completed.get("error")
+                    if isinstance(error, dict):
+                        raise HarnessProviderError("Codex turn", error)
                     raise HarnessTransportError(
                         "Codex turn failed: "
                         + str(_bounded(error or status, limit=1_000))
@@ -2554,6 +2588,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 profile_id=profile.id,
                 healthy=True,
                 kind=self.kind,
+                authentication_state="verified",
                 harness_version=str(version) if version else None,
                 capabilities=HarnessCapabilities(
                     sessions=True,
@@ -4754,6 +4789,7 @@ class GrokAcpAdapter(HarnessAdapter):
                 profile_id=profile.id,
                 healthy=True,
                 kind=self.kind,
+                authentication_state="verified",
                 harness_version=version,
                 capabilities=HarnessCapabilities(
                     sessions=True,
@@ -5633,6 +5669,22 @@ class HarnessRuntimeService:
                 "checked_at": result.checked_at,
                 "detail": result.detail,
                 "harness_version": result.harness_version,
+                "authentication_state": result.authentication_state
+                if result.healthy
+                else (
+                    "failed"
+                    if reason_code_for(
+                        HarnessConfigurationError(result.detail or ""),
+                        feature="harnesses",
+                    )
+                    == "authentication_failed"
+                    else "unverified"
+                ),
+                "session_state": profile.capabilities.session_state,
+                "turn_state": profile.capabilities.turn_state,
+                "last_successful_turn_at": profile.capabilities.last_successful_turn_at,
+                "last_turn_failure_reason": profile.capabilities.last_turn_failure_reason,
+                "exercised_capabilities": profile.capabilities.exercised_capabilities,
             }
         )
         changes: dict[str, Any] = {"capabilities": capabilities}
@@ -5644,7 +5696,170 @@ class HarnessRuntimeService:
             changes,
             expected_revision=profile.revision,
         )
-        return result
+        return result.model_copy(
+            update={
+                "authentication_state": capabilities.authentication_state,
+                "session_state": capabilities.session_state,
+                "turn_state": capabilities.turn_state,
+                "last_successful_turn_at": capabilities.last_successful_turn_at,
+            }
+        )
+
+    async def test_turn(self, profile_id: str) -> HarnessHealth:
+        """Spend one bounded provider turn outside every durable project session."""
+        profile = self.store.get(HarnessProfile, profile_id)
+        if not profile.enabled:
+            raise HarnessConfigurationError("Enable this harness before testing a turn")
+        model = profile.default_model or next(iter(profile.capabilities.models), None)
+        if not model:
+            raise HarnessConfigurationError(
+                "Check this harness to discover a model first"
+            )
+        state: Literal["verified", "failed", "unverified"] = "failed"
+        session_state: Literal["verified", "failed", "unverified"] = "failed"
+        reason: str | None = None
+        connection: HarnessConnection | None = None
+        try:
+            with tempfile.TemporaryDirectory(
+                prefix="nebula-harness-check-"
+            ) as workspace_name:
+                workspace = Path(workspace_name)
+                session = HarnessSession(
+                    id=str(uuid4()),
+                    engagement_id="diagnostic",
+                    harness_profile_id=profile.id,
+                    model=model,
+                    metadata={
+                        "native_capabilities": HarnessNativeCapabilities().model_dump()
+                    },
+                )
+
+                async def deny_permission(
+                    _request: HarnessPermissionRequest,
+                ) -> PermissionTicket:
+                    raise HarnessConfigurationError("Diagnostic turns cannot use tools")
+
+                request = AdapterOpenRequest(
+                    profile=profile.model_copy(
+                        update={"native_capabilities": HarnessNativeCapabilities()}
+                    ),
+                    session=session,
+                    workspace=workspace,
+                    mcp_profiles=(),
+                    credential_store=self.credential_store,
+                    permission_handler=deny_permission,
+                )
+                adapter = self.adapter_factory(profile.kind)
+                connection = await adapter.open(request)
+                session_state = "verified"
+                completed = False
+                reply = ""
+                async with asyncio.timeout(90):
+                    async for event in connection.run_turn(
+                        "Reply with exactly OK. Do not use tools.", model=model
+                    ):
+                        if event.type == "error":
+                            raise HarnessTransportError(
+                                event.message or "Diagnostic turn failed"
+                            )
+                        if (
+                            event.type in {"tool_started", "tool_completed"}
+                            or event.item_kind == "tool"
+                        ):
+                            raise HarnessConfigurationError(
+                                "Diagnostic turn attempted a tool"
+                            )
+                        completed = completed or event.type == "completed"
+                        if event.type == "completed" and event.message:
+                            reply = event.message
+                        elif event.type == "message_delta" and event.delta:
+                            reply += event.delta
+                if not completed or not reply.strip():
+                    raise HarnessTransportError(
+                        "Diagnostic turn ended without a text answer"
+                    )
+                state = "verified"
+                if connection.external_session_id:
+                    resumed = session.model_copy(
+                        update={"external_session_id": connection.external_session_id}
+                    )
+                    await connection.close()
+                    connection = None
+                    resume_request = AdapterOpenRequest(
+                        profile=request.profile,
+                        session=resumed,
+                        workspace=workspace,
+                        mcp_profiles=(),
+                        credential_store=self.credential_store,
+                        permission_handler=deny_permission,
+                    )
+                    connection = await adapter.open(resume_request)
+                    if connection.external_session_id != resumed.external_session_id:
+                        raise HarnessTransportError(
+                            "Diagnostic session resumed a different id"
+                        )
+                await connection.close()
+                connection = None
+        except Exception as exc:
+            reason = reason_code_for(exc, feature="harnesses")
+            record_caught_exception(
+                "harnesses",
+                "harnesses.test_turn_failed",
+                "A diagnostic harness turn failed.",
+                exc,
+                stage="test-turn",
+            )
+            if state == "verified":
+                session_state = "failed"
+            elif session_state != "verified":
+                session_state = "failed"
+        finally:
+            if connection is not None:
+                with suppress(Exception):
+                    await connection.close()
+        current = self.store.get(HarnessProfile, profile_id)
+        capabilities = current.capabilities.model_copy(
+            update={
+                "authentication_state": "failed"
+                if reason == "authentication_failed"
+                else current.capabilities.authentication_state,
+                "session_state": session_state,
+                "turn_state": state,
+                "last_successful_turn_at": utc_now()
+                if state == "verified"
+                else current.capabilities.last_successful_turn_at,
+                "last_turn_failure_reason": reason,
+                "exercised_capabilities": list(
+                    dict.fromkeys(
+                        [
+                            *current.capabilities.exercised_capabilities,
+                            *(
+                                ("session_create", "model_turn", "session_resume")
+                                if state == "verified" and session_state == "verified"
+                                else ()
+                            ),
+                        ]
+                    )
+                ),
+            }
+        )
+        self.store.update(
+            HarnessProfile,
+            profile_id,
+            {"capabilities": capabilities},
+            expected_revision=current.revision,
+        )
+        return HarnessHealth(
+            profile_id=profile_id,
+            healthy=state == "verified" and session_state == "verified",
+            kind=profile.kind,
+            capabilities=capabilities,
+            detail=reason,
+            authentication_state=capabilities.authentication_state,
+            session_state=session_state,
+            turn_state=state,
+            last_successful_turn_at=capabilities.last_successful_turn_at,
+        )
 
     def available_skills(
         self, *, engagement_id: str, profile_id: str
@@ -7218,6 +7433,40 @@ class HarnessRuntimeService:
                     },
                     expected_revision=session.revision,
                 )
+                try:
+                    profile = self.store.get(HarnessProfile, session.harness_profile_id)
+                    self.store.update(
+                        HarnessProfile,
+                        profile.id,
+                        {
+                            "capabilities": profile.capabilities.model_copy(
+                                update={
+                                    "session_state": "verified",
+                                    "turn_state": "verified",
+                                    "last_successful_turn_at": utc_now(),
+                                    "last_turn_failure_reason": None,
+                                    "exercised_capabilities": list(
+                                        dict.fromkeys(
+                                            [
+                                                *profile.capabilities.exercised_capabilities,
+                                                "session_create",
+                                                "model_turn",
+                                            ]
+                                        )
+                                    ),
+                                }
+                            )
+                        },
+                        expected_revision=profile.revision,
+                    )
+                except Exception as evidence_error:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.profile_evidence_failed",
+                        "Completed turn status could not be copied to the harness profile.",
+                        evidence_error,
+                        stage="profile-evidence",
+                    )
             except asyncio.CancelledError as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -8700,6 +8949,11 @@ class HarnessRuntimeService:
                     goal = event.goal
 
         connection = self._connections.get(session.id)
+        last_turn = (
+            self.store.get(HarnessTurn, session.last_turn_id)
+            if session.last_turn_id
+            else None
+        )
         return HarnessSessionActivity(
             session_id=session.id,
             session_status=session.status,
@@ -8708,6 +8962,9 @@ class HarnessRuntimeService:
             turn_id=turn.id if turn is not None else None,
             turn_status=turn.status if turn is not None else None,
             turn_origin=turn.origin if turn is not None else None,
+            last_turn_id=last_turn.id if last_turn is not None else None,
+            last_turn_status=last_turn.status if last_turn is not None else None,
+            last_turn_origin=last_turn.origin if last_turn is not None else None,
             started_at=turn.started_at if turn is not None else None,
             last_activity_at=session.last_activity_at,
             detail=detail,
@@ -11324,6 +11581,31 @@ class HarnessRuntimeService:
             )
         self._interrupt_owner(turn)
         session = self.store.get(HarnessSession, turn.harness_session_id)
+        reason = diagnostic.get("reason_code") if diagnostic else None
+        if status != HarnessTurnStatus.CANCELLED:
+            try:
+                profile = self.store.get(HarnessProfile, session.harness_profile_id)
+                self.store.update(
+                    HarnessProfile,
+                    profile.id,
+                    {
+                        "capabilities": profile.capabilities.model_copy(
+                            update={
+                                "turn_state": "failed",
+                                "last_turn_failure_reason": reason,
+                            }
+                        )
+                    },
+                    expected_revision=profile.revision,
+                )
+            except Exception as evidence_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.profile_evidence_failed",
+                    "Failed turn status could not be copied to the harness profile.",
+                    evidence_error,
+                    stage="profile-evidence",
+                )
         if session.status != HarnessSessionStatus.CLOSED:
             self.store.update(
                 HarnessSession,

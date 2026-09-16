@@ -16,6 +16,8 @@ INCIDENT_SCHEMA = "nebula.diagnostic-incident/v1"
 REASON_CODES = frozenset(
     {
         "transport_closed",
+        "quota_exhausted",
+        "session_not_found",
         "protocol_invalid",
         "dependency_unavailable",
         "authentication_failed",
@@ -149,11 +151,37 @@ def reason_code_for(
     if event_code in REASON_CODES:
         return event_code
     name = type(exception).__name__.lower() if exception is not None else ""
-    code = " ".join(filter(None, (event_code, name))).lower()
+    code = " ".join(
+        filter(None, (event_code, name, str(exception)[:300] if exception else None))
+    ).lower()
+    provider_status = getattr(exception, "http_status", None)
+    provider_data = getattr(exception, "data", None)
+    provider_text = (
+        str(provider_data) + " " + str(getattr(exception, "code", ""))
+    ).lower()[:1_000]
+    if provider_status == 402 or any(
+        token in provider_text
+        for token in ("balance exhausted", "quota exhausted", "insufficient credits")
+    ):
+        return "quota_exhausted"
+    if provider_status == 404 or any(
+        token in provider_text
+        for token in ("session not found", "thread not found", "fs_not_found")
+    ):
+        return "session_not_found"
+    if provider_status in {401, 403, 429, 408, 504}:
+        status_code = provider_status
     if status_code == 429 or "rate" in code and "limit" in code:
         return "rate_limited"
     if status_code == 401 or any(
-        token in code for token in ("authentication", "credential", "unauthorized")
+        token in code
+        for token in (
+            "authentication",
+            "credential",
+            "unauthorized",
+            "login",
+            "not signed in",
+        )
     ):
         return "authentication_failed"
     if status_code == 403 or any(

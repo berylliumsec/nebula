@@ -12,7 +12,7 @@ const profile: HarnessProfile = {
   enabled: true, localOnly: true, permitsSensitiveData: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
-const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn()};
+const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", previewMode: false})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
 
@@ -48,6 +48,30 @@ describe("harness settings persistence boundaries", () => {
       expect(api.checkHarness).toHaveBeenCalledTimes(2);
     });
   }
+});
+
+it("keeps Check free and makes provider usage explicit for Test turn", async () => {
+  api.listHarnesses.mockResolvedValue([{...profile, authenticationState: "verified", sessionState: "unverified", turnState: "unverified"}]);
+  api.testHarnessTurn.mockResolvedValue({healthy: true});
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(await screen.findByText(/Sign-in: verified · Session: unverified · Model turn: unverified/)).toBeVisible();
+  const test = screen.getByRole("button", {name: "Test turn"});
+  expect(test).toHaveAttribute("title", expect.stringContaining("provider quota"));
+  expect(api.testHarnessTurn).not.toHaveBeenCalled();
+  await userEvent.click(test);
+  await waitFor(() => expect(api.testHarnessTurn).toHaveBeenCalledWith(profile.id));
+});
+
+it("explains exhausted balance without offering an immediate turn retry", async () => {
+  vi.clearAllMocks();
+  api.listHarnesses.mockResolvedValue([{
+    ...profile, authenticationState: "verified", turnState: "failed",
+    lastTurnFailureReason: "quota_exhausted",
+  }]);
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/Restore balance or wait for reset/);
+  expect(screen.queryByRole("button", {name: "Retry turn"})).not.toBeInTheDocument();
+  expect(api.testHarnessTurn).not.toHaveBeenCalled();
 });
 
 it("shows harnesses independently of a failed MCP catalog and retries in place", async () => {
