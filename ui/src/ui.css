@@ -166,7 +166,9 @@
 .harness-thinking > summary { cursor: pointer; min-height: 44px; padding: 10px 4px; }
 .harness-thinking > summary span { margin-inline-start: 12px; font-size: 0.85em; }
 .harness-thinking > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.harness-thinking .harness-reasoning-summary { white-space: pre-wrap; overflow-wrap: anywhere; }
+.harness-reasoning-summary { min-width: 0; overflow-wrap: anywhere; }
+.harness-reasoning-summary > .assistant-markdown > :first-child { margin-top: 0; }
+.harness-reasoning-summary > .assistant-markdown > :last-child { margin-bottom: 0; }
 .harness-command-hints { display: flex; flex-wrap: wrap; gap: 4px; max-height: min(8rem, 18cqh); overflow-y: auto; }
 .harness-command-hints button { min-height: 44px; gap: 8px; flex-wrap: wrap; }
 

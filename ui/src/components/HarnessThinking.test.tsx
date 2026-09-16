@@ -30,6 +30,16 @@ describe("Harness thinking and commands", () => {
     expect(screen.queryByLabelText("Harness thinking")).toBeNull();
   });
 
+  it("renders public thinking as Markdown with inert copyable code", async () => {
+    const event = { schemaVersion: "nebula.harness-activity/v2" as const, type: "item_upsert" as const, vendor: "grok_acp" as const, itemId: "thinking-markdown", itemKind: "reasoning" as const, itemStatus: "completed" as const, title: "Reasoning", sequence: 1, payload: { reasoning_summary_state: "available", reasoning_summary_text: "**Finding**\n\n```c\ntable[i] = tok;\n```" }, artifactIds: [] };
+    render(<HarnessThinking items={reduceHarnessActivity([], event, "assistant")} />);
+    await userEvent.setup().click(screen.getByText("Thinking"));
+    expect(screen.getByText("Finding").tagName).toBe("STRONG");
+    expect(screen.getByText("table[i] = tok;")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Copy exact code" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /run/i })).toBeNull();
+  });
+
   it("discovers commands and inserts syntax without executing", async () => {
     expect(isHarnessCommand(" /usage ")).toBe(true);
     expect(isHarnessCommand("/goals status")).toBe(true);
