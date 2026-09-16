@@ -1,13 +1,13 @@
 {
-  "change_digest": "47a077937cfba22dbbf535b52792212eff33fbafb0495a5e162445093037496a",
-  "reviewed_by": "Codex Nebula 3.0.0-alpha.18 release preparation review",
-  "reason": "Selects the two packaging contract tests that read every canonical Nebula 3 version source and exercise the exact release-version CLI check used by the protected tag workflow. The diff changes only synchronized version values and the checked-in release body; package assembly, installation, updater signing, provenance, and smoke tests remain mandatory gates in the protected release workflow after the preparation commit reaches main.",
-  "exclusions": "No full suites. No runtime behavior, UI component, Core API, provider or harness adapter, browser origin boundary, native implementation, packaging script, or workflow logic changes. Frontend, native, Playwright, mobile, LAN, unrelated backend, and physical-device tests are therefore excluded from this source-only preparation diff. The release workflow will perform the Linux x86_64 production package, signature, attestation, clean-install, self-test, doctor, and bundled-browser gates before a draft can be created.",
+  "change_digest": "effbd7d7bb1e9b8c35b9f58cb59df9156d308e68d1ef4786ebe15c3fdb60e5c8",
+  "reviewed_by": "Codex alpha.18 release failure and alpha.19 recovery review",
+  "reason": "Selects the exact release-version contracts and the browser catalog areas whose assertions failed in alpha.18: durable chat reconnection in all eight permanent desktop/mobile Chromium/WebKit profiles, Assistant reliability and native-command thinking in all eight real-Core profiles, desktop harness image capability, and the real-Core reviewed Coding execution journey. The 35 browser tests verify retained thinking alongside a single resumed reply, response-owned activity, durable native thinking, explicit capability selection, and progressively disclosed editor tools.",
+  "exclusions": "No full suites. Alpha.18 passed 89 other selected matrix jobs, and this diff changes only the failing acceptance contracts plus synchronized alpha.19 version metadata and notes. Unaffected Ask Nebula, browser navigation, project lifecycle, terminal, Coding layout, workbench navigation, provider, native implementation, and unrelated backend/frontend journeys are excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
   "expected_tests": {
     "python": 2,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 35
   },
   "python": [
     "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
@@ -15,5 +15,11 @@
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:chat-reconnection",
+    "area:assistant-reliability",
+    "area:harness-commands-real",
+    "entry:browser/desktop",
+    "area:unrestricted-execution"
+  ]
 }
