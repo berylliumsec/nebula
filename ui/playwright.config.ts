@@ -83,7 +83,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     {
       name: "mobile-chromium-small",
       testMatch: "**/interface.spec.ts",
-      grep: /assistant popup|Terminal opens Assistant beside the live shell|browser Assistant |assistant upgrade|universal search opens|VPN settings keep|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
+      grep: /advanced session binding|assistant popup|Terminal opens Assistant beside the live shell|browser Assistant |assistant upgrade|universal search opens|VPN settings keep|theme picker|host folder picker|project scope normalizes|mission workflow|mission result actions|completed harness output|activity ledger groups repeated work|assistant follow-up queue|assistant live guidance|assistant context pack|conversation switching|harness model controls|AI writing submits the visible supported model|New chat detaches|oversized harness activity|audit every primary workspace view|audit primary mutation dialogs|paired-device settings|mobile Workbench navigation|browser research tools expose durable workflows|product typography and touch contracts|shared actions keep sleek geometry|terminal screenshot capture|terminal VPN boundary|code editor keeps its caret|terminal and notes keep a visible focused caret|Zero keeps one navigable panoramic shell/,
       use: { ...devices["Pixel 5"], viewport: { width: 320, height: 700 } },
     },
     {
@@ -95,7 +95,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     {
       name: "mobile-webkit-small",
       testMatch: "**/interface.spec.ts",
-      grep: /assistant popup|Terminal opens Assistant beside the live shell|browser Assistant |assistant upgrade|universal search opens|VPN settings keep|theme picker|host folder picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output|terminal VPN boundary|conversation switching/,
+      grep: /advanced session binding|assistant popup|Terminal opens Assistant beside the live shell|browser Assistant |assistant upgrade|universal search opens|VPN settings keep|theme picker|host folder picker|mission result actions|activity ledger groups repeated work|browser research tools expose durable workflows|completed harness output|terminal VPN boundary|conversation switching/,
       use: { ...devices["iPhone 13"], viewport: { width: 320, height: 700 } },
     },
     {

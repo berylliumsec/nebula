@@ -1917,6 +1917,7 @@ export interface HarnessSessionSummary {
   id: Identifier;
   engagementId: Identifier;
   harnessProfileId: Identifier;
+  displayName: string;
   model: string;
   reasoningEffort?: string;
   serviceTier?: string;

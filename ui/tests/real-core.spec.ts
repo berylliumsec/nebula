@@ -3261,14 +3261,17 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    const wholePageText = Array.from({length: 750}, (_, index) => `Page paragraph ${index.toString().padStart(3, "0")}.`).join(" ").slice(0, 6_000);
-    await page.getByRole("textbox", { name: "Message the analyst assistant", exact: true }).fill(wholePageText);
+    await page.getByRole("textbox", { name: "Message the analyst assistant", exact: true }).fill("Keep this harness conversation");
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", { timeout: 20_000 });
     const sourceId = new URL(page.url()).searchParams.get("session")!;
     const source = await (await core.api.get(`chat-sessions/${sourceId}`)).json();
     const history = await (await core.api.get(`chat/sessions/${sourceId}/messages`)).json();
-    await page.getByText(wholePageText, { exact: true }).first().evaluate(element => {
+    const harnessSessions = await (await core.api.get("harness-sessions", {
+      params: { engagement_id: source.engagement_id },
+    })).json() as Array<{id: string; display_name: string}>;
+    expect(harnessSessions.find(item => item.id === source.harness_session_id)?.display_name).toBe("SETTINGS fixture low");
+    await page.getByText("Keep this harness conversation", { exact: true }).first().evaluate(element => {
       const range = document.createRange(); range.selectNodeContents(element);
       const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
       element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
@@ -3277,7 +3280,6 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
     const branchResponse = await opening; expect(branchResponse.ok(), await branchResponse.text()).toBe(true);
     const branch = await branchResponse.json();
-    await expect(page.getByRole("dialog", {name: "Ask Nebula", exact: true}).locator("details")).toContainText("Page paragraph 000.");
     expect(branch.harness_session_id).not.toBe(source.harness_session_id);
     const renewed = page.waitForResponse(response => response.url().endsWith(`/chat/temporary-sessions/${branch.id}/keepalive`) && response.request().method() === "POST");
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));

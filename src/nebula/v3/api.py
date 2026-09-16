@@ -10715,6 +10715,73 @@ def _register_crud_routes(
                 offset=offset,
                 limit=limit,
             )
+            if model is HarnessSession and entities:
+
+                def all_entities(related_model: type[Entity]) -> list[Entity]:
+                    items: list[Entity] = []
+                    while True:
+                        batch = store.list_entities(
+                            related_model,
+                            engagement_id=engagement_id,
+                            offset=len(items),
+                            limit=1_000,
+                        )
+                        items.extend(batch)
+                        if len(batch) < 1_000:
+                            return items
+
+                chat_titles = {
+                    item.harness_session_id: item.title
+                    for item in all_entities(ChatSession)
+                    if isinstance(item, ChatSession) and item.harness_session_id
+                }
+                run_titles = {
+                    item.harness_session_id: str(
+                        item.metadata.get("name") or item.objective
+                    )
+                    for item in all_entities(AgentRun)
+                    if isinstance(item, AgentRun) and item.harness_session_id
+                }
+                first_turns: dict[str, HarnessTurn] = {}
+                turns = all_entities(HarnessTurn)
+                for candidate_turn in sorted(turns, key=lambda item: item.created_at):
+                    if isinstance(candidate_turn, HarnessTurn):
+                        first_turns.setdefault(
+                            candidate_turn.harness_session_id, candidate_turn
+                        )
+
+                named_sessions: list[Entity] = []
+                for entity in entities:
+                    if not isinstance(entity, HarnessSession):
+                        continue
+                    first_turn = first_turns.get(entity.id)
+                    turn_title = None
+                    if first_turn is not None:
+                        turn_title = (
+                            first_turn.response
+                            if first_turn.prompt.startswith(
+                                "Name this conversation from its first exchange"
+                            )
+                            else first_turn.prompt
+                        )
+                    display_name = (
+                        chat_titles.get(entity.id)
+                        or run_titles.get(entity.id)
+                        or turn_title
+                    )
+                    normalized_name = (
+                        re.sub(r"\s+", " ", display_name).strip()[:160]
+                        if isinstance(display_name, str)
+                        else ""
+                    )
+                    named_sessions.append(
+                        entity.model_copy(
+                            update={
+                                "display_name": normalized_name or "Unattached session"
+                            }
+                        )
+                    )
+                return named_sessions
             if model is KnowledgeSource:
                 return [
                     knowledge_summary(entity)

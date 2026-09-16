@@ -1,21 +1,11 @@
 {
-  "change_digest": "56d61639926b57b35da84a7090930702d05700d502a70b0343e4eafa51abdb1c",
-  "reviewed_by": "Codex Ask Nebula tool-isolation review",
-  "reason": "A retained stalled popup turn proved that a highlighted-text Ask Nebula harness session ignored the UI tools-disabled request and ran nine project/model tools for about three and a half minutes. Select two exact backend contracts for tool-free temporary harness creation and the two real-Core provider/harness popup journeys, including a 6000-character selection.",
-  "exclusions": "No full suites. Unrelated harness adapters, chat workflows, native capture mechanics, mobile profiles, physical devices, and the remote Mac are excluded. The native capture boundary already limits selections to 6000 characters; the focused real-Core browser journey exercises that maximum payload through temporary setup and the first harness response.",
-  "expected_tests": {
-    "python": 2,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 2
-  },
-  "python": [
-    "tests/v3/test_temporary_chat.py::test_harness_fork_uses_fresh_runtime_and_snapshot",
-    "tests/v3/test_harnesses.py::test_tool_disabled_harness_session_has_no_native_or_command_runtime"
-  ],
+  "change_digest": "73851cac632f35ccf0adece876187b1c121270f09fec14fa118c1743310c9139",
+  "reviewed_by": "Codex advanced session binding review",
+  "reason": "Advanced Session Binding now receives a Core-owned display name for sessions without a Nebula chat attachment. Select the harness API integration test, the focused selector journey in desktop Chromium, 320px mobile Chromium, and 320px mobile WebKit, and the real-Core harness isolation journey with a durable catalog assertion. Also compile the production UI locally.",
+  "exclusions": "No full suites. No frontend unit test is selected because the regression crosses the Core list response, API mapper, and rendered native select and is covered at API, mocked Playwright, and real-Core layers. Native shell, provider execution semantics, streaming, mutation, LAN-origin behavior, and filesystem behavior are unchanged. Physical devices are unavailable; the mobile projects are emulated.",
+  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 4},
+  "python": ["tests/v3/test_harnesses.py::test_harness_api_chat_mission_handoff_and_catalog"],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:ask-nebula-real-core/real-core"
-  ]
+  "playwright": ["entry:advanced-session-binding/desktop", "entry:advanced-session-binding/mobile-chromium-small", "entry:advanced-session-binding/mobile-webkit-small", "entry:advanced-session-binding/real-core"]
 }
