@@ -31,6 +31,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         try:
             chat = store.get(ChatSession, session_id)
         except NotFoundError:
+            # diagnostic-expected: an already-discarded temporary chat needs no cleanup.
             return
         if not chat.metadata.get("temporary_assistant"):
             raise HTTPException(
@@ -73,11 +74,13 @@ def temporary_chat_router(store, chat_service, harness_runtime):
                 try:
                     await discard(session_id)
                 except Exception:
+                    # diagnostic-expected: log the cleanup failure and retry on the next sweep.
                     logger.exception("Temporary assistant cleanup failed; will retry")
             await asyncio.sleep(60)
 
     @asynccontextmanager
     async def lifespan(_app):
+        # diagnostic-expected: lifespan owns this task and cancels/awaits it on shutdown.
         task = asyncio.create_task(collect())
         try:
             yield

@@ -1,11 +1,19 @@
 {
-  "change_digest": "8edf34f383b29f2eb4b7425a6635b61cac743831677d188e4bf6502b09531eb3",
-  "reviewed_by": "Codex mobile Coding action-rail review",
-  "reason": "Reviewed the mobile Coding action-rail and focused browser assertion diff after rebasing onto the Security Browser update; its shared CSS and test edits are unrelated to this Coding delta. The secondary workflow actions expand as full-width rows at 320/390/430 px, Review and More actions stay inside the rail, and choosing a handoff closes the menu before returning to the editor. Selected the existing Coding desktop/mobile Chromium/WebKit area, editor component file, and real-Core Code save journey to protect the shared toolbar and workspace draft flow.",
-  "exclusions": "No full suites. Core routes, native code, mission execution, unrelated Workbench views, and physical-device testing are unchanged or unavailable. Python and native layers have no relevant implementation change.",
-  "expected_tests": {"python": 0, "frontend": 22, "native": 0, "playwright": 10},
-  "python": [],
-  "frontend": ["ui/src/components/CodeEditorPanel.test.tsx"],
+  "change_digest": "92fc4f1246401080a0aafbe7e965b1ad6770c374f9a24cc0031ffc3ff4c14282",
+  "reviewed_by": "Codex macOS stale browser proxy review",
+  "reason": "On macOS 14+, Wry writes capture proxy settings to the identity WKWebsiteDataStore. A direct tab must clear that setting before first navigation when capture is disabled; another proxied tab in the same identity must remain protected. Select the three existing native-browser security contracts and an arm64 macOS compile check. The affected client journey requires a rebuilt Mac app and remains a manual release gate. The required Python 3.12 diagnostic audit found three existing temporary-chat cleanup classifications missing despite already-discarded lookup, logged retry, and lifespan-owned cancel/await behavior. Add reviewable diagnostic-expected comments only; select all seven temporary-chat contract tests to protect that existing lifecycle.",
+  "exclusions": "No full suites. Core routes, frontend controls, and Playwright web-interface behavior are unchanged. No focused Rust test exercises WKWebsiteDataStore on Linux CI. The affected Mac client is not remotely controllable, so live navigation, production Mac package, physical-device, and reconnect gates are unavailable for this PR; do not claim the operator workflow is complete from these checks. Local temporary-chat collection is blocked by the host Conda pyOpenSSL/botocore mismatch; CI Python 3.12 will collect and execute the seven tests. No temporary-chat runtime behavior changed.",
+  "expected_tests": {
+    "python": 10,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python": [
+    "tests/v3/test_tauri_browser_security.py",
+    "tests/v3/test_temporary_chat.py"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:coding-makeover", "area:coding-makeover-core"]
+  "playwright": []
 }
