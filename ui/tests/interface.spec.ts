@@ -6166,12 +6166,24 @@ test("advanced session binding: resume existing session discovers and filters ex
       return;
     }
     if (path.endsWith("/harness-sessions") && request.method() === "GET") {
-      await route.fulfill({ json: [] });
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "existing-harness-session",
+        engagement_id: "scratch-project",
+        harness_profile_id: "external-session-harness",
+        external_session_id: "grok-external-1",
+        display_name: "Unattached session",
+        model: "grok-4.6",
+        status: "idle",
+        mcp_server_ids: [],
+        last_activity_at: entity.updated_at,
+        metadata: {},
+      }] });
       return;
     }
     if (path.endsWith("/external-sessions") && request.method() === "GET") {
       await route.fulfill({ json: [
-        { external_session_id: "grok-external-1", display_name: "ptpcamerad adjacent overflow objects", model: "grok-4.6", updated_at: entity.updated_at, internal_session_id: null },
+        { external_session_id: "grok-external-1", display_name: "ptpcamerad adjacent overflow objects", model: "grok-4.6", updated_at: entity.updated_at, internal_session_id: "existing-harness-session" },
         { external_session_id: "grok-external-2", display_name: "bluetooth parser audit", model: "grok-4.6", updated_at: entity.updated_at, internal_session_id: null },
       ] });
       return;
@@ -6204,10 +6216,9 @@ test("advanced session binding: resume existing session discovers and filters ex
   await page.getByLabel("Filter resumable sessions by name").fill("ptpcam");
   const sessionSelect = page.getByLabel("Chat harness session");
   await expect(sessionSelect.getByRole("option", { name: /ptpcamerad adjacent overflow objects/ })).toHaveCount(1);
+  await expect(sessionSelect.getByRole("option", { name: /Unattached session/ })).toHaveCount(0);
   await expect(sessionSelect.getByRole("option", { name: /bluetooth parser audit/ })).toHaveCount(0);
-  await sessionSelect.selectOption("external:grok-external-1");
-  await expect(sessionSelect).toHaveValue("imported-harness-session");
-  expect(imported).toMatchObject({ external_session_id: "grok-external-1", display_name: "ptpcamerad adjacent overflow objects" });
+  expect(imported).toBeUndefined();
 });
 
 test("assistant upgrade makes loaded knowledge sources available automatically", async ({ page }) => {

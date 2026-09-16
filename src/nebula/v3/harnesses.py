@@ -6233,18 +6233,32 @@ class HarnessRuntimeService:
             profile, self.credential_store, workspace
         )
         imported = {
-            item.external_session_id: item.id
+            item.external_session_id: item
             for item in self.store.list_entities(
                 HarnessSession, engagement_id=engagement_id, limit=1_000
             )
             if item.harness_profile_id == profile_id and item.external_session_id
         }
-        return [
-            item.model_copy(
-                update={"internal_session_id": imported.get(item.external_session_id)}
+        reconciled: list[ExternalHarnessSession] = []
+        for item in discovered:
+            internal = imported.get(item.external_session_id)
+            if internal is not None and internal.display_name != item.display_name:
+                internal = self.store.update(
+                    HarnessSession,
+                    internal.id,
+                    {"display_name": item.display_name},
+                    expected_revision=internal.revision,
+                )
+            reconciled.append(
+                item.model_copy(
+                    update={
+                        "internal_session_id": internal.id
+                        if internal is not None
+                        else None
+                    }
+                )
             )
-            for item in discovered
-        ]
+        return reconciled
 
     def import_external_session(
         self,

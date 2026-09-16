@@ -941,7 +941,16 @@ export function SessionsPage() {
     setExternalSessionsLoading(true);
     setExternalSessionsError(undefined);
     void api.listExternalHarnessSessions(harnessId, engagement.id, controller.signal)
-      .then(setExternalHarnessSessions)
+      .then(items => {
+        setExternalHarnessSessions(items);
+        const namesByInternalId = new Map(items
+          .filter(item => item.internalSessionId)
+          .map(item => [item.internalSessionId as string, item.displayName]));
+        setHarnessSessions(current => current.map(item => {
+          const reconciledName = namesByInternalId.get(item.id);
+          return reconciledName ? {...item, displayName: reconciledName} : item;
+        }));
+      })
       .catch(error => {
         if (controller.signal.aborted) return;
         setExternalHarnessSessions([]);
