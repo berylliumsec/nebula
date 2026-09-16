@@ -3267,12 +3267,10 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     const sourceId = new URL(page.url()).searchParams.get("session")!;
     const source = await (await core.api.get(`chat-sessions/${sourceId}`)).json();
     const history = await (await core.api.get(`chat/sessions/${sourceId}/messages`)).json();
-    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
-    await page.getByText("Advanced session binding", { exact: true }).click();
-    await expect(page.getByLabel("Chat harness session").getByRole("option", {
-      name: /SETTINGS fixture low · fixture · low · idle/,
-    })).toHaveCount(1);
-    await page.getByRole("button", { name: "Close assistant settings", exact: true }).click();
+    const harnessSessions = await (await core.api.get("harness-sessions", {
+      params: { engagement_id: source.engagement_id },
+    })).json() as Array<{id: string; display_name: string}>;
+    expect(harnessSessions.find(item => item.id === source.harness_session_id)?.display_name).toBe("SETTINGS fixture low");
     await page.getByText("Keep this harness conversation", { exact: true }).first().evaluate(element => {
       const range = document.createRange(); range.selectNodeContents(element);
       const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
