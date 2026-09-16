@@ -16,13 +16,13 @@
   ],
   "native": [],
   "playwright": [
-    "thinking-retention/model-desktop",
-    "thinking-retention/model-compact",
-    "thinking-retention/model-chromium-320",
-    "thinking-retention/model-webkit-320",
-    "thinking-retention/model-chromium-390",
-    "thinking-retention/model-webkit-390",
-    "thinking-retention/model-chromium-430",
-    "thinking-retention/model-webkit-430"
+    "entry:thinking-retention/model-desktop",
+    "entry:thinking-retention/model-compact",
+    "entry:thinking-retention/model-chromium-320",
+    "entry:thinking-retention/model-webkit-320",
+    "entry:thinking-retention/model-chromium-390",
+    "entry:thinking-retention/model-webkit-390",
+    "entry:thinking-retention/model-chromium-430",
+    "entry:thinking-retention/model-webkit-430"
   ]
 }
