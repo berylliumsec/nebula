@@ -48,6 +48,30 @@ regains focus. Normal service
 audit retention is unchanged; this is a disposable chat, not a zero-retention
 inference mode. Nothing from the popup is promoted to the main conversation.
 
+## Concurrent questions
+
+Journey: open Ask Nebula, start a response, select another source, and open a
+second Ask Nebula window without stopping, replacing, or hiding the first. Each
+window owns a separate temporary Core branch, stream, transcript, draft,
+position, visibility, Stop action, and Close action. The provider owns an
+unbounded keyed collection of windows; Core remains authoritative for each
+temporary branch. New windows are slightly offset when the viewport has room,
+while the existing viewport clamping keeps every window reachable on desktop
+and mobile.
+
+Closing or hiding one window must not affect any other window. A visible window
+continues to suppress the native browser surface where required by native-layer
+stacking; hiding all windows restores it. Full reload retains the existing
+disposable cleanup behavior for every open branch. The broader product rule is
+that starting an auxiliary task must not destroy another active task merely
+because both use the same presentation type.
+
+Agent results render as Markdown while they stream and remain visible after the
+completion snapshot arrives. If a harness completion snapshot omits text, the
+popup preserves the normalized `message_delta` result instead of clearing it.
+An agent that genuinely completes without any text result produces an explicit
+visible notice rather than an apparently empty successful turn.
+
 ## Non-modal popup correction
 
 Journey: open Ask Nebula, keep using the underlying page, drag the header (or
