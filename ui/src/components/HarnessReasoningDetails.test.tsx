@@ -15,6 +15,7 @@ it("keeps long completed and earlier streamed summaries selectable", async () =>
   expect(container.querySelector(".harness-reasoning-summary")).toHaveAttribute("tabindex", "0");
   await userEvent.click(screen.getByText("Earlier streamed summary"));
   expect(screen.getByText("Earlier public text")).toBeVisible();
+  expect(screen.getByText("Earlier public text").closest(".harness-reasoning-summary")).toHaveAttribute("tabindex", "0");
   expect(screen.getByText("Provider-supplied reasoning summary.")).toBeVisible();
 });
 

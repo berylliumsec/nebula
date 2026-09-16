@@ -33,7 +33,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       const changed = rows.filter({ has: page.getByText("Completed summary for " + vendor, {exact: true}) });
       await changed.locator(".activity-ledger-entry-content > details > summary").click();
       await changed.getByText("Earlier streamed summary", {exact: true}).click();
-      const earlier = changed.locator(".harness-streamed-summary p");
+      const earlier = changed.locator(".harness-streamed-summary .harness-reasoning-summary");
       await expect(earlier).toHaveText("Long public text. ".repeat(5000) + "PRESERVED TAIL");
       await earlier.focus();
       await earlier.press("End");

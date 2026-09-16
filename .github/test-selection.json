@@ -1,5 +1,5 @@
 {
-  "change_digest": "1a4348d2e58a856b51935a522bbc3a94729b0f5f76d7fd8da5ee10a97d311584",
+  "change_digest": "c8cc08299e63be7eea983a67d9f9ca664b16ec7a2e41fd82cb7a1de83b292ede",
   "reviewed_by": "Codex harness-thought Markdown rendering review",
   "reason": "Selected the two exact component files that exercise compact and expanded public harness thought rendering, plus the catalogued real-Core thinking retention journey across permanent desktop, compact, mobile Chromium, and mobile WebKit projects.",
   "exclusions": "No full suites. Core persistence, provider adapters, API schemas, and native code are unchanged, so Python and native tests are not applicable. Unrelated assistant, provider, and workspace journeys are excluded. A production build is run separately because it is a build gate, not a test-selection layer.",
