@@ -1,4 +1,5 @@
 import { createContext, type Dispatch, type PropsWithChildren, type SetStateAction, useContext } from "react";
+import type { SettingCatalogEntry } from "../settingsCatalog";
 
 export interface ContextualCommand {
   id: string;
@@ -19,6 +20,7 @@ export interface ChromeContextValue {
   trailingToolbarHost?: HTMLElement | null;
   contextualCommands?: ContextualCommand[];
   openPalette: () => void;
+  openSetting?: (entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => void;
   openProjectPicker?: () => void;
   setActivityOpen: Dispatch<SetStateAction<boolean>>;
   setPaletteOpen: Dispatch<SetStateAction<boolean>>;

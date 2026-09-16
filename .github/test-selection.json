@@ -1,26 +1,29 @@
 {
-  "change_digest": "e175fea04db43477633ee26ac2bf7c007b48f51f9bc74b24a44b16af11b0b674",
-  "reviewed_by": "Codex alpha.18 release failure and alpha.19 recovery review",
-  "reason": "Selects the exact release-version contracts and browser catalog areas whose assertions failed in alpha.18: durable chat reconnection in all eight permanent desktop/mobile Chromium/WebKit profiles, Assistant reliability and native-command thinking in all eight real-Core profiles, all five named Browser Assistant journeys across desktop and both landscape engines, and the real-Core reviewed Coding execution journey. The catalog contract proves that the landscape entries no longer collect 18 unrelated interface tests merely because their project name contains browser. The 48 browser tests verify retained thinking alongside a single resumed reply, response-owned activity, durable native thinking, explicit capability selection, upload approval, degraded-Core recovery, and progressively disclosed editor tools.",
-  "exclusions": "No full suites. Alpha.18 passed 89 other selected matrix jobs, and this diff changes only the failing acceptance contracts, the over-broad browser-area selector, and synchronized alpha.19 version metadata and notes. Unaffected Ask Nebula, project lifecycle, terminal, Coding layout, workbench navigation, provider, native implementation, and unrelated backend/frontend journeys are excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
+  "change_digest": "a605fc939527dbee4bb93e4552bd004433c3b7c06001cc9670ec352580cee8cb",
+  "reviewed_by": "Codex alpha.18 release failure, alpha.19 recovery, and Assistant settings navigation review",
+  "reason": "Preserves the exact release-version contracts and browser catalog areas selected for the alpha.19 recovery, then adds one isolated component test and three permanent desktop/mobile Chromium/mobile WebKit journeys for the Assistant setup links and focused Settings lens. The resulting 51 browser tests cover durable reconnection, Assistant reliability, the bounded Browser Assistant catalog, and the new discoverable provider, harness, MCP, command-runtime, and tool-follow-up navigation.",
+  "exclusions": "No full suites. The Assistant change is presentation and navigation only, with no server-owned state, native implementation, provider protocol, or security-boundary mutation. Unaffected Ask Nebula, browser navigation, project lifecycle, terminal execution, Coding layout, and unrelated backend/frontend journeys remain excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
   "expected_tests": {
     "python": 3,
-    "frontend": 0,
+    "frontend": 1,
     "native": 0,
-    "playwright": 48
+    "playwright": 51
   },
   "python": [
     "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
     "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract",
     "tests/test_playwright_impact.py::test_browser_area_only_collects_named_browser_assistant_journeys"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/AssistantSetupLinks.test.tsx"
+  ],
   "native": [],
   "playwright": [
     "area:chat-reconnection",
     "area:assistant-reliability",
     "area:harness-commands-real",
     "area:browser",
-    "area:unrestricted-execution"
+    "area:unrestricted-execution",
+    "area:assistant-settings-navigation"
   ]
 }

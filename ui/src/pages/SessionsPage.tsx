@@ -20,6 +20,7 @@ import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
+import { AssistantSetupLinks } from "../components/AssistantSetupLinks";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
@@ -32,6 +33,7 @@ import {
 import {
   Bot,
   Bookmark,
+  Boxes,
   Braces,
   Check,
   ChevronDown,
@@ -60,6 +62,7 @@ import {
   Search,
   Send,
   Settings2,
+  Sparkles,
   ShieldCheck,
   Square,
   SquareTerminal,
@@ -122,6 +125,8 @@ import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
 import { TabBar, Toolbar } from "../components/SurfacePrimitives";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useChrome } from "../state/ChromeContext";
+import { settingCatalogEntry } from "../settingsCatalog";
 import { AgentsPage } from "./AgentsPage";
 import {
   harnessCostLabel,
@@ -406,6 +411,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
 
 export function SessionsPage() {
   const confirm = useConfirmation();
+  const { openSetting } = useChrome();
   const {
     assistantDraftNotice,
     askNebulaPopupVisible,
@@ -3328,6 +3334,15 @@ export function SessionsPage() {
                 <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
+                <AssistantSetupLinks items={[
+                  { entry: settingCatalogEntry(runtimeKind === "provider" ? "settings.providers" : "settings.harnesses"), icon: runtimeKind === "provider" ? Settings2 : Bot, label: runtimeKind === "provider" ? "Model providers" : "Assistant harnesses", detail: runtimeKind === "provider" ? `${enabledProviders.length} enabled` : `${harnesses.filter((item) => item.enabled).length} enabled` },
+                  { entry: settingCatalogEntry("settings.mcp"), icon: Boxes, label: "MCP tools", detail: mcpServers.length ? `${mcpServers.length} available` : "None configured" },
+                  { entry: settingCatalogEntry("settings.automation-runtime"), icon: SquareTerminal, label: "Command runtime", detail: canUseTools ? "Ready" : "Needs attention" },
+                  { entry: settingCatalogEntry("settings.follow-up"), icon: Sparkles, label: "Tool follow-up", detail: "Notes and next steps" },
+                ]} onOpen={(entry) => {
+                  setAssistantSettingsOpen(false);
+                  openSetting?.(entry, assistantSettingsButtonRef.current);
+                }} />
                 </div>
               </section>, document.body)}
               <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
