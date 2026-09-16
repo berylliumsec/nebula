@@ -19,6 +19,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatMessage,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     ProviderProfile,
     Task,
@@ -577,6 +578,86 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
     assert "response is active" in rename_response.json()["detail"]
     assert "response is active" in response.json()["detail"]
     assert store.get(ChatSession, session.id).id == session.id
+
+
+def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
+    store = NebulaStore(tmp_path / "chat-session-activity.db")
+    engagement = store.create(Engagement(name="Activity states"))
+    profile = store.create(
+        ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
+    )
+
+    sessions = {}
+    for state in ("working", "waiting", "idle"):
+        sessions[state] = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title=state.title(),
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+    temporary = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Temporary assistant",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"temporary_assistant": True},
+        )
+    )
+    working_turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=sessions["working"].id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    waiting_turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=sessions["waiting"].id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+    store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=temporary.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+
+    client = TestClient(create_app(store, auth_token="test-token"))
+    response = client.get(
+        "/api/v1/chat/session-activity",
+        params={"engagement_id": engagement.id},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 200
+    activity = {item["session_id"]: item for item in response.json()}
+    assert activity == {
+        sessions["working"].id: {
+            "session_id": sessions["working"].id,
+            "state": "working",
+            "turn_id": working_turn.id,
+        },
+        sessions["waiting"].id: {
+            "session_id": sessions["waiting"].id,
+            "state": "waiting",
+            "turn_id": waiting_turn.id,
+        },
+        sessions["idle"].id: {
+            "session_id": sessions["idle"].id,
+            "state": "idle",
+            "turn_id": None,
+        },
+    }
 
 
 def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):

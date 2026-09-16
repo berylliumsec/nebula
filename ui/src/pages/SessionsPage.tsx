@@ -74,6 +74,7 @@ import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type {
   ChatCompletionRequest,
   ChatContentBlock,
+  ChatSessionActivity,
   ChatSessionSummary,
   ChatStreamEvent,
   ContextStatus,
@@ -509,6 +510,7 @@ export function SessionsPage() {
   const [terminalAssistantOpen, setTerminalAssistantOpen] = useState(false);
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [sessionActivity, setSessionActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
   const [sessionQuery, setSessionQuery] = useState("");
@@ -1384,6 +1386,27 @@ export function SessionsPage() {
     }
   };
 
+  const refreshSessionActivity = useCallback(async () => {
+    if (!api || !engagement) return;
+    const requestedEngagementId = engagement.id;
+    try {
+      const activity = await api.listChatSessionActivity(requestedEngagementId);
+      if (activeEngagementIdRef.current !== requestedEngagementId) return;
+      setSessionActivity(Object.fromEntries(activity.map(item => [item.sessionId, item.state])));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.activity_status", "Conversation activity status could not be refreshed.", error, "sessions_page");
+    }
+  }, [api, engagement]);
+
+  useEffect(() => {
+    if ((!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
+    void refreshSessionActivity();
+    const timer = window.setInterval(() => void refreshSessionActivity(), 5_000);
+    const onFocus = () => void refreshSessionActivity();
+    window.addEventListener("focus", onFocus);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+  }, [conversationPanelOpen, mobileListOpen, refreshSessionActivity, view]);
+
   const resetConversation = (open: boolean) => {
     previewOwnerRef.current = "";
     restoredScrollRef.current = undefined;
@@ -2103,7 +2126,10 @@ export function SessionsPage() {
     }
     // Events invalidate the durable snapshot; they never independently resolve
     // an approval. Polling/visibility recovery also covers missed stream events.
-    if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) refreshSessionState();
+    if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) {
+      refreshSessionState();
+      void refreshSessionActivity();
+    }
     if (streamEvent.type === "started" && streamEvent.sessionId) {
       previewOwnerRef.current = streamEvent.sessionId;
       setSessionId(streamEvent.sessionId);
@@ -3507,9 +3533,10 @@ export function SessionsPage() {
             <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
             {visibleSessions.map((session) => {
               const actionsOpen = sessionActionsId === session.id;
+              const activityState = sessionActivity[session.id] ?? "idle";
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><MessageSquare size={16} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"

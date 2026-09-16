@@ -83,6 +83,20 @@ describe("Ask Nebula popup", () => {
     expect(await screen.findByText("A separate answer")).toBeVisible();
     expect(api.createTemporaryChat).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps the streamed agent result when the completion snapshot has no text", async () => {
+    const api = fixture(); const user = userEvent.setup();
+    api.streamChat.mockImplementation(async (_body, onEvent) => {
+      onEvent({ type: "message_delta", providerId: "provider", model: "m", delta: "**Agent result**\n\n- first finding" });
+      return { message: { role: "assistant", content: "" } };
+    });
+    render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+    await user.type(screen.getByRole("textbox"), "Run the agent");
+    await user.click(screen.getByRole("button", { name: "Ask question" }));
+    expect(await screen.findByText("Agent result")).toHaveRole("strong");
+    expect(screen.getByRole("listitem")).toHaveTextContent("first finding");
+    expect(screen.queryByText("completed without a text result")).not.toBeInTheDocument();
+  });
 });
 
 it("stops only the popup turn and keeps the question editable", async () => {

@@ -589,6 +589,17 @@ kbd { font-size: 11px; }
 .session-list-item.renaming { display: block; }
 .session-list-item > .session-select { display: grid; min-width: 0; min-height: 46px; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 9px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
 .session-list-item > .session-select > span { display: flex; min-width: 0; flex-direction: column; }
+.session-list-item > .session-select > .conversation-activity-marker { display: block; width: 9px; min-width: 9px; height: 9px; justify-self: center; border: 1.5px solid currentColor; border-radius: 50%; opacity: .72; }
+.session-list-item > .session-select > .conversation-activity-marker.working { border-color: var(--blue); background: var(--blue); animation: conversation-working-pulse 2s ease-in-out infinite; }
+.session-list-item > .session-select > .conversation-activity-marker.waiting { border-color: currentColor; border-radius: 2px; background: currentColor; opacity: 1; transform: rotate(45deg) scale(.78); }
+.session-list-item > .session-select > .conversation-activity-marker.idle { background: transparent; }
+@keyframes conversation-working-pulse {
+  0%, 100% { opacity: .58; transform: scale(.82); }
+  50% { opacity: 1; transform: scale(1.32); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-list-item > .session-select > .conversation-activity-marker.working { animation: none; opacity: 1; transform: none; }
+}
 .session-item-actions { position: relative; display: grid; place-items: center; }
 .session-actions-trigger { width: 34px; height: 34px; opacity: 0; pointer-events: none; transition: opacity 120ms ease, background-color 120ms ease; }
 .session-list-item:hover .session-actions-trigger, .session-list-item:focus-within .session-actions-trigger, .session-list-item.actions-open .session-actions-trigger { opacity: 1; pointer-events: auto; }

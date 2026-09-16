@@ -1790,6 +1790,12 @@ export interface ChatSessionSummary {
   revision: number;
 }
 
+export interface ChatSessionActivity {
+  sessionId: Identifier;
+  state: "working" | "waiting" | "idle";
+  turnId?: Identifier;
+}
+
 export interface HarnessProfile {
   id: Identifier;
   name: string;

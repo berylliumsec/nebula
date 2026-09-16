@@ -1924,6 +1924,27 @@ test("all assistant states remain fully visible inside mobile Workbench navigati
 });
 
 test("stabilization conversations sidebar icon reveals the left pane", async ({ page }, testInfo) => {
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat/session-activity")) {
+      await route.fulfill({ json: [
+        { session_id: "conversation-working", state: "working", turn_id: "turn-working" },
+        { session_id: "conversation-waiting", state: "waiting", turn_id: "turn-waiting" },
+        { session_id: "conversation-idle", state: "idle", turn_id: null },
+      ] });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [
+        { ...entity, id: "conversation-working", engagement_id: "scratch-project", title: "Active analysis", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} },
+        { ...entity, id: "conversation-waiting", engagement_id: "scratch-project", title: "Approval needed", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} },
+        { ...entity, id: "conversation-idle", engagement_id: "scratch-project", title: "Saved notes", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} },
+      ] });
+      return;
+    }
+    await route.fallback();
+  });
   await openWorkspace(page, "/?view=chat", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   const toggle = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
@@ -1936,6 +1957,11 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await toggle.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("complementary", {name: "Conversations"})).toBeVisible();
+  const working = page.getByRole("img", { name: "Working" });
+  await expect(working).toHaveClass(/working/);
+  await expect(working).toHaveCSS("animation-name", "conversation-working-pulse");
+  await expect(page.getByRole("img", { name: "Waiting for you" })).toHaveClass(/waiting/);
+  await expect(page.getByRole("img", { name: "Idle" })).toHaveClass(/idle/);
   await expect(page.getByRole("button", {name: "Hide conversations", exact: true})).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("button", {name: "Hide conversations", exact: true}).last().click();
   await expect(page.getByRole("complementary", {name: "Conversations"})).not.toBeVisible();
@@ -6891,11 +6917,17 @@ test("assistant popup hides, restores and discards without changing the main con
     model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true }, metadata: { default_model: "model-1" },
   }] }));
   const requests: Record<string, unknown>[] = [];
-  let discarded = false;
-  await page.route("**/api/v1/chat/temporary-sessions", route => route.fulfill({ status: 201, json: {
-    ...entity, id: "popup-private", engagement_id: "project-1", title: "Ask Nebula", backend: "provider", provider_profile_id: "provider-1", model: "model-1", metadata: { temporary_assistant: true },
-  } }));
-  await page.route("**/api/v1/chat/temporary-sessions/popup-private", async route => { discarded = true; await route.fulfill({ status: 204 }); });
+  const discarded = new Set<string>();
+  let temporarySessionCount = 0;
+  await page.route("**/api/v1/chat/temporary-sessions", route => {
+    temporarySessionCount += 1;
+    return route.fulfill({ status: 201, json: {
+      ...entity, id: `popup-private-${temporarySessionCount}`, engagement_id: "project-1", title: "Ask Nebula", backend: "provider", provider_profile_id: "provider-1", model: "model-1", metadata: { temporary_assistant: true },
+    } });
+  });
+  await page.route(/\/api\/v1\/chat\/temporary-sessions\/popup-private-\d+$/, async route => {
+    discarded.add(route.request().url().split("/").at(-1)!); await route.fulfill({ status: 204 });
+  });
   await page.route("**/api/v1/chat/completions", async route => {
     requests.push(route.request().postDataJSON());
     await route.fulfill({ contentType: "text/event-stream", body: 'event: done\ndata: {"type":"done","session_id":"popup-private","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"A private answer with a follow-up."},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6},"finish_reason":"stop","citations":[]}\n\n' });
@@ -6916,19 +6948,36 @@ test("assistant popup hides, restores and discards without changing the main con
   await expect(popup.getByRole("textbox")).toHaveValue("Explain the selected title");
   await popup.getByRole("button", { name: "Ask question" }).click();
   await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
-  expect(requests[0].session_id).toBe("popup-private");
+  const firstSessionId = requests[0].session_id as string;
   await popup.getByRole("textbox").fill("Keep this follow-up unsent");
   await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
   await expect(popup).toHaveCount(0);
   const launcher = page.getByRole("button", { name: /Show Ask Nebula, Response ready/ });
   await expect(launcher).toBeVisible();
+  await page.getByRole("heading", { name: "Scratch Project", exact: true }).evaluate(element => {
+    const range = document.createRange(); range.selectNodeContents(element);
+    const selection = getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+  });
+  await page.getByRole("button", { name: "Ask Nebula", exact: true }).click();
+  const secondPopup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
+  await expect(secondPopup).toHaveCount(1);
+  await expect(launcher).toBeVisible();
+  await secondPopup.getByRole("textbox").fill("Keep this second question independent");
+  await secondPopup.getByRole("button", { name: "Ask question" }).click();
+  await expect(secondPopup.getByText("A private answer with a follow-up.")).toBeVisible();
+  const secondSessionId = requests[1].session_id as string;
+  expect(secondSessionId).not.toBe(firstSessionId);
+  await secondPopup.getByRole("button", { name: "Close Ask Nebula" }).click();
+  await expect(secondPopup).toHaveCount(0);
+  await expect.poll(() => discarded.has(secondSessionId)).toBe(true);
   const moveLauncher = page.getByRole("button", { name: "Move hidden Ask Nebula" });
   const start = await launcher.boundingBox();
   await moveLauncher.focus();
   await page.keyboard.press("ArrowLeft");
   const moved = await launcher.boundingBox();
   expect(moved!.x).toBeLessThan(start!.x);
-  expect(requests).toHaveLength(1);
+  expect(requests).toHaveLength(2);
   await moveLauncher.dragTo(page.locator("body"), { targetPosition: { x: 24, y: 120 } });
   const dragged = await launcher.boundingBox();
   expect(dragged!.x).toBeGreaterThanOrEqual(0);
@@ -6956,7 +7005,7 @@ test("assistant popup hides, restores and discards without changing the main con
   await launcher.click();
   await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
   await expect(popup.getByRole("textbox")).toHaveValue("Keep this follow-up unsent");
-  expect(requests).toHaveLength(1);
+  expect(requests).toHaveLength(2);
   const bounds = await popup.boundingBox(); const viewport = page.viewportSize()!;
   expect(bounds!.x).toBeGreaterThanOrEqual(0); expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
   expect(bounds!.width).toBeLessThanOrEqual(560);
@@ -6976,10 +7025,11 @@ test("assistant popup hides, restores and discards without changing the main con
   await expect(popup).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(popup).toBeVisible();
-  await popup.screenshot({ path: testInfo.outputPath("popup.png") });
+  await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("popup.png") });
   expect((await new AxeBuilder({ page }).include('[role="dialog"]').analyze()).violations).toEqual([]);
   await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
-  await expect(popup).toHaveCount(0); await expect.poll(() => discarded).toBe(true);
+  await expect(popup).toHaveCount(0); await expect.poll(() => discarded.has(firstSessionId)).toBe(true);
   await expect(page).toHaveURL(urlBeforeClose);
   await expect(page.getByText("A private answer with a follow-up.")).toHaveCount(0);
 });

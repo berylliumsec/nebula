@@ -39,6 +39,13 @@ export interface FindingDraftRequest {
   evidenceId: string;
 }
 
+interface AskNebulaPopupState {
+  id: number;
+  draft: SelectionActionDraft;
+  snapshot?: AssistantSnapshot;
+  visible: boolean;
+}
+
 interface WorkbenchDraftContextValue {
   askNebulaPopupVisible: boolean;
   assistantDrafts: SelectionActionDraft[];
@@ -214,8 +221,8 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   const { api, engagement, providers = [], harnesses = [] } = useWorkspace();
   const assistantSnapshot = useRef<AssistantSnapshot | undefined>(undefined);
   const registerAssistantSnapshot = useCallback((snapshot: AssistantSnapshot) => { assistantSnapshot.current = snapshot; }, []);
-  const [popup, setPopup] = useState<{ draft: SelectionActionDraft; snapshot?: AssistantSnapshot }>();
-  const [popupVisible, setPopupVisible] = useState(false);
+  const [popups, setPopups] = useState<AskNebulaPopupState[]>([]);
+  const nextPopupId = useRef(0);
   const location = useLocation();
   const locationRef = useRef(location);
   locationRef.current = location;
@@ -318,8 +325,12 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       providerId: runtime.kind === "provider" ? runtime.id : undefined,
       harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
     } : undefined;
-    setPopup({ draft, snapshot: snapshot ? { ...snapshot } : undefined });
-    setPopupVisible(true);
+    setPopups((currentPopups) => [...currentPopups, {
+      id: nextPopupId.current++,
+      draft,
+      snapshot: snapshot ? { ...snapshot } : undefined,
+      visible: true,
+    }]);
   }, [engagement, providers, harnesses]);
   const requestNebulaDraft = useCallback((request: NebulaDraftRequest) => {
     const draft = toSelectionDraft(request);
@@ -413,7 +424,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   );
 
   const value = useMemo<WorkbenchDraftContextValue>(() => ({
-    askNebulaPopupVisible: Boolean(popup) && popupVisible,
+    askNebulaPopupVisible: popups.some((popup) => popup.visible),
     assistantDrafts,
     assistantDraftNotice,
     noteDraft,
@@ -432,8 +443,7 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
     clearExecutionDraft,
     clearFindingDraft,
   }), [
-    popup,
-    popupVisible,
+    popups,
     assistantDrafts,
     assistantDraftNotice,
     clearAssistantDraftNotice,
@@ -462,8 +472,11 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
       resolveSource={resolveSource}
     >
       {children}
-      {popup && <AskNebulaPopup api={api} snapshot={popup.snapshot} context={popup.draft}
-        onVisibilityChange={setPopupVisible} onClose={() => { setPopup(undefined); setPopupVisible(false); }} />}
+      {popups.map((popup, placementIndex) => <AskNebulaPopup key={popup.id} api={api} snapshot={popup.snapshot}
+        context={popup.draft} placementIndex={placementIndex}
+        onVisibilityChange={(visible) => setPopups((currentPopups) => currentPopups.map((candidate) =>
+          candidate.id === popup.id ? { ...candidate, visible } : candidate))}
+        onClose={() => setPopups((currentPopups) => currentPopups.filter((candidate) => candidate.id !== popup.id))} />)}
     </SelectionActionsProvider>
   </WorkbenchDraftContext.Provider>;
 }

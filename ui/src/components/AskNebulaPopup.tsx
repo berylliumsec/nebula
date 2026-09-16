@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { GripHorizontal, LoaderCircle, Minimize2, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,9 +12,10 @@ import styles from "./AskNebulaPopup.module.css";
 
 export type AssistantSnapshot = Omit<ChatCompletionRequest, "messages" | "contextAttachments">;
 
-export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityChange }: {
-  api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; onClose(): void; onVisibilityChange?: (visible: boolean) => void;
+export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onClose, onVisibilityChange }: {
+  api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; placementIndex?: number; onClose(): void; onVisibilityChange?: (visible: boolean) => void;
 }) {
+  const titleId = useId();
   const panel = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const launcher = useRef<HTMLButtonElement>(null);
@@ -28,7 +29,10 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
     }
   }, [context]);
   const [launcherPosition, setLauncherPosition] = useState<{ x: number; y: number }>();
-  const [position, setPosition] = useState({ x: Math.max(12, window.innerWidth - 584), y: 80 });
+  const [position, setPosition] = useState(() => ({
+    x: Math.max(12, window.innerWidth - 584 - (placementIndex % 5) * 32),
+    y: 80 + (placementIndex % 5) * 32,
+  }));
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const launcherDrag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const moveLauncher = (x: number, y: number) => {
@@ -99,6 +103,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [answer, setAnswer] = useState("");
+  const streamedAnswer = useRef("");
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [progress, setProgress] = useState("Thinking…");
@@ -202,6 +207,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
     turnId.current = undefined;
     harnessTurnId.current = undefined;
     commentary.current = "";
+    streamedAnswer.current = "";
     setProgress("Connecting…");
     needsAction.current = false;
     setBusy(true); setError(undefined); setAnswer("");
@@ -228,7 +234,10 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
           needsAction.current = false; abort.abort(); setBusy(false);
           setError(event.itemStatus === "failed" ? "The response failed. You can try your question again." : "Response stopped. Your question is ready to edit or resend.");
         }
-        if (event.type === "delta" || event.type === "message_delta") setAnswer(current => current + event.delta);
+        if (event.type === "delta" || event.type === "message_delta") {
+          streamedAnswer.current += event.delta;
+          setAnswer(streamedAnswer.current);
+        }
         if (event.type === "approval_required" || event.type === "approval" || event.type === "interaction") {
           needsAction.current = true;
           setError("This question needs an action. Stop this response and ask a question that can be answered from the context.");
@@ -236,9 +245,11 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
       }, abort.signal);
       if (!abort.signal.aborted && result) {
         needsAction.current = false;
-        setMessages(current => [...current, { role: "user", content: prompt }, result.message]);
+        const content = result.message.content || streamedAnswer.current;
+        setMessages(current => [...current, { role: "user", content: prompt }, { ...result.message, content }]);
         if (input.current) input.current.value = "";
         setQuestion(""); setAnswer("");
+        if (!content.trim()) setError("The agent completed without a text result.");
       }
     } catch (reason) {
       if (!abort.signal.aborted) {
@@ -263,7 +274,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
         <span className={styles.show}>Show</span>
       </button>
     </div> :
-    <div ref={panel} className={styles.popup} role="dialog" aria-labelledby="ask-nebula-title" style={{ left: position.x, top: position.y }}>
+    <div ref={panel} className={styles.popup} role="dialog" aria-labelledby={titleId} style={{ left: position.x, top: position.y }}>
     <div data-selection-actions-disabled>
       <div className={styles.header}>
         <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
@@ -271,7 +282,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
           onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }}
           onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }} onLostPointerCapture={() => { drag.current = undefined; }}
           onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); move(position.x + direction[0] * 24, position.y + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
-        <div className={styles.title}><h2 id="ask-nebula-title">Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
+        <div className={styles.title}><h2 id={titleId}>Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
         <button className="icon-button subtle" type="button" aria-label="Hide Ask Nebula" title="Hide and keep this conversation"
           onClick={() => { setQuestion(input.current?.value ?? question); setHidden(true); onVisibilityChange?.(false); }}><Minimize2 size={18} aria-hidden="true" /></button>
         <button className="icon-button subtle" type="button" aria-label="Close Ask Nebula" title="Close and discard" onClick={onClose}><X size={18} aria-hidden="true" /></button></div>

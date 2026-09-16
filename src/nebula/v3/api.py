@@ -706,6 +706,12 @@ class ChatSessionForkRequest(NebulaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+class ChatSessionActivity(NebulaModel):
+    session_id: str
+    state: Literal["working", "waiting", "idle"]
+    turn_id: str | None = None
+
+
 class ChatImageUploadRequest(NebulaModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     filename: str = Field(min_length=1, max_length=1_024)
@@ -8457,6 +8463,35 @@ def create_app(
     app.include_router(
         workspace_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)]
     )
+
+    @app.get(
+        f"{API_PREFIX}/chat/session-activity",
+        response_model=list[ChatSessionActivity],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_session_activity(
+        engagement_id: str,
+    ) -> list[ChatSessionActivity]:
+        activity: list[ChatSessionActivity] = []
+        for session in store.list_entities(ChatSession, engagement_id=engagement_id):
+            if session.metadata.get("temporary_assistant") is True:
+                continue
+            turn = chat_service().pending_turn(session.id)
+            activity.append(
+                ChatSessionActivity(
+                    session_id=session.id,
+                    state=(
+                        "idle"
+                        if turn is None
+                        else "waiting"
+                        if turn.status == ChatTurnStatus.WAITING_APPROVAL
+                        else "working"
+                    ),
+                    turn_id=turn.id if turn else None,
+                )
+            )
+        return activity
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",

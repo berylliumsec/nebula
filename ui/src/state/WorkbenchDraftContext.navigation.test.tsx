@@ -1,18 +1,28 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkbenchDraftProvider, useWorkbenchDrafts } from "./WorkbenchDraftContext";
 
-const state = vi.hoisted(() => ({
-  createHandoff: vi.fn(),
-  cancelHandoff: vi.fn().mockResolvedValue({}),
-}));
+const state = vi.hoisted(() => {
+  const api = {
+    createHandoff: vi.fn(),
+    cancelHandoff: vi.fn().mockResolvedValue({}),
+    createTemporaryChat: vi.fn(),
+    discardTemporaryChat: vi.fn().mockResolvedValue(undefined),
+    keepTemporaryChatAlive: vi.fn().mockResolvedValue(undefined),
+    streamChat: vi.fn(),
+    cancelChatTurn: vi.fn().mockResolvedValue({}),
+    stopHarnessTurn: vi.fn().mockResolvedValue(undefined),
+    getPendingChatTurn: vi.fn().mockResolvedValue({ id: "pending-turn" }),
+  };
+  return { ...api, api };
+});
 
 vi.mock("../api/runtime", () => ({ desktopDeviceId: () => Promise.resolve("device-current") }));
 vi.mock("./WorkspaceContext", () => ({
   useWorkspace: () => ({
-    api: { createHandoff: state.createHandoff, cancelHandoff: state.cancelHandoff },
+    api: state.api,
     engagement: { id: "project-1", name: "Project one" },
   }),
 }));
@@ -37,6 +47,50 @@ function AskFromAssistant({ view = "chat" }: { view?: "chat" | "browser" }) {
     sourceLabel: "Assistant response",
   }, view)}>Add context to chat</button><button onClick={clearAssistantDrafts}>Clear context</button></>;
 }
+
+function ConcurrentAskProbe() {
+  const { registerAssistantSnapshot, requestNebulaDraft } = useWorkbenchDrafts();
+  return <>
+    <button onClick={() => registerAssistantSnapshot({ engagementId: "project-1", providerId: "provider-1", model: "model-1" })}>Register runtime</button>
+    <button onClick={() => requestNebulaDraft({ text: "First context", sourceKind: "conversation", sourceId: "one", sourceLabel: "First source" })}>Ask first</button>
+    <button onClick={() => requestNebulaDraft({ text: "Second context", sourceKind: "conversation", sourceId: "two", sourceLabel: "Second source" })}>Ask second</button>
+  </>;
+}
+
+it("opens independent Ask Nebula windows without replacing a running request", async () => {
+  state.createTemporaryChat.mockReset();
+  state.createTemporaryChat
+    .mockResolvedValueOnce({ id: "popup-one", backend: "provider", providerId: "provider-1", model: "model-1" })
+    .mockResolvedValue({ id: "popup-two", backend: "provider", providerId: "provider-1", model: "model-1" });
+  state.discardTemporaryChat.mockClear();
+  state.streamChat.mockImplementationOnce((_body, onEvent, signal) => new Promise((_resolve, reject) => {
+    onEvent({ type: "started", turnId: "turn-one", model: "model-1", sessionId: "popup-one" });
+    signal.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")));
+  }));
+  const user = userEvent.setup();
+  render(<MemoryRouter><WorkbenchDraftProvider><ConcurrentAskProbe /></WorkbenchDraftProvider></MemoryRouter>);
+
+  await user.click(screen.getByRole("button", { name: "Register runtime" }));
+  await user.click(screen.getByRole("button", { name: "Ask first" }));
+  await waitFor(() => expect(state.createTemporaryChat).toHaveBeenCalledTimes(1));
+  const firstDialog = screen.getByRole("dialog", { name: "Ask Nebula" });
+  await user.type(within(firstDialog).getByRole("textbox", { name: "Question for Nebula" }), "Keep working");
+  await user.click(within(firstDialog).getByRole("button", { name: "Ask question" }));
+  await expect(within(firstDialog).getByRole("button", { name: "Stop response" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Ask second" }));
+  await waitFor(() => expect(state.createTemporaryChat).toHaveBeenCalledTimes(2));
+
+  const dialogs = screen.getAllByRole("dialog", { name: "Ask Nebula" });
+  expect(dialogs).toHaveLength(2);
+  expect(within(dialogs[0]).getByText("First source")).toBeVisible();
+  expect(within(dialogs[1]).getByText("Second source")).toBeVisible();
+  expect(within(dialogs[0]).getByRole("button", { name: "Stop response" })).toBeVisible();
+
+  await user.click(within(dialogs[1]).getByRole("button", { name: "Close Ask Nebula" }));
+  expect(screen.getAllByRole("dialog", { name: "Ask Nebula" })).toHaveLength(1);
+  expect(screen.getByText("First source")).toBeVisible();
+  await waitFor(() => expect(state.discardTemporaryChat).toHaveBeenCalledExactlyOnceWith("popup-two"));
+});
 
 describe("Add context to chat conversation navigation", () => {
   beforeEach(() => {

@@ -11,6 +11,7 @@ import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatSessionRenameRequest,
+  ChatSessionActivity,
   ChatSessionSummary,
   ChatStreamEvent,
   ChatTurn,
@@ -7515,6 +7516,16 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapChatSession)));
+  }
+
+  listChatSessionActivity(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ChatSessionActivity[]> {
+    return this.request<Array<{ session_id: string; state: ChatSessionActivity["state"]; turn_id?: string | null }>>(
+      `chat/session-activity?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    ).then(items => items.map(item => ({ sessionId: item.session_id, state: item.state, turnId: item.turn_id ?? undefined })));
   }
 
   renameChatSession(
