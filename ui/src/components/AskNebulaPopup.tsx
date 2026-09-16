@@ -119,6 +119,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
     let closed = false;
     let created: ChatSessionSummary | undefined;
     let leaseTimer: ReturnType<typeof setInterval> | undefined;
+    let openTimer: ReturnType<typeof setTimeout> | undefined;
     const discard = (id: string) => {
       void api.discardTemporaryChat(id).catch(reason => {
         void logCaughtDiagnostic("interface.ask_nebula.cleanup_failed", "The popup closed; Core will expire its temporary conversation.", reason, "chat");
@@ -126,7 +127,11 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
     };
     setReady(false);
     setError(undefined);
+    openTimer = setTimeout(() => {
+      if (!closed) setError("Opening the temporary conversation is taking too long. Try again; your main conversation is unchanged.");
+    }, 15_000);
     void api.createTemporaryChat(snapshot).then(session => {
+      clearTimeout(openTimer);
       created = session;
       if (closed) { discard(session.id); return; }
       branch.current = session;
@@ -139,7 +144,9 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
       window.addEventListener("focus", renew);
       renewLease.current = renew;
       setReady(true);
+      setError(undefined);
     }).catch(reason => {
+      clearTimeout(openTimer);
       void logCaughtDiagnostic("interface.ask_nebula.open_failed", "The temporary assistant could not open.", reason, "chat");
       if (!closed) setError(reason instanceof Error ? reason.message : "Could not open a temporary conversation. Try again.");
     });
@@ -147,6 +154,7 @@ export function AskNebulaPopup({ api, snapshot, context, onClose, onVisibilityCh
     window.addEventListener("pagehide", unload);
     return () => {
       closed = true;
+      clearTimeout(openTimer);
       controller.current?.abort();
       clearInterval(leaseTimer);
       if (renewLease.current) window.removeEventListener("focus", renewLease.current);

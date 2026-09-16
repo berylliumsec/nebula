@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -22,6 +22,30 @@ function fixture() {
 }
 
 describe("Ask Nebula popup", () => {
+  it("recovers when temporary conversation opening stalls and discards a late branch", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = fixture();
+      let finishFirst!: (value: unknown) => void;
+      let finishRetry!: (value: unknown) => void;
+      api.createTemporaryChat
+        .mockReturnValueOnce(new Promise(resolve => { finishFirst = resolve; }))
+        .mockReturnValueOnce(new Promise(resolve => { finishRetry = resolve; }));
+      render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+      expect(screen.getByRole("alert")).toHaveTextContent("taking too long");
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      expect(api.createTemporaryChat).toHaveBeenCalledTimes(2);
+      await act(async () => finishFirst({ id: "late", backend: "provider", providerId: "provider", model: "m" }));
+      expect(api.discardTemporaryChat).toHaveBeenCalledWith("late");
+      await act(async () => finishRetry({ id: "recovered", backend: "provider", providerId: "provider", model: "m" }));
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Ask question" })).toBeDisabled();
+      fireEvent.input(screen.getByRole("textbox", { name: "Question for Nebula" }), { target: { value: "Explain the selection" } });
+      expect(screen.getByRole("button", { name: "Ask question" })).toBeEnabled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("forks once, keeps follow-ups in the popup, and discards on close", async () => {
     const api = fixture(); const user = userEvent.setup();
     const { unmount } = render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
