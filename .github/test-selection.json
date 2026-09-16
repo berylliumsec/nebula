@@ -1,20 +1,11 @@
 {
-  "change_digest": "ea50304b29983b74cf6cc4979ea451c7052bba4d5d8875e7fe7b1e1d07b0665a",
-  "reviewed_by": "Codex native Ask Nebula popup review",
-  "reason": "Native Browser Ask Nebula opens a DOM popup that the macOS native webview can cover. Select the 15 popup lifecycle component tests and the 8 catalogued desktop Browser interaction tests, including the native page capture journey updated to verify popup visibility, Hide, Show, Close, and native browser visibility. Build the production UI bundle.",
-  "exclusions": "No full suites. Python Core APIs and Rust browser commands are unchanged, so no Python or native tests are selected. Mobile browser interaction is not the affected native desktop webview path. The installed Mac client is unavailable for a packaged app and real WKWebView gate; local Playwright Tauri shim does not establish that physical-device behavior.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 15,
-    "native": 0,
-    "playwright": 8
-  },
+  "change_digest": "3767763f54b4526db4bcb2270568cc4a75c569dd1c0ebbb27fd9f1e0816c60ad",
+  "reviewed_by": "Codex popup setup stall review",
+  "reason": "Ask Nebula can remain indefinitely at Preparing if its temporary conversation request never settles. Select all 16 focused popup lifecycle component tests, including a delayed setup and late-branch cleanup regression; one desktop Chromium, one mobile Chromium, and one mobile WebKit popup interaction test; and two real-Core provider/harness temporary-conversation journeys. Build the production UI.",
+  "exclusions": "No full suites. Rust native capture and Python temporary-chat route behavior are unchanged, so no native or Python test files are selected. The affected remote Mac network and physical WKWebView path are unavailable here; the selected real-Core journey uses the production bundle with a local runtime fixture and cannot establish that Mac transport's exact failure cause.",
+  "expected_tests": {"python": 0, "frontend": 16, "native": 0, "playwright": 5},
   "python": [],
-  "frontend": [
-    "ui/src/components/AskNebulaPopup.test.tsx"
-  ],
+  "frontend": ["ui/src/components/AskNebulaPopup.test.tsx"],
   "native": [],
-  "playwright": [
-    "entry:browser/desktop"
-  ]
+  "playwright": ["entry:ask-nebula-popup/desktop", "entry:ask-nebula-popup/mobile-chromium-small", "entry:ask-nebula-popup/mobile-webkit-small", "entry:ask-nebula-real-core/real-core"]
 }
