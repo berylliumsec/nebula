@@ -920,7 +920,10 @@ fn clear_macos_identity_proxy(
             }
             Ok(())
         })();
-        let _ = sender.send(result);
+        if sender.send(result).is_err() {
+            // The caller already timed out and reported the native browser failure.
+            eprintln!("Nebula could not deliver the macOS browser data-store reset result.");
+        }
     })
     .map_err(|error| format!("cannot access the macOS browser data store: {error}"))?;
     wait_for_native_browser_result(receiver)

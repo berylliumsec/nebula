@@ -1,16 +1,17 @@
 {
-  "change_digest": "79d921501fa174906dabd9623b779ea48919876d789d873c3a1477a064c0dce3",
+  "change_digest": "92fc4f1246401080a0aafbe7e965b1ad6770c374f9a24cc0031ffc3ff4c14282",
   "reviewed_by": "Codex macOS stale browser proxy review",
-  "reason": "On macOS 14+, Wry writes capture proxy settings to the identity WKWebsiteDataStore. A direct tab must clear that setting before first navigation when capture is disabled; another proxied tab in the same identity must remain protected. Select the three existing native-browser security contracts and an arm64 macOS compile check. The affected client journey requires a rebuilt Mac app and remains a manual release gate.",
-  "exclusions": "No full suites. Core routes, frontend controls, and Playwright web-interface behavior are unchanged. No focused Rust test exercises WKWebsiteDataStore on Linux CI. The affected Mac client is not remotely controllable, so live navigation, production Mac package, physical-device, and reconnect gates are unavailable for this PR; do not claim the operator workflow is complete from these checks.",
+  "reason": "On macOS 14+, Wry writes capture proxy settings to the identity WKWebsiteDataStore. A direct tab must clear that setting before first navigation when capture is disabled; another proxied tab in the same identity must remain protected. Select the three existing native-browser security contracts and an arm64 macOS compile check. The affected client journey requires a rebuilt Mac app and remains a manual release gate. The required Python 3.12 diagnostic audit found three existing temporary-chat cleanup classifications missing despite already-discarded lookup, logged retry, and lifespan-owned cancel/await behavior. Add reviewable diagnostic-expected comments only; select all seven temporary-chat contract tests to protect that existing lifecycle.",
+  "exclusions": "No full suites. Core routes, frontend controls, and Playwright web-interface behavior are unchanged. No focused Rust test exercises WKWebsiteDataStore on Linux CI. The affected Mac client is not remotely controllable, so live navigation, production Mac package, physical-device, and reconnect gates are unavailable for this PR; do not claim the operator workflow is complete from these checks. Local temporary-chat collection is blocked by the host Conda pyOpenSSL/botocore mismatch; CI Python 3.12 will collect and execute the seven tests. No temporary-chat runtime behavior changed.",
   "expected_tests": {
-    "python": 3,
+    "python": 10,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_tauri_browser_security.py"
+    "tests/v3/test_tauri_browser_security.py",
+    "tests/v3/test_temporary_chat.py"
   ],
   "frontend": [],
   "native": [],
