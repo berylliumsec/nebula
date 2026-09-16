@@ -3,8 +3,8 @@ import { expect, it, vi } from "vitest";
 import { ChatQueuePanel } from "./ChatQueuePanel";
 import type { useChatQueue } from "../pages/useChatQueue";
 
-function controller(status = "queued", error?: string) {
-  return { queue: { revision: 1, paused: false, items: [{ id: "one", key: "one", status, request: { messages: [{ role: "user", content: "A very long queued message ".repeat(30) }] } }] }, busy: false, error, mutate: vi.fn().mockResolvedValue(true), reload: vi.fn() } as unknown as ReturnType<typeof useChatQueue>;
+function controller(status = "queued", error?: string, turnId?: string) {
+  return { queue: { revision: 1, paused: false, items: [{ id: "one", key: "one", status, turn_id: turnId, request: { messages: [{ role: "user", content: "A very long queued message ".repeat(30) }] } }] }, busy: false, error, mutate: vi.fn().mockResolvedValue(true), reload: vi.fn() } as unknown as ReturnType<typeof useChatQueue>;
 }
 it("keeps queued text and management controls behind a compact disclosure", () => {
   const queue = controller();
@@ -22,4 +22,14 @@ it("exposes queue errors and review actions immediately", () => {
   expect(view.container.querySelector("details")!.open).toBe(true);
   expect(screen.getByRole("alert")).toHaveTextContent("Queue unavailable");
   expect(screen.getByRole("button", { name: "Retry as new message" })).toBeVisible();
+});
+it("removes a dispatched follow-up from the visible queue once Core links its turn", () => {
+  const {rerender} = render(<ChatQueuePanel queue={controller("sending")} onRefreshConversation={vi.fn()} />);
+  expect(screen.getByRole("region", {name: "Core follow-up queue"})).toHaveTextContent("1 follow-up · Sending");
+
+  rerender(<ChatQueuePanel queue={controller("sending", undefined, "turn-one")} onRefreshConversation={vi.fn()} />);
+  expect(screen.queryByRole("region", {name: "Core follow-up queue"})).not.toBeInTheDocument();
+
+  rerender(<ChatQueuePanel queue={controller("needs_review", undefined, "turn-one")} onRefreshConversation={vi.fn()} />);
+  expect(screen.getByRole("region", {name: "Core follow-up queue"})).toHaveTextContent("Needs attention");
 });

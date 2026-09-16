@@ -6,7 +6,7 @@ import { expect, test, type Page } from "@playwright/test";
 const reloadTest = test.extend({ serviceWorkers: "block" });
 
 async function installCoreQueueFixture(page: Page) {
-  const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
+  const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; turn_id?: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
   const actions: string[] = [];
   await page.route("**/api/v1/chat/sessions/*/queue", async route => {
     if (route.request().method() === "POST") {
@@ -2705,6 +2705,19 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   await expect(page.getByRole("button", {name: "Stop response"})).toHaveCount(0, {timeout: 15000});
   expect(await page.evaluate(() => (globalThis as typeof globalThis & {__queueChatRequests?: unknown[]}).__queueChatRequests?.length)).toBe(1);
   await expect(queue).toContainText("continues after all browser tabs close");
+
+  durable.queue.items[0].status = "sending";
+  durable.queue.items[0].turn_id = "accepted-follow-up-turn";
+  durable.queue.revision += 1;
+  await expect(queue.locator("li")).toHaveCount(1, {timeout: 5_000});
+  await expect(queue).not.toContainText("First queued follow-up.");
+  await expect(queue).toContainText("Second queued follow-up.");
+
+  durable.queue.items[0].status = "needs_review";
+  durable.queue.revision += 1;
+  await expect(queue.locator("li")).toHaveCount(2, {timeout: 5_000});
+  await expect(queue).toContainText("First queued follow-up.");
+  await expect(queue).toContainText("Needs attention");
 });
 
 test("assistant live guidance steers an active Codex turn with advertised steering capabilities", async ({ page }, testInfo) => {
