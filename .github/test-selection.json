@@ -1,17 +1,18 @@
 {
-  "change_digest": "effbd7d7bb1e9b8c35b9f58cb59df9156d308e68d1ef4786ebe15c3fdb60e5c8",
+  "change_digest": "6d03205bb3d99e2e3240c7d716337fdd4de3d2de9c32122349c9f902a81c6fb4",
   "reviewed_by": "Codex alpha.18 release failure and alpha.19 recovery review",
-  "reason": "Selects the exact release-version contracts and the browser catalog areas whose assertions failed in alpha.18: durable chat reconnection in all eight permanent desktop/mobile Chromium/WebKit profiles, Assistant reliability and native-command thinking in all eight real-Core profiles, desktop harness image capability, and the real-Core reviewed Coding execution journey. The 35 browser tests verify retained thinking alongside a single resumed reply, response-owned activity, durable native thinking, explicit capability selection, and progressively disclosed editor tools.",
-  "exclusions": "No full suites. Alpha.18 passed 89 other selected matrix jobs, and this diff changes only the failing acceptance contracts plus synchronized alpha.19 version metadata and notes. Unaffected Ask Nebula, browser navigation, project lifecycle, terminal, Coding layout, workbench navigation, provider, native implementation, and unrelated backend/frontend journeys are excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
+  "reason": "Selects the exact release-version contracts and browser catalog areas whose assertions failed in alpha.18: durable chat reconnection in all eight permanent desktop/mobile Chromium/WebKit profiles, Assistant reliability and native-command thinking in all eight real-Core profiles, all five named Browser Assistant journeys across desktop and both landscape engines, and the real-Core reviewed Coding execution journey. The catalog contract proves that the landscape entries no longer collect 18 unrelated interface tests merely because their project name contains browser. The 48 browser tests verify retained thinking alongside a single resumed reply, response-owned activity, durable native thinking, explicit capability selection, upload approval, degraded-Core recovery, and progressively disclosed editor tools.",
+  "exclusions": "No full suites. Alpha.18 passed 89 other selected matrix jobs, and this diff changes only the failing acceptance contracts, the over-broad browser-area selector, and synchronized alpha.19 version metadata and notes. Unaffected Ask Nebula, project lifecycle, terminal, Coding layout, workbench navigation, provider, native implementation, and unrelated backend/frontend journeys are excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
   "expected_tests": {
-    "python": 2,
+    "python": 3,
     "frontend": 0,
     "native": 0,
-    "playwright": 35
+    "playwright": 48
   },
   "python": [
     "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract",
+    "tests/test_playwright_impact.py::test_browser_area_only_collects_named_browser_assistant_journeys"
   ],
   "frontend": [],
   "native": [],
@@ -19,7 +20,7 @@
     "area:chat-reconnection",
     "area:assistant-reliability",
     "area:harness-commands-real",
-    "entry:browser/desktop",
+    "area:browser",
     "area:unrestricted-execution"
   ]
 }
