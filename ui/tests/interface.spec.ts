@@ -6127,6 +6127,15 @@ for (const imageInput of [true, false]) {
         await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at } }] });
       } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
         await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
+      } else if (path.endsWith("/chat/sessions/image-chat/messages")) {
+        await route.fulfill({ json: [
+          { ...entity, id: "image-operator", engagement_id: "scratch-project", session_id: "image-chat", sequence: 1, role: "user", content: "Describe the selected image.", citations: [], metadata: {} },
+          { ...entity, id: "image-assistant", engagement_id: "scratch-project", session_id: "image-chat", sequence: 2, role: "assistant", content: "Image received.", citations: [], metadata: { harness_turn_id: "image-turn" } },
+        ] });
+      } else if (path.endsWith("/chat/sessions/image-chat/pending-turn")) {
+        await route.fulfill({ json: null });
+      } else if (path.endsWith("/chat/sessions/image-chat/state")) {
+        await route.fulfill({ json: { schema: "nebula.session-state/v1", session_id: "image-chat", revision: 1, turn_id: "image-turn", harness_turn_id: "image-turn", execution: "completed", busy: false, detail: "Response completed.", connection: "connected", actions: ["check_status"], pending: [], decisions: [] } });
       } else if (path.endsWith("/browser-companion")) {
         await route.fulfill({ json: { session_id: "image-browser", tabs: [{ id: "image-tab", title: "Image page", url: "https://example.test/" }] } });
       } else if (path.endsWith("/image-browser/operations")) {
