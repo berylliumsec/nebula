@@ -953,6 +953,7 @@ export function SessionsPage() {
       })
       .catch(error => {
         if (controller.signal.aborted) return;
+        void logCaughtDiagnostic("interface.sessions_page.external_sessions_load_failed", "External harness sessions could not be loaded.", error, "sessions_page");
         setExternalHarnessSessions([]);
         setExternalSessionsError(error instanceof Error ? error.message : "External sessions could not be loaded.");
       })
@@ -985,6 +986,7 @@ export function SessionsPage() {
       setHarnessSessionId(imported.id);
       setAssistantSettingsStatus(`Ready to resume ${external.displayName}.`);
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.external_session_import_failed", "An external harness session could not be imported.", error, "sessions_page");
       setExternalSessionsError(error instanceof Error ? error.message : "The external session could not be imported.");
     } finally {
       setExternalSessionsLoading(false);

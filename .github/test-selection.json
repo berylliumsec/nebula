@@ -1,11 +1,11 @@
 {
-  "change_digest": "c3df3ed5abcd0724c1a1210c2174b61fe526c2a5c14062073e89ad4c2c500a85",
-  "reviewed_by": "Codex external session name reconciliation review",
-  "reason": "Selected durable provider-title reconciliation plus the catalogued desktop, 320px Chromium, 320px WebKit, and real-Core harness session journeys.",
-  "exclusions": "No full suites, unrelated provider/chat/browser workflows, native runtime tests, live paid-provider turns, or physical devices. Production UI compilation was checked separately.",
-  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 4},
-  "python": ["tests/v3/test_harnesses.py::test_external_harness_session_can_be_discovered_and_imported_once"],
-  "frontend": [],
+  "change_digest": "938d38d0f1e11a28a7ac05b3a15e962ec5b6d1512e8da51b3bdd90263b854bd3",
+  "reviewed_by": "Codex assistant queue reconciliation review after current-main rebase",
+  "reason": "Selected the three ChatQueuePanel component cases and the exact mocked-Core queue polling journey in desktop Chromium, narrow desktop, mobile Chromium 320, and mobile WebKit 390. The focused coverage proves that a Core-linked sending item leaves the visible follow-up queue and returns if Core marks it needs review. The existing diagnostics audit checks the two current-main external-session recovery handlers corrected after CI identified missing diagnostic recording.",
+  "exclusions": "No full suites. Current main already contains the overlapping Coding, harness, Security Browser, and native-browser changes from the original combined worktree; the rebased PR retains the queue projection fix, its regression coverage, and diagnostic recording required by the existing frontend audit. Backend queue mutation is unchanged. Live provider turns, real-Core LAN, physical devices, and software keyboards are excluded.",
+  "expected_tests": {"python": 0, "frontend": 3, "native": 0, "playwright": 4},
+  "python": [],
+  "frontend": ["ui/src/components/ChatQueuePanel.test.tsx"],
   "native": [],
-  "playwright": ["area:advanced-session-binding"]
+  "playwright": ["area:assistant-queue-reconciliation"]
 }

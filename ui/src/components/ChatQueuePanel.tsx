@@ -4,7 +4,12 @@ export function ChatQueuePanel({queue: controller, onRefreshConversation}: {queu
   const {queue, busy, error, mutate, reload} = controller;
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState<QueueItem>(); const [text, setText] = useState("");
-  const items = queue?.items.filter(item => !["complete", "cancelled"].includes(item.status)) ?? [];
+  // Once Core has linked a sending item to its durable turn, the transcript is
+  // the operator-facing authority for that work. Keep the queue focused on
+  // undispatched or recoverable follow-ups; reconciliation can still surface a
+  // linked turn again if Core moves it to needs_review or failed.
+  const items = queue?.items.filter(item => !["complete", "cancelled"].includes(item.status)
+    && !(item.status === "sending" && item.turn_id)) ?? [];
   const editable = items.filter(item => ["queued", "needs_review"].includes(item.status));
   const move = (item: QueueItem, direction: number) => { const order = editable.map(row => row.id); const index = order.indexOf(item.id); const target = index + direction; if (target < 0 || target >= order.length) return; [order[index], order[target]] = [order[target], order[index]]; void mutate({action: "reorder", order}); };
   if (!items.length && !error && !editing) return null;
