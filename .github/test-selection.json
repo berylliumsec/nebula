@@ -1,19 +1,20 @@
 {
-  "change_digest": "92fc4f1246401080a0aafbe7e965b1ad6770c374f9a24cc0031ffc3ff4c14282",
-  "reviewed_by": "Codex macOS stale browser proxy review",
-  "reason": "On macOS 14+, Wry writes capture proxy settings to the identity WKWebsiteDataStore. A direct tab must clear that setting before first navigation when capture is disabled; another proxied tab in the same identity must remain protected. Select the three existing native-browser security contracts and an arm64 macOS compile check. The affected client journey requires a rebuilt Mac app and remains a manual release gate. The required Python 3.12 diagnostic audit found three existing temporary-chat cleanup classifications missing despite already-discarded lookup, logged retry, and lifespan-owned cancel/await behavior. Add reviewable diagnostic-expected comments only; select all seven temporary-chat contract tests to protect that existing lifecycle.",
-  "exclusions": "No full suites. Core routes, frontend controls, and Playwright web-interface behavior are unchanged. No focused Rust test exercises WKWebsiteDataStore on Linux CI. The affected Mac client is not remotely controllable, so live navigation, production Mac package, physical-device, and reconnect gates are unavailable for this PR; do not claim the operator workflow is complete from these checks. Local temporary-chat collection is blocked by the host Conda pyOpenSSL/botocore mismatch; CI Python 3.12 will collect and execute the seven tests. No temporary-chat runtime behavior changed.",
+  "change_digest": "ea50304b29983b74cf6cc4979ea451c7052bba4d5d8875e7fe7b1e1d07b0665a",
+  "reviewed_by": "Codex native Ask Nebula popup review",
+  "reason": "Native Browser Ask Nebula opens a DOM popup that the macOS native webview can cover. Select the 15 popup lifecycle component tests and the 8 catalogued desktop Browser interaction tests, including the native page capture journey updated to verify popup visibility, Hide, Show, Close, and native browser visibility. Build the production UI bundle.",
+  "exclusions": "No full suites. Python Core APIs and Rust browser commands are unchanged, so no Python or native tests are selected. Mobile browser interaction is not the affected native desktop webview path. The installed Mac client is unavailable for a packaged app and real WKWebView gate; local Playwright Tauri shim does not establish that physical-device behavior.",
   "expected_tests": {
-    "python": 10,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 15,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python": [
-    "tests/v3/test_tauri_browser_security.py",
-    "tests/v3/test_temporary_chat.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/AskNebulaPopup.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:browser/desktop"
+  ]
 }
