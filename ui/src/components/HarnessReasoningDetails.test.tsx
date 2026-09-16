@@ -12,7 +12,7 @@ it("keeps long completed and earlier streamed summaries selectable", async () =>
   const text = "Long summary. ".repeat(6000) + "FINAL TAIL";
   const { container } = render(<HarnessReasoningDetails item={item({ streams: { reasoning_summary: text }, payload: { reasoning_summary_state: "available", reasoning_streamed_text: "Earlier public text" } })} />);
   expect(container.querySelector("p")?.textContent).toBe(text);
-  expect(container.querySelector("p")).toHaveAttribute("tabindex", "0");
+  expect(container.querySelector(".harness-reasoning-summary")).toHaveAttribute("tabindex", "0");
   await userEvent.click(screen.getByText("Earlier streamed summary"));
   expect(screen.getByText("Earlier public text")).toBeVisible();
   expect(screen.getByText("Provider-supplied reasoning summary.")).toBeVisible();
@@ -22,6 +22,14 @@ it("renders commentary instead of the generic durable event description", () => 
   render(<HarnessReasoningDetails item={item({ streams: { commentary: "Public progress update" }, summary: "chat · Harness output delta", title: "Commentary", vendor: "grok_acp" })} />);
   expect(screen.getByText("Public progress update")).toBeVisible();
   expect(screen.queryByText("chat · Harness output delta")).not.toBeInTheDocument();
+});
+
+it("renders durable public summaries with tables and inline code", () => {
+  const markdown = "| Slot | Target |\n|---|---|\n| 51 | **canary** |\n\nUse `parseKeywords`.";
+  const { container } = render(<HarnessReasoningDetails item={item({ streams: { reasoning_summary: markdown } })} />);
+  expect(container.querySelector("table")).toBeInTheDocument();
+  expect(screen.getByText("canary").tagName).toBe("STRONG");
+  expect(screen.getByText("parseKeywords").tagName).toBe("CODE");
 });
 
 it("explains unavailable, pending, malformed and historically truncated text", () => {

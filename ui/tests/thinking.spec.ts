@@ -51,7 +51,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
         expect(await long.locator(".harness-reasoning-summary").textContent()).toBe("Long thinking " + "x".repeat(39986) + "y".repeat(40000));
         const commentary = rows.filter({has: page.getByText("A public progress update.", {exact: true})});
         await commentary.locator(".activity-ledger-entry-content > details > summary").click();
-        await expect(commentary.locator("p.harness-reasoning-summary")).toBeVisible();
+        await expect(commentary.locator(".harness-reasoning-summary")).toBeVisible();
       }
       return rows;
     };

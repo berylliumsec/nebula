@@ -1,24 +1,28 @@
 {
-  "change_digest": "431ff4bb67579fb61fda91cea53d67e73216a6667fa85f3380b346dd551e4802",
-  "reviewed_by": "Codex host-mode native-tool boundary review",
-  "reason": "Selected exact harness runtime and adapter regressions for Docker capability suppression, host capability freezing and linked-workspace binding, Grok native-tool launch behavior and user-bus inheritance, and Codex native shell environment configuration.",
-  "exclusions": "No full suites. UI and API schemas are unchanged, so frontend, native, and Playwright layers are not applicable. The deployed real-Core host-mode Grok journey will be exercised after merge; physical devices and browser matrices are unrelated to this provider execution-boundary correction.",
+  "change_digest": "1a4348d2e58a856b51935a522bbc3a94729b0f5f76d7fd8da5ee10a97d311584",
+  "reviewed_by": "Codex harness-thought Markdown rendering review",
+  "reason": "Selected the two exact component files that exercise compact and expanded public harness thought rendering, plus the catalogued real-Core thinking retention journey across permanent desktop, compact, mobile Chromium, and mobile WebKit projects.",
+  "exclusions": "No full suites. Core persistence, provider adapters, API schemas, and native code are unchanged, so Python and native tests are not applicable. Unrelated assistant, provider, and workspace journeys are excluded. A production build is run separately because it is a build gate, not a test-selection layer.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 10,
     "native": 0,
-    "playwright": 0
+    "playwright": 16
   },
-  "python": [
-    "tests/v3/test_harnesses.py::test_harness_session_freezes_native_capabilities",
-    "tests/v3/test_harnesses.py::test_host_mode_freezes_native_shell_and_uses_linked_workspace",
-    "tests/v3/test_harnesses.py::test_existing_codex_session_forks_when_project_changes_to_host_mode",
-    "tests/v3/test_harnesses.py::test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session",
-    "tests/v3/test_harness_adapters.py::test_grok_process_removes_host_command_and_workspace_tools",
-    "tests/v3/test_harness_adapters.py::test_grok_host_session_preserves_native_tools_and_user_bus",
-    "tests/v3/test_harness_adapters.py::test_codex_native_capabilities_are_explicit_and_keep_shell_environment_minimal"
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessThinking.test.tsx",
+    "ui/src/components/HarnessReasoningDetails.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "thinking-retention/model-desktop",
+    "thinking-retention/model-compact",
+    "thinking-retention/model-chromium-320",
+    "thinking-retention/model-webkit-320",
+    "thinking-retention/model-chromium-390",
+    "thinking-retention/model-webkit-390",
+    "thinking-retention/model-chromium-430",
+    "thinking-retention/model-webkit-430"
+  ]
 }
