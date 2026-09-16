@@ -743,9 +743,9 @@
       {"area":"inline-commentary","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"completed harness output surfaces Grok commentary as live narrative","runtime":"mock","shard":"1/1"}
     ],
     "browser": [
-      {"area":"browser","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser","runtime":"mock","shard":"1/1"},
-      {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
-      {"area":"browser","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
+      {"area":"browser","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"}
     ],
     "mobile-layout": [
       {"area":"mobile-layout","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},

@@ -214,6 +214,18 @@ def test_full_manifest_covers_every_permanent_playwright_project():
     } <= {"mock", "real-core", "real-core-sandbox"}
 
 
+def test_browser_area_only_collects_named_browser_assistant_journeys():
+    entries = MANIFEST["areas"]["browser"]
+    assert {entry["project"] for entry in entries} == {
+        "desktop",
+        "browser-chromium-landscape",
+        "browser-webkit-landscape",
+    }
+    assert {entry["grep"] for entry in entries} == {
+        "browser Assistant (stays|harness|approves)"
+    }
+
+
 def test_explicit_area_selection_overrides_global_fallback():
     result = select_plan(
         MANIFEST,

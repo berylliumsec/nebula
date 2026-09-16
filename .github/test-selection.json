@@ -1,17 +1,18 @@
 {
-  "change_digest": "20b9c4a8901a8b3d40f1539bf4dc7663637eee58a5ba5b0f55630b095221b698",
+  "change_digest": "a605fc939527dbee4bb93e4552bd004433c3b7c06001cc9670ec352580cee8cb",
   "reviewed_by": "Codex alpha.18 release failure, alpha.19 recovery, and Assistant settings navigation review",
-  "reason": "Preserves the exact release-version contracts and browser catalog areas selected for the alpha.19 recovery, then adds one isolated component test and three permanent desktop/mobile Chromium/mobile WebKit journeys for the Assistant setup links and focused Settings lens. The resulting 38 browser tests cover the prior durable reconnection and Assistant reliability contracts plus the new discoverable provider, harness, MCP, command-runtime, and tool-follow-up navigation.",
+  "reason": "Preserves the exact release-version contracts and browser catalog areas selected for the alpha.19 recovery, then adds one isolated component test and three permanent desktop/mobile Chromium/mobile WebKit journeys for the Assistant setup links and focused Settings lens. The resulting 51 browser tests cover durable reconnection, Assistant reliability, the bounded Browser Assistant catalog, and the new discoverable provider, harness, MCP, command-runtime, and tool-follow-up navigation.",
   "exclusions": "No full suites. The Assistant change is presentation and navigation only, with no server-owned state, native implementation, provider protocol, or security-boundary mutation. Unaffected Ask Nebula, browser navigation, project lifecycle, terminal execution, Coding layout, and unrelated backend/frontend journeys remain excluded. Physical devices and packaged AppImage/DEB installation are unavailable locally; the protected release preparation supplies production packaging, sandbox, signature, provenance, clean-install, self-test, doctor, and bundled-browser gates.",
   "expected_tests": {
-    "python": 2,
+    "python": 3,
     "frontend": 1,
     "native": 0,
-    "playwright": 38
+    "playwright": 51
   },
   "python": [
     "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract",
+    "tests/test_playwright_impact.py::test_browser_area_only_collects_named_browser_assistant_journeys"
   ],
   "frontend": [
     "ui/src/components/AssistantSetupLinks.test.tsx"
@@ -21,7 +22,7 @@
     "area:chat-reconnection",
     "area:assistant-reliability",
     "area:harness-commands-real",
-    "entry:browser/desktop",
+    "area:browser",
     "area:unrestricted-execution",
     "area:assistant-settings-navigation"
   ]
