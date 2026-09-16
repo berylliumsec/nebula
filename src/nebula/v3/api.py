@@ -481,6 +481,7 @@ READ_ONLY_RESOURCES = {
     "operator_executions",
     "report_renders",
     "runs",
+    "harness_sessions",
     "harness_turns",
     "source_snapshots",
     "tasks",
@@ -506,7 +507,6 @@ CUSTOM_RESOURCES = {
     "browser_identities",
     "browser_sessions",
     "browser_traffic",
-    "harness_sessions",
     "browser_websocket_frames",
     "browser_site_nodes",
     "browser_site_edges",
@@ -3385,82 +3385,6 @@ def create_app(
     )
     async def get_harness_catalog() -> list[Any]:
         return harness_catalog()
-
-    @app.get(
-        f"{API_PREFIX}/harness-sessions",
-        response_model=list[HarnessSession],
-        tags=["harnesses"],
-        dependencies=[Depends(require_auth)],
-    )
-    async def list_harness_sessions(
-        engagement_id: str | None = None,
-        offset: int = Query(default=0, ge=0),
-        limit: int = Query(default=100, ge=1, le=1000),
-    ) -> list[HarnessSession]:
-        sessions = store.list_entities(
-            HarnessSession,
-            engagement_id=engagement_id,
-            offset=offset,
-            limit=limit,
-        )
-        if not sessions:
-            return []
-
-        def all_entities(model: type[Entity]) -> list[Entity]:
-            items: list[Entity] = []
-            while True:
-                batch = store.list_entities(
-                    model,
-                    engagement_id=engagement_id,
-                    offset=len(items),
-                    limit=1000,
-                )
-                items.extend(batch)
-                if len(batch) < 1000:
-                    return items
-
-        chat_titles = {
-            item.harness_session_id: item.title
-            for item in all_entities(ChatSession)
-            if isinstance(item, ChatSession) and item.harness_session_id
-        }
-        run_titles = {
-            item.harness_session_id: str(item.metadata.get("name") or item.objective)
-            for item in all_entities(AgentRun)
-            if isinstance(item, AgentRun) and item.harness_session_id
-        }
-        first_turns: dict[str, HarnessTurn] = {}
-        turns = all_entities(HarnessTurn)
-        for turn in sorted(turns, key=lambda item: item.created_at):
-            if not isinstance(turn, HarnessTurn):
-                continue
-            first_turns.setdefault(turn.harness_session_id, turn)
-
-        result: list[HarnessSession] = []
-        for session in sessions:
-            turn = first_turns.get(session.id)
-            turn_title = None
-            if turn is not None:
-                if turn.prompt.startswith("Name this conversation from its first exchange"):
-                    turn_title = turn.response
-                else:
-                    turn_title = turn.prompt
-            display_name = (
-                chat_titles.get(session.id)
-                or run_titles.get(session.id)
-                or turn_title
-            )
-            normalized_name = (
-                re.sub(r"\s+", " ", display_name).strip()[:160]
-                if isinstance(display_name, str)
-                else ""
-            )
-            result.append(
-                session.model_copy(
-                    update={"display_name": normalized_name or "Unattached session"}
-                )
-            )
-        return result
 
     @app.post(
         f"{API_PREFIX}/harnesses/{{profile_id}}/health",
