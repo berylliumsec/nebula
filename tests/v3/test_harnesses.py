@@ -315,10 +315,20 @@ def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
     assert repeated.id == imported.id
     assert imported.external_session_id == "external-thread-7"
     assert imported.display_name == "Externally started Codex audit"
+    stale = store.update(
+        HarnessSession,
+        imported.id,
+        {"display_name": "Unattached session"},
+        expected_revision=imported.revision,
+    )
+    assert stale.display_name == "Unattached session"
     rediscovered = asyncio.run(
         runtime.external_sessions(profile_id=profile.id, engagement_id=engagement.id)
     )
     assert rediscovered[0].internal_session_id == imported.id
+    assert store.get(HarnessSession, imported.id).display_name == (
+        "Externally started Codex audit"
+    )
     assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
 
 

@@ -1,7 +1,7 @@
 {
-  "change_digest": "9fa9f2b1db60f2964bcd22f86ba7b8095353730ab644006341340425ba6f34db",
-  "reviewed_by": "Codex external harness session resume review",
-  "reason": "Selected the external Codex/Grok discovery and durable import contract plus the catalogued desktop, 320px Chromium, 320px WebKit, and real-Core harness session journeys.",
+  "change_digest": "c3df3ed5abcd0724c1a1210c2174b61fe526c2a5c14062073e89ad4c2c500a85",
+  "reviewed_by": "Codex external session name reconciliation review",
+  "reason": "Selected durable provider-title reconciliation plus the catalogued desktop, 320px Chromium, 320px WebKit, and real-Core harness session journeys.",
   "exclusions": "No full suites, unrelated provider/chat/browser workflows, native runtime tests, live paid-provider turns, or physical devices. Production UI compilation was checked separately.",
   "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 4},
   "python": ["tests/v3/test_harnesses.py::test_external_harness_session_can_be_discovered_and_imported_once"],
