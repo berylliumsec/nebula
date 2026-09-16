@@ -378,11 +378,11 @@ test("assistant upgrade conversation switching restores durable Core history pro
     });
     await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
-    await expect(page.getByText("Refreshing conversation…", {exact: true})).toBeVisible();
+    await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
     releaseHistory();
-    await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+    await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
     await page.locator(`.session-select[data-session-id="${targetId}"]`).click();
-    await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+    await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
     failHistory = true;
     await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
     await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toBeVisible();

@@ -3168,7 +3168,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
   await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-  await expect(page.locator(".session-list nav > button.active")).toContainText("New conversation");
+  await expect(page.locator(".session-new-chat.active")).toContainText("New chat");
   await page.getByRole("button", { name: "Assistant settings" }).click();
   await expect(page.getByRole("combobox", { name: "Chat runtime" })).toBeEnabled();
 });
@@ -3400,19 +3400,19 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await selectChat("Source conversation");
   await expect(page.getByText("Source transcript", {exact: true})).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
-  await expect(page.getByText("Refreshing conversation…", {exact: true})).toBeVisible();
-  await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeDisabled();
+  await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
+  await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeEnabled();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Unsent source draft");
-  await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeDisabled();
+  await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
   freshSource = true;
   releaseRefresh(); refreshGate = undefined;
   await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
-  await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+  await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
 
   await selectChat("Target conversation");
-  await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+  await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   failRefresh = true;
   await selectChat("Source conversation");
   await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
@@ -3423,7 +3423,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toHaveCount(0);
 
   await selectChat("Target conversation");
-  await expect(page.getByText("Refreshing conversation…", {exact: true})).toHaveCount(0);
+  await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
   await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();

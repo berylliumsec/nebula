@@ -775,6 +775,23 @@ export function SessionsPage() {
       session.backend === "harness" ? "agent harness" : "provider",
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
   }, [sessionQuery, sessions]);
+  const groupedSessions = useMemo(() => {
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1_000;
+    const groups = new Map<string, ChatSessionSummary[]>();
+    for (const session of visibleSessions) {
+      const activity = sessionActivity[session.id] ?? "idle";
+      const updated = Date.parse(session.updatedAt);
+      const label = activity === "waiting" ? "Needs you"
+        : activity === "working" ? "Working"
+          : updated >= startOfToday.getTime() ? "Today"
+            : updated >= weekAgo ? "Previous 7 days" : "Older";
+      groups.set(label, [...(groups.get(label) ?? []), session]);
+    }
+    return ["Needs you", "Working", "Today", "Previous 7 days", "Older"]
+      .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
+  }, [sessionActivity, visibleSessions]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
     ? Math.min(100, Math.round((activeContextStatus.estimatedInputTokens / activeContextStatus.targetInputTokens) * 100))
@@ -1731,7 +1748,9 @@ export function SessionsPage() {
     const preview = chatPreviews.get(id);
     restoredScrollRef.current = preview;
     previewOwnerRef.current = "";
-    setSessionReadReady(false);
+    // Cached durable messages remain usable while Core reconciles authoritative
+    // history and actionable state in the background.
+    setSessionReadReady(Boolean(preview));
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
     setApprovalDecisionBusy(false);
@@ -1980,6 +1999,7 @@ export function SessionsPage() {
       setMobileListOpen(false);
     } catch (error) {
       if (!selectionIsCurrent() || loadController.signal.aborted) return;
+      setSessionReadReady(false);
       if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
         chatPreviews.delete(id);
         setMessages([]);
@@ -3347,7 +3367,7 @@ export function SessionsPage() {
               </section>, document.body)}
               <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
                 <ThreadPrimitive.Root className="chat-thread">
-                  {loadingHistory && messages.length > 0 && <div className="chat-thinking" role="status"><LoaderCircle className="spin" size={14} /> Refreshing conversation…</div>}
+                  {loadingHistory && messages.length > 0 && <div className="chat-thinking chat-syncing" role="status"><LoaderCircle className="spin" size={14} /> Showing saved messages · syncing…</div>}
                   <ThreadPrimitive.Viewport
                     ref={chatViewportRef}
                     className="chat-scroll"
@@ -3498,7 +3518,7 @@ export function SessionsPage() {
               </div>
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <div className="chat-composer-input" role="combobox" aria-label="Skill suggestions" aria-autocomplete="list" aria-expanded={Boolean(skillToken)} aria-controls={skillToken ? "harness-skill-menu" : undefined} aria-activedescendant={skillToken && matchingHarnessSkills.length ? `harness-skill-option-${skillMenuIndex}` : undefined}>
-                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || loadingHistory} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
+                  <textarea ref={composerRef} id="analyst-message" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || (loadingHistory && !sessionReadReady)} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
@@ -3543,10 +3563,10 @@ export function SessionsPage() {
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
           <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
-          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search title or runtime" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
+          <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
+          <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
-            <button className={conversationOpen && !sessionId ? "active" : undefined} type="button" onClick={newConversation}><MessageSquare size={16} /><span><strong>New conversation</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
-            {visibleSessions.map((session) => {
+            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label}</h3>{group.sessions.map((session) => {
               const actionsOpen = sessionActionsId === session.id;
               const activityState = sessionActivity[session.id] ?? "idle";
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
@@ -3596,7 +3616,7 @@ export function SessionsPage() {
                   items[next]?.focus();
                 }}
               ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
-            })}
+            })}</section>)}
             {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
