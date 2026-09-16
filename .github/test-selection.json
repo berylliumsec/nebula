@@ -1,39 +1,19 @@
 {
-  "change_digest": "6d35b401c34e56562f2cce96171180aa67e01acf9fb5a59ae6aaaff66ede9312",
-  "reviewed_by": "Codex concurrent Ask Nebula and conversation activity review",
-  "reason": "Selects the popup component and provider lifecycle regressions, the Core-owned saved-conversation activity endpoint, all eight permanent production-browser profiles for both the popup and conversation-list journeys, and the focused real-Core popup journey. This covers opening a second independent temporary branch while the first response remains active, preserving streamed Markdown agent results through completion, per-window close and cleanup, responsive positioning, accessible motion-based working/waiting/idle markers including reduced-motion CSS, durable branch isolation, and the unchanged source conversation.",
-  "exclusions": "No full suites. Provider and harness adapters, native code, and unrelated assistant/workspace journeys are unchanged, so native and unrelated backend/frontend tests are excluded. The focused API test proves Core state classification and temporary-session exclusion; selected browser profiles prove the operator-visible states and responsive popup workflow. A production build is run separately because it is a build gate, not a test-selection layer. Physical-device execution is unavailable locally and is not represented by a substituted resized browser claim.",
+  "change_digest": "47a077937cfba22dbbf535b52792212eff33fbafb0495a5e162445093037496a",
+  "reviewed_by": "Codex Nebula 3.0.0-alpha.18 release preparation review",
+  "reason": "Selects the two packaging contract tests that read every canonical Nebula 3 version source and exercise the exact release-version CLI check used by the protected tag workflow. The diff changes only synchronized version values and the checked-in release body; package assembly, installation, updater signing, provenance, and smoke tests remain mandatory gates in the protected release workflow after the preparation commit reaches main.",
+  "exclusions": "No full suites. No runtime behavior, UI component, Core API, provider or harness adapter, browser origin boundary, native implementation, packaging script, or workflow logic changes. Frontend, native, Playwright, mobile, LAN, unrelated backend, and physical-device tests are therefore excluded from this source-only preparation diff. The release workflow will perform the Linux x86_64 production package, signature, attestation, clean-install, self-test, doctor, and bundled-browser gates before a draft can be created.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 24,
+    "python": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 17
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state"
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
   ],
-  "frontend": [
-    "ui/src/components/AskNebulaPopup.test.tsx",
-    "ui/src/state/WorkbenchDraftContext.navigation.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:ask-nebula-popup/compact",
-    "entry:ask-nebula-popup/desktop",
-    "entry:ask-nebula-popup/mobile-chromium-ledger-390",
-    "entry:ask-nebula-popup/mobile-chromium-small",
-    "entry:ask-nebula-popup/mobile-chromium-wide",
-    "entry:ask-nebula-popup/mobile-webkit",
-    "entry:ask-nebula-popup/mobile-webkit-small",
-    "entry:ask-nebula-popup/mobile-webkit-wide",
-    "entry:ask-nebula-real-core/real-core",
-    "entry:conversations-sidebar/compact",
-    "entry:conversations-sidebar/desktop",
-    "entry:conversations-sidebar/mobile-chromium-ledger-390",
-    "entry:conversations-sidebar/mobile-chromium-small",
-    "entry:conversations-sidebar/mobile-chromium-wide",
-    "entry:conversations-sidebar/mobile-webkit",
-    "entry:conversations-sidebar/mobile-webkit-small",
-    "entry:conversations-sidebar/mobile-webkit-wide"
-  ]
+  "playwright": []
 }
