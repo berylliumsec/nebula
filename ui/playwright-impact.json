@@ -732,6 +732,11 @@
       {"area":"assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
     ],
+    "inline-commentary": [
+      {"area":"inline-commentary","project":"desktop","test_match":"tests/interface.spec.ts","grep":"completed harness output surfaces Grok commentary as live narrative","runtime":"mock","shard":"1/1"},
+      {"area":"inline-commentary","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"completed harness output surfaces Grok commentary as live narrative","runtime":"mock","shard":"1/1"},
+      {"area":"inline-commentary","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"completed harness output surfaces Grok commentary as live narrative","runtime":"mock","shard":"1/1"}
+    ],
     "browser": [
       {"area":"browser","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser","runtime":"mock","shard":"1/1"},
       {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},

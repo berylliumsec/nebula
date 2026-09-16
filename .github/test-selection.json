@@ -1,28 +1,20 @@
 {
-  "change_digest": "c8cc08299e63be7eea983a67d9f9ca664b16ec7a2e41fd82cb7a1de83b292ede",
-  "reviewed_by": "Codex harness-thought Markdown rendering review",
-  "reason": "Selected the two exact component files that exercise compact and expanded public harness thought rendering, plus the catalogued real-Core thinking retention journey across permanent desktop, compact, mobile Chromium, and mobile WebKit projects.",
-  "exclusions": "No full suites. Core persistence, provider adapters, API schemas, and native code are unchanged, so Python and native tests are not applicable. Unrelated assistant, provider, and workspace journeys are excluded. A production build is run separately because it is a build gate, not a test-selection layer.",
+  "change_digest": "f6645ab997522d5d1b104dfa9bb6477447ea9f0a2c12dfc0a2ba28fd99f9b8cf",
+  "reviewed_by": "Codex inline harness-commentary Markdown review",
+  "reason": "Selected the exact streamed Grok commentary journey in desktop Chromium, 320 px mobile Chromium, and mobile WebKit, covering Markdown semantics, inert fenced code, accessibility, and horizontal geometry.",
+  "exclusions": "No full suites. Core persistence, provider adapters, API schemas, native code, and server-owned state are unchanged, so Python, frontend-unit, native, and real-Core tests are not applicable. Unrelated assistant and workspace journeys are excluded. A production build is run separately because it is a build gate, not a test-selection layer.",
   "expected_tests": {
     "python": 0,
-    "frontend": 10,
+    "frontend": 0,
     "native": 0,
-    "playwright": 16
+    "playwright": 3
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/HarnessThinking.test.tsx",
-    "ui/src/components/HarnessReasoningDetails.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:thinking-retention/model-desktop",
-    "entry:thinking-retention/model-compact",
-    "entry:thinking-retention/model-chromium-320",
-    "entry:thinking-retention/model-webkit-320",
-    "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-webkit-390",
-    "entry:thinking-retention/model-chromium-430",
-    "entry:thinking-retention/model-webkit-430"
+    "entry:inline-commentary/desktop",
+    "entry:inline-commentary/mobile-chromium-small",
+    "entry:inline-commentary/mobile-webkit"
   ]
 }

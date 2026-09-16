@@ -114,6 +114,7 @@ import { copySelectionText, createHashedSelectionAttachment } from "../component
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { HarnessSkillAutocomplete, findHarnessSkillToken, type HarnessSkillTokenRange } from "../components/HarnessSkillAutocomplete";
 import { HarnessThinking } from "../components/HarnessThinking";
+import { HarnessMarkdown } from "../components/HarnessMarkdown";
 import { HarnessCommandHints, isHarnessCommand } from "../components/HarnessCommandHints";
 import { HarnessStatusRail } from "../components/HarnessStatusRail";
 import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
@@ -3363,7 +3364,7 @@ export function SessionsPage() {
                     <div className="chat-message-body">
                       <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
                       {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
-                        {commentaryItems.map((item) => <p key={item.key}>{item.text}</p>)}
+                        {commentaryItems.map((item) => <HarnessMarkdown content={item.text} key={item.key} />)}
                       </div>}
                       {message.role === "assistant" && <HarnessThinking items={messageActivityItems} />}
                       {message.content && (message.role === "assistant"

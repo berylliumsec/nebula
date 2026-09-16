@@ -4372,16 +4372,19 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
       const encoder = new TextEncoder();
       const frames = [
         { type: "started", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", session_id: "chat-grok-commentary", turn_id: "chat-turn-grok-commentary" },
-        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I’ve mapped the workspace. Next I’m validating the affected files before I make the change.", artifact_ids: [], payload: {} },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "**I’ve mapped the workspace.** Next I’m validating `parseKeywords` before I make the change.\n\n## Stack layout\n\n```text\ntable[50] == canary\n```", artifact_ids: [], payload: {} },
         { type: "tool_started", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "tool-1", item_kind: "tool", item_status: "running", title: "Inspect workspace", artifact_ids: [], payload: {} },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
         { type: "done", session_id: "chat-grok-commentary", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", message: { id: "assistant-grok-commentary", role: "assistant", content: "The workspace validation is complete." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
       ];
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          frames.forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
+          frames.slice(0, 2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          globalThis.setTimeout(() => {
+            frames.slice(2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          }, 30_000);
         },
       });
       return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -4398,8 +4401,14 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
   await page.getByRole("button", { name: "Send message" }).click();
 
   const commentary = page.getByLabel("Assistant commentary");
-  await expect(commentary).toContainText("I’ve mapped the workspace. Next I’m validating the affected files before I make the change.");
+  await expect(commentary).toContainText("I’ve mapped the workspace. Next I’m validating parseKeywords before I make the change.");
   await expect(commentary).toBeVisible();
+  await expect(commentary.locator("strong")).toHaveText("I’ve mapped the workspace.");
+  await expect(commentary.getByRole("heading", { name: "Stack layout" })).toBeVisible();
+  await expect(commentary.locator("code").filter({ hasText: "parseKeywords" })).toBeVisible();
+  await expect(commentary.locator(".assistant-code-block")).toContainText("table[50] == canary");
+  await expect(commentary.getByRole("button", { name: "Copy exact code" })).toBeVisible();
+  await expect(commentary.getByRole("button", { name: /run/i })).toHaveCount(0);
   await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
   const commentaryGeometry = await commentary.evaluate((element) => ({
     left: element.getBoundingClientRect().left,
