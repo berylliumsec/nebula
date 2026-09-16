@@ -3716,8 +3716,17 @@ test("harness model controls expose only the selected runtime's advertised optio
   await expect(page.getByRole("combobox", { name: "Harness speed" }).locator("option"))
     .toHaveText(["Harness default", "Default", "Fast"]);
 
-  await page.keyboard.press("Escape");
+  const setup = settingsDialog.getByRole("region", { name: "Assistant setup" });
+  await expect(setup.getByRole("button")).toHaveCount(4);
+  await expect(setup.getByRole("button", { name: /Assistant harnesses/ })).toContainText("2 enabled");
+  await expect(setup.getByRole("button", { name: /MCP tools/ })).toContainText("None configured");
+  await expect(setup.getByRole("button", { name: /Command runtime/ })).toBeVisible();
+  await expect(setup.getByRole("button", { name: /Tool follow-up/ })).toBeVisible();
+  await setup.getByRole("button", { name: /Assistant harnesses/ }).click();
   await expect(page.getByRole("dialog", { name: "Assistant settings" })).toHaveCount(0);
+  const harnessLens = page.getByRole("dialog", { name: "Assistant harnesses" });
+  await expect(harnessLens).toBeVisible();
+  await harnessLens.getByRole("button", { name: "Done" }).click();
   await expect(settingsButton).toBeFocused();
 
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
@@ -6148,6 +6157,10 @@ for (const imageInput of [true, false]) {
     await openWorkspace(page, "/?view=browser", "Workbench");
     const panel = page.getByRole("complementary", { name: "Browser Assistant", exact: true });
     if (!await panel.isVisible()) await page.getByRole("button", { name: "Assistant", exact: true }).click();
+    await panel.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+    await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("image-harness");
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
     await panel.getByRole("button", { name: "Attach files", exact: true }).click();
     const attachmentDialog = page.getByRole("dialog", { name: "Attach to next message" });
     const attach = attachmentDialog.getByRole("button", { name: "Images from this device", exact: true });

@@ -142,3 +142,9 @@ export const settingCatalog: SettingCatalogEntry[] = [
 export function settingCatalogText(entry: SettingCatalogEntry): string {
   return [entry.label, entry.description, entry.category, entry.scope, ...entry.keywords].join(" ");
 }
+
+export function settingCatalogEntry(id: string): SettingCatalogEntry {
+  const entry = settingCatalog.find((item) => item.id === id);
+  if (!entry) throw new Error(`Unknown setting catalog entry: ${id}`);
+  return entry;
+}

@@ -19,6 +19,11 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "assistant-settings-navigation": [
+      {"area":"assistant-settings-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"harness model controls expose only the selected runtime's advertised options","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-settings-navigation","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"harness model controls expose only the selected runtime's advertised options","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-settings-navigation","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"harness model controls expose only the selected runtime's advertised options","runtime":"mock","shard":"1/1"}
+    ],
     "advanced-session-binding": [
       {"area":"advanced-session-binding","project":"desktop","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},
       {"area":"advanced-session-binding","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},

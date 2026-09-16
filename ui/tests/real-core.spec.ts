@@ -1333,9 +1333,11 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     await page.getByRole("button", { name: /scanner\.py/ }).click();
     await expect(page.locator(".cm-line").nth(1)).toHaveText("    return 'changed'");
     await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
-    await page.getByRole("button", { name: "Problems" }).click();
+    await page.getByRole("button", { name: "More editor tools" }).click();
+    await page.getByLabel("Editor tools").getByRole("button", { name: "Problems" }).click();
     await expect(page.locator(".cm-panel-lint")).toBeVisible();
-    await page.getByRole("button", { name: "Tasks" }).click();
+    await page.getByRole("button", { name: "More editor tools" }).click();
+    await page.getByLabel("Editor tools").getByRole("button", { name: "Tasks" }).click();
     const tasks = page.getByRole("dialog", { name: "Project tasks and tests" });
     await tasks.getByRole("option", { name: /make: lint/ }).click();
     const executionReview = page.getByRole("dialog", { name: "Review exact code execution" });
@@ -2962,7 +2964,7 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     const chatId = new URL(page.url()).searchParams.get("session");
     expect(chatId).toBeTruthy();
     await expect(page.getByText("Fixture workspace argument error", {exact: true})).not.toBeVisible();
-    const ledger = page.locator(".chat-message.assistant .activity-ledger").last();
+    const ledger = page.locator(".chat-message.assistant").filter({hasText: "SETTINGS fixture low"}).locator(".activity-ledger");
     await ledger.getByRole("button", {name: "Show activity"}).click();
     await ledger.getByText("Workspace read", {exact: true}).click();
     await expect(ledger.getByText("Fixture workspace argument error", {exact: true}).first()).toBeVisible();
@@ -3112,11 +3114,12 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
       await composer.fill("/goal Clock");
       await page.getByRole("button", {name: "Send message", exact: true}).click();
-      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal work completed.", {timeout: 20_000});
-      const thinking = page.getByLabel("Harness thinking").first();
-      await expect(thinking).toBeVisible();
-      await thinking.locator("summary").click();
-      await expect(thinking).toContainText("Retained thinking from the native peer.");
+      const goalMessage = page.locator(".chat-message.assistant").filter({hasText: "Goal work completed."}).last();
+      const goalReply = goalMessage.locator(".assistant-markdown").filter({hasText: "Goal work completed."});
+      await expect(goalReply).toHaveText("Goal work completed.", {timeout: 20_000});
+      await expect(goalReply).not.toHaveClass(/streaming/, {timeout: 20_000});
+      await goalMessage.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      await expect(goalMessage.locator(".activity-ledger-audit .harness-reasoning-summary")).toContainText("Retained thinking from the native peer.");
       if (id === "inert-fixture") {
         await composer.fill("/vendor");
         await expect(page.getByRole("button", {name: "/vendor-check Check project"})).toBeVisible();
@@ -3143,15 +3146,16 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await core.restart();
       await page.reload();
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
-      await expect(thinking).toBeVisible();
-      await thinking.locator("summary").click();
-      await expect(thinking).toContainText("Retained thinking from the native peer.");
+      const retainedGoal = page.locator(".chat-message.assistant").filter({hasText: "Goal work completed."}).last();
+      await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      const retainedThinking = retainedGoal.locator(".activity-ledger-audit .harness-reasoning-summary");
+      await expect(retainedThinking).toContainText("Retained thinking from the native peer.");
       await composer.fill("/goal status");
       await page.getByRole("button", {name: "Send message", exact: true}).click();
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal: Clock", {timeout: 20_000});
       const entries = (await readFile(path.join(core.dataDir, "command-requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
       expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
-      await thinking.scrollIntoViewIfNeeded();
+      await retainedThinking.scrollIntoViewIfNeeded();
       await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
     }
     await info.attach("native-command-evidence", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), peer: "inert native protocol peer; real Core, production adapters, persistence and UI"}), contentType: "application/json"});

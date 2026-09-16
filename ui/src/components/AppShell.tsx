@@ -64,6 +64,9 @@ export function AppShell() {
     return !value;
   }), []);
   const openPalette = useCallback(() => setPaletteOpen(true), []);
+  const openSetting = useCallback((entry: SettingCatalogEntry, returnFocus?: HTMLElement | null) => {
+    setSettingLens({ entry, returnFocus: returnFocus ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null) });
+  }, []);
   const openProjectPicker = useCallback(() => {
     setSidebarCollapsed(false);
     setProjectPickerOpen(true);
@@ -152,6 +155,7 @@ export function AppShell() {
     toolbarHost,
     trailingToolbarHost,
     openPalette,
+    openSetting,
     openProjectPicker,
     setActivityOpen,
     setContextualCommands,
@@ -159,7 +163,7 @@ export function AppShell() {
     setToolbarHost,
     toggleActivity,
     toggleSidebar,
-  }), [activityOpen, contextualCommands, openPalette, openProjectPicker, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost, trailingToolbarHost]);
+  }), [activityOpen, contextualCommands, openPalette, openProjectPicker, openSetting, paletteOpen, settingLens, sidebarCollapsed, toggleActivity, toggleSidebar, toolbarHost, trailingToolbarHost]);
   return (
     <ReleaseUpdateProvider>
       <WorkbenchEditorProvider>

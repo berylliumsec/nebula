@@ -135,9 +135,25 @@
 .chat-settings-floating .chat-settings-fields select { height: 44px; }
 .chat-settings-floating .chat-advanced-session { margin-block: 20px; }
 .chat-settings-floating .chat-settings-capabilities { margin-top: 20px; }
+.chat-settings-setup { display: grid; gap: 10px; margin-top: 20px; }
+.chat-settings-section-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.chat-settings-section-heading strong { color: var(--text); font-size: 12px; font-weight: 600; }
+.chat-settings-section-heading small { color: var(--muted); font-size: 11px; }
+.chat-settings-setup-list { display: grid; overflow: hidden; border: 1px solid var(--border-soft); border-radius: 12px; background: color-mix(in srgb, var(--surface-muted) 72%, transparent); }
+.chat-settings-setup-row { display: grid; min-height: 52px; grid-template-columns: 32px minmax(0, 1fr) 20px; align-items: center; gap: 10px; padding: 7px 10px; border: 0; border-radius: 0; color: var(--text); background: transparent; text-align: left; cursor: pointer; }
+.chat-settings-setup-row + .chat-settings-setup-row { border-top: 1px solid var(--border-soft); }
+.chat-settings-setup-row:hover { background: color-mix(in srgb, var(--surface-raised) 72%, transparent); }
+.chat-settings-setup-row:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--focus); outline-offset: -2px; }
+.chat-settings-setup-row > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
+.chat-settings-setup-row strong { font-size: 12px; font-weight: 550; }
+.chat-settings-setup-row small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.chat-settings-setup-row > svg { color: var(--muted); }
+.chat-settings-setup-icon { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; color: var(--blue); background: color-mix(in srgb, var(--blue-muted) 78%, transparent); }
 @media (max-width: 480px) {
   .chat-settings-floating > .chat-context-bar { padding: 16px; }
   .chat-settings-floating .chat-settings-fields { grid-template-columns: minmax(0, 1fr); }
+  .chat-settings-section-heading { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .chat-settings-setup-row { min-height: 56px; }
 }
 
 .chat-recovery-notice > .icon-button, .chat-catch-up header > .icon-button { flex: 0 0 44px; width: 44px; min-height: 44px; }
