@@ -1,11 +1,21 @@
 {
-  "change_digest": "3767763f54b4526db4bcb2270568cc4a75c569dd1c0ebbb27fd9f1e0816c60ad",
-  "reviewed_by": "Codex popup setup stall review",
-  "reason": "Ask Nebula can remain indefinitely at Preparing if its temporary conversation request never settles. Select all 16 focused popup lifecycle component tests, including a delayed setup and late-branch cleanup regression; one desktop Chromium, one mobile Chromium, and one mobile WebKit popup interaction test; and two real-Core provider/harness temporary-conversation journeys. Build the production UI.",
-  "exclusions": "No full suites. Rust native capture and Python temporary-chat route behavior are unchanged, so no native or Python test files are selected. The affected remote Mac network and physical WKWebView path are unavailable here; the selected real-Core journey uses the production bundle with a local runtime fixture and cannot establish that Mac transport's exact failure cause.",
-  "expected_tests": {"python": 0, "frontend": 16, "native": 0, "playwright": 5},
-  "python": [],
-  "frontend": ["ui/src/components/AskNebulaPopup.test.tsx"],
+  "change_digest": "99a0f8da4ac36045923d154d0dcae6a2035d572a48d3c38f866f0dae733eb7c2",
+  "reviewed_by": "Codex Ask Nebula tool-isolation review",
+  "reason": "A retained stalled popup turn proved that a highlighted-text Ask Nebula harness session ignored the UI tools-disabled request and ran nine project/model tools for about three and a half minutes. Select two exact backend contracts for tool-free temporary harness creation and the two real-Core provider/harness popup journeys, including a 6000-character selection.",
+  "exclusions": "No full suites. Unrelated harness adapters, chat workflows, native capture mechanics, mobile profiles, physical devices, and the remote Mac are excluded. The native capture boundary already limits selections to 6000 characters; the focused real-Core browser journey exercises that maximum payload through temporary setup and the first harness response.",
+  "expected_tests": {
+    "python": 2,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 2
+  },
+  "python": [
+    "tests/v3/test_temporary_chat.py::test_harness_fork_uses_fresh_runtime_and_snapshot",
+    "tests/v3/test_harnesses.py::test_tool_disabled_harness_session_has_no_native_or_command_runtime"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": ["entry:ask-nebula-popup/desktop", "entry:ask-nebula-popup/mobile-chromium-small", "entry:ask-nebula-popup/mobile-webkit-small", "entry:ask-nebula-real-core/real-core"]
+  "playwright": [
+    "entry:ask-nebula-real-core/real-core"
+  ]
 }

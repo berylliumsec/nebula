@@ -1408,6 +1408,36 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
     assert all(name.startswith("model.") for name in snapshot["tool_names"])
 
 
+def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    configured = HarnessNativeCapabilities(
+        web_search=True,
+        browser=True,
+        skills=True,
+        subagents=True,
+    )
+    store.update(
+        HarnessProfile,
+        profile.id,
+        {"native_capabilities": configured.model_dump(mode="json")},
+        expected_revision=profile.revision,
+    )
+
+    session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        tools_enabled=False,
+    )
+
+    assert HarnessNativeCapabilities.model_validate(
+        session.metadata["native_capabilities"]
+    ) == HarnessNativeCapabilities()
+    assert session.metadata["command_runtime_enabled"] is False
+    assert "command_runtime_snapshot" not in session.metadata
+    assert session.id not in runtime._gateway_oci_components
+
+
 @pytest.mark.parametrize("restart", [False, True])
 def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session(
     tmp_path,

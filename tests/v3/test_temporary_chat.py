@@ -136,6 +136,13 @@ def test_harness_fork_uses_fresh_runtime_and_snapshot(popup):
     )
     runtime.create_session.return_value = fresh
     branch = create(client)
+    runtime.create_session.assert_called_once_with(
+        engagement_id="p",
+        profile_id="harness",
+        model="m",
+        mcp_server_ids=[],
+        tools_enabled=False,
+    )
     saved = store.get(ChatSession, branch)
     assert saved.harness_session_id == fresh.id
     assert saved.metadata["harness_context_handoff_pending"] is True
