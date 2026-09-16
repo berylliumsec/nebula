@@ -367,6 +367,7 @@ from .missions import (
     MissionStateError,
 )
 from .harnesses import (
+    ExternalHarnessSession,
     HarnessActivityEventList,
     HarnessConfigurationError,
     HarnessError,
@@ -629,6 +630,13 @@ class OperationEventList(NebulaModel):
 class HarnessInteractionDecisionRequest(NebulaModel):
     action: Literal["answer", "decline", "cancel"]
     response: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExternalHarnessSessionImportRequest(NebulaModel):
+    engagement_id: str = Field(min_length=1, max_length=200)
+    external_session_id: str = Field(min_length=1, max_length=500)
+    display_name: str = Field(min_length=1, max_length=160)
+    model: str | None = Field(default=None, max_length=500)
 
 
 class PatchRequest(NebulaModel):
@@ -3415,6 +3423,37 @@ def create_app(
         return harness_runtime.available_skills(
             engagement_id=engagement_id,
             profile_id=profile_id,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/harnesses/{{profile_id}}/external-sessions",
+        response_model=list[ExternalHarnessSession],
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_external_harness_sessions(
+        profile_id: str,
+        engagement_id: str = Query(min_length=1, max_length=200),
+    ) -> list[ExternalHarnessSession]:
+        return await harness_runtime.external_sessions(
+            engagement_id=engagement_id, profile_id=profile_id
+        )
+
+    @app.post(
+        f"{API_PREFIX}/harnesses/{{profile_id}}/external-sessions/import",
+        response_model=HarnessSession,
+        tags=["harnesses"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_external_harness_session(
+        profile_id: str, request: ExternalHarnessSessionImportRequest
+    ) -> HarnessSession:
+        return harness_runtime.import_external_session(
+            engagement_id=request.engagement_id,
+            profile_id=profile_id,
+            external_session_id=request.external_session_id,
+            display_name=request.display_name,
+            model=request.model,
         )
 
     @app.get(
