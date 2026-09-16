@@ -10744,23 +10744,25 @@ def _register_crud_routes(
                 }
                 first_turns: dict[str, HarnessTurn] = {}
                 turns = all_entities(HarnessTurn)
-                for turn in sorted(turns, key=lambda item: item.created_at):
-                    if isinstance(turn, HarnessTurn):
-                        first_turns.setdefault(turn.harness_session_id, turn)
+                for candidate_turn in sorted(turns, key=lambda item: item.created_at):
+                    if isinstance(candidate_turn, HarnessTurn):
+                        first_turns.setdefault(
+                            candidate_turn.harness_session_id, candidate_turn
+                        )
 
                 named_sessions: list[Entity] = []
                 for entity in entities:
                     if not isinstance(entity, HarnessSession):
                         continue
-                    turn = first_turns.get(entity.id)
+                    first_turn = first_turns.get(entity.id)
                     turn_title = None
-                    if turn is not None:
+                    if first_turn is not None:
                         turn_title = (
-                            turn.response
-                            if turn.prompt.startswith(
+                            first_turn.response
+                            if first_turn.prompt.startswith(
                                 "Name this conversation from its first exchange"
                             )
-                            else turn.prompt
+                            else first_turn.prompt
                         )
                     display_name = (
                         chat_titles.get(entity.id)

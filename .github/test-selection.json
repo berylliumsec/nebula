@@ -1,5 +1,5 @@
 {
-  "change_digest": "9b64a5df1ddb3c8806e06622bc382c5a977a0939363525a3876d418389c527dd",
+  "change_digest": "c08bd0076d47344db0a2327b85ee34dee6b541df05da6efc8e4cfc8012787e59",
   "reviewed_by": "Codex advanced session binding review",
   "reason": "Advanced Session Binding now receives a Core-owned display name for sessions without a Nebula chat attachment. Select the existing harness API integration test, the new focused selector journey in desktop Chromium, 320px mobile Chromium, and 320px mobile WebKit, and the existing real-Core harness isolation journey with an added durable catalog assertion. Also compile the production UI locally.",
   "exclusions": "No full suites. No frontend unit test is selected because the regression crosses the Core list response, API mapper, and rendered native select and is covered at API, mocked Playwright, and real-Core layers. Native shell, provider execution semantics, streaming, mutation, LAN-origin behavior, and filesystem behavior are unchanged. Physical devices are unavailable; the mobile projects are emulated.",
