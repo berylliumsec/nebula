@@ -1,11 +1,11 @@
 {
-  "change_digest": "90266bb4725b8ffb0fbba7841ca791bef512dfee232cb2876096525c27490551",
+  "change_digest": "fa98b3ebeb4f253d0f1e9beda6233bd2e3fe46ca00ee1d74767a47c198b87eb2",
   "reviewed_by": "Codex advanced session binding review",
-  "reason": "Advanced Session Binding now receives a Core-owned display name for sessions without a Nebula chat attachment. Select the existing harness API integration test that covers persisted chat/session ownership and the new focused selector journey in desktop Chromium, 320px mobile Chromium, and 320px mobile WebKit. Also compile the production UI locally.",
-  "exclusions": "No full suites. No frontend unit test is selected because the regression crosses the Core list response, API mapper, and rendered native select and is covered at API and Playwright layers. Native shell, provider execution, streaming, mutation, LAN-origin behavior, and filesystem behavior are unchanged. Physical devices are unavailable; the mobile projects are emulated.",
-  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 3},
+  "reason": "Advanced Session Binding now receives a Core-owned display name for sessions without a Nebula chat attachment. Select the existing harness API integration test, the new focused selector journey in desktop Chromium, 320px mobile Chromium, and 320px mobile WebKit, and the existing real-Core harness isolation journey with an added durable catalog assertion. Also compile the production UI locally.",
+  "exclusions": "No full suites. No frontend unit test is selected because the regression crosses the Core list response, API mapper, and rendered native select and is covered at API, mocked Playwright, and real-Core layers. Native shell, provider execution semantics, streaming, mutation, LAN-origin behavior, and filesystem behavior are unchanged. Physical devices are unavailable; the mobile projects are emulated.",
+  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 4},
   "python": ["tests/v3/test_harnesses.py::test_harness_api_chat_mission_handoff_and_catalog"],
   "frontend": [],
   "native": [],
-  "playwright": ["entry:advanced-session-binding/desktop", "entry:advanced-session-binding/mobile-chromium-small", "entry:advanced-session-binding/mobile-webkit-small"]
+  "playwright": ["entry:advanced-session-binding/desktop", "entry:advanced-session-binding/mobile-chromium-small", "entry:advanced-session-binding/mobile-webkit-small", "entry:advanced-session-binding/real-core"]
 }

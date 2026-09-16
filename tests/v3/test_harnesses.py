@@ -57,6 +57,7 @@ from nebula.v3.domain import (
     HarnessSession,
     HarnessSessionStatus,
     HarnessTurn,
+    HarnessTurnOrigin,
     HarnessTurnStatus,
     HarnessWorkspaceAccess,
     KnowledgeSource,
@@ -3028,6 +3029,26 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             "nebula.harness-activity/v2"
         )
 
+        unattached_session = store.create(
+            HarnessSession(
+                engagement_id=engagement.id,
+                harness_profile_id=profile.id,
+                external_session_id="external-research-session",
+                model="test-model",
+                status=HarnessSessionStatus.IDLE,
+            )
+        )
+        store.create(
+            HarnessTurn(
+                engagement_id=engagement.id,
+                harness_session_id=unattached_session.id,
+                origin=HarnessTurnOrigin.ANALYSIS,
+                prompt="ptpcamerad adjacent overflow objects",
+                status=HarnessTurnStatus.COMPLETE,
+                response="Bounded research notes",
+            )
+        )
+
         sessions = client.get(
             "/api/v1/harness-sessions",
             headers=headers,
@@ -3041,6 +3062,17 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
         assert listed_session["display_name"] == (
             "Harness answer for Name this conversation"
         )
+        listed_unattached = next(
+            item for item in sessions.json() if item["id"] == unattached_session.id
+        )
+        assert listed_unattached["display_name"] == (
+            "ptpcamerad adjacent overflow objects"
+        )
+        stored_session = client.get(
+            f"/api/v1/harness-sessions/{body['harness_session_id']}", headers=headers
+        )
+        assert stored_session.status_code == 200
+        assert stored_session.json()["external_session_id"] == "vendor-session-1"
         activity = client.get(
             f"/api/v1/harness-sessions/{body['harness_session_id']}/activity",
             headers=headers,
