@@ -41,7 +41,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import hashlib
@@ -567,6 +567,14 @@ class HarnessSkillSummary(NebulaModel):
     source: Literal["project", "installed"]
 
 
+class ExternalHarnessSession(NebulaModel):
+    external_session_id: str = Field(min_length=1, max_length=500)
+    display_name: str = Field(min_length=1, max_length=160)
+    model: str | None = Field(default=None, max_length=500)
+    updated_at: datetime | None = None
+    internal_session_id: str | None = Field(default=None, max_length=200)
+
+
 class HarnessEvent(NebulaModel):
     schema_version: Literal[
         "nebula.harness-activity/v1", "nebula.harness-activity/v2"
@@ -912,6 +920,17 @@ class HarnessAdapter(ABC):
 
     @abstractmethod
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection: ...
+
+    async def list_external_sessions(
+        self,
+        profile: HarnessProfile,
+        credential_store: CredentialStore,
+        workspace: Path,
+    ) -> list[ExternalHarnessSession]:
+        del profile, credential_store, workspace
+        raise HarnessConfigurationError(
+            "This harness does not expose resumable external sessions"
+        )
 
 
 def harness_catalog() -> list[HarnessCatalogItem]:
@@ -2641,6 +2660,68 @@ class CodexAppServerAdapter(HarnessAdapter):
         finally:
             if rpc is not None:
                 await rpc.close()
+
+    async def list_external_sessions(
+        self,
+        profile: HarnessProfile,
+        credential_store: CredentialStore,
+        workspace: Path,
+    ) -> list[ExternalHarnessSession]:
+        rpc = await self._connect(profile, credential_store, (), workspace)
+        try:
+            await self._initialize(rpc)
+            sessions: list[ExternalHarnessSession] = []
+            cursor: str | None = None
+            for _ in range(10):
+                params: dict[str, Any] = {
+                    "cwd": str(workspace),
+                    "limit": 100,
+                    "sortKey": "updated_at",
+                    "sortDirection": "desc",
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                result = await rpc.request("thread/list", params)
+                if not isinstance(result, dict) or not isinstance(
+                    result.get("data"), list
+                ):
+                    raise HarnessTransportError(
+                        "Codex thread/list returned an invalid result"
+                    )
+                for item in result["data"]:
+                    if not isinstance(item, dict):
+                        continue
+                    external_id = item.get("id")
+                    if not isinstance(external_id, str) or not external_id:
+                        continue
+                    raw_name = item.get("name") or item.get("preview")
+                    display_name = re.sub(
+                        r"\s+", " ", raw_name if isinstance(raw_name, str) else ""
+                    ).strip()[:160]
+                    updated = item.get("updatedAt")
+                    sessions.append(
+                        ExternalHarnessSession(
+                            external_session_id=external_id,
+                            display_name=display_name or "Untitled Codex session",
+                            model=(
+                                item.get("model")
+                                if isinstance(item.get("model"), str)
+                                else None
+                            ),
+                            updated_at=(
+                                datetime.fromtimestamp(updated, tz=timezone.utc)
+                                if isinstance(updated, int | float)
+                                else None
+                            ),
+                        )
+                    )
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    break
+                cursor = next_cursor
+            return sessions
+        finally:
+            await rpc.close()
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         try:
@@ -4833,6 +4914,64 @@ class GrokAcpAdapter(HarnessAdapter):
             if rpc is not None:
                 await rpc.close()
 
+    async def list_external_sessions(
+        self,
+        profile: HarnessProfile,
+        credential_store: CredentialStore,
+        workspace: Path,
+    ) -> list[ExternalHarnessSession]:
+        del credential_store
+        if not profile.executable:
+            raise HarnessConfigurationError("Grok executable is required")
+        executable = Path(str(profile.executable))
+        if not executable.is_absolute() or not executable.is_file():
+            raise HarnessConfigurationError(
+                "Grok executable must be an existing absolute file"
+            )
+        command = [str(executable), "sessions", "list", "--limit", "500"]
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=str(workspace),
+                env=_harness_environment(profile),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        except (OSError, TimeoutError) as exc:
+            raise HarnessUnavailableError(
+                "Grok sessions could not be listed on the Nebula host"
+            ) from exc
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            raise HarnessUnavailableError(detail[:500] or "Grok sessions list failed")
+        sessions: list[ExternalHarnessSession] = []
+        row = re.compile(
+            r"^(?P<id>[0-9a-fA-F-]{36})\s+"
+            r"(?P<created>\d{4}-\d{2}-\d{2})\s+"
+            r"(?P<updated>\d{4}-\d{2}-\d{2})\s+"
+            r"\S+\s+(?P<name>.+)$"
+        )
+        for line in stdout.decode("utf-8", errors="replace").splitlines():
+            match = row.match(line.strip())
+            if match is None:
+                continue
+            display_name = re.sub(r"\s+", " ", match.group("name")).strip()[:160]
+            sessions.append(
+                ExternalHarnessSession(
+                    external_session_id=match.group("id"),
+                    display_name=(
+                        "Untitled Grok session"
+                        if display_name == "(no summary)"
+                        else display_name
+                    ),
+                    updated_at=datetime.strptime(
+                        match.group("updated"), "%Y-%m-%d"
+                    ).replace(tzinfo=timezone.utc),
+                )
+            )
+        return sessions
+
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
         try:
             async with asyncio.timeout(HARNESS_STARTUP_TIMEOUT_SECONDS):
@@ -6081,6 +6220,66 @@ class HarnessRuntimeService:
             )
         self._gateway_oci_components[session.id] = components
         return components
+
+    async def external_sessions(
+        self, *, engagement_id: str, profile_id: str
+    ) -> list[ExternalHarnessSession]:
+        profile = self.store.get(HarnessProfile, profile_id)
+        if not profile.enabled:
+            raise HarnessConfigurationError(f"harness {profile.id!r} is disabled")
+        self.store.get(Engagement, engagement_id)
+        workspace = self.workspace_resolver(engagement_id)
+        discovered = await self.adapter_factory(profile.kind).list_external_sessions(
+            profile, self.credential_store, workspace
+        )
+        imported = {
+            item.external_session_id: item.id
+            for item in self.store.list_entities(
+                HarnessSession, engagement_id=engagement_id, limit=1_000
+            )
+            if item.harness_profile_id == profile_id and item.external_session_id
+        }
+        return [
+            item.model_copy(
+                update={"internal_session_id": imported.get(item.external_session_id)}
+            )
+            for item in discovered
+        ]
+
+    def import_external_session(
+        self,
+        *,
+        engagement_id: str,
+        profile_id: str,
+        external_session_id: str,
+        display_name: str,
+        model: str | None,
+    ) -> HarnessSession:
+        for existing in self.store.list_entities(
+            HarnessSession, engagement_id=engagement_id, limit=1_000
+        ):
+            if (
+                existing.harness_profile_id == profile_id
+                and existing.external_session_id == external_session_id
+            ):
+                return existing
+        created = self.create_session(
+            engagement_id=engagement_id,
+            profile_id=profile_id,
+            model=model,
+        )
+        return self.store.update(
+            HarnessSession,
+            created.id,
+            {
+                "display_name": re.sub(r"\s+", " ", display_name).strip()[:160]
+                or "Untitled external session",
+                "external_session_id": external_session_id,
+                "status": HarnessSessionStatus.IDLE,
+                "metadata": {**created.metadata, "external_import": True},
+            },
+            expected_revision=created.revision,
+        )
 
     def create_session(
         self,

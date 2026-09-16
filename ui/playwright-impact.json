@@ -20,9 +20,9 @@
   ],
   "areas": {
     "advanced-session-binding": [
-      {"area":"advanced-session-binding","project":"desktop","test_match":"tests/interface.spec.ts","grep":"advanced session binding shows the Core-owned name","runtime":"mock","shard":"1/1"},
-      {"area":"advanced-session-binding","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding shows the Core-owned name","runtime":"mock","shard":"1/1"},
-      {"area":"advanced-session-binding","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding shows the Core-owned name","runtime":"mock","shard":"1/1"},
+      {"area":"advanced-session-binding","project":"desktop","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},
+      {"area":"advanced-session-binding","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},
+      {"area":"advanced-session-binding","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},
       {"area":"advanced-session-binding","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade popup isolates a harness session on real Core","runtime":"real-core","shard":"1/1"}
     ],
     "coding-makeover": [

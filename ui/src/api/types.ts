@@ -1939,6 +1939,14 @@ export interface HarnessSessionSummary {
   lastActivityAt: string;
 }
 
+export interface ExternalHarnessSessionSummary {
+  externalSessionId: string;
+  displayName: string;
+  model?: string;
+  updatedAt?: string;
+  internalSessionId?: string;
+}
+
 export interface HarnessCommand {
   name: string;
   description: string;

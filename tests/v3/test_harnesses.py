@@ -86,6 +86,7 @@ from nebula.v3.harnesses import (
     HarnessPermissionRequest,
     HarnessInteractionRequest,
     HarnessRuntimeService,
+    ExternalHarnessSession,
     HarnessSkillInvocation,
     HarnessTransportError,
     _harness_developer_instructions,
@@ -198,6 +199,16 @@ class FakeAdapter(HarnessAdapter):
         self.connections.append(connection)
         return connection
 
+    async def list_external_sessions(self, profile, credential_store, workspace):
+        del profile, credential_store, workspace
+        return [
+            ExternalHarnessSession(
+                external_session_id="external-thread-7",
+                display_name="Externally started Codex audit",
+                model="test-model",
+            )
+        ]
+
 
 class FailingOpenAdapter(FakeAdapter):
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
@@ -275,6 +286,40 @@ def _runtime(tmp_path: Path, *, fail: bool = False):
         adapter_factory=lambda _: adapter,
     )
     return store, engagement, profile, mcp, adapter, runtime
+
+
+def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+
+    discovered = asyncio.run(
+        runtime.external_sessions(profile_id=profile.id, engagement_id=engagement.id)
+    )
+    assert discovered[0].external_session_id == "external-thread-7"
+    assert discovered[0].internal_session_id is None
+
+    imported = runtime.import_external_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        external_session_id="external-thread-7",
+        display_name="Externally started Codex audit",
+        model="test-model",
+    )
+    repeated = runtime.import_external_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        external_session_id="external-thread-7",
+        display_name="Ignored duplicate",
+        model="test-model",
+    )
+
+    assert repeated.id == imported.id
+    assert imported.external_session_id == "external-thread-7"
+    assert imported.display_name == "Externally started Codex audit"
+    rediscovered = asyncio.run(
+        runtime.external_sessions(profile_id=profile.id, engagement_id=engagement.id)
+    )
+    assert rediscovered[0].internal_session_id == imported.id
+    assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
 
 
 @pytest.mark.parametrize(

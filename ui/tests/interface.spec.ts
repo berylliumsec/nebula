@@ -6142,7 +6142,8 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
 });
 
-test("advanced session binding shows the Core-owned name for an unattached harness session", async ({ page }) => {
+test("advanced session binding: resume existing session discovers and filters externally started sessions by name", async ({ page }) => {
+  let imported: Record<string, unknown> | undefined;
   await page.route("**/api/v1/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -6165,18 +6166,31 @@ test("advanced session binding shows the Core-owned name for an unattached harne
       return;
     }
     if (path.endsWith("/harness-sessions") && request.method() === "GET") {
-      await route.fulfill({ json: [{
+      await route.fulfill({ json: [] });
+      return;
+    }
+    if (path.endsWith("/external-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [
+        { external_session_id: "grok-external-1", display_name: "ptpcamerad adjacent overflow objects", model: "grok-4.6", updated_at: entity.updated_at, internal_session_id: null },
+        { external_session_id: "grok-external-2", display_name: "bluetooth parser audit", model: "grok-4.6", updated_at: entity.updated_at, internal_session_id: null },
+      ] });
+      return;
+    }
+    if (path.endsWith("/external-sessions/import") && request.method() === "POST") {
+      imported = request.postDataJSON();
+      await route.fulfill({ json: {
         ...entity,
-        id: "external-harness-session",
+        id: "imported-harness-session",
         engagement_id: "scratch-project",
         harness_profile_id: "external-session-harness",
+        external_session_id: "grok-external-1",
         display_name: "ptpcamerad adjacent overflow objects",
         model: "grok-4.6",
         status: "idle",
         mcp_server_ids: [],
         last_activity_at: entity.updated_at,
-        metadata: {},
-      }] });
+        metadata: { external_import: true },
+      } });
       return;
     }
     await route.fallback();
@@ -6186,10 +6200,14 @@ test("advanced session binding shows the Core-owned name for an unattached harne
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
   await page.getByLabel("Chat runtime").selectOption("harness");
-  await page.getByText("Advanced session binding", { exact: true }).click();
-  await expect(page.getByLabel("Chat harness session").getByRole("option", {
-    name: /ptpcamerad adjacent overflow objects · grok-4\.6 · idle/,
-  })).toHaveCount(1);
+  await page.getByText("Resume existing session", { exact: true }).click();
+  await page.getByLabel("Filter resumable sessions by name").fill("ptpcam");
+  const sessionSelect = page.getByLabel("Chat harness session");
+  await expect(sessionSelect.getByRole("option", { name: /ptpcamerad adjacent overflow objects/ })).toHaveCount(1);
+  await expect(sessionSelect.getByRole("option", { name: /bluetooth parser audit/ })).toHaveCount(0);
+  await sessionSelect.selectOption("external:grok-external-1");
+  await expect(sessionSelect).toHaveValue("imported-harness-session");
+  expect(imported).toMatchObject({ external_session_id: "grok-external-1", display_name: "ptpcamerad adjacent overflow objects" });
 });
 
 test("assistant upgrade makes loaded knowledge sources available automatically", async ({ page }) => {

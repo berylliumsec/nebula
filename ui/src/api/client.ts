@@ -90,6 +90,7 @@ import type {
   HarnessTurnDetail,
   HarnessSessionActivity,
   HarnessSessionSummary,
+  ExternalHarnessSessionSummary,
   HarnessSkillSummary,
   KnowledgeIngestRequest,
   KnowledgeIndexStatus,
@@ -5178,6 +5179,52 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => items.map(mapHarnessSession));
+  }
+
+  listExternalHarnessSessions(
+    id: string,
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ExternalHarnessSessionSummary[]> {
+    return this.request<Array<{
+      external_session_id: string;
+      display_name: string;
+      model?: string | null;
+      updated_at?: string | null;
+      internal_session_id?: string | null;
+    }>>(
+      `harnesses/${encodeURIComponent(id)}/external-sessions?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    ).then(items => items.map(item => ({
+      externalSessionId: item.external_session_id,
+      displayName: item.display_name,
+      model: item.model ?? undefined,
+      updatedAt: item.updated_at ?? undefined,
+      internalSessionId: item.internal_session_id ?? undefined,
+    })));
+  }
+
+  importExternalHarnessSession(
+    id: string,
+    body: {
+      engagementId: string;
+      externalSessionId: string;
+      displayName: string;
+      model?: string;
+    },
+  ): Promise<HarnessSessionSummary> {
+    return this.request<WireHarnessSession>(
+      `harnesses/${encodeURIComponent(id)}/external-sessions/import`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          engagement_id: body.engagementId,
+          external_session_id: body.externalSessionId,
+          display_name: body.displayName,
+          model: body.model,
+        }),
+      },
+    ).then(mapHarnessSession);
   }
 
   getHarnessSessionActivity(

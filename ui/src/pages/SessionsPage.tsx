@@ -85,6 +85,7 @@ import type {
   HarnessInteraction,
   HarnessSessionActivity,
   HarnessSessionSummary,
+  ExternalHarnessSessionSummary,
   HarnessSkillSummary,
   McpServerProfile,
   PersistedChatMessage,
@@ -525,6 +526,10 @@ export function SessionsPage() {
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [harnessesLoaded, setHarnessesLoaded] = useState(false);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
+  const [externalHarnessSessions, setExternalHarnessSessions] = useState<ExternalHarnessSessionSummary[]>([]);
+  const [externalSessionQuery, setExternalSessionQuery] = useState("");
+  const [externalSessionsLoading, setExternalSessionsLoading] = useState(false);
+  const [externalSessionsError, setExternalSessionsError] = useState<string>();
   const [harnessActivity, setHarnessActivity] = useState<HarnessSessionActivity>();
   const [harnessActivityError, setHarnessActivityError] = useState<string>();
   const [harnessProgress, setHarnessProgress] = useState<HarnessProgress>();
@@ -924,6 +929,58 @@ export function SessionsPage() {
     });
     return () => { active = false; };
   }, [api, coreState, engagement]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!api || !engagement || !assistantSettingsOpen || runtimeKind !== "harness" || !harnessId) {
+      setExternalHarnessSessions([]);
+      setExternalSessionsError(undefined);
+      setExternalSessionsLoading(false);
+      return () => controller.abort();
+    }
+    setExternalSessionsLoading(true);
+    setExternalSessionsError(undefined);
+    void api.listExternalHarnessSessions(harnessId, engagement.id, controller.signal)
+      .then(setExternalHarnessSessions)
+      .catch(error => {
+        if (controller.signal.aborted) return;
+        setExternalHarnessSessions([]);
+        setExternalSessionsError(error instanceof Error ? error.message : "External sessions could not be loaded.");
+      })
+      .finally(() => { if (!controller.signal.aborted) setExternalSessionsLoading(false); });
+    return () => controller.abort();
+  }, [api, engagement, assistantSettingsOpen, runtimeKind, harnessId]);
+
+  const selectHarnessSession = async (value: string) => {
+    if (!value.startsWith("external:")) {
+      setHarnessSessionId(value);
+      return;
+    }
+    if (!api || !engagement || !harnessId) return;
+    const externalId = value.slice("external:".length);
+    const external = externalHarnessSessions.find(item => item.externalSessionId === externalId);
+    if (!external) return;
+    setExternalSessionsLoading(true);
+    setExternalSessionsError(undefined);
+    try {
+      const imported = await api.importExternalHarnessSession(harnessId, {
+        engagementId: engagement.id,
+        externalSessionId: external.externalSessionId,
+        displayName: external.displayName,
+        model: model || external.model,
+      });
+      setHarnessSessions(current => [imported, ...current.filter(item => item.id !== imported.id)]);
+      setExternalHarnessSessions(current => current.map(item => item.externalSessionId === externalId
+        ? {...item, internalSessionId: imported.id}
+        : item));
+      setHarnessSessionId(imported.id);
+      setAssistantSettingsStatus(`Ready to resume ${external.displayName}.`);
+    } catch (error) {
+      setExternalSessionsError(error instanceof Error ? error.message : "The external session could not be imported.");
+    } finally {
+      setExternalSessionsLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement || view !== "browser") {
@@ -3224,7 +3281,7 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}
-                {runtimeKind === "harness" && <details className="chat-advanced-session"><summary>Advanced session binding</summary><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId)} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.displayName} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}</select></label></details>}
+                {runtimeKind === "harness" && <details className="chat-advanced-session"><summary>Resume existing session</summary><label><span>Filter by name</span><input type="search" aria-label="Filter resumable sessions by name" value={externalSessionQuery} placeholder="Search Codex or Grok sessions" onChange={(event) => setExternalSessionQuery(event.target.value)} /></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId) || externalSessionsLoading} onChange={(event) => void selectHarnessSession(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => (item.harnessProfileId === harnessId || item.id === harnessSessionId) && (item.id === harnessSessionId || item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase()))).map((item) => <option value={item.id} key={item.id}>{item.displayName} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}{externalHarnessSessions.filter((item) => !item.internalSessionId && item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase())).map((item) => <option value={`external:${item.externalSessionId}`} key={`external:${item.externalSessionId}`}>{item.displayName}{item.model ? ` · ${item.model}` : ""}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ""}</option>)}</select></label>{externalSessionsLoading && <p className="provider-dialog-note" role="status">Loading resumable sessions…</p>}{externalSessionsError && <p className="provider-dialog-note error" role="alert">{externalSessionsError}</p>}</details>}
                 {sessionId && <p className="provider-dialog-note">Changes apply to your next message. Conversation history is kept.</p>}
                 <div className="chat-settings-capabilities">
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && !selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>Enable installed skills for this harness in Settings.</small></span></div>}
