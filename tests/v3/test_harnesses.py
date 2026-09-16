@@ -1430,9 +1430,12 @@ def test_tool_disabled_harness_session_has_no_native_or_command_runtime(tmp_path
         tools_enabled=False,
     )
 
-    assert HarnessNativeCapabilities.model_validate(
-        session.metadata["native_capabilities"]
-    ) == HarnessNativeCapabilities()
+    assert (
+        HarnessNativeCapabilities.model_validate(
+            session.metadata["native_capabilities"]
+        )
+        == HarnessNativeCapabilities()
+    )
     assert session.metadata["command_runtime_enabled"] is False
     assert "command_runtime_snapshot" not in session.metadata
     assert session.id not in runtime._gateway_oci_components

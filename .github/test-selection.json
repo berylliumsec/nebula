@@ -1,5 +1,5 @@
 {
-  "change_digest": "99a0f8da4ac36045923d154d0dcae6a2035d572a48d3c38f866f0dae733eb7c2",
+  "change_digest": "56d61639926b57b35da84a7090930702d05700d502a70b0343e4eafa51abdb1c",
   "reviewed_by": "Codex Ask Nebula tool-isolation review",
   "reason": "A retained stalled popup turn proved that a highlighted-text Ask Nebula harness session ignored the UI tools-disabled request and ran nine project/model tools for about three and a half minutes. Select two exact backend contracts for tool-free temporary harness creation and the two real-Core provider/harness popup journeys, including a 6000-character selection.",
   "exclusions": "No full suites. Unrelated harness adapters, chat workflows, native capture mechanics, mobile profiles, physical devices, and the remote Mac are excluded. The native capture boundary already limits selections to 6000 characters; the focused real-Core browser journey exercises that maximum payload through temporary setup and the first harness response.",
