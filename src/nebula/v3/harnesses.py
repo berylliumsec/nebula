@@ -335,6 +335,20 @@ def _container_only_native_capabilities(
     )
 
 
+def _native_capabilities_for_execution_mode(
+    capabilities: HarnessNativeCapabilities,
+    execution_mode: Literal["docker", "host"],
+) -> HarnessNativeCapabilities:
+    if execution_mode == "host":
+        return capabilities.model_copy(
+            update={
+                "workspace_access": HarnessWorkspaceAccess.WRITE,
+                "shell": True,
+            }
+        )
+    return _container_only_native_capabilities(capabilities)
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -344,7 +358,7 @@ def _session_native_capabilities(
         if isinstance(raw, dict)
         else profile.native_capabilities
     )
-    return _container_only_native_capabilities(capabilities)
+    return capabilities
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -410,9 +424,14 @@ def _harness_developer_instructions(
     tool_names = ", ".join(
         str(item.get("name") or "")[:100] for item in gateway_tools[:64]
     )
+    native_workspace = capabilities.workspace_access != HarnessWorkspaceAccess.NONE
     return (
-        f"Nebula {vendor} session. The process cwd is private scratch, not the project workspace. "
-        "Project operations use the supplied Nebula tools; their project root is cwd '.'. "
+        f"Nebula {vendor} session. "
+        + (
+            "The process cwd is the linked project workspace. Use vendor-native filesystem and shell tools for project operations; supplied Nebula tools provide additional audited capabilities. "
+            if native_workspace
+            else "The process cwd is private scratch, not the project workspace. Project operations use the supplied Nebula tools; their project root is cwd '.'. "
+        )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
             "The knowledge capability state governs only knowledge.list and knowledge.search; it does not constrain explicitly invoked installed skills. "
@@ -1124,6 +1143,24 @@ def _minimal_environment(extra: Mapping[str, str] | None = None) -> dict[str, st
     return keep
 
 
+def _user_bus_environment() -> dict[str, str]:
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    bus = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
+    if not runtime or not bus:
+        return {}
+    path = Path(runtime)
+    try:
+        metadata = path.stat()
+    except OSError:
+        # diagnostic-expected: absent or inaccessible session state is omitted.
+        return {}
+    if not path.is_absolute() or not path.is_dir() or metadata.st_uid != os.getuid():
+        return {}
+    if bus != f"unix:path={path / 'bus'}":
+        return {}
+    return {"XDG_RUNTIME_DIR": runtime, "DBUS_SESSION_BUS_ADDRESS": bus}
+
+
 def _harness_home(profile: HarnessProfile) -> Path:
     if profile.home_directory:
         return Path(profile.home_directory)
@@ -1131,9 +1168,14 @@ def _harness_home(profile: HarnessProfile) -> Path:
 
 
 def _harness_environment(
-    profile: HarnessProfile, extra: Mapping[str, str] | None = None
+    profile: HarnessProfile,
+    extra: Mapping[str, str] | None = None,
+    *,
+    host_session: bool = False,
 ) -> dict[str, str]:
     env = _minimal_environment(extra)
+    if host_session:
+        env.update(_user_bus_environment())
     if profile.home_directory:
         home = _harness_home(profile)
         if not home.is_dir():
@@ -2907,10 +2949,11 @@ class CodexAppServerAdapter(HarnessAdapter):
                 selected_mcp_config, _ = _mcp_runtime_config(
                     mcp_profiles, credentials, workspace
                 )
-            argv = [str(executable), "app-server", "-c", "mcp_servers={}"]
-            for override in _codex_process_overrides(
+            effective_native_capabilities = (
                 native_capabilities or HarnessNativeCapabilities()
-            ):
+            )
+            argv = [str(executable), "app-server", "-c", "mcp_servers={}"]
+            for override in _codex_process_overrides(effective_native_capabilities):
                 argv.extend(["-c", override])
             child_env: dict[str, str] = {}
             if profile.auth_mode == HarnessAuthMode.SECRET_REF and profile.secret_ref:
@@ -2927,7 +2970,11 @@ class CodexAppServerAdapter(HarnessAdapter):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(workspace),
-                env=_harness_environment(profile, child_env),
+                env=_harness_environment(
+                    profile,
+                    child_env,
+                    host_session=effective_native_capabilities.shell,
+                ),
                 limit=MAX_MCP_MESSAGE_BYTES,
             )
             rpc = _CodexRpc(process=process)
@@ -3055,7 +3102,7 @@ def _codex_shell_environment(
         capabilities.workspace_access != HarnessWorkspaceAccess.NONE
     )
     return {
-        "inherit": "none",
+        "inherit": "all" if shell else "none",
         "set": {
             "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
             if shell
@@ -4769,12 +4816,20 @@ class GrokAcpAdapter(HarnessAdapter):
             raise HarnessConfigurationError(
                 "Grok executable must be an existing absolute file"
             )
-        command = [
-            str(executable),
-            "--disallowed-tools",
-            ",".join(self._DISALLOWED_HOST_TOOLS),
-            "agent",
-        ]
+        native_capabilities = (
+            _session_native_capabilities(session, profile)
+            if session is not None
+            else _container_only_native_capabilities(profile.native_capabilities)
+        )
+        command = [str(executable)]
+        if (
+            native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
+            and not native_capabilities.shell
+        ):
+            command.extend(
+                ["--disallowed-tools", ",".join(self._DISALLOWED_HOST_TOOLS)]
+            )
+        command.append("agent")
         if session is not None:
             command.extend(["--model", session.model])
             raw_options = session.metadata.get("runtime_options")
@@ -4789,7 +4844,9 @@ class GrokAcpAdapter(HarnessAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(workspace),
-            env=_harness_environment(profile),
+            env=_harness_environment(
+                profile, host_session=bool(native_capabilities.shell)
+            ),
             limit=MAX_MCP_MESSAGE_BYTES,
         )
         rpc = _AcpRpc(process=process)
@@ -5554,6 +5611,13 @@ class HarnessRuntimeService:
                 "harness runtime is already bound to an automation platform"
             )
         self.automation_tool_platform = platform
+
+    def _project_execution_mode(self, engagement_id: str) -> Literal["docker", "host"]:
+        if self.automation_tool_platform is None:
+            return "docker"
+        return self.automation_tool_platform.manager.project_policy(
+            engagement_id
+        ).execution_mode
 
     def bind_browser_automation_platform(
         self, platform: BrowserAutomationToolPlatform
@@ -6371,13 +6435,17 @@ class HarnessRuntimeService:
             if tools_enabled
             else (None, None)
         )
+        execution_mode = self._project_execution_mode(engagement_id)
         native_capabilities = (
-            _container_only_native_capabilities(profile.native_capabilities)
+            _native_capabilities_for_execution_mode(
+                profile.native_capabilities, execution_mode
+            )
             if tools_enabled
             else HarnessNativeCapabilities()
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
+            "execution_mode": execution_mode,
             "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             "runtime_options": {
@@ -6487,6 +6555,35 @@ class HarnessRuntimeService:
                 mcp_snapshot=deepcopy(session.mcp_snapshot),
                 metadata=metadata,
             )
+        )
+
+    def _fork_session_for_execution_mode(
+        self,
+        session: HarnessSession,
+        profile: HarnessProfile,
+        *,
+        execution_mode: Literal["docker", "host"],
+        reason: str,
+    ) -> HarnessSession:
+        """Fork without carrying bindings or command runtime across mode changes."""
+
+        replacement = self._fork_session(session, reason=reason)
+        metadata = deepcopy(replacement.metadata)
+        metadata.pop("workspace_binding_version", None)
+        metadata.pop("command_runtime_snapshot", None)
+        metadata.update(
+            {
+                "execution_mode": execution_mode,
+                "native_capabilities": _native_capabilities_for_execution_mode(
+                    _session_native_capabilities(session, profile), execution_mode
+                ).model_dump(mode="json"),
+            }
+        )
+        return self.store.update(
+            HarnessSession,
+            replacement.id,
+            {"metadata": metadata},
+            expected_revision=replacement.revision,
         )
 
     def fork_session(self, session_id: str, *, reason: str) -> HarnessSession:
@@ -6944,6 +7041,26 @@ class HarnessRuntimeService:
                 },
                 expected_revision=chat.revision,
             )
+        current_execution_mode = self._project_execution_mode(session.engagement_id)
+        if session.metadata.get("execution_mode") != current_execution_mode:
+            previous_session_id = session.id
+            handoff_context = self._chat_handoff_context(
+                chat, reason="an execution mode update"
+            )
+            session = self._fork_session_for_execution_mode(
+                session,
+                profile,
+                execution_mode=current_execution_mode,
+                reason="execution_mode_changed",
+            )
+            chat = self._rebind_chat_session(
+                chat,
+                session,
+                previous_session_id=previous_session_id,
+                reason="execution_mode_changed",
+            )
+            forked_from_session_id = previous_session_id
+            session_rollover_reason = "execution_mode_changed"
         if self.session_activity(session.id).busy:
             forked_from_session_id = session.id
             handoff_context = self._chat_handoff_context(chat)
@@ -6962,7 +7079,12 @@ class HarnessRuntimeService:
             handoff_context = self._chat_handoff_context(
                 chat, reason="a workspace connection update"
             )
-            session = self._fork_session(session, reason="workspace_connection_changed")
+            session = self._fork_session_for_execution_mode(
+                session,
+                profile,
+                execution_mode=current_execution_mode,
+                reason="workspace_connection_changed",
+            )
             chat = self._rebind_chat_session(
                 chat,
                 session,
@@ -7845,6 +7967,15 @@ class HarnessRuntimeService:
                 )
                 self._gateway_oci_components.pop(session.id, None)
         forked_from_session_id: str | None = None
+        current_execution_mode = self._project_execution_mode(session.engagement_id)
+        if session.metadata.get("execution_mode") != current_execution_mode:
+            forked_from_session_id = session.id
+            session = self._fork_session_for_execution_mode(
+                session,
+                profile,
+                execution_mode=current_execution_mode,
+                reason="execution_mode_changed",
+            )
         if self.session_activity(session.id).busy:
             forked_from_session_id = session.id
             session = self._fork_session(session, reason="parallel mission requested")
@@ -10288,6 +10419,22 @@ class HarnessRuntimeService:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         analysis_only = bool(session.metadata.get("analysis_only"))
+        if not analysis_only and "execution_mode" not in session.metadata:
+            execution_mode = self._project_execution_mode(session.engagement_id)
+            session = self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "execution_mode": execution_mode,
+                        "native_capabilities": _native_capabilities_for_execution_mode(
+                            profile.native_capabilities, execution_mode
+                        ).model_dump(mode="json"),
+                    }
+                },
+                expected_revision=session.revision,
+            )
         if analysis_only:
             profile = profile.model_copy(
                 update={
@@ -10362,15 +10509,21 @@ class HarnessRuntimeService:
         )
         launch = await gateway.start()
         self._gateways[session.id] = gateway
-        isolated_workspace = gateway.root / "vendor-workspace"
+        execution_mode = session.metadata.get("execution_mode", "docker")
+        isolated_workspace = (
+            self.workspace_resolver(session.engagement_id)
+            if execution_mode == "host" and not analysis_only
+            else gateway.root / "vendor-workspace"
+        )
         if portable_names and not analysis_only:
             # Grok indexes native sessions by cwd. Keep this private directory
             # stable across Core restarts, separately from the ephemeral socket.
-            isolated_workspace = (
-                self.artifact_store.root
-                / "harness-workspaces"
-                / hashlib.sha256(session.id.encode()).hexdigest()
-            )
+            if execution_mode != "host":
+                isolated_workspace = (
+                    self.artifact_store.root
+                    / "harness-workspaces"
+                    / hashlib.sha256(session.id.encode()).hexdigest()
+                )
             session = self.store.update(
                 HarnessSession,
                 session.id,

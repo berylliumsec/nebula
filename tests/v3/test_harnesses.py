@@ -1471,12 +1471,123 @@ def test_harness_session_freezes_native_capabilities(tmp_path):
     assert frozen.shell is False
     assert frozen.web_search is True
     assert frozen.subagents is True
+    assert session.metadata["execution_mode"] == "docker"
+
+
+def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+
+        class HostCommands:
+            def __init__(self) -> None:
+                self.store = store
+                self.manager = SimpleNamespace(
+                    project_policy=lambda _engagement_id: SimpleNamespace(
+                        execution_mode="host"
+                    )
+                )
+
+            def chat_components(self, *, engagement_id: str):
+                del engagement_id
+                raise AutomationRuntimeUnavailable("command runtime is optional")
+
+        runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+        session = runtime.create_session(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+        )
+        native = HarnessNativeCapabilities.model_validate(
+            session.metadata["native_capabilities"]
+        )
+        assert session.metadata["execution_mode"] == "host"
+        assert native.workspace_access == HarnessWorkspaceAccess.WRITE
+        assert native.shell is True
+
+        _chat, _chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect the linked host workspace",
+            chat_session_id=None,
+            harness_session_id=session.id,
+            mcp_server_ids=[],
+        )
+        _ = [event async for event in runtime.stream_turn(turn.id)]
+        assert adapter.opens[0].workspace == tmp_path
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        chat, _, first = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Start in the isolated workspace",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        _ = [event async for event in runtime.stream_turn(first.id)]
+        original = store.get(HarnessSession, first.harness_session_id)
+        assert original.metadata["execution_mode"] == "docker"
+
+        class HostCommands:
+            def __init__(self) -> None:
+                self.store = store
+                self.manager = SimpleNamespace(
+                    project_policy=lambda _engagement_id: SimpleNamespace(
+                        execution_mode="host"
+                    )
+                )
+
+            def chat_components(self, *, engagement_id: str):
+                del engagement_id
+                raise AutomationRuntimeUnavailable("command runtime is optional")
+
+        runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+        updated, _, second = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Continue in the linked host workspace",
+            chat_session_id=chat.id,
+            harness_session_id=original.id,
+            mcp_server_ids=[],
+        )
+        replacement = store.get(HarnessSession, second.harness_session_id)
+        native = HarnessNativeCapabilities.model_validate(
+            replacement.metadata["native_capabilities"]
+        )
+        assert updated.harness_session_id == replacement.id
+        assert replacement.id != original.id
+        assert replacement.external_session_id is None
+        assert replacement.metadata["execution_mode"] == "host"
+        assert native.workspace_access == HarnessWorkspaceAccess.WRITE
+        assert native.shell is True
+
+        _ = [event async for event in runtime.stream_turn(second.id)]
+        assert adapter.opens[-1].session.external_session_id is None
+        assert adapter.opens[-1].workspace == tmp_path
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_harness_session_does_not_require_unprepared_optional_command_runtime(tmp_path):
     store, engagement, profile, _, _, runtime = _runtime(tmp_path)
 
     class UnpreparedCommands:
+        manager = SimpleNamespace(
+            project_policy=lambda _engagement_id: SimpleNamespace(
+                execution_mode="docker"
+            )
+        )
+
         def chat_components(self, *, engagement_id: str):
             del engagement_id
             raise AutomationRuntimeUnavailable("Kali image is still preparing")
@@ -3631,6 +3742,73 @@ def test_legacy_grok_chat_keeps_history_during_workspace_migration(tmp_path):
     assert (
         store.get(HarnessSession, second.harness_session_id).external_session_id is None
     )
+
+
+def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        profile = store.update(
+            HarnessProfile,
+            profile.id,
+            {"kind": "grok_acp"},
+            expected_revision=profile.revision,
+        )
+
+        class HostCommands:
+            def __init__(self) -> None:
+                self.store = store
+                self.manager = SimpleNamespace(
+                    project_policy=lambda _engagement_id: SimpleNamespace(
+                        execution_mode="host"
+                    )
+                )
+
+            def chat_components(self, *, engagement_id: str):
+                del engagement_id
+                raise AutomationRuntimeUnavailable("command runtime is optional")
+
+        session = runtime.create_session(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+        )
+        legacy_metadata = dict(session.metadata)
+        legacy_metadata.pop("execution_mode")
+        legacy_metadata["workspace_binding_version"] = 1
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "external_session_id": "legacy-cwd-bound-session",
+                "metadata": legacy_metadata,
+            },
+            expected_revision=session.revision,
+        )
+        runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect the linked host workspace",
+            chat_session_id=None,
+            harness_session_id=session.id,
+            mcp_server_ids=[],
+        )
+        replacement = store.get(HarnessSession, turn.harness_session_id)
+        assert chat.harness_session_id == replacement.id
+        assert replacement.id != session.id
+        assert replacement.external_session_id is None
+        assert replacement.metadata["execution_mode"] == "host"
+        assert "workspace_binding_version" not in replacement.metadata
+        assert turn.metadata["session_rollover_reason"] == "execution_mode_changed"
+
+        _ = [event async for event in runtime.stream_turn(turn.id)]
+        assert adapter.opens[0].session.external_session_id is None
+        assert adapter.opens[0].workspace == tmp_path
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
