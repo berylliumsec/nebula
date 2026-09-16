@@ -578,7 +578,15 @@ kbd { font-size: 11px; }
 .session-list-search:focus-within { border-color: var(--focus); }
 .session-list-search input { min-width: 0; height: 38px; flex: 1; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 12px; }
 .session-list-search .icon-button { width: 32px; height: 32px; }
+.session-new-chat { display: grid; min-height: 46px; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; margin: 8px 8px 0; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: var(--radius-control); color: var(--action-primary-text); background: var(--action-primary); text-align: left; cursor: pointer; }
+.session-new-chat:hover, .session-new-chat:focus-visible { background: var(--action-primary-hover); }
+.session-new-chat:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.session-new-chat > span { display: grid; min-width: 0; gap: 2px; }
+.session-new-chat strong { font-size: 12px; }
+.session-new-chat small { overflow: hidden; color: color-mix(in srgb, var(--action-primary-text) 72%, transparent); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .session-list nav { display: grid; grid-auto-rows: max-content; align-content: start; gap: 3px; padding: 8px; }
+.session-list-group { display: grid; gap: 3px; }
+.session-list-group > h3 { margin: 7px 4px 2px; color: var(--muted); font-size: 10px; font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
 .session-list nav > button { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 46px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }
@@ -609,6 +617,7 @@ kbd { font-size: 11px; }
 .session-actions-menu > button.danger { color: var(--red); }
 .session-actions-menu > button.danger:hover, .session-actions-menu > button.danger:focus-visible { background: var(--red-muted); }
 @media (hover: none), (pointer: coarse) {
+  .session-new-chat { min-height: 48px; }
   .session-list-item { grid-template-columns: minmax(0, 1fr) 44px; }
   .session-actions-trigger { width: 44px; height: 44px; opacity: 1; pointer-events: auto; }
   .session-actions-menu > button { min-height: 44px; }
