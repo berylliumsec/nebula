@@ -117,6 +117,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
                 profile_id=profile_id or "",
                 model=model,
                 mcp_server_ids=[],
+                tools_enabled=False,
             )
         messages = chat_service().session_messages(source.id) if source else []
         chat = ChatSession(

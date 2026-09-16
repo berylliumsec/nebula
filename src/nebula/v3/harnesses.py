@@ -5876,6 +5876,7 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str] | None = None,
         reasoning_effort: str | None = None,
         service_tier: str | None = None,
+        tools_enabled: bool = True,
     ) -> HarnessSession:
         if self._closed:
             raise HarnessUnavailableError("harness runtime is shut down")
@@ -5934,15 +5935,22 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError(_safe_error(exc)) from exc
         snapshot = [item.model_dump(mode="json") for item in profiles]
         session_id = str(uuid4())
-        components, oci_snapshot = self._build_oci_components(
-            engagement_id=engagement_id,
-            model=selected_model,
+        components, oci_snapshot = (
+            self._build_oci_components(
+                engagement_id=engagement_id,
+                model=selected_model,
+            )
+            if tools_enabled
+            else (None, None)
+        )
+        native_capabilities = (
+            _container_only_native_capabilities(profile.native_capabilities)
+            if tools_enabled
+            else HarnessNativeCapabilities()
         )
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
-            "native_capabilities": _container_only_native_capabilities(
-                profile.native_capabilities
-            ).model_dump(mode="json"),
+            "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             "runtime_options": {
                 "reasoning_effort": resolved_reasoning_effort,
