@@ -397,6 +397,54 @@ def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_
     assert isinstance(rpc, _AcpRpc)
 
 
+def test_grok_host_session_preserves_native_tools_and_user_bus(monkeypatch, tmp_path):
+    observed: dict[str, Any] = {}
+
+    class Process:
+        stdin = SimpleNamespace()
+        stdout = SimpleNamespace()
+        stderr = SimpleNamespace()
+
+    async def create_process(*argv: str, **kwargs: Any) -> Process:
+        observed["argv"] = argv
+        observed["kwargs"] = kwargs
+        return Process()
+
+    runtime = tmp_path / "run-user"
+    runtime.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", f"unix:path={runtime / 'bus'}")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    monkeypatch.setattr(_AcpRpc, "start", lambda self: asyncio.sleep(0))
+    executable = tmp_path / "grok"
+    executable.write_text("", encoding="utf-8")
+    profile = HarnessProfile(
+        id="grok-host",
+        name="Grok host",
+        kind=HarnessKind.GROK_ACP,
+        executable=str(executable),
+    )
+    native = HarnessNativeCapabilities(
+        workspace_access=HarnessWorkspaceAccess.WRITE,
+        shell=True,
+    )
+    session = HarnessSession(
+        id="session-host",
+        engagement_id="eng-a",
+        harness_profile_id=profile.id,
+        model="grok-test",
+        metadata={"native_capabilities": native.model_dump(mode="json")},
+    )
+
+    asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
+
+    assert "--disallowed-tools" not in observed["argv"]
+    assert observed["kwargs"]["env"]["XDG_RUNTIME_DIR"] == str(runtime)
+    assert observed["kwargs"]["env"]["DBUS_SESSION_BUS_ADDRESS"] == (
+        f"unix:path={runtime / 'bus'}"
+    )
+
+
 def test_grok_connection_normalizes_mode_plan_and_streamed_message():
     async def scenario() -> None:
         rpc = FixtureGrokRpc()
@@ -1666,7 +1714,7 @@ def test_codex_native_capabilities_are_explicit_and_keep_shell_environment_minim
     assert config["features"]["multi_agent"] is True
     assert config["features"]["plugins"] is False
     assert config["web_search"] == "live"
-    assert config["shell_environment_policy"]["inherit"] == "none"
+    assert config["shell_environment_policy"]["inherit"] == "all"
     assert config["shell_environment_policy"]["set"]["PATH"] != "/nonexistent"
 
 

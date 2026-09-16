@@ -1,11 +1,24 @@
 {
-  "change_digest": "938d38d0f1e11a28a7ac05b3a15e962ec5b6d1512e8da51b3bdd90263b854bd3",
-  "reviewed_by": "Codex assistant queue reconciliation review after current-main rebase",
-  "reason": "Selected the three ChatQueuePanel component cases and the exact mocked-Core queue polling journey in desktop Chromium, narrow desktop, mobile Chromium 320, and mobile WebKit 390. The focused coverage proves that a Core-linked sending item leaves the visible follow-up queue and returns if Core marks it needs review. The existing diagnostics audit checks the two current-main external-session recovery handlers corrected after CI identified missing diagnostic recording.",
-  "exclusions": "No full suites. Current main already contains the overlapping Coding, harness, Security Browser, and native-browser changes from the original combined worktree; the rebased PR retains the queue projection fix, its regression coverage, and diagnostic recording required by the existing frontend audit. Backend queue mutation is unchanged. Live provider turns, real-Core LAN, physical devices, and software keyboards are excluded.",
-  "expected_tests": {"python": 0, "frontend": 3, "native": 0, "playwright": 4},
-  "python": [],
-  "frontend": ["ui/src/components/ChatQueuePanel.test.tsx"],
+  "change_digest": "431ff4bb67579fb61fda91cea53d67e73216a6667fa85f3380b346dd551e4802",
+  "reviewed_by": "Codex host-mode native-tool boundary review",
+  "reason": "Selected exact harness runtime and adapter regressions for Docker capability suppression, host capability freezing and linked-workspace binding, Grok native-tool launch behavior and user-bus inheritance, and Codex native shell environment configuration.",
+  "exclusions": "No full suites. UI and API schemas are unchanged, so frontend, native, and Playwright layers are not applicable. The deployed real-Core host-mode Grok journey will be exercised after merge; physical devices and browser matrices are unrelated to this provider execution-boundary correction.",
+  "expected_tests": {
+    "python": 7,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python": [
+    "tests/v3/test_harnesses.py::test_harness_session_freezes_native_capabilities",
+    "tests/v3/test_harnesses.py::test_host_mode_freezes_native_shell_and_uses_linked_workspace",
+    "tests/v3/test_harnesses.py::test_existing_codex_session_forks_when_project_changes_to_host_mode",
+    "tests/v3/test_harnesses.py::test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session",
+    "tests/v3/test_harness_adapters.py::test_grok_process_removes_host_command_and_workspace_tools",
+    "tests/v3/test_harness_adapters.py::test_grok_host_session_preserves_native_tools_and_user_bus",
+    "tests/v3/test_harness_adapters.py::test_codex_native_capabilities_are_explicit_and_keep_shell_environment_minimal"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": ["area:assistant-queue-reconciliation"]
+  "playwright": []
 }
