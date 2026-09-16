@@ -2960,12 +2960,14 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
     await composer.fill("Remember this first message");
     await page.getByRole("button", {name: "Send message", exact: true}).click();
-    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", {timeout: 20_000});
+    const firstReply = page.locator(".chat-message.assistant .assistant-markdown").last();
+    await expect(firstReply).toContainText("SETTINGS fixture low", {timeout: 20_000});
+    await expect(firstReply).not.toHaveClass(/streaming/, {timeout: 20_000});
     const chatId = new URL(page.url()).searchParams.get("session");
     expect(chatId).toBeTruthy();
     await expect(page.getByText("Fixture workspace argument error", {exact: true})).not.toBeVisible();
     const ledger = page.locator(".chat-message.assistant").filter({hasText: "SETTINGS fixture low"}).locator(".activity-ledger");
-    await ledger.getByRole("button", {name: "Show activity"}).click();
+    await ledger.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
     await ledger.getByText("Workspace read", {exact: true}).click();
     await expect(ledger.getByText("Fixture workspace argument error", {exact: true}).first()).toBeVisible();
     await ledger.getByRole("button", {name: "Hide activity"}).click();
