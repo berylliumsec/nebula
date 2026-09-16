@@ -3049,6 +3049,7 @@ class HarnessSession(Entity):
     entity_kind: ClassVar[str] = "harness_sessions"
     engagement_id: str
     harness_profile_id: str
+    display_name: str | None = Field(default=None, max_length=160)
     external_session_id: str | None = Field(default=None, max_length=500)
     model: str = Field(min_length=1, max_length=500)
     status: HarnessSessionStatus = HarnessSessionStatus.STARTING

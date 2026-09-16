@@ -1464,6 +1464,7 @@ interface WireMcpServerProfile extends WireEntity {
 interface WireHarnessSession extends WireEntity {
   engagement_id: string;
   harness_profile_id: string;
+  display_name?: string | null;
   model: string;
   status: HarnessSessionSummary["status"];
   mcp_server_ids?: string[];
@@ -3242,10 +3243,14 @@ function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
 }
 
 function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
+  const displayName = typeof value.display_name === "string"
+    ? value.display_name.trim()
+    : "";
   return {
     id: value.id,
     engagementId: value.engagement_id,
     harnessProfileId: value.harness_profile_id,
+    displayName: displayName || "Unattached session",
     model: value.model,
     reasoningEffort: typeof value.metadata?.runtime_options === "object"
       && value.metadata.runtime_options

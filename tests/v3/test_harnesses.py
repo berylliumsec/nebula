@@ -3034,7 +3034,13 @@ def test_harness_api_chat_mission_handoff_and_catalog(tmp_path):
             params={"engagement_id": engagement.id},
         )
         assert sessions.status_code == 200
-        assert sessions.json()[0]["external_session_id"] == "vendor-session-1"
+        listed_session = next(
+            item for item in sessions.json() if item["id"] == body["harness_session_id"]
+        )
+        assert listed_session["external_session_id"] == "vendor-session-1"
+        assert listed_session["display_name"] == (
+            "Harness answer for Name this conversation"
+        )
         activity = client.get(
             f"/api/v1/harness-sessions/{body['harness_session_id']}/activity",
             headers=headers,

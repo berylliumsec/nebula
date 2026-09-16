@@ -6142,6 +6142,56 @@ test("assistant upgrade foundation keeps empty chat quiet and settings opaque", 
   await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toBeFocused();
 });
 
+test("advanced session binding shows the Core-owned name for an unattached harness session", async ({ page }) => {
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "external-session-harness",
+        name: "External session harness",
+        kind: "grok_acp",
+        connection_mode: "spawn",
+        transport: "stdio",
+        executable: "grok",
+        auth_mode: "existing_session",
+        default_model: "grok-4.6",
+        enabled: true,
+        privacy: { local_only: true, permits_sensitive_data: true },
+        native_capabilities: { workspace_access: "write", shell: true, skills: true, subagents: true },
+        capabilities: { models: ["grok-4.6"], model_options: [{ model: "grok-4.6" }], checked_at: entity.updated_at },
+      }] });
+      return;
+    }
+    if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "external-harness-session",
+        engagement_id: "scratch-project",
+        harness_profile_id: "external-session-harness",
+        display_name: "ptpcamerad adjacent overflow objects",
+        model: "grok-4.6",
+        status: "idle",
+        mcp_server_ids: [],
+        last_activity_at: entity.updated_at,
+        metadata: {},
+      }] });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  await page.getByLabel("Chat runtime").selectOption("harness");
+  await page.getByText("Advanced session binding", { exact: true }).click();
+  await expect(page.getByLabel("Chat harness session").getByRole("option", {
+    name: /ptpcamerad adjacent overflow objects · grok-4\.6 · idle/,
+  })).toHaveCount(1);
+});
+
 test("assistant upgrade makes loaded knowledge sources available automatically", async ({ page }) => {
   const provider = {
     ...entity,
