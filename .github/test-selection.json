@@ -1,16 +1,15 @@
 {
-  "change_digest": "cd0b0884c5ac014f8c2a32a49424e8deeb48c998d5254525204fee7423f7ba7c",
-  "reviewed_by": "Codex review of the approved Assistant chat-switching mockups and affected lifecycle",
-  "reason": "The diff changes only Assistant conversation navigation, cached transcript reconciliation, composer readiness during cache refresh, and the existing switching assertions. Four focused browser journeys cover desktop, 390 px Chromium, 390 px WebKit, and authoritative real-Core persistence/reconciliation.",
-  "exclusions": "No full suites. No Python, frontend component, or native tests apply because the change has no backend, isolated component, or native boundary. Unrelated assistant settings, provider, terminal, browser, mission, and project workflows are excluded. Physical devices are unavailable; the selected permanent mobile projects are emulated. Production build and LAN real-Core evidence are covered by the selected real-Core journey.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 4},
-  "python": [],
+  "change_digest": "accf781d5acba62b9e4ef7a47131709dbd7a5742e8f2c8c1af421bbfb6d0c6d9",
+  "reviewed_by": "Codex alpha.19 clean-install failure and alpha.20 recovery review",
+  "reason": "The failed alpha.19 preparation proved installation and desktop self-test on Ubuntu, Debian, and Kali, then exposed one shared workflow mismatch: Playwright stages full Chromium as chrome under --no-shell, while the smoke gate searched only for headless-shell executables. Three focused packaging contracts verify synchronized alpha.20 metadata, the release CLI contract, and that the protected clean-install workflow discovers and launches the staged full Chromium binary.",
+  "exclusions": "No full suites. The source change is limited to release metadata, notes, one protected-workflow executable selector, and its packaging contract assertion. Product code, UI behavior, provider integrations, state lifecycle, native runtime behavior, and browser journeys are unchanged; the reviewed accumulated release matrix runs again during protected preparation. Physical package installation is supplied by the protected Ubuntu, Debian, and Kali clean-smoke jobs.",
+  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 0},
+  "python": [
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy",
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:workbench-navigation-core/assistant-real-desktop"
-  ]
+  "playwright": []
 }
