@@ -59,12 +59,16 @@ temporary branch. New windows are slightly offset when the viewport has room,
 while the existing viewport clamping keeps every window reachable on desktop
 and mobile.
 
-Closing or hiding one window must not affect any other window. A visible window
-continues to suppress the native browser surface where required by native-layer
-stacking; hiding all windows restores it. Full reload retains the existing
-disposable cleanup behavior for every open branch. The broader product rule is
-that starting an auxiliary task must not destroy another active task merely
-because both use the same presentation type.
+Closing or hiding one window must not affect any other window. Native browser
+surfaces cannot composite beneath a DOM popup, so the Browser continuously uses
+the largest rectangular part of its page surface that does not intersect any
+visible Ask Nebula window. Moving or resizing a popup updates those native bounds;
+hiding or closing it restores the full page surface. The native page remains live
+and visible instead of blanking the whole Browser, while no part of the popup can
+be buried beneath it. Full reload retains the existing disposable cleanup behavior
+for every open branch. The broader product rule is that starting an auxiliary task
+must not destroy another active task merely because both use the same presentation
+type.
 
 Agent results render as Markdown while they stream and remain visible after the
 completion snapshot arrives. If a harness completion snapshot omits text, the

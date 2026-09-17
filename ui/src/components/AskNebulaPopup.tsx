@@ -12,6 +12,8 @@ import styles from "./AskNebulaPopup.module.css";
 
 export type AssistantSnapshot = Omit<ChatCompletionRequest, "messages" | "contextAttachments">;
 
+const ASK_NEBULA_LAYOUT_EVENT = "nebula-ask-nebula-layout";
+
 export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onClose, onVisibilityChange }: {
   api?: ApiClient; snapshot?: AssistantSnapshot; context: SelectionActionDraft; placementIndex?: number; onClose(): void; onVisibilityChange?: (visible: boolean) => void;
 }) {
@@ -33,6 +35,12 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
     x: Math.max(12, window.innerWidth - 584 - (placementIndex % 5) * 32),
     y: 80 + (placementIndex % 5) * 32,
   }));
+  useLayoutEffect(() => {
+    window.dispatchEvent(new Event(ASK_NEBULA_LAYOUT_EVENT));
+  }, [hidden, position.x, position.y]);
+  useEffect(() => () => {
+    requestAnimationFrame(() => window.dispatchEvent(new Event(ASK_NEBULA_LAYOUT_EVENT)));
+  }, []);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const launcherDrag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const moveLauncher = (x: number, y: number) => {
@@ -68,6 +76,7 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
     const clamp = () => {
       const rect = panel.current?.getBoundingClientRect();
       if (rect) move(rect.left, rect.top);
+      window.dispatchEvent(new Event(ASK_NEBULA_LAYOUT_EVENT));
     };
     const observer = new ResizeObserver(clamp);
     if (panel.current) observer.observe(panel.current);
@@ -274,7 +283,7 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
         <span className={styles.show}>Show</span>
       </button>
     </div> :
-    <div ref={panel} className={styles.popup} role="dialog" aria-labelledby={titleId} style={{ left: position.x, top: position.y }}>
+    <div ref={panel} className={styles.popup} data-ask-nebula-popup role="dialog" aria-labelledby={titleId} style={{ left: position.x, top: position.y }}>
     <div data-selection-actions-disabled>
       <div className={styles.header}>
         <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
