@@ -1696,7 +1696,7 @@ pub(crate) fn browser_configure_session_proxy(
     upstream_proxy_credential_ref: Option<String>,
     capture_bodies: bool,
     interception_enabled: bool,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     if !valid_identifier(&project_id) || !valid_identifier(&session_id) {
         return Err("The Project or session identifier is invalid.".to_string());
     }

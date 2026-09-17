@@ -1435,7 +1435,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     }
     setWorkspaceError(undefined);
     try {
-      await workbenchBrowser.configureProxy(projectId, activeSession.id, {
+      const resumedTransactionIds = await workbenchBrowser.configureProxy(projectId, activeSession.id, {
         enabled: activeSession.upstreamProxyEnabled,
         url: activeSession.upstreamProxyUrl,
         credentialRef: activeSession.upstreamProxyCredentialRef,
@@ -1453,6 +1453,18 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         ...current,
         sessions: current.sessions.map((session) => session.id === updated.id ? updated : session),
       } : current);
+      if (!interceptionEnabled && resumedTransactionIds?.length) {
+        try {
+          const research = await api.getSecurityBrowserResearch(projectId);
+          const resumed = new Set(resumedTransactionIds);
+          await Promise.all(research.intercepts
+            .filter((intercept) => intercept.sessionId === activeSession.id && intercept.state === "paused" && resumed.has(intercept.transactionId))
+            .map((intercept) => api.decideSecurityBrowserIntercept(intercept, "forward", operatorId)));
+        } catch (caught) {
+          void logCaughtDiagnostic("interface.security_browser.intercept_resume_reconcile_failed", "A resumed native request could not be reconciled with its durable queue entry.", caught, "workbench_browser");
+          setWorkspaceError("Requests resumed in the native browser, but the Intercept queue could not refresh. Reopen the research workbench to reconcile its saved state.");
+        }
+      }
       setNotice({ kind: "info", message: interceptionEnabled ? "Interception enabled. In-scope requests now pause durably for up to 60 seconds." : "Interception disabled. New requests pass through the capture proxy without pausing." });
     } catch (caught) {
       void logCaughtDiagnostic("interface.security_browser.interception_update_failed", "Browser interception could not be updated.", caught, "workbench_browser");

@@ -109,6 +109,8 @@ describe("manual request workspace presentation", () => {
     const onToggle = vi.fn(); const props = { available: true, desktop: true, scopeReady: true, nativeReady: true, pending: false, onToggle, onSetup: vi.fn() };
     const view = render(<InterceptionTransport {...props} enabled={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Pause requests" })); expect(onToggle).toHaveBeenCalledOnce();
+    view.rerender(<InterceptionTransport {...props} enabled />);
+    expect(screen.getByRole("button", { name: "Resume requests" })).toHaveAttribute("title", expect.stringMatching(/Forward requests and responses already paused/));
     view.rerender(<InterceptionTransport {...props} enabled pending />);
     expect(screen.getByRole("button", { name: "Resume requests" })).toBeDisabled();
     expect(screen.getByText(/Interception on/)).toBeVisible();

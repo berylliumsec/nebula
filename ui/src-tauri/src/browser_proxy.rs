@@ -507,13 +507,17 @@ impl BrowserProxyHandle {
         config: Option<NativeUpstreamProxyConfig>,
         capture_bodies: bool,
         interception_enabled: bool,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<String>, String> {
         ensure_proxy_running(self.running.load(Ordering::Acquire))?;
         self.connector.configure(config)?;
         self.capture_bodies.store(capture_bodies, Ordering::Relaxed);
         self.interception_enabled
             .store(interception_enabled, Ordering::Relaxed);
-        Ok(())
+        if interception_enabled {
+            Ok(Vec::new())
+        } else {
+            forward_pending_intercepts(&self.pending_intercepts)
+        }
     }
 
     pub(crate) fn decide_intercept(
@@ -599,6 +603,28 @@ fn resolve_pending_intercept(
     sender
         .send(decision)
         .map_err(|_| "The native transaction expired before the decision arrived.".to_string())
+}
+
+fn forward_pending_intercepts(
+    pending: &Arc<Mutex<HashMap<String, oneshot::Sender<NativeInterceptDecision>>>>,
+) -> Result<Vec<String>, String> {
+    let waiters = {
+        let mut registry = pending
+            .lock()
+            .map_err(|_| "The native intercept registry is unavailable.".to_string())?;
+        std::mem::take(&mut *registry)
+    };
+    let mut transaction_ids = Vec::with_capacity(waiters.len());
+    for (transaction_id, sender) in waiters {
+        // A waiter may have expired between draining the registry and delivery.
+        // It is already gone from authoritative live state, so no retry is needed.
+        let _ = sender.send(NativeInterceptDecision::Forward(
+            NativeInterceptEdits::default(),
+        ));
+        transaction_ids.push(transaction_id);
+    }
+    transaction_ids.sort();
+    Ok(transaction_ids)
 }
 
 impl BrowserProxyHandle {
@@ -2648,6 +2674,37 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn resuming_requests_forwards_every_pending_native_intercept() {
+        let pending = Arc::new(Mutex::new(HashMap::new()));
+        let mut receivers = Vec::new();
+        for transaction_id in ["request-1", "response-1"] {
+            let (sender, receiver) = oneshot::channel();
+            pending
+                .lock()
+                .unwrap()
+                .insert(transaction_id.to_string(), sender);
+            receivers.push(receiver);
+        }
+
+        assert_eq!(
+            forward_pending_intercepts(&pending).unwrap(),
+            vec!["request-1".to_string(), "response-1".to_string()]
+        );
+        assert!(pending.lock().unwrap().is_empty());
+        for receiver in receivers {
+            assert!(matches!(
+                receiver.await,
+                Ok(NativeInterceptDecision::Forward(NativeInterceptEdits {
+                    method: None,
+                    url: None,
+                    headers,
+                })) if headers.is_empty()
+            ));
+        }
+        assert!(forward_pending_intercepts(&pending).unwrap().is_empty());
     }
 
     #[test]

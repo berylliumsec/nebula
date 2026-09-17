@@ -727,12 +727,21 @@ async def smoke(
                                 "return document.body.innerText.includes('Paused requests (0)');",
                                 120,
                             )
+                            await submit_address(target_url + "resume-pending")
+                            await wait_for(
+                                "return document.body.innerText.includes('Paused requests (1)');",
+                                120,
+                            )
                             await click_button(
                                 "Resume requests",
                                 "data-validation-disable-interception",
                             )
                             await wait_for(
                                 "return document.body.innerText.includes('Interception disabled. New requests pass through');",
+                                120,
+                            )
+                            await wait_for(
+                                "return document.body.innerText.includes('Paused requests (0)') && document.querySelector('#browser-address')?.value.includes('/resume-pending') && !document.querySelector('.browser-toolbar button[aria-label=\"Reload\"]')?.disabled;",
                                 120,
                             )
                             await click_button(
