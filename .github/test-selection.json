@@ -1,11 +1,24 @@
 {
-  "change_digest": "38fd7bfa57bc958107ab69332abefa33d46a268359e54d33ce8ab78c9f5b6867",
-  "reviewed_by": "Codex review of the operator-reported overlapping native-browser status notice",
-  "reason": "The browser notice now gives its decorative status icon, readable message, and accessible dismiss action independent layout ownership. The focused component file covers the exact DOM and accessible contract, while the existing desktop browser-complete entry covers native child bounds and browser workspace geometry.",
-  "exclusions": "No Core, native proxy, database, chat, provider, terminal, project, mobile-browser, or external-target behavior changed. HTTPS interception was confirmed to work after the operator installed and trusted the existing Project CA, so this branch does not alter CA generation or TLS policy. Full suites and unrelated interface journeys are excluded.",
-  "expected_tests": {"python": 0, "frontend": 21, "native": 0, "playwright": 1},
-  "python": [],
-  "frontend": ["ui/src/components/WorkbenchBrowser.test.tsx"],
-  "native": [],
-  "playwright": ["entry:browser-complete/desktop"]
+  "change_digest": "21fc39203df596d6c28b28941e3d27d9e8058cc34545f54378aeae2fbe8fb3ca",
+  "reviewed_by": "Codex review of the Intruder Payload Studio implementation and approved Figma workflow",
+  "reason": "The selection covers the complete changed path: Core attack validation and durable provenance, deterministic upload/script transformations, the Intruder component workflow, and the existing browser-complete operator journey across the permanent desktop and 320/390/430 Chromium and WebKit profiles. It also runs the exact existing native resume-intercepts regression after classifying its intentionally ignored expired-waiter result for the repository diagnostic audit.",
+  "exclusions": "No chat lifecycle, terminal, editor, mission orchestration, certificate, or native proxy behavior changed. The Rust edit is a diagnostic classification comment only and is covered by its exact existing regression test. Browser matrix entries use the established mocked native boundary and do not send traffic to external targets. Full suites and unrelated Playwright journeys are excluded.",
+  "expected_tests": {
+    "python": 6,
+    "frontend": 10,
+    "native": 1,
+    "playwright": 7
+  },
+  "python": ["tests/v3/test_browser_research.py"],
+  "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
+  "native": ["browser_proxy::tests::resuming_requests_forwards_every_pending_native_intercept"],
+  "playwright": [
+    "entry:browser-complete/desktop",
+    "entry:browser-complete/mobile-chromium-small",
+    "entry:browser-complete/mobile-chromium",
+    "entry:browser-complete/mobile-chromium-wide",
+    "entry:browser-complete/mobile-webkit-small",
+    "entry:browser-complete/mobile-webkit",
+    "entry:browser-complete/mobile-webkit-wide"
+  ]
 }

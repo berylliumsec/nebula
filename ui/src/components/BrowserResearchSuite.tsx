@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { AlertTriangle, Braces, GitCompareArrows, LoaderCircle, Pause, Play, Plus, RefreshCw, Send, ShieldAlert, Square, Target, Trash2 } from "lucide-react";
+import { AlertTriangle, Braces, FileUp, GitCompareArrows, LoaderCircle, Pause, Play, Plus, RefreshCw, Send, ShieldAlert, Sparkles, Square, Target, Trash2 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../api/client";
 import type {
   SecurityBrowserAttack,
   SecurityBrowserCrawlJob,
   SecurityBrowserIdentity,
+  HarnessProfile,
+  ProviderHealth,
+  SecurityBrowserPayloadSource,
   SecurityBrowserResearchWorkspace,
   SecurityBrowserSession,
 } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useConfirmation } from "./DialogSystem";
+import { AIWritingDialog } from "./AIWritingDialog";
 
 export type BrowserResearchToolView = "target" | "intercepts" | "repeater" | "intruder" | "utilities";
 
@@ -24,6 +28,8 @@ interface Props {
   view: BrowserResearchToolView;
   draftStore?: RepeaterDraftStore;
   onOpenRepeater?: () => void;
+  providers?: ProviderHealth[];
+  harnesses?: HarnessProfile[];
 }
 
 type RepeaterDraft = { name: string; method: string; url: string; headers: string; body: string; baseline: string };
@@ -63,7 +69,61 @@ function headerPairs(value: string): Array<[string, string]> {
 const formatHeaders = (headers: Array<[string, string]>) => headers.map(([name, value]) => `${name}: ${value}`).join("\n");
 const reusableSecretHeader = /authorization|cookie|csrf|xsrf|api[-_]?key|token/i;
 
-function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, session, view, draftStore, onOpenRepeater }: Props) {
+type PayloadSourceKind = SecurityBrowserPayloadSource["kind"];
+
+export function normalizePayloadValues(values: unknown[]): string[] {
+  const normalized = values.map((value) => typeof value === "string" ? value.trim() : String(value)).filter(Boolean);
+  if (!normalized.length) throw new Error("The payload source did not contain any values.");
+  if (normalized.length > 10_000) throw new Error("A payload set cannot contain more than 10,000 values.");
+  if (normalized.some((value) => value.length > 16_384)) throw new Error("Payload values cannot exceed 16,384 characters.");
+  return normalized;
+}
+
+export function parsePayloadDocument(text: string, filename: string): string[] {
+  if (new TextEncoder().encode(text).byteLength > 2 * 1024 * 1024) throw new Error("Payload files must be 2 MiB or smaller.");
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".json")) {
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((value) => !["string", "number"].includes(typeof value))) throw new Error("JSON payload files must contain a flat array of strings or numbers.");
+    return normalizePayloadValues(parsed);
+  }
+  if (lower.endsWith(".csv")) {
+    const rows = text.split(/\r?\n/).filter((row) => row.trim());
+    return normalizePayloadValues(rows.map((row) => {
+      const match = row.match(/^\s*(?:"((?:[^"]|"")*)"|([^,]*))/);
+      return (match?.[1]?.replaceAll('""', '"') ?? match?.[2] ?? "").trim();
+    }));
+  }
+  return normalizePayloadValues(text.split(/\r?\n/));
+}
+
+export function runPayloadScript(source: string): string[] {
+  const output: string[] = [];
+  const number = (value: string, line: number) => { const parsed = Number(value.trim()); if (!Number.isSafeInteger(parsed)) throw new Error(`Script line ${line} requires safe integers.`); return parsed; };
+  source.split(/\r?\n/).forEach((raw, index) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith("//")) return;
+    const call = line.match(/^(values|range|prefix)\((.*)\)$/);
+    if (!call) throw new Error(`Script line ${index + 1} must use values(...), range(...), or prefix(...).`);
+    if (call[1] === "values") {
+      let values: unknown;
+      try { values = JSON.parse(`[${call[2]}]`); } catch { throw new Error(`Script line ${index + 1} contains invalid JSON values.`); }
+      if (!Array.isArray(values) || values.some((value) => !["string", "number"].includes(typeof value))) throw new Error(`Script line ${index + 1} accepts only strings and numbers.`);
+      output.push(...values.map(String));
+      return;
+    }
+    const args = call[2].split(",").map((value) => value.trim());
+    const prefix = call[1] === "prefix" ? (() => { try { return JSON.parse(args.shift() ?? "") as unknown; } catch { /* diagnostic-expected: invalid operator-authored DSL input is reported below */ return undefined; } })() : "";
+    if (typeof prefix !== "string" || args.length < 2 || args.length > 3) throw new Error(`Script line ${index + 1} has invalid arguments.`);
+    const start = number(args[0], index + 1); const end = number(args[1], index + 1); const step = args[2] === undefined ? (end >= start ? 1 : -1) : number(args[2], index + 1);
+    if (!step || Math.sign(end - start || step) !== Math.sign(step)) throw new Error(`Script line ${index + 1} has a step that cannot reach its end.`);
+    if (Math.floor(Math.abs((end - start) / step)) + 1 > 10_000) throw new Error(`Script line ${index + 1} exceeds the 10,000-value limit.`);
+    for (let value = start; step > 0 ? value <= end : value >= end; value += step) output.push(`${prefix}${value}`);
+  });
+  return normalizePayloadValues(output);
+}
+
+function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, session, view, draftStore, onOpenRepeater, providers = [], harnesses = [] }: Props) {
   const storeKey = `${projectId}:${session?.id ?? "none"}`;
   const initialUrl = session?.tabs.find((tab) => tab.id === session.activeTabId)?.url ?? session?.tabs[0]?.url ?? "";
   const emptyDraft = { name: "Repeater", method: "GET", url: initialUrl, headers: "", body: "" };
@@ -93,6 +153,12 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
   const [attackHeaders, setAttackHeaders] = useState("{}");
   const [attackBody, setAttackBody] = useState("");
   const [payloads, setPayloads] = useState("0\n1\n-1");
+  const [payloadSource, setPayloadSource] = useState<PayloadSourceKind>("manual");
+  const [payloadSourceMeta, setPayloadSourceMeta] = useState<SecurityBrowserPayloadSource>({ kind: "manual", displayName: "Manual entry", valueCount: 3 });
+  const [payloadPreview, setPayloadPreview] = useState<string[]>(["0", "1", "-1"]);
+  const [payloadFileBusy, setPayloadFileBusy] = useState(false);
+  const [payloadScript, setPayloadScript] = useState('# Deterministic, inert output only\nrange(0, 10)\nvalues("admin", "auditor")');
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const [decoderOperation, setDecoderOperation] = useState("url_encode");
   const [decoderInput, setDecoderInput] = useState("");
   const [decoderOutput, setDecoderOutput] = useState("");
@@ -415,6 +481,66 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
     }
   };
 
+  const applyPayloadValues = (values: string[], source: SecurityBrowserPayloadSource) => {
+    const normalized = normalizePayloadValues(values);
+    setPayloadPreview(normalized);
+    setPayloads(normalized.join("\n"));
+    setPayloadSourceMeta({ ...source, valueCount: normalized.length });
+    setNotice(`${normalized.length.toLocaleString()} reviewed payload values are ready. Save the attack draft to persist them.`);
+  };
+
+  const readPayloadFile = async (file: File) => {
+    setPayloadFileBusy(true);
+    setError(undefined);
+    try {
+      if (file.size > 2 * 1024 * 1024) throw new Error("Payload files must be 2 MiB or smaller.");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      const values = parsePayloadDocument(text, file.name);
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((value) => value.toString(16).padStart(2, "0")).join("");
+      applyPayloadValues(values, { kind: "upload", displayName: file.name, sha256: digest, valueCount: values.length });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_upload_failed", "The Intruder payload file could not be read.", caught, "browser_research_suite");
+      setError(`${message(caught)} Choose a UTF-8 text, CSV, or flat JSON-array file and try again.`);
+    } finally {
+      setPayloadFileBusy(false);
+    }
+  };
+
+  const previewPayloadScript = () => {
+    try {
+      const values = runPayloadScript(payloadScript);
+      void crypto.subtle.digest("SHA-256", new TextEncoder().encode(payloadScript)).then((digest) => {
+        const sha256 = Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
+        applyPayloadValues(values, { kind: "script", displayName: "Payload script", sha256, valueCount: values.length, promptVersion: "payload-script/v1" });
+      });
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_script_failed", "The Intruder payload script could not be previewed.", caught, "browser_research_suite");
+      setError(message(caught));
+    }
+  };
+
+  const applyAssistantPayloads = (result: import("../api/types").WritingTransformResponse) => {
+    try {
+      const clean = result.content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+      const parsed = JSON.parse(clean) as unknown;
+      if (!Array.isArray(parsed)) throw new Error("The assistant response was not a JSON array.");
+      const values = normalizePayloadValues(parsed);
+      applyPayloadValues(values, {
+        kind: "assistant",
+        displayName: "Assistant proposal",
+        valueCount: values.length,
+        promptVersion: result.provenance.promptVersion,
+        model: result.provenance.model,
+        providerProfileId: result.provenance.providerProfileId,
+      });
+      setAssistantOpen(false);
+    } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_assistant_parse_failed", "The assistant payload proposal could not be parsed.", caught, "browser_research_suite");
+      setError(`${message(caught)} Regenerate the proposal; no attack was changed.`);
+    }
+  };
+
   const createAttack = async (event: FormEvent) => {
     event.preventDefault();
     if (!session || !identity) return;
@@ -453,6 +579,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
         maxRequests: Math.min(1000, Math.max(1, plannedRequests)),
         maxConcurrency: 1,
         requestsPerSecond: 2,
+        payloadSource: { ...payloadSourceMeta, valueCount: payloadSets.reduce((total, set) => total + set.length, 0) },
       });
       setNotice("Intruder attack saved as a draft. Queue it when its positions and budgets are correct.");
       await refresh();
@@ -593,11 +720,24 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
     {view === "intruder" && <section aria-labelledby="browser-intruder-heading">
       <header className="browser-suite-heading"><div><ShieldAlert size={16} /><span><h3 id="browser-intruder-heading">Intruder</h3><small>Curated or inert custom payloads with explicit rate, concurrency, and request budgets.</small></span></div></header>
       {!desktop && <p className="browser-automation-mobile-note">This device can monitor, pause, cancel, and retry. Only the paired desktop executes payload requests.</p>}
-      <form className="browser-suite-form" onSubmit={createAttack}><label>Name<input required value={attackName} onChange={(event) => setAttackName(event.target.value)} /></label><label>Strategy<select value={attackStrategy} onChange={(event) => setAttackStrategy(event.target.value as SecurityBrowserAttack["strategy"])}><option value="sniper">Sniper</option><option value="battering_ram">Battering ram</option><option value="pitchfork">Pitchfork</option><option value="cluster_bomb">Cluster bomb</option></select></label><label>Method<input required value={attackMethod} onChange={(event) => setAttackMethod(event.target.value.toUpperCase())} /></label><label>Position names<input required value={attackPosition} onChange={(event) => setAttackPosition(event.target.value)} /><small>Comma-separated, for example <code>id, role</code>.</small></label><label className="browser-suite-wide">URL template<input required value={attackUrl} onChange={(event) => setAttackUrl(event.target.value)} /><small>Put a marker such as <code>§id§</code> in the URL, a header value, or the body for every named position.</small></label><label className="browser-suite-wide">Headers JSON<textarea rows={4} value={attackHeaders} onChange={(event) => setAttackHeaders(event.target.value)} /></label><label className="browser-suite-wide">Body template<textarea rows={5} maxLength={65536} value={attackBody} onChange={(event) => setAttackBody(event.target.value)} /></label><label className="browser-suite-wide">Payload sets<textarea rows={7} value={payloads} onChange={(event) => setPayloads(event.target.value)} /><small>One value per line. Pitchfork and cluster bomb need one set per position, in the same order; separate sets with a line containing only <code>---</code>.</small></label><button className="button primary" disabled={busy || !session || !identity || !attackUrl || !attackPosition.trim() || !payloads.trim()} type="submit">Save attack draft</button></form>
+      <form className="browser-suite-form" onSubmit={createAttack}><label>Name<input required value={attackName} onChange={(event) => setAttackName(event.target.value)} /></label><label>Strategy<select value={attackStrategy} onChange={(event) => setAttackStrategy(event.target.value as SecurityBrowserAttack["strategy"])}><option value="sniper">Sniper</option><option value="battering_ram">Battering ram</option><option value="pitchfork">Pitchfork</option><option value="cluster_bomb">Cluster bomb</option></select></label><label>Method<input required value={attackMethod} onChange={(event) => setAttackMethod(event.target.value.toUpperCase())} /></label><label>Position names<input required value={attackPosition} onChange={(event) => setAttackPosition(event.target.value)} /><small>Comma-separated, for example <code>id, role</code>.</small></label><label className="browser-suite-wide">URL template<input required value={attackUrl} onChange={(event) => setAttackUrl(event.target.value)} /><small>Put a marker such as <code>§id§</code> in the URL, a header value, or the body for every named position.</small></label><label className="browser-suite-wide">Headers JSON<textarea rows={4} value={attackHeaders} onChange={(event) => setAttackHeaders(event.target.value)} /></label><label className="browser-suite-wide">Body template<textarea rows={5} maxLength={65536} value={attackBody} onChange={(event) => setAttackBody(event.target.value)} /></label>
+        <section className="intruder-payload-studio browser-suite-wide" aria-labelledby="intruder-payload-heading">
+          <header><div><strong id="intruder-payload-heading">Payload source</strong><small>{payloadSourceMeta.displayName} · {payloadSourceMeta.valueCount.toLocaleString()} values</small></div><span>Previewing never sends requests</span></header>
+          <div className="intruder-payload-tabs" role="tablist" aria-label="Payload source">
+            {(["manual", "upload", "assistant", "script"] as const).map((source) => <button key={source} type="button" role="tab" aria-selected={payloadSource === source} onClick={() => { setPayloadSource(source); setError(undefined); }}>{source === "manual" ? "Manual" : source === "upload" ? "Upload file" : source === "assistant" ? "Assistant" : "Script"}</button>)}
+          </div>
+          {payloadSource === "manual" && <label>Payload sets<textarea rows={7} value={payloads} onChange={(event) => { setPayloads(event.target.value); const count = event.target.value.split(/\r?\n/).filter((value) => value.trim() && value.trim() !== "---").length; setPayloadSourceMeta({ kind: "manual", displayName: "Manual entry", valueCount: Math.max(1, count) }); }} /><small>One value per line. Pitchfork and cluster bomb need one set per position, in the same order; separate sets with a line containing only <code>---</code>.</small></label>}
+          {payloadSource === "upload" && <div className="intruder-payload-source"><label className="intruder-upload"><FileUp size={20} aria-hidden="true" /><strong>{payloadFileBusy ? "Reading payload file…" : "Choose a payload file"}</strong><span>UTF-8 text, first CSV column, or flat JSON array · 2 MiB maximum</span><input aria-label="Upload payload file" type="file" accept=".txt,.csv,.json,text/plain,text/csv,application/json" disabled={payloadFileBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void readPayloadFile(file); event.currentTarget.value = ""; }} /></label></div>}
+          {payloadSource === "assistant" && <div className="intruder-payload-source"><Sparkles size={20} aria-hidden="true" /><div><strong>Generate from this project request</strong><span>The selected runtime receives the attack name, method, URL template, and position names—not headers, cookies, or body content.</span></div><button className="button secondary" type="button" disabled={!providers.length && !harnesses.length} onClick={() => setAssistantOpen(true)}>Generate proposal</button>{!providers.length && !harnesses.length && <small>Configure and enable a provider or harness to generate payloads.</small>}</div>}
+          {payloadSource === "script" && <div className="intruder-payload-source intruder-script"><label>Deterministic payload script<textarea aria-label="Payload script" rows={7} value={payloadScript} onChange={(event) => setPayloadScript(event.target.value)} /><small><code>values("admin", 0)</code>, <code>range(0, 10)</code>, or <code>prefix("tenant-", 1, 5)</code>. No network, filesystem, environment, imports, clocks, or request hooks.</small></label><button className="button secondary" type="button" onClick={previewPayloadScript}><Braces size={14} /> Run preview</button></div>}
+          {payloadSource !== "manual" && payloadPreview.length > 0 && <details className="intruder-payload-preview" open><summary>Reviewed values ({payloadPreview.length.toLocaleString()})</summary><ol aria-label="Reviewed payload values" tabIndex={0}>{payloadPreview.slice(0, 100).map((value, index) => <li key={`${index}:${value}`}><code>{String(index + 1).padStart(3, "0")}</code><span>{value}</span></li>)}</ol>{payloadPreview.length > 100 && <small>Preview limited to the first 100 values.</small>}<button className="button quiet" type="button" onClick={() => setPayloadSource("manual")}>Edit values manually</button></details>}
+        </section>
+        <button className="button primary" disabled={busy || !session || !identity || !attackUrl || !attackPosition.trim() || !payloads.trim()} type="submit">Save attack draft</button></form>
       {sessionItems(workspace?.attacks).length ? <ol className="browser-suite-list">{[...sessionItems(workspace?.attacks)].reverse().map((attack) => {
         const results = (workspace?.attackResults ?? []).filter((result) => result.attackId === attack.id).sort((left, right) => left.sequence - right.sequence);
         return <li key={attack.id}><span className={`browser-action-status ${attack.state}`}>{attack.state}</span><div><strong>{attack.name}</strong><small>{attack.strategy.replaceAll("_", " ")} · {attack.requestCount}/{attack.maxRequests} requests · {attack.errorCount} errors · {attack.requestsPerSecond}/s{attack.error ? ` · ${attack.error}` : ""}</small><span className="browser-suite-actions">{attack.state === "draft" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "queue")}>Queue on desktop</button>}{attack.state === "queued" && <small>Waiting for the owning desktop…</small>}{attack.state === "running" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "pause")}><Pause size={13} /> Pause</button>}{attack.state === "paused" && <button className="button primary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "resume")}><Play size={13} /> Resume</button>}{["failed", "cancelled"].includes(attack.state) && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "retry")}>Retry remaining</button>}{["draft", "queued", "running", "paused"].includes(attack.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionAttack(attack, "cancel")}><Square size={13} /> Cancel</button>}{["draft", "complete", "cancelled", "failed"].includes(attack.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete Intruder attack ${attack.name}`} type="button" onClick={() => void deleteAttack(attack)}><Trash2 size={13} /> Delete</button>}</span>{results.length > 0 && <details><summary>Results ({results.length})</summary><ol className="browser-result-list">{results.map((result) => <li key={result.id}><code>#{result.sequence + 1}</code><strong>{result.error ? "ERR" : result.statusCode ?? "—"}</strong><span>{result.payloads.join(", ")} · {result.responseBytes ?? "—"} bytes · {result.durationMs ?? "—"} ms</span>{result.error && <small>{result.error}</small>}</li>)}</ol></details>}</div></li>;
       })}</ol> : <div className="browser-research-empty"><ShieldAlert size={20} /><strong>No attacks</strong><span>Create a bounded attack draft; requests run only after you queue it.</span></div>}
+      {assistantOpen && <AIWritingDialog api={api} engagementId={projectId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Generate Intruder payloads" description="The assistant proposes inert values for review. It cannot save or queue the attack." sourceLabel="Bounded request context" sourceText={JSON.stringify({ attackName, method: attackMethod, urlTemplate: attackUrl, positions: attackPosition.split(",").map((value) => value.trim()).filter(Boolean) }, null, 2)} initialInstruction={'Return only a JSON array of at most 100 inert string payload values relevant to the observed request context. Do not include Markdown, credentials, destructive commands, or explanations.'} onApply={applyAssistantPayloads} onClose={() => setAssistantOpen(false)} />}
     </section>}
 
     {view === "utilities" && <section aria-labelledby="browser-utilities-heading">

@@ -618,9 +618,9 @@ fn forward_pending_intercepts(
     for (transaction_id, sender) in waiters {
         // A waiter may have expired between draining the registry and delivery.
         // It is already gone from authoritative live state, so no retry is needed.
-        let _ = sender.send(NativeInterceptDecision::Forward(
+        drop(sender.send(NativeInterceptDecision::Forward(
             NativeInterceptEdits::default(),
-        ));
+        )));
         transaction_ids.push(transaction_id);
     }
     transaction_ids.sort();

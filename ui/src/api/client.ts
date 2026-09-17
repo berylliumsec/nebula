@@ -708,6 +708,7 @@ interface WireBrowserAttack extends WireEntity {
   request_count: number;
   error_count: number;
   error?: string | null;
+  metadata?: { payload_source?: { kind: "manual" | "upload" | "assistant" | "script"; display_name: string; sha256?: string | null; value_count: number; prompt_version?: string | null; model?: string | null; provider_profile_id?: string | null } };
 }
 
 interface WireBrowserAttackResult extends WireEntity {
@@ -4082,6 +4083,15 @@ function mapBrowserResearchWorkspace(value: WireBrowserResearchWorkspace): Secur
       requestCount: item.request_count,
       errorCount: item.error_count,
       error: item.error ?? undefined,
+      payloadSource: item.metadata?.payload_source ? {
+        kind: item.metadata.payload_source.kind,
+        displayName: item.metadata.payload_source.display_name,
+        sha256: item.metadata.payload_source.sha256 ?? undefined,
+        valueCount: item.metadata.payload_source.value_count,
+        promptVersion: item.metadata.payload_source.prompt_version ?? undefined,
+        model: item.metadata.payload_source.model ?? undefined,
+        providerProfileId: item.metadata.payload_source.provider_profile_id ?? undefined,
+      } : undefined,
     })),
     attackResults: value.attack_results.map((item) => ({
       id: item.id,
@@ -8507,6 +8517,7 @@ export class ApiClient {
       maxRequests: number;
       maxConcurrency: number;
       requestsPerSecond: number;
+      payloadSource?: import("./types").SecurityBrowserPayloadSource;
     },
   ): Promise<SecurityBrowserAttack> {
     return this.request<WireBrowserAttack>(
@@ -8528,6 +8539,15 @@ export class ApiClient {
           max_requests: body.maxRequests,
           max_concurrency: body.maxConcurrency,
           requests_per_second: body.requestsPerSecond,
+          payload_source: body.payloadSource ? {
+            kind: body.payloadSource.kind,
+            display_name: body.payloadSource.displayName,
+            sha256: body.payloadSource.sha256,
+            value_count: body.payloadSource.valueCount,
+            prompt_version: body.payloadSource.promptVersion,
+            model: body.payloadSource.model,
+            provider_profile_id: body.payloadSource.providerProfileId,
+          } : undefined,
         }),
       },
     ).then((value) => mapBrowserResearchWorkspace({

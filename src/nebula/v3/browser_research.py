@@ -213,6 +213,16 @@ class RepeaterResultRequest(NebulaModel):
     actor_id: str = Field(min_length=1, max_length=200)
 
 
+class PayloadSourceProvenance(NebulaModel):
+    kind: Literal["manual", "upload", "assistant", "script"] = "manual"
+    display_name: str = Field(default="Manual entry", min_length=1, max_length=1024)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    value_count: int = Field(ge=1, le=50_000)
+    prompt_version: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+    provider_profile_id: str | None = Field(default=None, max_length=200)
+
+
 class AttackCreateRequest(NebulaModel):
     session_id: str = Field(min_length=1, max_length=200)
     identity_id: str = Field(min_length=1, max_length=200)
@@ -230,6 +240,7 @@ class AttackCreateRequest(NebulaModel):
     max_requests: int = Field(default=100, ge=1, le=100_000)
     max_concurrency: int = Field(default=1, ge=1, le=32)
     requests_per_second: float = Field(default=2.0, gt=0, le=100.0)
+    payload_source: PayloadSourceProvenance | None = None
 
     @field_validator("transforms")
     @classmethod
@@ -918,8 +929,13 @@ class BrowserResearchService:
             self._active_risk(),
             native_scope_authority=True,
         )
+        attack_data = request.model_dump(exclude={"payload_source"})
         attack = BrowserAttack(
-            engagement_id=session.engagement_id, **request.model_dump()
+            engagement_id=session.engagement_id,
+            metadata={"payload_source": request.payload_source.model_dump(mode="json")}
+            if request.payload_source
+            else {},
+            **attack_data,
         )
         return self._create(attack, "browser_attack.created", actor_id)
 

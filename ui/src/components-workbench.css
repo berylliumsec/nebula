@@ -855,6 +855,27 @@ kbd { font-size: 11px; }
 .browser-suite-form label, .browser-utility-grid label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .browser-suite-form :where(input, select, textarea), .browser-utility-grid :where(input, select, textarea) { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--text); background: var(--canvas); font: 11px/1.45 var(--font-mono); resize: vertical; }
 .browser-suite-wide, .browser-suite-form > button { grid-column: 1 / -1; }
+.intruder-payload-studio { display: grid; gap: 10px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); background: var(--surface); }
+.intruder-payload-studio > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.intruder-payload-studio > header > div { display: grid; gap: 2px; }
+.intruder-payload-studio > header :where(small, span) { color: var(--muted); font-size: 11px; }
+.intruder-payload-tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border-soft); }
+.intruder-payload-tabs button { min-width: max-content; min-height: 44px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; }
+.intruder-payload-tabs button[aria-selected="true"] { color: var(--text-strong); border-bottom-color: var(--blue); background: var(--surface-muted); }
+.intruder-payload-source { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--canvas); }
+.intruder-payload-source > div { display: grid; min-width: 0; flex: 1; gap: 3px; }
+.intruder-payload-source span, .intruder-payload-source small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.intruder-upload { position: relative; display: flex !important; min-height: 112px; flex: 1; place-items: center; justify-content: center; border: 1px dashed var(--blue); border-radius: var(--radius-control); color: var(--text) !important; text-align: center; cursor: pointer; }
+.intruder-upload input { position: absolute; width: 1px !important; height: 1px; opacity: 0; }
+.intruder-script { display: grid; }
+.intruder-script > label { width: 100%; }
+.intruder-script > button { justify-self: start; }
+.intruder-payload-preview { min-width: 0; padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--canvas); }
+.intruder-payload-preview summary { cursor: pointer; color: var(--text); font-size: 11px; font-weight: var(--weight-semibold); }
+.intruder-payload-preview ol { display: grid; max-height: 220px; gap: 2px; margin: 8px 0; padding: 0; overflow: auto; list-style: none; }
+.intruder-payload-preview li { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 8px; padding: 4px 6px; color: var(--muted-strong); font: 11px/1.4 var(--font-mono); }
+.intruder-payload-preview li span { overflow-wrap: anywhere; }
+@media (max-width: 700px) { .intruder-payload-studio > header, .intruder-payload-source { align-items: stretch; flex-direction: column; } .intruder-payload-source .button { width: 100%; } }
 .browser-utility-grid { display: grid; gap: 9px; }
 .browser-utility-grid form { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); background: var(--surface); }
 .browser-utility-grid h4 { display: flex; align-items: center; gap: 5px; margin: 0; }
