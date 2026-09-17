@@ -1,11 +1,11 @@
 {
-  "change_digest": "ba4053fd28ff7f84c7f40337bea70dfe6c192b31d79935f6083e6dbae4f2b1d9",
-  "reviewed_by": "Codex review of the Ask Nebula native-browser visibility change",
-  "reason": "The selection covers the changed desktop presentation boundary: the WorkbenchBrowser component and the catalogued native-scope-status desktop journey verify that opening, hiding, restoring, and closing Ask Nebula no longer hides the live native browser. A production build validates the removed context and prop plumbing.",
-  "exclusions": "No Python, Rust, Core persistence, provider, harness, streaming, reconnect, mobile layout, or origin-sensitive behavior changed. The native browser integration is desktop-only; mobile Chromium/WebKit, real-Core, LAN-origin, physical-device, full-suite, and unrelated Playwright journeys are excluded.",
+  "change_digest": "02e38f8ba4a0585f99e4f1fb6937be39cb238de05dbcb0bb30c3befe38ca3659",
+  "reviewed_by": "Codex review of Ask Nebula native-webview occlusion handling",
+  "reason": "The selection covers the changed desktop geometry boundary: component tests verify largest-unoccluded-region selection, and the catalogued native-scope-status desktop journey opens and drags Ask Nebula while asserting the visible native browser bounds never intersect the popup. A production build validates the layout-event integration.",
+  "exclusions": "No Python, Rust, Core persistence, provider, harness, streaming, reconnect, mobile layout, or origin-sensitive behavior changed. Mobile Chromium/WebKit, real-Core, LAN-origin, physical-device, full-suite, and unrelated Playwright journeys are excluded. The mocked native-command boundary does not replace a packaged desktop dogfood check.",
   "expected_tests": {
     "python": 0,
-    "frontend": 21,
+    "frontend": 22,
     "native": 0,
     "playwright": 1
   },

@@ -1030,11 +1030,32 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   const popup = page.getByRole("dialog", { name: "Ask Nebula" });
   await expect(popup).toBeVisible();
   await expect(popup).toContainText("Browser · Mock target account");
+  const nativeBounds = () => page.evaluate(() => {
+    const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
+    return calls.filter(call => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
+  });
+  const expectNativeClearOfPopup = async () => {
+    await expect.poll(async () => {
+      const [native, overlay] = await Promise.all([nativeBounds(), popup.boundingBox()]);
+      if (!native || !overlay) return false;
+      return native.x + native.width <= overlay.x || overlay.x + overlay.width <= native.x
+        || native.y + native.height <= overlay.y || overlay.y + overlay.height <= native.y;
+    }).toBe(true);
+  };
   const nativeVisible = () => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
     return calls.filter(call => call.command === "browser_set_visible").at(-1)?.args.visible;
   });
   await expect.poll(nativeVisible).toBe(true);
+  await expectNativeClearOfPopup();
+  const moveHandle = popup.getByRole("button", { name: "Move Ask Nebula" });
+  const handleBox = await moveHandle.boundingBox();
+  expect(handleBox).toBeTruthy();
+  await page.mouse.move(handleBox!.x + handleBox!.width / 2, handleBox!.y + handleBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(420, 360, { steps: 4 });
+  await page.mouse.up();
+  await expectNativeClearOfPopup();
   await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
   await expect.poll(nativeVisible).toBe(true);
   const launcher = page.getByRole("button", { name: /Show Ask Nebula/ });

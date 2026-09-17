@@ -6,7 +6,7 @@ import type { EngagementScopePolicy } from "../api/types";
 import type { ApiClient } from "../api/client";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
 import { DialogProvider, useDialogPresence } from "./DialogSystem";
-import { WorkbenchBrowser } from "./WorkbenchBrowser";
+import { largestUnoccludedBrowserRect, WorkbenchBrowser } from "./WorkbenchBrowser";
 
 const runtimeMocks = vi.hoisted(() => ({
   isTauriRuntime: vi.fn(),
@@ -198,6 +198,17 @@ describe("WorkbenchBrowser", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("keeps the native browser in the largest region not covered by Ask Nebula", () => {
+    expect(largestUnoccludedBrowserRect(
+      { x: 20, y: 100, width: 1000, height: 700 },
+      [{ x: 700, y: 60, width: 400, height: 520 }],
+    )).toEqual({ x: 20, y: 100, width: 680, height: 700 });
+    expect(largestUnoccludedBrowserRect(
+      { x: 20, y: 100, width: 1000, height: 700 },
+      [{ x: 250, y: 180, width: 560, height: 500 }],
+    )).toEqual({ x: 20, y: 100, width: 230, height: 700 });
   });
 
   it("passes fresh scope into tab creation before the first page request", async () => {

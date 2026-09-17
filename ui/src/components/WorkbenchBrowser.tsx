@@ -82,6 +82,31 @@ type BrowserNotice =
 
 const MAX_TABS = 16;
 const CLIPPING_OVERFLOW = new Set(["auto", "clip", "hidden", "scroll"]);
+const ASK_NEBULA_LAYOUT_EVENT = "nebula-ask-nebula-layout";
+
+export function largestUnoccludedBrowserRect(surface: BrowserBounds, occlusions: BrowserBounds[]): BrowserBounds {
+  let candidates = [surface];
+  for (const occlusion of occlusions) {
+    const next: BrowserBounds[] = [];
+    for (const candidate of candidates) {
+      const left = Math.max(candidate.x, occlusion.x);
+      const top = Math.max(candidate.y, occlusion.y);
+      const right = Math.min(candidate.x + candidate.width, occlusion.x + occlusion.width);
+      const bottom = Math.min(candidate.y + candidate.height, occlusion.y + occlusion.height);
+      if (right <= left || bottom <= top) { next.push(candidate); continue; }
+      next.push(
+        { x: candidate.x, y: candidate.y, width: candidate.width, height: top - candidate.y },
+        { x: candidate.x, y: bottom, width: candidate.width, height: candidate.y + candidate.height - bottom },
+        { x: candidate.x, y: candidate.y, width: left - candidate.x, height: candidate.height },
+        { x: right, y: candidate.y, width: candidate.x + candidate.width - right, height: candidate.height },
+      );
+    }
+    candidates = next.filter((candidate) => candidate.width >= 1 && candidate.height >= 1);
+  }
+  if (!candidates.length) return { ...surface, width: 0, height: 0 };
+  return candidates.reduce((largest, candidate) =>
+    candidate.width * candidate.height > largest.width * largest.height ? candidate : largest);
+}
 
 function tabId(): string {
   return `tab-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`.replace(/[^a-zA-Z0-9_-]/g, "-");
@@ -290,11 +315,19 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     // Native webviews and the DOM can round fractional high-DPI coordinates in opposite
     // directions. Keep every native edge inside the CSS surface so the page can never bleed
     // upward over the address bar (or outside another clipped ancestor) by a device pixel.
-    const x = snapInsideStart(rect.left);
+    const occlusions = Array.from(document.querySelectorAll<HTMLElement>("[data-ask-nebula-popup]"))
+      .map((popup) => popup.getBoundingClientRect())
+      .filter((popup) => popup.width > 0 && popup.height > 0)
+      .map((popup) => ({ x: popup.left, y: popup.top, width: popup.width, height: popup.height }));
+    const visible = largestUnoccludedBrowserRect(
+      { x: rect.left, y: Math.max(0, rect.top, toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top), width: rect.width, height: rect.bottom - Math.max(0, rect.top, toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top) },
+      occlusions,
+    );
+    const x = snapInsideStart(visible.x);
     const toolbarBottom = toolbarRef.current?.getBoundingClientRect().bottom ?? rect.top;
-    const y = snapInsideStart(Math.max(0, rect.top, toolbarBottom));
-    const right = snapInsideEnd(rect.right);
-    const bottom = snapInsideEnd(rect.bottom);
+    const y = snapInsideStart(Math.max(visible.y, toolbarBottom));
+    const right = snapInsideEnd(visible.x + visible.width);
+    const bottom = snapInsideEnd(visible.y + visible.height);
     if (right - x < 1 || bottom - y < 1) return undefined;
     return { x, y, width: right - x, height: bottom - y };
   }, []);
@@ -1081,8 +1114,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     }
     window.addEventListener("resize", sync);
     window.addEventListener("scroll", sync, true);
+    window.addEventListener(ASK_NEBULA_LAYOUT_EVENT, sync);
     sync();
-    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); cancelAnimationFrame(frame); };
+    return () => { observer.disconnect(); mutationObserver?.disconnect(); window.removeEventListener("resize", sync); window.removeEventListener("scroll", sync, true); window.removeEventListener(ASK_NEBULA_LAYOUT_EVENT, sync); cancelAnimationFrame(frame); };
   }, [activeTab?.created, activeTab?.id, bounds, browserVisible, capabilities?.projectStorage, desktop, error, notice, projectId]);
 
   useEffect(() => () => {
