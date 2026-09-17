@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
 import type { SecurityBrowserIdentity, SecurityBrowserSession } from "../api/types";
-import { BrowserResearchSuite } from "./BrowserResearchSuite";
+import { BrowserResearchSuite, parsePayloadDocument, runPayloadScript } from "./BrowserResearchSuite";
 import { DialogProvider } from "./DialogSystem";
 
 const identity = { id: "identity-1", name: "Operator" } as SecurityBrowserIdentity;
@@ -33,6 +33,19 @@ function api(overrides: Record<string, unknown> = {}): ApiClient {
 }
 
 describe("BrowserResearchSuite", () => {
+  it("parses bounded text, CSV, and JSON payload documents", () => {
+    expect(parsePayloadDocument("admin\nuser\n", "roles.txt")).toEqual(["admin", "user"]);
+    expect(parsePayloadDocument('"tenant,one",ignored\ntenant-two,ignored', "tenants.csv")).toEqual(["tenant,one", "tenant-two"]);
+    expect(parsePayloadDocument('[0, "admin"]', "values.json")).toEqual(["0", "admin"]);
+    expect(() => parsePayloadDocument('{"value":"admin"}', "values.json")).toThrow(/flat array/i);
+  });
+
+  it("runs only the bounded declarative payload script language", () => {
+    expect(runPayloadScript('range(0, 2)\nvalues("admin", 9)\nprefix("tenant-", 1, 2)')).toEqual(["0", "1", "2", "admin", "9", "tenant-1", "tenant-2"]);
+    expect(() => runPayloadScript("fetch('https://example.test')")).toThrow(/must use values/i);
+    expect(() => runPayloadScript("range(0, 20000)")).toThrow(/10,000-value limit/i);
+  });
+
   it("renders the durable target map and bounded crawl controls", async () => {
     renderSuite(<BrowserResearchSuite api={api()} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="target" />);
 
@@ -96,7 +109,7 @@ describe("BrowserResearchSuite", () => {
     };
     renderSuite(<BrowserResearchSuite api={api({ getSecurityBrowserResearch: vi.fn().mockResolvedValue(workspace) })} desktop={false} identity={identity} operatorId="operator" projectId="project-1" session={session} view="repeater" />);
     expect(await screen.findByRole("button", { name: "Send" })).toBeDisabled();
-    expect(screen.getByText(/paired desktop performs sends/i)).toBeVisible();
+    expect(screen.getByText(/sends require the paired desktop/i)).toBeVisible();
   });
 
   it("copies a paused request into Repeater without deciding the live transaction", async () => {
@@ -175,6 +188,7 @@ describe("BrowserResearchSuite", () => {
       positions: ["id", "role"],
       payloadSets: [["1", "2"], ["user", "admin"]],
       maxRequests: 2,
+      payloadSource: expect.objectContaining({ kind: "manual", valueCount: 4 }),
     })));
   });
 });

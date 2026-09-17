@@ -5745,6 +5745,22 @@ test("browser research tools expose durable workflows on paired clients", async 
   await expect(page.getByRole("heading", { name: "Intruder" })).toBeVisible();
   await expect(page.getByLabel("Position names")).toBeVisible();
   await expect(page.locator("label", { hasText: "Payload sets" }).locator("small")).toContainText("separate sets with a line containing only");
+  await page.getByRole("tab", { name: "Upload file" }).click();
+  const upload = page.getByLabel("Upload payload file");
+  await expect(upload).toBeAttached();
+  await upload.setInputFiles({
+    name: "roles.json",
+    mimeType: "application/json",
+    buffer: Buffer.from('["admin", "auditor"]'),
+  });
+  await expect(page.getByText("Reviewed values (2)")).toBeVisible();
+  await expect(page.getByText("roles.json", { exact: false })).toBeVisible();
+  await page.getByRole("tab", { name: "Script" }).click();
+  await expect(page.getByLabel("Payload script")).toContainText("range(0, 10)");
+  await page.getByRole("button", { name: "Run preview" }).click();
+  await expect(page.getByText("Reviewed values (13)")).toBeVisible();
+  await page.getByRole("tab", { name: "Assistant" }).click();
+  await expect(page.getByText(/headers, cookies, or body content/i)).toBeVisible();
 
   const suite = page.locator(".browser-suite");
   expect(await suite.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);

@@ -1,11 +1,24 @@
 {
-  "change_digest": "38fd7bfa57bc958107ab69332abefa33d46a268359e54d33ce8ab78c9f5b6867",
-  "reviewed_by": "Codex review of the operator-reported overlapping native-browser status notice",
-  "reason": "The browser notice now gives its decorative status icon, readable message, and accessible dismiss action independent layout ownership. The focused component file covers the exact DOM and accessible contract, while the existing desktop browser-complete entry covers native child bounds and browser workspace geometry.",
-  "exclusions": "No Core, native proxy, database, chat, provider, terminal, project, mobile-browser, or external-target behavior changed. HTTPS interception was confirmed to work after the operator installed and trusted the existing Project CA, so this branch does not alter CA generation or TLS policy. Full suites and unrelated interface journeys are excluded.",
-  "expected_tests": {"python": 0, "frontend": 21, "native": 0, "playwright": 1},
-  "python": [],
-  "frontend": ["ui/src/components/WorkbenchBrowser.test.tsx"],
+  "change_digest": "4c661618b5dc052c32e505a7181c8dc5f8fdcf26430d72ffcc47593058b23fa3",
+  "reviewed_by": "Codex review of the Intruder Payload Studio implementation and approved Figma workflow",
+  "reason": "The selection covers the complete changed path: Core attack validation and durable provenance, deterministic upload/script transformations, the Intruder component workflow, and the existing browser-complete operator journey across the permanent desktop and 320/390/430 Chromium and WebKit profiles.",
+  "exclusions": "No chat lifecycle, terminal, editor, mission orchestration, native proxy, certificate, or Rust code changed. Browser matrix entries use the established mocked native boundary and do not send traffic to external targets. Full suites and unrelated Playwright journeys are excluded.",
+  "expected_tests": {
+    "python": 6,
+    "frontend": 10,
+    "native": 0,
+    "playwright": 7
+  },
+  "python": ["tests/v3/test_browser_research.py"],
+  "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
   "native": [],
-  "playwright": ["entry:browser-complete/desktop"]
+  "playwright": [
+    "entry:browser-complete/desktop",
+    "entry:browser-complete/mobile-chromium-small",
+    "entry:browser-complete/mobile-chromium",
+    "entry:browser-complete/mobile-chromium-wide",
+    "entry:browser-complete/mobile-webkit-small",
+    "entry:browser-complete/mobile-webkit",
+    "entry:browser-complete/mobile-webkit-wide"
+  ]
 }

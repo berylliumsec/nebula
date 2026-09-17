@@ -791,6 +791,17 @@ export interface SecurityBrowserAttack {
   requestCount: number;
   errorCount: number;
   error?: string;
+  payloadSource?: SecurityBrowserPayloadSource;
+}
+
+export interface SecurityBrowserPayloadSource {
+  kind: "manual" | "upload" | "assistant" | "script";
+  displayName: string;
+  sha256?: string;
+  valueCount: number;
+  promptVersion?: string;
+  model?: string;
+  providerProfileId?: Identifier;
 }
 
 export interface SecurityBrowserAttackResult {

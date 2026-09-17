@@ -325,6 +325,12 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
             "payload_sets": [{"kind": "curated", "name": "boundary_numbers"}],
             "transforms": ["url_encode"],
             "max_requests": 2,
+            "payload_source": {
+                "kind": "upload",
+                "display_name": "boundaries.txt",
+                "sha256": "a" * 64,
+                "value_count": 5,
+            },
         },
     )
     assert attack.status_code == 201, attack.text
@@ -363,6 +369,15 @@ def test_repeater_and_intruder_lifecycles_are_durable_and_budgeted(tmp_path):
     assert store.count(BrowserAttackResult) == 2
     saved_attack = store.get(BrowserAttack, current["id"])
     assert saved_attack.state == "complete"
+    assert saved_attack.metadata["payload_source"] == {
+        "kind": "upload",
+        "display_name": "boundaries.txt",
+        "sha256": "a" * 64,
+        "value_count": 5,
+        "prompt_version": None,
+        "model": None,
+        "provider_profile_id": None,
+    }
 
 
 def test_intruder_requires_real_markers_and_strategy_payload_cardinality(tmp_path):
