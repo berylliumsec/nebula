@@ -25,15 +25,15 @@
     ,"browser_proxy::tests::upstream_connectors_require_safe_explicit_proxy_endpoints"
   ],
   "playwright": [
-    "browser-complete/desktop",
-    "browser-complete/browser-chromium-landscape",
-    "browser-complete/browser-webkit-landscape",
-    "browser-complete/mobile-chromium",
-    "browser-complete/mobile-chromium-small",
-    "browser-complete/mobile-chromium-wide",
-    "browser-complete/mobile-webkit",
-    "browser-complete/mobile-webkit-small",
-    "browser-complete/mobile-webkit-wide",
-    "browser-complete/real-core"
+    "entry:browser-complete/desktop",
+    "entry:browser-complete/browser-chromium-landscape",
+    "entry:browser-complete/browser-webkit-landscape",
+    "entry:browser-complete/mobile-chromium",
+    "entry:browser-complete/mobile-chromium-small",
+    "entry:browser-complete/mobile-chromium-wide",
+    "entry:browser-complete/mobile-webkit",
+    "entry:browser-complete/mobile-webkit-small",
+    "entry:browser-complete/mobile-webkit-wide",
+    "entry:browser-complete/real-core"
   ]
 }
