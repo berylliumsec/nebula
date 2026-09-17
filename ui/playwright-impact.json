@@ -9,7 +9,7 @@
   ],
   "rules": [
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant"]},
-    {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py"], "areas": ["browser"]},
+    {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
     {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
@@ -746,6 +746,18 @@
       {"area":"browser","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
       {"area":"browser","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
       {"area":"browser","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"}
+    ],
+    "browser-complete": [
+      {"area":"browser-complete","project":"desktop","test_match":"tests/interface.spec.ts","grep":"browser keeps native bounds|remote Core mode keeps the native Browser|stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"browser-chromium-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"browser-webkit-landscape","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization manual request workspace|browser research tools expose durable workflows|browser Assistant (stays|harness|approves)","runtime":"mock","shard":"1/1"},
+      {"area":"browser-complete","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"real Core Browser shows durable scope|stabilization real Core device-browser handoff","runtime":"real-core","shard":"1/1"}
     ],
     "mobile-layout": [
       {"area":"mobile-layout","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},

@@ -1,16 +1,39 @@
 {
-  "change_digest": "cd0b0884c5ac014f8c2a32a49424e8deeb48c998d5254525204fee7423f7ba7c",
-  "reviewed_by": "Codex review of the approved Assistant chat-switching mockups and affected lifecycle",
-  "reason": "The diff changes only Assistant conversation navigation, cached transcript reconciliation, composer readiness during cache refresh, and the existing switching assertions. Four focused browser journeys cover desktop, 390 px Chromium, 390 px WebKit, and authoritative real-Core persistence/reconciliation.",
-  "exclusions": "No full suites. No Python, frontend component, or native tests apply because the change has no backend, isolated component, or native boundary. Unrelated assistant settings, provider, terminal, browser, mission, and project workflows are excluded. Physical devices are unavailable; the selected permanent mobile projects are emulated. Production build and LAN real-Core evidence are covered by the selected real-Core journey.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 4},
-  "python": [],
-  "frontend": [],
-  "native": [],
+  "change_digest": "cc78a14b94ec373a05c8b43caa583fe73c5581ad86ee0e83da18662887ff9bbe",
+  "reviewed_by": "Codex review of the browser interception native-liveness fix and live packaged Intercept, Repeater, and Intruder operator journey requested by the operator",
+  "reason": "The native change rejects dead or unattached proxy configuration, and the frontend readiness handshake prevents the first interception event after reload from racing listener registration. The selected browser matrix collects 63 production-bundle interface cases across desktop, landscape mobile, Chromium and WebKit profiles, plus 2 disposable real-Core LAN journeys. Two focused frontend tests cover readiness success and timeout recovery; eleven native proxy tests cover the transport contract. One additional packaged native-WebDriver journey drives the visible capture/trust, Intercept, Repeater, Intruder, pause/resume/cancel/retry, result, and reload controls against an isolated real Core and loopback fixture.",
+  "exclusions": "No unrelated full suites or external targets. Physical phones are unavailable. Mobile/WebKit control layout is covered by the selected Playwright profiles; native proxy transport runs in the packaged Linux desktop. The test acknowledges explicit CA trust through the visible product dialog but does not silently mutate the host OS trust store, so HTTPS MITM trust is excluded while live HTTP interception is exercised. Unrelated chat, provider, terminal, project, and model journeys are excluded.",
+  "expected_tests": {"python": 4, "frontend": 2, "native": 11, "playwright": 10},
+  "python": [
+    "tests/v3/test_browser_research.py::test_proxy_capture_populates_durable_target_map_without_secrets",
+    "tests/v3/test_browser_research.py::test_interception_requires_opt_in_and_is_single_decision",
+    "tests/v3/test_browser_research.py::test_repeater_and_intruder_lifecycles_are_durable_and_budgeted",
+    "tests/v3/test_browser_security.py::test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies"
+  ],
+  "frontend": ["ui/src/components/browserInterceptReadiness.test.ts"],
+  "native": [
+    "browser_proxy::tests::browser_proxy_redacts_reusable_secrets_but_keeps_comparable_hashes",
+    "browser_proxy::tests::browser_proxy_reports_http2_without_flattening_it_to_http1",
+    "browser_proxy::tests::http_connect_upstream_forwards_a_real_request",
+    "browser_proxy::tests::intercepted_request_edits_replace_visible_fields_without_clearing_identity_headers",
+    "browser_proxy::tests::native_intercepts_are_single_use_and_deliver_the_operator_decision",
+    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
+    "browser_proxy::tests::native_scope_rejects_credential_bearing_urls",
+    "browser_proxy::tests::proxy_connector_adds_http_default_port_for_connect_tunnels",
+    "browser_proxy::tests::socks5_upstream_forwards_a_real_request_without_local_dns",
+    "browser_proxy::tests::stopped_proxy_rejects_configuration_instead_of_accepting_stale_state"
+    ,"browser_proxy::tests::upstream_connectors_require_safe_explicit_proxy_endpoints"
+  ],
   "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:workbench-navigation-core/assistant-real-desktop"
+    "browser-complete/desktop",
+    "browser-complete/browser-chromium-landscape",
+    "browser-complete/browser-webkit-landscape",
+    "browser-complete/mobile-chromium",
+    "browser-complete/mobile-chromium-small",
+    "browser-complete/mobile-chromium-wide",
+    "browser-complete/mobile-webkit",
+    "browser-complete/mobile-webkit-small",
+    "browser-complete/mobile-webkit-wide",
+    "browser-complete/real-core"
   ]
 }
