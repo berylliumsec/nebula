@@ -1785,10 +1785,10 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     <div className="browser-web-research-bar"><button className="button secondary" type="button" aria-expanded={researchOpen} onClick={() => setResearchOpen((value) => !value)}><Network size={14} /> Research workbench</button><span>Durable history and desktop handoff are available on paired devices.</span></div>
     {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
     {notice && <div className="browser-notice" role="status">
-      {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : <Check size={14} />}
-      <span>{notice.message}</span>
+      <span className="browser-notice-icon" aria-hidden="true">{notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : <Check size={14} />}</span>
+      <span className="browser-notice-message">{notice.message}</span>
       {notice.kind === "knowledge" && <Link to={`/project?view=sources&source=${encodeURIComponent(notice.sourceId)}`}>View source <ExternalLink size={12} /></Link>}
-      <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
+      <button className="browser-notice-dismiss" type="button" aria-label="Dismiss browser notice" title="Dismiss" onClick={() => setNotice(undefined)}><X size={14} /></button>
     </div>}
     <div className="browser-surface">
       <div className="browser-start">
@@ -1829,11 +1829,11 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       {nativeScopeError && <div className="browser-notice error" role="alert"><span><strong>Navigation blocked: browser scope unavailable.</strong> The Project policy and native browser session are out of sync. Existing research records remain available. Reload to refresh Project scope and retry. <small>{nativeScopeError}</small></span><button type="button" disabled={!activeTab?.created} onClick={() => void runControl("reload")}>Reload page</button></div>}
       {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
       {notice && <div className="browser-notice" role="status">
-        {notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}
-        <span>{notice.message}</span>
+        <span className="browser-notice-icon" aria-hidden="true">{notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}</span>
+        <span className="browser-notice-message">{notice.message}</span>
         {notice.kind === "download" && <button type="button" onClick={onOpenFiles}>Open Files <ExternalLink size={12} /></button>}
         {notice.kind === "knowledge" && <Link to={`/project?view=sources&source=${encodeURIComponent(notice.sourceId)}`}>View source <ExternalLink size={12} /></Link>}
-        <button type="button" aria-label="Dismiss browser notice" onClick={() => setNotice(undefined)}><X size={14} /></button>
+        <button className="browser-notice-dismiss" type="button" aria-label="Dismiss browser notice" title="Dismiss" onClick={() => setNotice(undefined)}><X size={14} /></button>
       </div>}
       {selectionContext && <section className="browser-selection-assistant" aria-labelledby="browser-selection-title">
         <header>
