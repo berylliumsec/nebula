@@ -1,24 +1,16 @@
 {
-  "change_digest": "21fc39203df596d6c28b28941e3d27d9e8058cc34545f54378aeae2fbe8fb3ca",
-  "reviewed_by": "Codex review of the Intruder Payload Studio implementation and approved Figma workflow",
-  "reason": "The selection covers the complete changed path: Core attack validation and durable provenance, deterministic upload/script transformations, the Intruder component workflow, and the existing browser-complete operator journey across the permanent desktop and 320/390/430 Chromium and WebKit profiles. It also runs the exact existing native resume-intercepts regression after classifying its intentionally ignored expired-waiter result for the repository diagnostic audit.",
-  "exclusions": "No chat lifecycle, terminal, editor, mission orchestration, certificate, or native proxy behavior changed. The Rust edit is a diagnostic classification comment only and is covered by its exact existing regression test. Browser matrix entries use the established mocked native boundary and do not send traffic to external targets. Full suites and unrelated Playwright journeys are excluded.",
+  "change_digest": "ba4053fd28ff7f84c7f40337bea70dfe6c192b31d79935f6083e6dbae4f2b1d9",
+  "reviewed_by": "Codex review of the Ask Nebula native-browser visibility change",
+  "reason": "The selection covers the changed desktop presentation boundary: the WorkbenchBrowser component and the catalogued native-scope-status desktop journey verify that opening, hiding, restoring, and closing Ask Nebula no longer hides the live native browser. A production build validates the removed context and prop plumbing.",
+  "exclusions": "No Python, Rust, Core persistence, provider, harness, streaming, reconnect, mobile layout, or origin-sensitive behavior changed. The native browser integration is desktop-only; mobile Chromium/WebKit, real-Core, LAN-origin, physical-device, full-suite, and unrelated Playwright journeys are excluded.",
   "expected_tests": {
-    "python": 6,
-    "frontend": 10,
-    "native": 1,
-    "playwright": 7
+    "python": 0,
+    "frontend": 21,
+    "native": 0,
+    "playwright": 1
   },
-  "python": ["tests/v3/test_browser_research.py"],
-  "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
-  "native": ["browser_proxy::tests::resuming_requests_forwards_every_pending_native_intercept"],
-  "playwright": [
-    "entry:browser-complete/desktop",
-    "entry:browser-complete/mobile-chromium-small",
-    "entry:browser-complete/mobile-chromium",
-    "entry:browser-complete/mobile-chromium-wide",
-    "entry:browser-complete/mobile-webkit-small",
-    "entry:browser-complete/mobile-webkit",
-    "entry:browser-complete/mobile-webkit-wide"
-  ]
+  "python": [],
+  "frontend": ["ui/src/components/WorkbenchBrowser.test.tsx"],
+  "native": [],
+  "playwright": ["entry:native-scope-status/desktop"]
 }

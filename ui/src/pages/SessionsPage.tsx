@@ -414,7 +414,6 @@ export function SessionsPage() {
   const { openSetting } = useChrome();
   const {
     assistantDraftNotice,
-    askNebulaPopupVisible,
     assistantDrafts,
     clearAssistantDraftNotice,
     clearAssistantDrafts,
@@ -3664,7 +3663,6 @@ export function SessionsPage() {
               scopeLoading={browserScopeLoading}
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
               onAskNebula={requestNebulaDraft}
-              askNebulaPopupVisible={askNebulaPopupVisible}
               onAttachContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
               assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined}
               onContinueConversation={(id) => void openAttachedChat(id)}
