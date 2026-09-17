@@ -1034,7 +1034,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
     return calls.filter(call => call.command === "browser_set_visible").at(-1)?.args.visible;
   });
-  await expect.poll(nativeVisible).toBe(false);
+  await expect.poll(nativeVisible).toBe(true);
   await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();
   await expect.poll(nativeVisible).toBe(true);
   const launcher = page.getByRole("button", { name: /Show Ask Nebula/ });
@@ -1042,7 +1042,7 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
   expect((await launcher.boundingBox())!.y + (await launcher.boundingBox())!.height).toBeLessThanOrEqual(geometry.surfaceTop);
   await launcher.click();
   await expect(popup).toBeVisible();
-  await expect.poll(nativeVisible).toBe(false);
+  await expect.poll(nativeVisible).toBe(true);
   await popup.getByRole("button", { name: "Close Ask Nebula" }).click();
   await expect.poll(nativeVisible).toBe(true);
   await page.route("**/browser-sessions/*/traffic", async route => {

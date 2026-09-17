@@ -47,7 +47,6 @@ interface AskNebulaPopupState {
 }
 
 interface WorkbenchDraftContextValue {
-  askNebulaPopupVisible: boolean;
   assistantDrafts: SelectionActionDraft[];
   assistantDraftNotice?: string;
   noteDraft?: SelectionActionDraft;
@@ -424,7 +423,6 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
   );
 
   const value = useMemo<WorkbenchDraftContextValue>(() => ({
-    askNebulaPopupVisible: popups.some((popup) => popup.visible),
     assistantDrafts,
     assistantDraftNotice,
     noteDraft,
