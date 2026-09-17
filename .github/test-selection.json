@@ -1,5 +1,5 @@
 {
-  "change_digest": "0cde62cefb5598d8748801b748a2a4bdf1d14aee1315b83e5fd43613c1cfe32a",
+  "change_digest": "f733c583bb7f86c6278c14614a6f88f913f922b8653ed6ea14170b99e7ffe304",
   "reviewed_by": "Codex review of the operator-reported invisible paused request and ineffective Resume requests recovery path",
   "reason": "The native proxy now returns and forwards every live request and response waiter when interception is disabled, so Resume requests recovers a navigation even when its pause event never reached the durable queue; matching durable queue entries are reconciled as forwarded. The focused component file covers the visible pause/resume contract, two exact native tests cover bulk recovery and retained single-use decisions, the desktop browser-complete selector covers the production interface journey, and the packaged native smoke now presses Resume with an actively paused request.",
   "exclusions": "No unrelated full suites, Core data-model tests, chat, provider, terminal, project, model, mobile-browser, or external-target journeys. The change is confined to the macOS/Linux native proxy waiter lifecycle and one control tooltip. A packaged native smoke is run separately because it is not represented by a guarded Playwright selector; physical macOS execution remains a deployment gate and cannot be replaced by Linux emulation.",

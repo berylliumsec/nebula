@@ -39,6 +39,7 @@ async def smoke(
     height: int = 900,
     stabilization: bool = False,
     research_suite: bool = False,
+    resume_recovery_only: bool = False,
 ) -> dict[str, object]:
     evidence_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="nebula-packaged-profile-") as temporary:
@@ -686,6 +687,45 @@ async def smoke(
                             await click_button(
                                 "Intercept", "data-validation-intercept"
                             )
+                            if resume_recovery_only:
+                                await submit_address(target_url + "resume-pending")
+                                await wait_for(
+                                    "return document.querySelector('#browser-address')?.value.includes('/resume-pending');",
+                                    120,
+                                )
+                                await click_button(
+                                    "Resume requests",
+                                    "data-validation-disable-interception",
+                                )
+                                await wait_for(
+                                    "return document.body.innerText.includes('Interception disabled. New requests pass through');",
+                                    120,
+                                )
+                                await wait_for(
+                                    "return document.body.innerText.includes('Paused requests (0)') && document.querySelector('#browser-address')?.value.includes('/resume-pending') && !document.querySelector('.browser-toolbar button[aria-label=\"Reload\"]')?.disabled;",
+                                    120,
+                                )
+                                screenshot = await webdriver.get(prefix + "/screenshot")
+                                screenshot.raise_for_status()
+                                (
+                                    evidence_root
+                                    / "packaged-resume-pending-recovery.png"
+                                ).write_bytes(
+                                    base64.b64decode(screenshot.json()["value"])
+                                )
+                                print(
+                                    "Packaged desktop: Resume forwarded the active native request",
+                                    flush=True,
+                                )
+                                return {
+                                    "state": "passed",
+                                    "package_root": str(package_root),
+                                    "profile_isolated": True,
+                                    "viewport": viewport,
+                                    "native_security_browser_visible": True,
+                                    "native_resume_pending_recovery": True,
+                                    "workflow_limit": "Focused regression gate; remaining research controls are separate selected journeys.",
+                                }
                             await submit_address(target_url + "forward-original")
                             await wait_for(
                                 "return document.body.innerText.includes('Paused requests (1)');",
@@ -961,6 +1001,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Exercise live native Intercept, Repeater, Intruder, and reload controls",
     )
+    parser.add_argument(
+        "--resume-recovery-only",
+        action="store_true",
+        help="Stop after proving Resume forwards an actively paused native request",
+    )
     args = parser.parse_args()
     print(
         json.dumps(
@@ -976,6 +1021,7 @@ if __name__ == "__main__":
                     args.height,
                     args.stabilization,
                     args.research_suite,
+                    args.resume_recovery_only,
                 )
             ),
             sort_keys=True,
