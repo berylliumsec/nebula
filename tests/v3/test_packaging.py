@@ -148,6 +148,9 @@ def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_depl
     assert "npm --prefix ui run test:e2e" not in continuous_integration
     assert "ui/src-tauri/resources/playwright-browsers" in release
     assert "NO_STRIP=1 NEBULA_DISTRIBUTION=direct" in release
+    assert (
+        "-name chrome -o -name headless_shell -o -name chrome-headless-shell" in release
+    )
     assert "--dump-dom about:blank" in release
 
 
