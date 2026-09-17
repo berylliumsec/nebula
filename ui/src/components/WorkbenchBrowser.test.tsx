@@ -647,7 +647,12 @@ describe("WorkbenchBrowser", () => {
       expectedRevision: 4,
     })));
     expect(onScopeUpdated).toHaveBeenCalledWith(expect.objectContaining({ revision: 5 }));
-    expect(await screen.findByRole("status")).toHaveTextContent("was added to Project scope revision 5");
+    const notice = await screen.findByRole("status");
+    expect(notice).toHaveTextContent("was added to Project scope revision 5");
+    expect(notice.querySelector(".browser-notice-icon")).toHaveAttribute("aria-hidden", "true");
+    expect(notice.querySelector(".browser-notice-message")).toHaveTextContent("was added to Project scope revision 5");
+    expect(screen.getByRole("button", { name: "Dismiss browser notice" })).toHaveClass("browser-notice-dismiss");
+    expect(screen.getByRole("button", { name: "Dismiss browser notice" })).toHaveAttribute("title", "Dismiss");
   });
 
   it("loads a concurrent scope revision without overwriting it and explains the retry", async () => {

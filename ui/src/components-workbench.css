@@ -664,9 +664,12 @@ kbd { font-size: 11px; }
 .browser-start small { color: var(--red); }
 .browser-privacy-notice, .browser-notice { display: flex; min-height: 34px; align-items: center; gap: 7px; padding: 6px 10px; border-bottom: 1px solid var(--border-soft); color: var(--muted); background: var(--surface-muted); font-size: 11px; }
 .browser-privacy-notice svg { color: var(--green); }
-.browser-notice > span { flex: 1; }
+.browser-notice > .browser-notice-icon { display: inline-grid; width: 18px; height: 18px; flex: 0 0 18px; place-items: center; color: var(--green); }
+.browser-notice > span:not(.browser-notice-icon) { min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; }
 .browser-notice.error { color: var(--red); background: var(--red-muted); }
 .browser-notice :where(button, a) { display: inline-flex; align-items: center; gap: 4px; border: 0; color: var(--blue); background: transparent; text-decoration: none; cursor: pointer; }
+.browser-notice > .browser-notice-dismiss { width: 44px; height: 44px; flex: 0 0 44px; justify-content: center; margin: -5px -9px -5px 0; border-radius: var(--radius-control); color: var(--muted); }
+.browser-notice > .browser-notice-dismiss:hover { color: var(--text); background: var(--surface-hover); }
 .browser-selection-assistant { display: grid; flex: 0 0 auto; gap: 8px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--blue) 35%, var(--border)); background: var(--surface-raised); box-shadow: none; }
 .browser-selection-assistant > header, .browser-selection-assistant > header > div, .browser-selection-assistant > header span, .browser-selection-assistant > footer { display: flex; align-items: center; }
 .browser-selection-assistant > header { justify-content: space-between; gap: 10px; }
