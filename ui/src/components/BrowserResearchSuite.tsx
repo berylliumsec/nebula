@@ -113,7 +113,7 @@ export function runPayloadScript(source: string): string[] {
       return;
     }
     const args = call[2].split(",").map((value) => value.trim());
-    const prefix = call[1] === "prefix" ? (() => { try { return JSON.parse(args.shift() ?? "") as unknown; } catch { return undefined; } })() : "";
+    const prefix = call[1] === "prefix" ? (() => { try { return JSON.parse(args.shift() ?? "") as unknown; } catch { /* diagnostic-expected: invalid operator-authored DSL input is reported below */ return undefined; } })() : "";
     if (typeof prefix !== "string" || args.length < 2 || args.length > 3) throw new Error(`Script line ${index + 1} has invalid arguments.`);
     const start = number(args[0], index + 1); const end = number(args[1], index + 1); const step = args[2] === undefined ? (end >= start ? 1 : -1) : number(args[2], index + 1);
     if (!step || Math.sign(end - start || step) !== Math.sign(step)) throw new Error(`Script line ${index + 1} has a step that cannot reach its end.`);
@@ -500,6 +500,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
       const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))).map((value) => value.toString(16).padStart(2, "0")).join("");
       applyPayloadValues(values, { kind: "upload", displayName: file.name, sha256: digest, valueCount: values.length });
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_upload_failed", "The Intruder payload file could not be read.", caught, "browser_research_suite");
       setError(`${message(caught)} Choose a UTF-8 text, CSV, or flat JSON-array file and try again.`);
     } finally {
       setPayloadFileBusy(false);
@@ -514,6 +515,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
         applyPayloadValues(values, { kind: "script", displayName: "Payload script", sha256, valueCount: values.length, promptVersion: "payload-script/v1" });
       });
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_script_failed", "The Intruder payload script could not be previewed.", caught, "browser_research_suite");
       setError(message(caught));
     }
   };
@@ -534,6 +536,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
       });
       setAssistantOpen(false);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.security_browser.payload_assistant_parse_failed", "The assistant payload proposal could not be parsed.", caught, "browser_research_suite");
       setError(`${message(caught)} Regenerate the proposal; no attack was changed.`);
     }
   };

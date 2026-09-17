@@ -932,9 +932,7 @@ class BrowserResearchService:
         attack_data = request.model_dump(exclude={"payload_source"})
         attack = BrowserAttack(
             engagement_id=session.engagement_id,
-            metadata={
-                "payload_source": request.payload_source.model_dump(mode="json")
-            }
+            metadata={"payload_source": request.payload_source.model_dump(mode="json")}
             if request.payload_source
             else {},
             **attack_data,

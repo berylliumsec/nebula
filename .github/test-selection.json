@@ -1,17 +1,17 @@
 {
-  "change_digest": "4c661618b5dc052c32e505a7181c8dc5f8fdcf26430d72ffcc47593058b23fa3",
+  "change_digest": "21fc39203df596d6c28b28941e3d27d9e8058cc34545f54378aeae2fbe8fb3ca",
   "reviewed_by": "Codex review of the Intruder Payload Studio implementation and approved Figma workflow",
-  "reason": "The selection covers the complete changed path: Core attack validation and durable provenance, deterministic upload/script transformations, the Intruder component workflow, and the existing browser-complete operator journey across the permanent desktop and 320/390/430 Chromium and WebKit profiles.",
-  "exclusions": "No chat lifecycle, terminal, editor, mission orchestration, native proxy, certificate, or Rust code changed. Browser matrix entries use the established mocked native boundary and do not send traffic to external targets. Full suites and unrelated Playwright journeys are excluded.",
+  "reason": "The selection covers the complete changed path: Core attack validation and durable provenance, deterministic upload/script transformations, the Intruder component workflow, and the existing browser-complete operator journey across the permanent desktop and 320/390/430 Chromium and WebKit profiles. It also runs the exact existing native resume-intercepts regression after classifying its intentionally ignored expired-waiter result for the repository diagnostic audit.",
+  "exclusions": "No chat lifecycle, terminal, editor, mission orchestration, certificate, or native proxy behavior changed. The Rust edit is a diagnostic classification comment only and is covered by its exact existing regression test. Browser matrix entries use the established mocked native boundary and do not send traffic to external targets. Full suites and unrelated Playwright journeys are excluded.",
   "expected_tests": {
     "python": 6,
     "frontend": 10,
-    "native": 0,
+    "native": 1,
     "playwright": 7
   },
   "python": ["tests/v3/test_browser_research.py"],
   "frontend": ["ui/src/components/BrowserResearchSuite.test.tsx"],
-  "native": [],
+  "native": ["browser_proxy::tests::resuming_requests_forwards_every_pending_native_intercept"],
   "playwright": [
     "entry:browser-complete/desktop",
     "entry:browser-complete/mobile-chromium-small",
