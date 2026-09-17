@@ -54,6 +54,7 @@ const CA_METADATA: &str = "nebula-browser-ca.json";
 pub(crate) struct BrowserProxyHandle {
     pub(crate) url: tauri::Url,
     shutdown: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+    running: Arc<std::sync::atomic::AtomicBool>,
     rules: Arc<Mutex<Vec<NativeProxyRule>>>,
     scope: Arc<Mutex<Option<NativeProxyScope>>>,
     connector: DynamicConnector,
@@ -67,6 +68,7 @@ impl Clone for BrowserProxyHandle {
         Self {
             url: self.url.clone(),
             shutdown: self.shutdown.clone(),
+            running: self.running.clone(),
             rules: self.rules.clone(),
             scope: self.scope.clone(),
             connector: self.connector.clone(),
@@ -506,6 +508,7 @@ impl BrowserProxyHandle {
         capture_bodies: bool,
         interception_enabled: bool,
     ) -> Result<(), String> {
+        ensure_proxy_running(self.running.load(Ordering::Acquire))?;
         self.connector.configure(config)?;
         self.capture_bodies.store(capture_bodies, Ordering::Relaxed);
         self.interception_enabled
@@ -520,6 +523,16 @@ impl BrowserProxyHandle {
     ) -> Result<(), String> {
         resolve_pending_intercept(&self.pending_intercepts, transaction_id, decision)
     }
+}
+
+fn ensure_proxy_running(running: bool) -> Result<(), String> {
+    if running {
+        return Ok(());
+    }
+    Err(
+        "The session capture proxy stopped unexpectedly; reopen the browser tab before enabling interception."
+            .to_string(),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -590,6 +603,7 @@ fn resolve_pending_intercept(
 
 impl BrowserProxyHandle {
     pub(crate) fn shutdown_now(&self) {
+        self.running.store(false, Ordering::Release);
         if let Some(shutdown) = self.shutdown.lock().ok().and_then(|mut value| value.take()) {
             let _ = shutdown.send(()); // diagnostic-expected: the proxy task may already have stopped
         }
@@ -2303,6 +2317,7 @@ pub(crate) fn start(
     let rules = handler.rules.clone();
     let scope = handler.scope.clone();
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let websocket_tls = proxy_tls_config()?;
     let proxy = Proxy::builder()
         .with_listener(listener)
@@ -2319,8 +2334,11 @@ pub(crate) fn start(
         .build()
         .map_err(|error| format!("cannot configure the local browser proxy: {error}"))?;
     let proxy_app = app.clone();
+    let proxy_running = running.clone();
     tauri::async_runtime::spawn(async move {
-        if proxy.start().await.is_err() {
+        let result = proxy.start().await;
+        proxy_running.store(false, Ordering::Release);
+        if result.is_err() {
             record_proxy_failure(
                 &proxy_app,
                 "desktop.browser.proxy_runtime_failed",
@@ -2333,6 +2351,7 @@ pub(crate) fn start(
         url: tauri::Url::parse(&format!("http://{address}"))
             .map_err(|error| format!("cannot prepare browser proxy URL: {error}"))?,
         shutdown: Arc::new(Mutex::new(Some(shutdown_tx))),
+        running,
         rules,
         scope,
         connector,
@@ -2598,6 +2617,15 @@ mod tests {
     fn browser_proxy_reports_http2_without_flattening_it_to_http1() {
         assert_eq!(protocol(Version::HTTP_2), "h2");
         assert_eq!(protocol(Version::HTTP_11), "http/1.1");
+    }
+
+    #[test]
+    fn stopped_proxy_rejects_configuration_instead_of_accepting_stale_state() {
+        assert!(ensure_proxy_running(true).is_ok());
+        assert_eq!(
+            ensure_proxy_running(false).unwrap_err(),
+            "The session capture proxy stopped unexpectedly; reopen the browser tab before enabling interception."
+        );
     }
 
     #[tokio::test]

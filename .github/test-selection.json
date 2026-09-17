@@ -1,15 +1,39 @@
 {
-  "change_digest": "accf781d5acba62b9e4ef7a47131709dbd7a5742e8f2c8c1af421bbfb6d0c6d9",
-  "reviewed_by": "Codex alpha.19 clean-install failure and alpha.20 recovery review",
-  "reason": "The failed alpha.19 preparation proved installation and desktop self-test on Ubuntu, Debian, and Kali, then exposed one shared workflow mismatch: Playwright stages full Chromium as chrome under --no-shell, while the smoke gate searched only for headless-shell executables. Three focused packaging contracts verify synchronized alpha.20 metadata, the release CLI contract, and that the protected clean-install workflow discovers and launches the staged full Chromium binary.",
-  "exclusions": "No full suites. The source change is limited to release metadata, notes, one protected-workflow executable selector, and its packaging contract assertion. Product code, UI behavior, provider integrations, state lifecycle, native runtime behavior, and browser journeys are unchanged; the reviewed accumulated release matrix runs again during protected preparation. Physical package installation is supplied by the protected Ubuntu, Debian, and Kali clean-smoke jobs.",
-  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 0},
+  "change_digest": "47f3b7e58ac50e2c3dc1852efc9662196a3191c517278d29cc2334af8feca85b",
+  "reviewed_by": "Codex review of the browser interception native-liveness fix and live packaged Intercept, Repeater, and Intruder operator journey requested by the operator",
+  "reason": "The native change rejects dead or unattached proxy configuration, and the frontend readiness handshake prevents the first interception event after reload from racing listener registration. The selected browser matrix collects 63 production-bundle interface cases across desktop, landscape mobile, Chromium and WebKit profiles, plus 2 disposable real-Core LAN journeys. Two focused frontend tests cover readiness success and timeout recovery; eleven native proxy tests cover the transport contract. One additional packaged native-WebDriver journey drives the visible capture/trust, Intercept, Repeater, Intruder, pause/resume/cancel/retry, result, and reload controls against an isolated real Core and loopback fixture.",
+  "exclusions": "No unrelated full suites or external targets. Physical phones are unavailable. Mobile/WebKit control layout is covered by the selected Playwright profiles; native proxy transport runs in the packaged Linux desktop. The test acknowledges explicit CA trust through the visible product dialog but does not silently mutate the host OS trust store, so HTTPS MITM trust is excluded while live HTTP interception is exercised. Unrelated chat, provider, terminal, project, and model journeys are excluded.",
+  "expected_tests": {"python": 4, "frontend": 2, "native": 11, "playwright": 10},
   "python": [
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy",
-    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
+    "tests/v3/test_browser_research.py::test_proxy_capture_populates_durable_target_map_without_secrets",
+    "tests/v3/test_browser_research.py::test_interception_requires_opt_in_and_is_single_decision",
+    "tests/v3/test_browser_research.py::test_repeater_and_intruder_lifecycles_are_durable_and_budgeted",
+    "tests/v3/test_browser_security.py::test_capture_requires_explicit_trust_and_supports_upstream_and_redacted_bodies"
   ],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "frontend": ["ui/src/components/browserInterceptReadiness.test.ts"],
+  "native": [
+    "browser_proxy::tests::browser_proxy_redacts_reusable_secrets_but_keeps_comparable_hashes",
+    "browser_proxy::tests::browser_proxy_reports_http2_without_flattening_it_to_http1",
+    "browser_proxy::tests::http_connect_upstream_forwards_a_real_request",
+    "browser_proxy::tests::intercepted_request_edits_replace_visible_fields_without_clearing_identity_headers",
+    "browser_proxy::tests::native_intercepts_are_single_use_and_deliver_the_operator_decision",
+    "browser_proxy::tests::native_scope_matches_domains_cidrs_paths_and_ports_fail_closed",
+    "browser_proxy::tests::native_scope_rejects_credential_bearing_urls",
+    "browser_proxy::tests::proxy_connector_adds_http_default_port_for_connect_tunnels",
+    "browser_proxy::tests::socks5_upstream_forwards_a_real_request_without_local_dns",
+    "browser_proxy::tests::stopped_proxy_rejects_configuration_instead_of_accepting_stale_state"
+    ,"browser_proxy::tests::upstream_connectors_require_safe_explicit_proxy_endpoints"
+  ],
+  "playwright": [
+    "entry:browser-complete/desktop",
+    "entry:browser-complete/browser-chromium-landscape",
+    "entry:browser-complete/browser-webkit-landscape",
+    "entry:browser-complete/mobile-chromium",
+    "entry:browser-complete/mobile-chromium-small",
+    "entry:browser-complete/mobile-chromium-wide",
+    "entry:browser-complete/mobile-webkit",
+    "entry:browser-complete/mobile-webkit-small",
+    "entry:browser-complete/mobile-webkit-wide",
+    "entry:browser-complete/real-core"
+  ]
 }

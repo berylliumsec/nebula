@@ -20,6 +20,7 @@ import type {
 import { desktopDeviceId, isTauriRuntime } from "../api/runtime";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { clearBrowserInterceptListenerReady, markBrowserInterceptListenerReady } from "./browserInterceptReadiness";
 
 const MAX_WAIT_MS = 5_000;
 
@@ -432,10 +433,12 @@ export function BrowserAutomationWorker() {
           });
         });
       });
+      markBrowserInterceptListenerReady();
       if (disposed) {
         contextStop();
         actionStop();
         interceptStop();
+        clearBrowserInterceptListenerReady();
       } else {
         stops.push(contextStop, actionStop, interceptStop);
       }
@@ -490,8 +493,13 @@ export function BrowserAutomationWorker() {
             credentialRef: session.upstreamProxyCredentialRef,
           }, session.captureMode === "bodies", session.interceptionEnabled);
           appliedProxyConfigs.current.set(session.id, proxySignature);
-        } catch {
-          // diagnostic-expected: a missing native proxy handle is configured when its visible tab is created.
+        } catch (caught) {
+          void logCaughtDiagnostic(
+            "interface.security_browser.proxy_reconcile_failed",
+            "The durable browser proxy settings could not be applied to a live native tab.",
+            caught,
+            "browser-automation-worker",
+          );
           // A session without an open native proxy handle is configured when
           // the visible tab is created; the next poll retries this update.
         }
@@ -791,6 +799,7 @@ export function BrowserAutomationWorker() {
     const timer = window.setInterval(() => void process(), 1500);
     return () => {
       disposed = true;
+      clearBrowserInterceptListenerReady();
       window.clearInterval(timer);
       stops.forEach((stop) => stop());
     };

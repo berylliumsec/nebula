@@ -1719,6 +1719,20 @@ pub(crate) fn browser_configure_session_proxy(
             "The session capture proxy is not running yet; open a trusted browser tab first."
                 .to_string()
         })?;
+    let has_attached_tab = state
+        .tabs
+        .lock()
+        .map_err(|_| "Browser state is unavailable.".to_string())?
+        .values()
+        .any(|tab| {
+            tab.project_id == project_id && tab.session_id == session_id && tab.proxy.is_some()
+        });
+    if !has_attached_tab {
+        return Err(
+            "No open browser tab is attached to the session capture proxy; reopen the tab before enabling interception."
+                .to_string(),
+        );
+    }
     let upstream = native_upstream_proxy_config(
         upstream_proxy_enabled,
         upstream_proxy_url,

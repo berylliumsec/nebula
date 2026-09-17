@@ -32,6 +32,7 @@ import { useConfirmation, useDialogOpen } from "./DialogSystem";
 import { aiRuntimeLabel, aiRuntimeOptions } from "./aiRuntimes";
 import { BrowserResearchSuite, type BrowserResearchToolView, type RepeaterDraftStore } from "./BrowserResearchSuite";
 import { SecurityBrowserWorkspacePanel } from "./SecurityBrowserWorkspacePanel";
+import { waitForBrowserInterceptListener } from "./browserInterceptReadiness";
 
 type ResearchView = "target" | "traffic" | "intercepts" | "repeater" | "automate" | "analyze" | "actions" | "identities" | "session";
 const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "automate", "analyze", "actions", "identities", "session"]);
@@ -424,6 +425,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         ...current,
         sessions: current.sessions.map((session) => session.id === persistedSession.id ? persistedSession : session),
       } : current);
+      if (persistedSession.proxyEnabled && persistedSession.interceptionEnabled) {
+        await waitForBrowserInterceptListener();
+      }
       if (tab.created) {
         if (persistedSession.proxyEnabled) {
           await workbenchBrowser.applyProxyScope(projectId, persistedSession.id, currentScope);
@@ -433,6 +437,13 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       }
       else {
         if (!activeIdentity) throw new Error("Select a healthy browser identity before opening a page.");
+        // A document reload can restore the durable tab ID before the previous
+        // WebView's unload cleanup has completed. Close that native identity
+        // explicitly so browser_create_tab cannot mistake a stale tab for the
+        // newly requested proxied navigation.
+        await workbenchBrowser.close(id, projectId).catch((caught) => {
+          if (!/no longer open/i.test(errorMessage(caught))) throw caught;
+        });
         await workbenchBrowser.create(
           id,
           projectId,
