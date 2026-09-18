@@ -1,5 +1,7 @@
 import asyncio
 import hashlib
+import json
+from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
@@ -7,32 +9,50 @@ from pydantic import ValidationError
 import nebula.v3.chat as chat_module
 from nebula.v3.chat import (
     ChatCompletionRequest,
+    ChatCompactionError,
     ChatConfigurationError,
     ChatHistoryConflict,
     ChatPrivacyError,
+    ChatRuntimeSwitchPreflightRequest,
     ChatService,
 )
 from nebula.v3.domain import (
+    ChatDecision,
     ChatMessage,
+    ChatGoal,
+    ChatGoalStatus,
     ChatRole,
     ChatSession,
     Engagement,
     KnowledgeSource,
+    NativeHookExecution,
     ProviderPrivacy,
     ProviderProfile,
+    RiskClass,
     ScopePolicy,
+    ToolCall,
+    ToolCallOrigin,
+    ToolCallStatus,
+    utc_now,
+    ChatTurn,
+    ChatTurnStatus,
 )
 from nebula.v3.providers import (
     ModelCapabilities,
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ModelUsage,
     ProviderConfig,
+    ProviderContextLengthError,
     ProviderHealth,
     ProviderKind,
+    StreamEventType,
 )
+from nebula.v3.model_catalog import ModelRouteDescriptor
 from nebula.v3.storage import NebulaStore, StoreTransaction
+from nebula.v3.tools import ToolInvocation
 
 
 class FakeProvider(ModelProvider):
@@ -98,6 +118,37 @@ class FakeProvider(ModelProvider):
         )
 
 
+class ContextRejectingProvider(FakeProvider):
+    def __init__(self, provider_id: str, *, reject_attempts: int = 1) -> None:
+        super().__init__(provider_id, local=False)
+        self.normal_attempts = 0
+        self.route_refreshes = 0
+        self.reject_attempts = reject_attempts
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        if not request.metadata.get("operation"):
+            self.normal_attempts += 1
+            self.requests.append(request)
+            if self.normal_attempts <= self.reject_attempts:
+                raise ProviderContextLengthError(
+                    "provider returned HTTP 400: context length exceeded"
+                )
+        return await super().complete(request)
+
+    async def openrouter_route_limits(
+        self, model: str
+    ) -> list[ModelRouteDescriptor]:
+        self.route_refreshes += 1
+        return [
+            ModelRouteDescriptor(
+                provider_name="bounded",
+                context_window=4_000,
+                max_input_tokens=3_500,
+                max_output_tokens=500,
+            )
+        ]
+
+
 def _profile(*, local: bool, permits_sensitive_data: bool = False) -> ProviderProfile:
     return ProviderProfile(
         id="provider-a",
@@ -134,6 +185,876 @@ def _source(
                 }
             ]
         },
+    )
+
+
+def test_runtime_switch_requires_revision_bound_compaction_confirmation(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-runtime-switch.db")
+    engagement = store.create(Engagement(id="eng-switch", name="Runtime switch"))
+    payload = _profile(local=True).model_dump(mode="python")
+    payload["model_allowlist"] = ["model-a", "model-small"]
+    payload["metadata"] = {
+        "default_model": "model-a",
+        "model_catalog_revision": "catalog-1",
+        "model_descriptors": [
+            {
+                "id": "model-a",
+                "context_window": 100_000,
+                "max_output_tokens": 2_000,
+            },
+            {
+                "id": "model-small",
+                "context_window": 4_000,
+                "max_input_tokens": 3_500,
+                "max_output_tokens": 500,
+            },
+        ],
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    session = store.create(
+        ChatSession(
+            id="session-switch",
+            engagement_id=engagement.id,
+            title="Switch safely",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=index + 1,
+                role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
+                content=(f"history-{index} " + "evidence " * 90),
+            )
+            for index in range(20)
+        ]
+    )
+    provider = FakeProvider(profile.id, local=True)
+    provider.config.model_allowlist.append("model-small")
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    proposed = ChatRuntimeSwitchPreflightRequest(
+        provider_id=profile.id,
+        model="model-small",
+        expected_session_revision=session.revision,
+    )
+    preflight = service.runtime_switch_preflight(session.id, proposed)
+
+    assert preflight.compatible is True
+    assert preflight.requires_compaction_confirmation is True
+    assert preflight.confirmation_token
+    assert preflight.metadata_revision == "catalog-1"
+    assert preflight.estimated_active_input_tokens > preflight.target_input_tokens
+
+    request = ChatCompletionRequest(
+        provider_id=profile.id,
+        engagement_id=engagement.id,
+        session_id=session.id,
+        model="model-small",
+        messages=[{"role": "user", "content": "continue on the smaller model"}],
+        include_knowledge=False,
+        stream=True,
+    )
+    with pytest.raises(ChatConfigurationError, match="confirmed context compaction"):
+        service.prepare(request)
+    unchanged = store.get(ChatSession, session.id)
+    assert unchanged.model == "model-a"
+    assert unchanged.provider_profile_id == profile.id
+
+    prepared = service.prepare(
+        request.model_copy(
+            update={"runtime_switch_confirmation": preflight.confirmation_token}
+        )
+    )
+    assert prepared.context_snapshot is not None
+    asyncio.run(service.complete(prepared))
+    switched = store.get(ChatSession, session.id)
+    assert switched.model == "model-small"
+    assert (
+        json.loads(prepared.model_request.metadata["resolved_context_limits"])[
+            "metadata_revision"
+        ]
+        == "catalog-1"
+    )
+
+
+@pytest.mark.parametrize("reject_attempts", [1, 2])
+def test_confirmed_context_rejection_refreshes_compacts_and_retries_once(
+    tmp_path, monkeypatch, reject_attempts
+):
+    store = NebulaStore(tmp_path / "chat-context-recovery.db")
+    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
+    payload = _profile(local=False, permits_sensitive_data=True).model_dump(
+        mode="python"
+    )
+    payload["provider_type"] = "openrouter"
+    payload["model_allowlist"] = ["author/model-a"]
+    payload["metadata"] = {
+        "default_model": "author/model-a",
+        "route_catalog_revision": "wide-routes",
+        "model_descriptors": [
+            {
+                "id": "author/model-a",
+                "context_window": 20_000,
+                "max_output_tokens": 2_000,
+                "route_limits_verified": True,
+                "route_limits": [
+                    {
+                        "provider_name": "wide",
+                        "context_window": 20_000,
+                        "max_input_tokens": 18_000,
+                        "max_output_tokens": 2_000,
+                        "supported_parameters": [],
+                    }
+                ],
+            }
+        ],
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    session = store.create(
+        ChatSession(
+            id="session-recovery",
+            engagement_id=engagement.id,
+            title="Recover context",
+            provider_profile_id=profile.id,
+            model="author/model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=index + 1,
+                role=ChatRole.USER if index % 2 == 0 else ChatRole.ASSISTANT,
+                content=f"history-{index} " + "evidence " * 200,
+            )
+            for index in range(10)
+        ]
+    )
+    provider = ContextRejectingProvider(
+        profile.id, reject_attempts=reject_attempts
+    )
+    provider.config.default_model = "author/model-a"
+    provider.config.model_allowlist = ["author/model-a"]
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            session_id=session.id,
+            model="author/model-a",
+            messages=[{"role": "user", "content": "continue safely"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    async def collect_stream():
+        return [item async for item in service.stream(prepared)]
+
+    if reject_attempts == 2:
+        with pytest.raises(ChatConfigurationError, match="compacted request context"):
+            asyncio.run(collect_stream())
+    else:
+        events = asyncio.run(collect_stream())
+        assert events[-1][0] == "done"
+    assert provider.normal_attempts == 2
+    assert provider.route_refreshes == 1
+    retried = next(
+        request
+        for request in provider.requests
+        if request.metadata.get("context_length_recovery") == "1"
+    )
+    limits = json.loads(retried.metadata["resolved_context_limits"])
+    assert limits["context_window"] == 4_000
+    assert limits["metadata_revision"] != "wide-routes"
+    assert prepared.context_snapshot is not None
+    turn = store.get(ChatTurn, prepared.turn.id)
+    assert turn.request_snapshot["context_length_recovery"]["attempted"] is True
+
+
+def test_provider_chat_persists_reasoning_apart_from_the_reply(tmp_path, monkeypatch):
+    class ThinkingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") == "conversation_naming":
+                return await super().complete(request)
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="FLASH_OK",
+                reasoning="Private chain of thought.",
+                usage=ModelUsage(input_tokens=4, output_tokens=3, total_tokens=7),
+                finish_reason="stop",
+            )
+
+    store = NebulaStore(tmp_path / "chat-reasoning.db")
+    engagement = store.create(Engagement(id="eng-reason", name="Reasoning"))
+    profile = store.create(_profile(local=True))
+    provider = ThinkingProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Reply with FLASH_OK."}],
+            include_knowledge=False,
+        )
+    )
+    response = asyncio.run(service.complete(prepared))
+    assert response.message.content == "FLASH_OK"
+    assert response.message.reasoning == "Private chain of thought."
+    stored = [
+        item
+        for item in service.session_messages(response.session_id)
+        if item.role == ChatRole.ASSISTANT
+    ]
+    assert stored[-1].content == "FLASH_OK"
+    assert stored[-1].reasoning == "Private chain of thought."
+
+
+def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-skill.db")
+    workspace = tmp_path / "workspace"
+    skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("Review only changed files.", encoding="utf-8")
+    engagement = store.create(Engagement(id="eng-skill", name="Skill project"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-skill",
+            engagement_id=engagement.id,
+            title="Skill session",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-skill",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Review the change",
+            completion_criteria=["Review is evidence backed"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store, workspace_resolver=lambda _: workspace)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            skill={"name": "review", "path": str(skill_path.resolve())},
+            messages=[{"role": "user", "content": "$review inspect it"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    assert prepared.turn is not None
+    snapshot = prepared.turn.request_snapshot["skill_snapshots"][0]
+    assert snapshot["path"] == str(skill_path.resolve())
+    assert snapshot["instructions"] == "Review only changed files."
+    assert snapshot["sha256"] in (prepared.model_request.instructions or "")
+    saved_goal = store.get(ChatGoal, goal.id)
+    assert saved_goal.skill_snapshots == [snapshot]
+
+    asyncio.run(service.complete(prepared))
+    completed_turn = store.get(ChatTurn, prepared.turn.id)
+    assert completed_turn.execution_claim_id is None
+    assert store.get(ChatGoal, goal.id).execution_claim_id is None
+    skill_path.write_text("Changed after start.", encoding="utf-8")
+    continued = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            messages=[{"role": "user", "content": "continue"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+    assert continued.turn is not None
+    assert continued.turn.request_snapshot["skill_snapshots"] == [snapshot]
+    assert "Review only changed files." in (continued.model_request.instructions or "")
+    assert "Changed after start." not in (continued.model_request.instructions or "")
+
+
+def test_provider_skill_resources_are_exposed_only_through_bounded_reader(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-skill-resource.db")
+    workspace = tmp_path / "workspace"
+    skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    resource = skill_path.parent / "references" / "checklist.md"
+    resource.parent.mkdir(parents=True)
+    skill_path.write_text(
+        "Read [the checklist](references/checklist.md).", encoding="utf-8"
+    )
+    resource.write_text("Run the focused checks.", encoding="utf-8")
+    engagement = store.create(Engagement(id="eng-resource", name="Skill resources"))
+    payload = _profile(local=True).model_dump(mode="python")
+    payload["capabilities"]["tool_calling"] = True
+    payload["capability_verifications"] = {
+        "model-a": {"model": "model-a", "status": "verified"}
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = FakeProvider(profile.id, local=True)
+    provider.config.capabilities.tools = True
+    provider.config.capabilities.strict_tools = True
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store, workspace_resolver=lambda _: workspace)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            skill={"name": "review", "path": str(skill_path.resolve())},
+            messages=[{"role": "user", "content": "$review inspect it"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    assert prepared.tools_enabled is True
+    assert set(prepared.tool_components.specs) == {"skill.read_resource"}
+    snapshot = prepared.turn.request_snapshot["skill_snapshots"][0]
+    assert snapshot["resources"][0]["relative_path"] == "references/checklist.md"
+    result = asyncio.run(
+        prepared.tool_components.broker.execute(
+            ToolInvocation(
+                engagement_id=engagement.id,
+                run_id=prepared.turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=prepared.turn.session_id,
+                chat_turn_id=prepared.turn.id,
+                tool_name="skill.read_resource",
+                arguments={
+                    "skill_path": str(skill_path.resolve()),
+                    "resource_path": "references/checklist.md",
+                },
+                workspace=workspace,
+            ),
+            prepared.tool_components.scope,
+        )
+    )
+    assert result.output["content"] == "Run the focused checks."
+
+
+def test_restart_interrupts_turns_and_blocks_unknown_tool_replay(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-recovery.db")
+    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    session = store.create(
+        ChatSession(
+            id="session-recovery",
+            engagement_id=engagement.id,
+            title="Recovery",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-recovery",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Recover safely",
+            completion_criteria=["No repeated tool effect"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-recovery",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "continue"}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+            },
+        )
+    )
+    store.create(
+        ToolCall(
+            id="tool-unknown",
+            engagement_id=engagement.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            tool_name="run_command",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            metadata={
+                "provider_call_id": "provider-call-1",
+                "provider_step": 0,
+                "budget_class": "execution",
+            },
+        )
+    )
+    service = ChatService(store)
+
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+    assert interrupted.request_snapshot["recovery"]["unknown_tool_call_ids"] == [
+        "tool-unknown"
+    ]
+    assert service.pending_turn(session.id).id == turn.id
+    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
+    with pytest.raises(ChatHistoryConflict, match="unknown tool outcome"):
+        service.prepare_resume(turn.id)
+
+    reconciled = service.reconcile_interrupted_tool(
+        turn.id,
+        "tool-unknown",
+        outcome="complete",
+        detail="Operator verified the command completed on the target.",
+        expected_revision=interrupted.revision,
+    )
+    reconciled_call = store.get(ToolCall, "tool-unknown")
+    assert reconciled_call.status == ToolCallStatus.COMPLETE
+    assert reconciled_call.result["verified"] is False
+    assert reconciled.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+    assert reconciled.tool_history[0]["model_call_id"] == "provider-call-1"
+    assert reconciled.tool_history[0]["trusted_result"] is False
+
+
+def test_restart_allows_explicit_resume_when_no_tool_effect_is_unknown(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-safe-recovery.db")
+    engagement = store.create(Engagement(id="eng-safe", name="Safe recovery"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    session = store.create(
+        ChatSession(
+            id="session-safe",
+            engagement_id=engagement.id,
+            title="Safe recovery",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-safe",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.FINALIZING,
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "continue"}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+            },
+        )
+    )
+    service = ChatService(store)
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+    assert interrupted.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+
+    prepared = service.prepare_resume(turn.id)
+
+    assert prepared.turn is not None
+    assert prepared.turn.status == ChatTurnStatus.ROUTING
+    assert prepared.turn.request_snapshot["recovery"]["required"] is False
+
+
+def test_native_provider_turn_snapshots_and_runs_agents_hooks_once(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-hooks.db")
+    workspace = tmp_path / "workspace"
+    hook_dir = workspace / ".agents" / "hooks" / "audit"
+    hook_dir.mkdir(parents=True)
+    script = hook_dir / "run.sh"
+    script.write_text(
+        "#!/bin/sh\npython3 -c 'import json,sys; print(json.load(sys.stdin)[\"event\"])'\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    (hook_dir / "hook.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "Audit",
+                "description": "Record lifecycle events.",
+                "events": ["chat.turn.started", "chat.turn.completed"],
+                "command": ["run.sh"],
+                "side_effects": "none",
+                "failure_policy": "block",
+            }
+        ),
+        encoding="utf-8",
+    )
+    engagement = store.create(Engagement(id="eng-hooks", name="Native hooks"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store, workspace_resolver=lambda _: workspace)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            hook_ids=["audit"],
+            messages=[{"role": "user", "content": "Run the native lifecycle."}],
+            include_knowledge=False,
+        )
+    )
+    assert prepared.turn is not None
+    assert prepared.turn.request_snapshot["hook_snapshots"][0]["id"] == "audit"
+
+    asyncio.run(service.complete(prepared))
+    executions = store.list_entities(NativeHookExecution, limit=10)
+    assert [(item.event_name, item.status) for item in executions] == [
+        ("chat.turn.started", "complete"),
+        ("chat.turn.completed", "complete"),
+    ]
+    assert all(item.stdout.strip() == item.event_name for item in executions)
+
+
+def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_path):
+    store = NebulaStore(tmp_path / "chat-hook-recovery.db")
+    engagement = store.create(Engagement(id="eng-hook-recovery", name="Hook recovery"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-hook-recovery",
+            engagement_id=engagement.id,
+            title="Hook recovery",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-hook-recovery",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "continue"}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+            },
+        )
+    )
+    execution = store.create(
+        NativeHookExecution(
+            id="hook-execution-unknown",
+            engagement_id=engagement.id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            hook_id="audit",
+            hook_snapshot={},
+            event_name="chat.turn.started",
+            side_effects="external",
+            started_at=utc_now(),
+        )
+    )
+    service = ChatService(store)
+
+    asyncio.run(service.startup())
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.request_snapshot["recovery"][
+        "unknown_hook_execution_ids"
+    ] == [execution.id]
+    assert store.get(NativeHookExecution, execution.id).status == "interrupted"
+    with pytest.raises(ChatHistoryConflict, match="unknown hook outcome"):
+        service.prepare_resume(turn.id)
+
+    reconciled = service.reconcile_interrupted_hook(
+        turn.id,
+        execution.id,
+        outcome="complete",
+        detail="Operator verified the external audit write completed.",
+        expected_revision=interrupted.revision,
+    )
+    assert reconciled.request_snapshot["recovery"][
+        "unknown_hook_execution_ids"
+    ] == []
+    assert store.get(NativeHookExecution, execution.id).status == "reconciled"
+
+
+def _write_native_hook(
+    workspace,
+    hook_id,
+    *,
+    events,
+    script="#!/bin/sh\nexit 0\n",
+    failure_policy="continue",
+    side_effects="none",
+):
+    hook_dir = workspace / ".agents" / "hooks" / hook_id
+    hook_dir.mkdir(parents=True)
+    executable = hook_dir / "run.sh"
+    executable.write_text(script, encoding="utf-8")
+    executable.chmod(0o700)
+    (hook_dir / "hook.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": hook_id,
+                "events": events,
+                "command": ["run.sh"],
+                "side_effects": side_effects,
+                "failure_policy": failure_policy,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return hook_dir
+
+
+def test_failed_provider_turn_emits_failed_hook_without_replacing_primary_error(
+    tmp_path, monkeypatch
+):
+    class BillingFailureProvider(FakeProvider):
+        def __init__(self, provider_id: str, *, local: bool) -> None:
+            super().__init__(provider_id, local=local)
+            self.failures_remaining = 1
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") == "conversation_naming":
+                return await super().complete(request)
+            if self.failures_remaining > 0:
+                self.failures_remaining -= 1
+                self.requests.append(request)
+                raise RuntimeError("provider billing exhausted")
+            return await super().complete(request)
+
+    store = NebulaStore(tmp_path / "chat-hook-failed.db")
+    workspace = tmp_path / "workspace"
+    _write_native_hook(
+        workspace,
+        "audit",
+        events=["chat.turn.started", "chat.turn.failed"],
+        script=(
+            "#!/bin/sh\n"
+            "python3 -c 'import json,sys; event=json.load(sys.stdin)[\"event\"]; "
+            "print(event); raise SystemExit(1 if event.endswith(\"failed\") else 0)'\n"
+        ),
+        failure_policy="block",
+    )
+    engagement = store.create(Engagement(id="eng-hook-failed", name="Failed hooks"))
+    profile = store.create(_profile(local=True))
+    provider = BillingFailureProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store, workspace_resolver=lambda _: workspace)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            hook_ids=["audit"],
+            messages=[{"role": "user", "content": "Charge this turn."}],
+            include_knowledge=False,
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="billing exhausted"):
+        asyncio.run(service.complete(prepared))
+
+    executions = store.list_entities(NativeHookExecution, limit=10)
+    assert [(item.event_name, item.status) for item in executions] == [
+        ("chat.turn.started", "complete"),
+        ("chat.turn.failed", "failed"),
+    ]
+    assert all("did not complete" not in (item.error or "") for item in executions)
+    turn = store.get(ChatTurn, prepared.turn.id)
+    assert turn.status is ChatTurnStatus.FAILED
+    assert service.pending_turn(turn.session_id) is None
+    follow_up = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            session_id=turn.session_id,
+            messages=[{"role": "user", "content": "Continue after the failed turn."}],
+            include_knowledge=False,
+        )
+    )
+    recovered = asyncio.run(service.complete(follow_up))
+    assert recovered.message.content
+
+
+def test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded(tmp_path):
+    class BlockingProvider(FakeProvider):
+        def __init__(self, provider_id: str, *, local: bool) -> None:
+            super().__init__(provider_id, local=local)
+            self.started = asyncio.Event()
+
+        async def stream(self, request: ModelRequest):
+            del request
+            self.started.set()
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta="Working. ")
+            await asyncio.Event().wait()
+            raise AssertionError("cancelled provider stream resumed unexpectedly")
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "chat-hook-cancelled.db")
+        workspace = tmp_path / "workspace"
+        _write_native_hook(
+            workspace,
+            "audit",
+            events=["chat.turn.started", "chat.turn.cancelled"],
+            failure_policy="block",
+        )
+        engagement = store.create(
+            Engagement(id="eng-hook-cancelled", name="Cancelled hooks")
+        )
+        profile = store.create(_profile(local=True))
+        provider = BlockingProvider(profile.id, local=True)
+        service = ChatService(
+            store,
+            provider_factory=lambda _: provider,
+            workspace_resolver=lambda _: workspace,
+        )
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                hook_ids=["audit"],
+                messages=[{"role": "user", "content": "Stop this turn."}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        await asyncio.wait_for(provider.started.wait(), 2)
+        stopped = await service.stop_provider_turn(turn_id)
+        await service.shutdown()
+
+        assert stopped.status == ChatTurnStatus.CANCELLED
+        executions = service.list_turn_hook_executions(turn_id)
+        assert [(item.event_name, item.status) for item in executions] == [
+            ("chat.turn.started", "complete"),
+            ("chat.turn.cancelled", "complete"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_provider_turn_and_goal_have_one_durable_worker_owner(tmp_path):
+    store = NebulaStore(tmp_path / "chat-worker-owner.db")
+    engagement = store.create(Engagement(id="eng-owner", name="Worker owner"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    session = store.create(
+        ChatSession(
+            id="session-owner",
+            engagement_id=engagement.id,
+            title="Worker owner",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-owner",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Keep one worker",
+            completion_criteria=["No duplicate execution"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    first = ChatService(
+        store, provider_factory=lambda _: provider, worker_id="worker-one"
+    )
+    second = ChatService(
+        store, provider_factory=lambda _: provider, worker_id="worker-two"
+    )
+    prepared = first.prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_id=profile.id,
+            messages=[{"role": "user", "content": "Continue once"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    first._claim_execution(prepared)
+
+    claimed_turn = store.get(ChatTurn, prepared.turn.id)
+    claimed_goal = store.get(ChatGoal, goal.id)
+    assert claimed_turn.execution_owner_id == "worker-one"
+    assert claimed_goal.execution_claim_id == claimed_turn.execution_claim_id
+    competing = replace(
+        prepared,
+        turn=claimed_turn,
+        execution_claim_id=None,
+    )
+    with pytest.raises(ChatHistoryConflict, match="another Core worker"):
+        second._claim_execution(competing)
+
+    asyncio.run(second.startup())
+
+    interrupted = store.get(ChatTurn, claimed_turn.id)
+    paused_goal = store.get(ChatGoal, goal.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+    assert interrupted.execution_claim_id is None
+    assert paused_goal.status == ChatGoalStatus.PAUSED
+    assert paused_goal.execution_claim_id is None
+    with pytest.raises(ChatHistoryConflict, match="stale worker output"):
+        first._assert_execution_owner(prepared)
+    stale_completion = first._completion(
+        prepared,
+        ModelResponse(
+            provider_id=profile.id,
+            model="model-a",
+            text="This stale output must not be saved.",
+            usage=ModelUsage(input_tokens=1, output_tokens=1),
+        ),
+    )
+    with pytest.raises(ChatHistoryConflict, match="stale worker output"):
+        first._persist(prepared, stale_completion)
+    assert all(
+        message.content != "This stale output must not be saved."
+        for message in first.session_messages(session.id)
     )
 
 
@@ -628,6 +1549,15 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
             for sequence in range(1, 1_003)
         ]
     )
+    question = store.create(
+        ChatDecision(
+            id="question-context",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            kind="question",
+            text="Which deployment region is authoritative?",
+        )
+    )
     provider = FakeProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
 
@@ -664,6 +1594,9 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
         <= limits.target_input_tokens
     )
     assert "DERIVED WORKING MEMORY" in (prepared.model_request.instructions or "")
+    assert "Which deployment region is authoritative?" in (
+        prepared.model_request.instructions or ""
+    )
     assert "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS" in (
         prepared.model_request.instructions or ""
     )
@@ -694,6 +1627,17 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
             messages=[{"role": "user", "content": "Confirm the same CVE again"}],
         )
     )
+    assert streamed.turn.request_snapshot["operator_decisions"] == [
+        {
+            "id": question.id,
+            "revision": question.revision,
+            "kind": "question",
+            "text": question.text,
+            "scope": "conversation",
+            "source_message_id": None,
+            "source_session_id": None,
+        }
+    ]
 
     async def collect_stream():
         return [item async for item in ChatService(store).stream(streamed)]
@@ -703,6 +1647,249 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
     assert streamed.context_usage.total_tokens > 0
     assert done["context_usage"]["total_tokens"] == streamed.context_usage.total_tokens
     assert len(ChatService(store).session_messages(session.id)) == 1_006
+
+
+def test_goal_charges_compaction_usage_before_provider_response(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "goal-compaction.db")
+    engagement = store.create(Engagement(id="eng-goal-context", name="Goal context"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-goal-context",
+            engagement_id=engagement.id,
+            title="Goal context",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                id=f"goal-context-{sequence}",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=sequence,
+                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                content=f"Historical evidence {sequence}: "
+                + ("bounded context " * 180),
+            )
+            for sequence in range(1, 13)
+        ]
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-context",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Continue with bounded context",
+            completion_criteria=["Usage is fully accounted"],
+            status=ChatGoalStatus.RUNNING,
+            token_budget=100_000,
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            stream=True,
+            messages=[{"role": "user", "content": "Continue the bounded review"}],
+        )
+    )
+
+    assert prepared.context_usage.total_tokens > 0
+    after_compaction = store.get(ChatGoal, goal.id)
+    assert after_compaction.usage == prepared.context_usage
+    response = asyncio.run(service.complete(prepared))
+    completed_usage = store.get(ChatGoal, goal.id).usage
+    assert completed_usage.total_tokens == prepared.context_usage.total_tokens + 7
+    assert response.context_usage == prepared.context_usage
+
+
+def test_goal_budget_blocks_compaction_before_provider_spend(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "goal-compaction-budget.db")
+    engagement = store.create(Engagement(id="eng-goal-budget", name="Goal budget"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-goal-budget",
+            engagement_id=engagement.id,
+            title="Goal budget",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                id=f"goal-budget-{sequence}",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=sequence,
+                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                content=f"Historical evidence {sequence}: "
+                + ("bounded context " * 180),
+            )
+            for sequence in range(1, 13)
+        ]
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-budget",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Stay within budget",
+            completion_criteria=["No unbudgeted compactor call"],
+            status=ChatGoalStatus.RUNNING,
+            token_budget=10,
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+
+    with pytest.raises(ChatCompactionError, match="insufficient mission token budget"):
+        ChatService(store).prepare(
+            ChatCompletionRequest(
+                session_id=session.id,
+                goal_id=goal.id,
+                provider_id=profile.id,
+                include_knowledge=False,
+                stream=True,
+                messages=[{"role": "user", "content": "Continue safely"}],
+            )
+        )
+
+    assert provider.requests == []
+    assert store.get(ChatGoal, goal.id).usage.total_tokens == 0
+
+
+def test_goal_charges_failed_compactor_attempts(tmp_path, monkeypatch):
+    class InvalidCompactorProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="not valid context memory",
+                usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+                finish_reason="stop",
+            )
+
+    store = NebulaStore(tmp_path / "goal-failed-compaction.db")
+    engagement = store.create(
+        Engagement(id="eng-failed-context", name="Failed context")
+    )
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-failed-context",
+            engagement_id=engagement.id,
+            title="Failed context",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                id=f"failed-context-{sequence}",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=sequence,
+                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                content=f"Historical evidence {sequence}: " + ("context " * 300),
+            )
+            for sequence in range(1, 13)
+        ]
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-failed-context",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Account for failed compaction",
+            completion_criteria=["Every model call is charged"],
+            status=ChatGoalStatus.RUNNING,
+            token_budget=100_000,
+        )
+    )
+    provider = InvalidCompactorProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+
+    with pytest.raises(ChatCompactionError, match="valid sourced memory"):
+        ChatService(store).prepare(
+            ChatCompletionRequest(
+                session_id=session.id,
+                goal_id=goal.id,
+                provider_id=profile.id,
+                include_knowledge=False,
+                stream=True,
+                messages=[{"role": "user", "content": "Continue safely"}],
+            )
+        )
+
+    assert len(provider.requests) == 2
+    assert store.get(ChatGoal, goal.id).usage.total_tokens == 30
+
+
+def test_pending_approval_blocks_new_turn_before_compaction_or_provider_spend(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "pending-before-context.db")
+    engagement = store.create(Engagement(id="eng-pending", name="Pending"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-pending",
+            engagement_id=engagement.id,
+            title="Pending",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create_many(
+        [
+            ChatMessage(
+                id=f"pending-history-{sequence}",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=sequence,
+                role=ChatRole.USER if sequence % 2 else ChatRole.ASSISTANT,
+                content=f"History {sequence}: " + ("context " * 300),
+            )
+            for sequence in range(1, 13)
+        ]
+    )
+    store.create(
+        ChatTurn(
+            id="pending-turn",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+            approval_id="approval-pending",
+        )
+    )
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+
+    with pytest.raises(ChatHistoryConflict, match="active response"):
+        ChatService(store).prepare(
+            ChatCompletionRequest(
+                session_id=session.id,
+                provider_id=profile.id,
+                include_knowledge=False,
+                messages=[{"role": "user", "content": "Send another message"}],
+            )
+        )
+
+    assert provider.requests == []
 
 
 def test_knowledge_retrieval_paginates_beyond_storage_page_limit(tmp_path, monkeypatch):

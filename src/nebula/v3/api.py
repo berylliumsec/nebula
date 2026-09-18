@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .code_completion import complete as complete_code
 import asyncio
 import base64
@@ -23,6 +23,7 @@ from typing import Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
 
 from fastapi import (
+    Body,
     Depends,
     FastAPI,
     Header,
@@ -66,6 +67,7 @@ from .automation_runtime import (
     CommandApprovalRequired,
     CommandResult,
     ProcessIORequest,
+    ProcessResultsRequest,
     RunCommandRequest,
 )
 from .automation_tools import AutomationToolPlatform, PROCESS_IO_NAME, RUN_COMMAND_NAME
@@ -150,9 +152,12 @@ from .chat import (
     ChatHistoryConflict,
     ChatPrivacyError,
     ChatResponseMessage,
+    ChatRuntimeSwitchPreflight,
+    ChatRuntimeSwitchPreflightRequest,
     ChatService,
 )
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
+from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .container_terminal import (
     ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
@@ -273,6 +278,7 @@ from .domain import (
     KnowledgeSource,
     LibraryItem,
     MissionGrant,
+
     NebulaModel,
     OperationEvent,
     OperatorProfile,
@@ -792,6 +798,38 @@ class ChatTurnSummary(NebulaModel):
     harness_turn_id: str | None = None
     tool_call_ids: list[str] = Field(default_factory=list)
     revision: int = Field(ge=1)
+    error: str | None = None
+    recovery_blocked: bool = False
+    unresolved_tool_call_ids: list[str] = Field(default_factory=list)
+    unresolved_hook_execution_ids: list[str] = Field(default_factory=list)
+    results_url: str | None = None
+    process_id: str | None = None
+
+
+class NativeHookExecutionSummary(NebulaModel):
+    id: str
+    hook_id: str
+    event_name: str
+    status: str
+    side_effects: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    error: str | None = None
+    reconciliation: dict[str, Any] | None = None
+
+
+class ChatToolReconciliationRequest(NebulaModel):
+    expected_revision: int = Field(ge=1)
+    tool_call_id: str = Field(min_length=1, max_length=200)
+    outcome: Literal["complete", "failed"]
+    detail: str = Field(min_length=1, max_length=2_000)
+
+
+class ChatHookReconciliationRequest(NebulaModel):
+    expected_revision: int = Field(ge=1)
+    hook_execution_id: str = Field(min_length=1, max_length=200)
+    outcome: Literal["complete", "failed"]
+    detail: str = Field(min_length=1, max_length=2_000)
 
 
 class ApprovalDecisionRequest(NebulaModel):
@@ -826,6 +864,11 @@ class VpnProfileDeleteRequest(NebulaModel):
 
 class AutomationCommandRequest(RunCommandRequest):
     approval_id: str | None = Field(default=None, max_length=200)
+
+
+class CheckpointCaptureRequest(NebulaModel):
+    label: str = Field(min_length=1, max_length=120)
+    paths: list[str] = Field(min_length=1, max_length=64)
 
 
 class ToolOutputSearchRequest(NebulaModel):
@@ -1298,6 +1341,9 @@ def create_app(
         and browser_database != ":memory:"
         else Path(execution_data_root or Path.home() / ".local/share/nebula/v3")
     )
+    managed_skill_root = browser_root / ".agents" / "skills"
+    managed_skill_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    managed_skill_root.chmod(0o700)
     managed_browser_host = ManagedBrowserHost(store, browser_root / "managed-browser")
     browser_companion = BrowserCompanion(
         store,
@@ -1318,6 +1364,23 @@ def create_app(
                 "harness execution requires an engagement workspace"
             )
         return tool_platform.workspace_for(engagement_id)
+
+    def native_workspace(engagement_id: str) -> Path:
+        engagement = store.get(Engagement, engagement_id)
+        if engagement.workspace_path:
+            workspace = (
+                Path(engagement.workspace_path).expanduser().resolve(strict=True)
+            )
+            if not workspace.is_dir():
+                raise ValueError("configured project workspace is not a directory")
+            return workspace
+        if automation_runtime is not None:
+            return automation_runtime.workspace_resolver(engagement_id)
+        if tool_platform is not None:
+            return tool_platform.workspace_for(engagement_id)
+        raise ValueError(
+            "native provider skills require an available project workspace"
+        )
 
     if automation_runtime is None:
         if artifact_store is not None and tool_platform is not None:
@@ -1428,11 +1491,28 @@ def create_app(
         operator_id=active_operator_id,
         knowledge_index=knowledge_index,
         artifact_store=artifact_store,
+        workspace_resolver=native_workspace,
+        managed_skill_root=managed_skill_root,
     )
 
     from .chat_catchup import catchup_router
     from .chat_decisions import decisions_router
     from .chat_queue import ChatQueueService, queue_router
+    from .chat_goals import goals_router
+    from .skill_catalog import (
+        SkillCatalogInfo,
+        SkillSelection,
+        SkillSnapshot,
+        SkillSummary,
+        discover_skills,
+        native_skill_roots,
+        snapshot_skill,
+    )
+    from .native_hooks import (
+        NativeHookDescriptor,
+        NativeHookError,
+        discover_native_hooks,
+    )
 
     chat_queue = ChatQueueService(store, provider_chat, harness_runtime)
 
@@ -1699,6 +1779,24 @@ def create_app(
                 provider_chat.startup,
                 provider_chat.shutdown,
             )
+
+            async def _chat_schedule_loop() -> None:
+                while True:
+                    await asyncio.sleep(15)
+                    await provider_chat.fire_due_schedules()
+
+            schedule_loop = create_diagnostic_task(
+                _chat_schedule_loop(),
+                feature="chat",
+                event_code="chat.schedule_loop",
+                failure_message="Provider chat scheduling stopped unexpectedly.",
+                name="nebula-chat-schedules",
+            )
+
+            def _stop_chat_schedules() -> None:
+                schedule_loop.cancel()
+
+            started.append(("chat", "schedules", _stop_chat_schedules))
             await start_component(
                 "harnesses",
                 "runtime",
@@ -6814,6 +6912,52 @@ def create_app(
             )
         return await automation_runtime.process_io(process_id, request)
 
+    @app.post(
+        f"{API_PREFIX}/automation-processes/{{process_id}}/results",
+        response_model=CommandExecution,
+        tags=["automation"],
+    )
+    async def submit_process_results(
+        process_id: str,
+        request: ProcessResultsRequest,
+        credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+        api_key_header: str | None = Header(default=None, alias="X-Nebula-Api-Key"),
+    ) -> CommandExecution:
+        if automation_runtime is None:
+            raise HTTPException(
+                status_code=501, detail="automation runtime is not configured"
+            )
+        api_key = api_key_header or (
+            credentials.credentials
+            if credentials is not None and credentials.scheme.lower() == "bearer"
+            else None
+        )
+        if not api_key:
+            raise HTTPException(
+                status_code=401,
+                detail="results API key required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        try:
+            execution = automation_runtime.accept_results(process_id, api_key, request)
+        except AutomationPolicyDenied as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            chat_service().continue_after_tool_callback(process_id)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.callback.resume_failed",
+                "Results were saved but the provider turn could not resume.",
+                exc,
+                stage="callback",
+            )
+        return execution
+
     @app.get(
         f"{API_PREFIX}/automation-sessions/{{session_id}}/processes",
         response_model=list[CommandExecution],
@@ -7638,6 +7782,40 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return Response(status_code=204)
 
+    def persist_provider_model_catalog(
+        profile: ProviderProfile, health: ProviderHealth
+    ) -> ProviderProfile:
+        """Persist bounded exact-model limits without churning unchanged profiles."""
+
+        if not health.healthy or not health.model_descriptors:
+            return profile
+        descriptors = [
+            item.model_dump(mode="json")
+            for item in sorted(health.model_descriptors, key=lambda item: item.id)
+        ]
+        encoded = json.dumps(
+            descriptors, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        revision = hashlib.sha256(encoded).hexdigest()
+        if (
+            profile.metadata.get("model_catalog_revision") == revision
+            and profile.metadata.get("model_descriptors") == descriptors
+        ):
+            return profile
+        return store.update(
+            ProviderProfile,
+            profile.id,
+            {
+                "metadata": {
+                    **profile.metadata,
+                    "model_descriptors": descriptors,
+                    "model_catalog_revision": revision,
+                    "model_catalog_source": health.catalog_source,
+                }
+            },
+            expected_revision=profile.revision,
+        )
+
     @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/health",
         response_model=ProviderHealth,
@@ -7646,7 +7824,9 @@ def create_app(
     )
     async def refresh_provider_health(provider_id: str) -> ProviderHealth:
         profile = store.get(ProviderProfile, provider_id)
-        return await _provider_health(profile, provider_factory)
+        health = await _provider_health(profile, provider_factory)
+        stored = persist_provider_model_catalog(profile, health)
+        return health.model_copy(update={"provider_revision": stored.revision})
 
     @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/capabilities/verify",
@@ -7691,7 +7871,9 @@ def create_app(
 
         async def checked(profile: ProviderProfile) -> ProviderHealth:
             async with semaphore:
-                return await _provider_health(profile, provider_factory)
+                health = await _provider_health(profile, provider_factory)
+                stored = persist_provider_model_catalog(profile, health)
+                return health.model_copy(update={"provider_revision": stored.revision})
 
         return list(await asyncio.gather(*(checked(profile) for profile in profiles)))
 
@@ -8423,7 +8605,246 @@ def create_app(
             return _chat_turn_summary(store.get(ChatTurn, turn.id))
         return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
 
+    @app.post(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/reconcile-tool",
+        response_model=ChatTurnSummary,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reconcile_chat_tool(
+        turn_id: str, request: ChatToolReconciliationRequest
+    ) -> ChatTurnSummary:
+        return _chat_turn_summary(
+            chat_service().reconcile_interrupted_tool(
+                turn_id,
+                request.tool_call_id,
+                outcome=request.outcome,
+                detail=request.detail,
+                expected_revision=request.expected_revision,
+            )
+        )
+
+    @app.post(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/reconcile-hook",
+        response_model=ChatTurnSummary,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reconcile_chat_hook(
+        turn_id: str, request: ChatHookReconciliationRequest
+    ) -> ChatTurnSummary:
+        return _chat_turn_summary(
+            chat_service().reconcile_interrupted_hook(
+                turn_id,
+                request.hook_execution_id,
+                outcome=request.outcome,
+                detail=request.detail,
+                expected_revision=request.expected_revision,
+            )
+        )
+
+    @app.get(
+        f"{API_PREFIX}/chat/turns/{{turn_id}}/hooks",
+        response_model=list[NativeHookExecutionSummary],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_hook_executions(
+        turn_id: str,
+    ) -> list[NativeHookExecutionSummary]:
+        return [
+            NativeHookExecutionSummary(
+                id=item.id,
+                hook_id=item.hook_id,
+                event_name=item.event_name,
+                status=item.status,
+                side_effects=item.side_effects,
+                started_at=item.started_at,
+                completed_at=item.completed_at,
+                error=item.error,
+                reconciliation=item.reconciliation,
+            )
+            for item in chat_service().list_turn_hook_executions(turn_id)
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/hooks",
+        response_model=list[NativeHookExecutionSummary],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_session_hook_executions(
+        session_id: str,
+    ) -> list[NativeHookExecutionSummary]:
+        return [
+            NativeHookExecutionSummary(
+                id=item.id,
+                hook_id=item.hook_id,
+                event_name=item.event_name,
+                status=item.status,
+                side_effects=item.side_effects,
+                started_at=item.started_at,
+                completed_at=item.completed_at,
+                error=item.error,
+                reconciliation=item.reconciliation,
+            )
+            for item in chat_service().list_session_hook_executions(session_id)
+        ]
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/subagents",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_subagents(session_id: str, response: Response) -> dict[str, Any]:
+        store.get(ChatSession, session_id)
+        response.headers["Cache-Control"] = "no-store"
+        subagents = chat_service().subagents
+        return {
+            "session_id": session_id,
+            "subagents": [subagents.view(item) for item in subagents.for_session(session_id)],
+        }
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/subagents/{{subagent_id}}/stop",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_chat_subagent(session_id: str, subagent_id: str) -> dict[str, Any]:
+        subagents = chat_service().subagents
+        record = subagents.get(subagent_id)
+        if record.parent_session_id != session_id:
+            raise NotFoundError(f"chat_subagents entity not found: {subagent_id}")
+        return subagents.view(await subagents.stop(record.id))
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/subagents/stop",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_all_chat_subagents(session_id: str) -> dict[str, Any]:
+        store.get(ChatSession, session_id)
+        subagents = chat_service().subagents
+        for record in subagents.active(subagents.for_session(session_id)):
+            await subagents.stop(record.id)
+        return {
+            "session_id": session_id,
+            "subagents": [subagents.view(item) for item in subagents.for_session(session_id)],
+        }
+
+    from .native_checkpoints import NativeCheckpointError, NativeCheckpointService
+
+    checkpoint_service = NativeCheckpointService(store, native_workspace)
+    schedule_service = ChatScheduleService(store)
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/checkpoints",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_chat_checkpoints(session_id: str):
+        return checkpoint_service.list_for_session(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/checkpoints",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def capture_chat_checkpoint(
+        session_id: str, body: CheckpointCaptureRequest = Body()
+    ):
+        try:
+            return checkpoint_service.capture(
+                session_id, label=body.label, paths=body.paths
+            )
+        except NativeCheckpointError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/chat/checkpoints/{{checkpoint_id}}/preview",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preview_chat_checkpoint(checkpoint_id: str):
+        return checkpoint_service.preview(checkpoint_id)
+
+    @app.post(
+        f"{API_PREFIX}/chat/checkpoints/{{checkpoint_id}}/restore",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def restore_chat_checkpoint(checkpoint_id: str):
+        try:
+            return checkpoint_service.restore(checkpoint_id)
+        except NativeCheckpointError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/schedule",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_chat_schedule(session_id: str):
+        return schedule_service.get(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/schedule",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_chat_schedule(session_id: str, body: ScheduleCreate = Body()):
+        return schedule_service.create(session_id, body)
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/schedule/actions",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def write_chat_schedule(session_id: str, body: ScheduleWrite = Body()):
+        return schedule_service.write(session_id, body)
+
     from .application_model.api import model_router
+
+    @app.get(
+        f"{API_PREFIX}/skills",
+        response_model=list[SkillSummary],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_provider_skills(engagement_id: str) -> list[SkillSummary]:
+        store.get(Engagement, engagement_id)
+        try:
+            return discover_skills(
+                native_skill_roots(native_workspace(engagement_id), managed_skill_root)
+            )
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.get(
+        f"{API_PREFIX}/skills/catalog",
+        response_model=SkillCatalogInfo,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def provider_skill_catalog(engagement_id: str) -> SkillCatalogInfo:
+        workspace = native_workspace(engagement_id)
+        return SkillCatalogInfo(
+            project_root=str((workspace / ".agents" / "skills").resolve()),
+            managed_root=str(managed_skill_root.resolve()),
+        )
+
+    @app.get(
+        f"{API_PREFIX}/hooks",
+        response_model=list[NativeHookDescriptor],
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_provider_hooks(engagement_id: str) -> list[NativeHookDescriptor]:
+        store.get(Engagement, engagement_id)
+        try:
+            return discover_native_hooks(native_workspace(engagement_id))
+        except (NativeHookError, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     app.include_router(
         model_router(application_model),
@@ -8440,6 +8861,30 @@ def create_app(
     )
     app.include_router(
         queue_router(chat_queue),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+
+    def resolve_goal_skill_snapshots(
+        session_id: str,
+        selections: list[SkillSelection],
+        existing: list[SkillSnapshot],
+    ) -> list[SkillSnapshot]:
+        session = store.get(ChatSession, session_id)
+        catalog = discover_skills(
+            native_skill_roots(
+                native_workspace(session.engagement_id), managed_skill_root
+            )
+        )
+        retained = {(item.name, item.path): item for item in existing}
+        return [
+            retained.get((selection.name, selection.path))
+            or snapshot_skill(selection, catalog)
+            for selection in selections
+        ]
+
+    app.include_router(
+        goals_router(store, skill_snapshot_resolver=resolve_goal_skill_snapshots),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )
@@ -8511,21 +8956,28 @@ def create_app(
     async def get_chat_session_context(session_id: str) -> ContextStatus:
         session = store.get(ChatSession, session_id)
         if session.backend == ChatBackend.HARNESS:
-            messages = chat_service().session_messages(session_id)
-            estimated = sum(
-                estimate_tokens(message.content, message_count=1)
-                for message in messages
-            )
             return ContextStatus(
                 owner_type=ContextOwnerType.CHAT_SESSION,
                 owner_id=session.id,
                 status="runtime_managed",
-                context_window=DEFAULT_CONTEXT_WINDOW,
+                context_window=0,
                 max_output_tokens=0,
-                target_input_tokens=DEFAULT_CONTEXT_WINDOW,
-                estimated_input_tokens=estimated,
+                target_input_tokens=0,
+                capacity_source="runtime",
+                estimated_input_tokens=0,
             )
         return chat_service().context_status(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/runtime-switch/preflight",
+        response_model=ChatRuntimeSwitchPreflight,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def preflight_chat_runtime_switch(
+        session_id: str, request: ChatRuntimeSwitchPreflightRequest
+    ) -> ChatRuntimeSwitchPreflight:
+        return chat_service().runtime_switch_preflight(session_id, request)
 
     @app.patch(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
@@ -8607,26 +9059,15 @@ def create_app(
     async def get_run_context(run_id: str) -> ContextStatus:
         run = store.get(AgentRun, run_id)
         if run.backend == RunBackend.HARNESS:
-            turns = [
-                turn
-                for turn in store.list_entities(
-                    HarnessTurn, engagement_id=run.engagement_id, limit=1_000
-                )
-                if turn.run_id == run.id
-            ]
             return ContextStatus(
                 owner_type=ContextOwnerType.AGENT_RUN,
                 owner_id=run.id,
                 status="runtime_managed",
-                context_window=DEFAULT_CONTEXT_WINDOW,
+                context_window=0,
                 max_output_tokens=0,
-                target_input_tokens=DEFAULT_CONTEXT_WINDOW,
-                estimated_input_tokens=sum(
-                    estimate_tokens(
-                        (turn.prompt or "") + (turn.response or ""), message_count=1
-                    )
-                    for turn in turns
-                ),
+                target_input_tokens=0,
+                capacity_source="runtime",
+                estimated_input_tokens=0,
             )
         latest = ContextCompactor(store).latest(
             ContextOwnerType.AGENT_RUN, run.id, run.engagement_id
@@ -8638,7 +9079,10 @@ def create_app(
         )
         if provider_id:
             profile = store.get(ProviderProfile, provider_id)
-            limits = resolve_context_limits(profile)
+            limits = resolve_context_limits(
+                profile,
+                model=latest.model if latest is not None else run.supervisor_model,
+            )
             context_window = limits.context_window
             max_output_tokens = limits.max_output_tokens
             target_input_tokens = limits.target_input_tokens
@@ -8737,6 +9181,21 @@ def create_app(
             context_window=context_window,
             max_output_tokens=max_output_tokens,
             target_input_tokens=target_input_tokens,
+            compacted_input_target=(
+                limits.compacted_input_target if provider_id else None
+            ),
+            capacity_source=limits.source if provider_id else "fallback",
+            capacity_estimated=limits.estimated if provider_id else True,
+            metadata_revision=limits.metadata_revision if provider_id else None,
+            route_limits_verified=limits.route_limits_verified
+            if provider_id
+            else False,
+            eligible_route_count=limits.eligible_route_count if provider_id else None,
+            route_context_window=limits.route_context_window if provider_id else None,
+            route_input_limit=limits.route_input_limit if provider_id else None,
+            route_limits_required=limits.route_limits_required
+            if provider_id
+            else False,
             estimated_input_tokens=estimated_input_tokens,
             compacted_through=through,
             source_references=latest.source_references if latest else [],
@@ -10378,6 +10837,19 @@ def _setup_server_sent_event(event: SetupEvent) -> bytes:
 
 
 def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
+    recovery = turn.request_snapshot.get("recovery", {})
+    unresolved = (
+        recovery.get("unknown_tool_call_ids", [])
+        if isinstance(recovery, dict)
+        and isinstance(recovery.get("unknown_tool_call_ids", []), list)
+        else []
+    )
+    unresolved_hooks = (
+        recovery.get("unknown_hook_execution_ids", [])
+        if isinstance(recovery, dict)
+        and isinstance(recovery.get("unknown_hook_execution_ids", []), list)
+        else []
+    )
     return ChatTurnSummary(
         id=turn.id,
         session_id=turn.session_id,
@@ -10386,6 +10858,28 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         harness_turn_id=turn.harness_turn_id,
         tool_call_ids=turn.tool_call_ids,
         revision=turn.revision,
+        error=turn.error,
+        recovery_blocked=bool(unresolved or unresolved_hooks),
+        unresolved_tool_call_ids=[item for item in unresolved if isinstance(item, str)],
+        unresolved_hook_execution_ids=[
+            item for item in unresolved_hooks if isinstance(item, str)
+        ],
+        results_url=next(
+            (
+                str(item.get("results_url"))
+                for item in reversed(turn.tool_history)
+                if item.get("status") == "waiting_callback" and item.get("results_url")
+            ),
+            None,
+        ),
+        process_id=next(
+            (
+                str(item.get("process_id"))
+                for item in reversed(turn.tool_history)
+                if item.get("status") == "waiting_callback" and item.get("process_id")
+            ),
+            None,
+        ),
     )
 
 
@@ -10486,7 +10980,17 @@ async def _provider_health(
     if profile.model_allowlist:
         allowed = set(profile.model_allowlist)
         models = [model for model in models if model in allowed]
-    return health.model_copy(update={"models": list(dict.fromkeys(models))})
+    allowed_models = set(models)
+    return health.model_copy(
+        update={
+            "models": list(dict.fromkeys(models)),
+            "model_descriptors": [
+                model
+                for model in health.model_descriptors
+                if model.id in allowed_models
+            ],
+        }
+    )
 
 
 def _safe_verification_failure(exc: Exception) -> str:
@@ -10524,9 +11028,12 @@ async def _verify_provider_capability(
             )
         }
     )
+    route_limits: list[Any] | None = None
+    route_limits_error: str | None = None
     try:
+        provider_runtime = (provider_factory or provider_from_profile)(probe_profile)
         response = await asyncio.wait_for(
-            (provider_factory or provider_from_profile)(probe_profile).complete(
+            provider_runtime.complete(
                 ModelRequest(
                     model=model,
                     instructions=(
@@ -10581,6 +11088,24 @@ async def _verify_provider_capability(
             model=model,
             status=ProviderVerificationStatus.VERIFIED,
         )
+        if profile.provider_type == "openrouter":
+            route_loader = getattr(provider_runtime, "openrouter_route_limits", None)
+            if route_loader is None:
+                route_limits_error = "endpoint discovery is unavailable"
+            else:
+                try:
+                    route_limits = await asyncio.wait_for(
+                        route_loader(model), timeout=15
+                    )
+                except Exception as route_exc:
+                    record_caught_exception(
+                        "api",
+                        "api.api.openrouter_route_discovery_failed",
+                        "OpenRouter endpoint limits could not be refreshed.",
+                        route_exc,
+                        stage="api",
+                    )
+                    route_limits_error = "endpoint limits could not be verified"
     except Exception as exc:
         record_caught_exception(
             "api",
@@ -10602,11 +11127,51 @@ async def _verify_provider_capability(
         and item.contract_version == "required-tool-v1"
         for item in verifications.values()
     )
+    metadata = dict(profile.metadata)
+    if (
+        profile.provider_type == "openrouter"
+        and verification.status == ProviderVerificationStatus.VERIFIED
+    ):
+        descriptors = [
+            dict(item)
+            for item in metadata.get("model_descriptors", [])
+            if isinstance(item, dict)
+        ]
+        descriptor = next(
+            (item for item in descriptors if item.get("id") == model), None
+        )
+        if descriptor is None:
+            descriptor = {"id": model, "name": model}
+            descriptors.append(descriptor)
+        checked_at = utc_now().isoformat()
+        descriptor.update(
+            {
+                "route_limits": [
+                    item.model_dump(mode="json") for item in (route_limits or [])
+                ],
+                "route_limits_verified": route_limits is not None,
+                "route_limits_checked_at": checked_at,
+                "route_limits_error": route_limits_error,
+            }
+        )
+        metadata["model_descriptors"] = descriptors
+        metadata["route_catalog_revision"] = hashlib.sha256(
+            json.dumps(
+                {
+                    "model": model,
+                    "checked_at": checked_at,
+                    "routes": descriptor["route_limits"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
     updated = store.update(
         ProviderProfile,
         profile.id,
         {
             "capability_verifications": verifications,
+            "metadata": metadata,
             # A health-discovered model may be verified before the operator has
             # configured an allowlist. Persist that explicit verification target
             # so subsequent profile reads and mission selectors do not forget it.

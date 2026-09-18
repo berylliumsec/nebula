@@ -19,7 +19,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterable
 from enum import Enum
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import boto3  # type: ignore[import-untyped]
 import httpx
@@ -33,10 +33,20 @@ from pydantic import (
 )
 
 from .domain import ProviderProfile
+from .model_catalog import (
+    ModelDescriptor,
+    ModelRouteDescriptor,
+    openrouter_model_routes,
+    openrouter_models,
+)
 
 
 class ProviderError(RuntimeError):
     """A normalized, secret-safe provider failure."""
+
+
+class ProviderContextLengthError(ProviderError):
+    """The provider explicitly rejected the request for exceeding context."""
 
 
 class UnsupportedCapability(ProviderError):
@@ -331,9 +341,23 @@ class ModelRequest(BaseModel):
 
 
 class ToolCall(BaseModel):
-    id: str
-    name: str
+    id: str = Field(min_length=1, max_length=500)
+    name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,127}$")
     arguments: dict[str, Any]
+
+
+def _normalized_tool_call(**values: Any) -> ToolCall:
+    try:
+        return ToolCall.model_validate(values)
+    except ValueError as exc:
+        record_caught_exception(
+            "providers",
+            "providers.providers.malformed_tool_call",
+            "A provider returned an invalid tool-call identity or name.",
+            exc,
+            stage="providers",
+        )
+        raise ProviderError("provider returned a malformed tool call") from exc
 
 
 class ModelUsage(BaseModel):
@@ -346,6 +370,7 @@ class ModelResponse(BaseModel):
     provider_id: str
     model: str
     text: str = ""
+    reasoning: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     finish_reason: str | None = None
@@ -356,6 +381,7 @@ class ModelResponse(BaseModel):
 class StreamEventType(str, Enum):
     STARTED = "started"
     TEXT_DELTA = "text_delta"
+    REASONING_DELTA = "reasoning_delta"
     TOOL_CALL = "tool_call"
     COMPLETED = "completed"
     ERROR = "error"
@@ -367,13 +393,20 @@ class ModelStreamEvent(BaseModel):
     tool_call: ToolCall | None = None
     response: ModelResponse | None = None
     error: str | None = None
+    context_length_exceeded: bool = False
 
 
 class ProviderHealth(BaseModel):
     provider_id: str
     healthy: bool
     models: list[str] = Field(default_factory=list)
+    model_descriptors: list[ModelDescriptor] = Field(default_factory=list)
     detail: str | None = None
+    credential_verified: bool | None = None
+    catalog_source: str | None = None
+    key_expires_at: str | None = None
+    key_limit_remaining: float | None = None
+    provider_revision: int | None = Field(default=None, ge=1)
 
 
 class ProviderCatalogEntry(BaseModel):
@@ -493,7 +526,13 @@ class ModelProvider(ABC):
                 exc,
                 stage="providers",
             )
-            yield ModelStreamEvent(type=StreamEventType.ERROR, error=str(exc))
+            yield ModelStreamEvent(
+                type=StreamEventType.ERROR,
+                error=str(exc),
+                context_length_exceeded=isinstance(
+                    exc, ProviderContextLengthError
+                ),
+            )
             return
         if response.text:
             yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta=response.text)
@@ -510,9 +549,17 @@ def _safe_error(response: httpx.Response) -> ProviderError:
     request_id = response.headers.get("x-request-id") or response.headers.get(
         "request-id"
     )
+    error_code: str | None = None
     try:
         body = response.json()
-        detail = body.get("error", {}).get("message") or body.get("message")
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        detail = (
+            error.get("message") if isinstance(error, dict) else None
+        ) or (body.get("message") if isinstance(body, dict) else None)
+        raw_code = (
+            error.get("code") if isinstance(error, dict) else None
+        ) or (body.get("code") if isinstance(body, dict) else None)
+        error_code = str(raw_code).casefold() if raw_code is not None else None
     except (ValueError, AttributeError) as caught_error:
         record_caught_exception(
             "providers",
@@ -523,10 +570,31 @@ def _safe_error(response: httpx.Response) -> ProviderError:
         )
         detail = None
     suffix = f" request_id={request_id}" if request_id else ""
-    return ProviderError(
+    message = (
         f"provider returned HTTP {response.status_code}{suffix}"
         + (f": {detail}" if detail else "")
     )
+    normalized_detail = str(detail or "").casefold()
+    context_codes = {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "max_tokens_exceeded",
+        "prompt_too_long",
+    }
+    context_markers = (
+        "context length",
+        "context window",
+        "maximum context",
+        "prompt is too long",
+        "prompt too long",
+        "too many tokens",
+    )
+    if response.status_code in {400, 413, 422} and (
+        error_code in context_codes
+        or any(marker in normalized_detail for marker in context_markers)
+    ):
+        return ProviderContextLengthError(message)
+    return ProviderError(message)
 
 
 def _arguments(value: Any) -> dict[str, Any]:
@@ -548,6 +616,64 @@ def _arguments(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ProviderError("provider returned non-object tool arguments")
     return parsed
+
+
+def _openai_text_parts(value: Any) -> str:
+    """Read visible text from an OpenAI-compatible content value."""
+
+    parts: list[str] = []
+    if isinstance(value, str) and value.strip():
+        parts.append(value.strip())
+    elif isinstance(value, list):
+        for block in value:
+            if isinstance(block, str) and block.strip():
+                parts.append(block.strip())
+                continue
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text") or block.get("content")
+            if block.get("type") in {None, "text", "output_text"} and isinstance(
+                text, str
+            ) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _openai_message_content(message: dict[str, Any]) -> str:
+    """Reply text only. Reasoning fields are not a substitute for content."""
+
+    return _openai_text_parts(message.get("content"))
+
+
+def _openai_message_reasoning(message: dict[str, Any]) -> str:
+    """Model thoughts from OpenRouter/OpenAI-compatible reasoning channels."""
+
+    parts: list[str] = []
+    for key in ("reasoning_content", "reasoning"):
+        value = message.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    details = message.get("reasoning_details")
+    if isinstance(details, list):
+        for item in details:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+                continue
+            if not isinstance(item, dict):
+                continue
+            kind = str(item.get("type") or "")
+            if "encrypted" in kind:
+                continue
+            text = item.get("text") or item.get("summary") or item.get("content")
+            if isinstance(text, str) and text.strip():
+                parts.append(text.strip())
+    return "\n".join(parts)
+
+
+def _openai_message_text(message: dict[str, Any]) -> str:
+    """Reply text for OpenAI-compatible messages. Thoughts stay separate."""
+
+    return _openai_message_content(message)
 
 
 def _vllm_grammar_schema(value: Any) -> Any:
@@ -652,7 +778,7 @@ class OpenAIResponsesProvider(ModelProvider):
         for item in data.get("output", []):
             if item.get("type") == "function_call":
                 calls.append(
-                    ToolCall(
+                    _normalized_tool_call(
                         id=item.get("call_id") or item.get("id", ""),
                         name=item["name"],
                         arguments=_arguments(item.get("arguments")),
@@ -755,6 +881,10 @@ class OpenAICompatibleProvider(ModelProvider):
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         if request.tools:
+            if self.config.flavor == ProviderFlavor.OPENROUTER:
+                # Prevent OpenRouter from selecting an endpoint that drops a
+                # parameter Nebula relies on for its verified tool contract.
+                payload["provider"] = {"require_parameters": True}
             payload["parallel_tool_calls"] = request.parallel_tool_calls
             payload["tools"] = [
                 {
@@ -787,6 +917,8 @@ class OpenAICompatibleProvider(ModelProvider):
                     ),
                 },
             }
+        if self.config.flavor == ProviderFlavor.OPENROUTER:
+            payload["reasoning"] = {"exclude": False}
         return payload
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -802,7 +934,7 @@ class OpenAICompatibleProvider(ModelProvider):
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         calls = [
-            ToolCall(
+            _normalized_tool_call(
                 id=item.get("id", ""),
                 name=item.get("function", {}).get("name", ""),
                 arguments=_arguments(item.get("function", {}).get("arguments")),
@@ -813,7 +945,8 @@ class OpenAICompatibleProvider(ModelProvider):
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model", model),
-            text=message.get("content") or "",
+            text=_openai_message_content(message),
+            reasoning=_openai_message_reasoning(message),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("prompt_tokens", 0),
@@ -830,6 +963,8 @@ class OpenAICompatibleProvider(ModelProvider):
             yield event
 
     async def health(self) -> ProviderHealth:
+        if self.config.flavor == ProviderFlavor.OPENROUTER:
+            return await self._openrouter_health()
         try:
             async with self._client(self._headers()) as client:
                 response = await client.get(self._path("/v1/models"))
@@ -851,6 +986,103 @@ class OpenAICompatibleProvider(ModelProvider):
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
 
+    async def _openrouter_health(self) -> ProviderHealth:
+        """Use account visibility without ever substituting the public catalog."""
+        try:
+            async with asyncio.timeout(30):
+                async with self._client(self._headers()) as client:
+                    key_response = await client.get(self._path("/v1/key"), timeout=10.0)
+                    if key_response.is_error:
+                        return ProviderHealth(
+                            provider_id=self.config.id,
+                            healthy=False,
+                            credential_verified=False,
+                            detail=(
+                                f"OpenRouter credential verification failed (HTTP {key_response.status_code}). "
+                                "Check the credential, then retry."
+                            ),
+                        )
+                    key_payload = key_response.json()
+                    key_data = (
+                        key_payload.get("data")
+                        if isinstance(key_payload, dict)
+                        else None
+                    )
+                    if not isinstance(key_data, dict):
+                        raise ValueError("Invalid OpenRouter key response")
+                    response = await client.get(
+                        self._path("/v1/models/user"), timeout=10.0
+                    )
+                if response.is_error:
+                    return ProviderHealth(
+                        provider_id=self.config.id,
+                        healthy=False,
+                        credential_verified=True,
+                        catalog_source="openrouter:/models/user",
+                        detail=(
+                            f"OpenRouter model discovery failed (HTTP {response.status_code}). "
+                            "Check credentials and account access, then refresh."
+                        ),
+                    )
+                descriptors = openrouter_models(response.json())
+            return ProviderHealth(
+                provider_id=self.config.id,
+                healthy=True,
+                models=[model.id for model in descriptors],
+                model_descriptors=descriptors,
+                credential_verified=True,
+                catalog_source="openrouter:/models/user",
+                key_expires_at=(
+                    key_data.get("expires_at")
+                    if isinstance(key_data.get("expires_at"), str)
+                    else None
+                ),
+                key_limit_remaining=(
+                    float(key_data["limit_remaining"])
+                    if isinstance(key_data.get("limit_remaining"), (int, float))
+                    and not isinstance(key_data.get("limit_remaining"), bool)
+                    else None
+                ),
+                detail="Account model catalog loaded; inference is not yet verified.",
+            )
+        except (httpx.HTTPError, TimeoutError, ValueError):
+            # Transport and upstream payload exceptions may contain credentials.
+            return ProviderHealth(
+                provider_id=self.config.id,
+                healthy=False,
+                detail="OpenRouter model discovery failed. Check the connection and refresh.",
+            )
+
+    async def openrouter_route_limits(self, model: str) -> list[ModelRouteDescriptor]:
+        """Load the exact automatic-routing endpoint set for one model."""
+
+        if self.config.flavor != ProviderFlavor.OPENROUTER:
+            raise UnsupportedCapability(
+                "route limits are available only for OpenRouter"
+            )
+        author, separator, slug = model.partition("/")
+        if not separator or not author or not slug or len(model) > 500:
+            raise ProviderError(
+                "OpenRouter route discovery requires an exact model slug"
+            )
+        endpoint = (
+            f"/v1/models/{quote(author, safe='')}/{quote(slug, safe=':')}/endpoints"
+        )
+        try:
+            async with asyncio.timeout(15):
+                async with self._client(self._headers()) as client:
+                    response = await client.get(self._path(endpoint), timeout=10.0)
+            if response.is_error:
+                raise ProviderError(
+                    f"OpenRouter endpoint discovery failed (HTTP {response.status_code})"
+                )
+            routes = openrouter_model_routes(response.json(), model=model)
+            if not routes:
+                raise ProviderError("OpenRouter returned no eligible model endpoints")
+            return routes
+        except (httpx.HTTPError, TimeoutError, ValueError) as exc:
+            raise ProviderError("OpenRouter endpoint discovery failed") from exc
+
 
 async def _stream_openai_compatible(
     provider: OpenAICompatibleProvider, request: ModelRequest
@@ -862,6 +1094,7 @@ async def _stream_openai_compatible(
     payload.update({"stream": True, "stream_options": {"include_usage": True}})
     yield ModelStreamEvent(type=StreamEventType.STARTED)
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
     call_parts: dict[int, dict[str, str]] = {}
     usage = ModelUsage()
     finish_reason: str | None = None
@@ -894,7 +1127,13 @@ async def _stream_openai_compatible(
                     choice = (data.get("choices") or [{}])[0]
                     finish_reason = choice.get("finish_reason") or finish_reason
                     delta = choice.get("delta") or {}
-                    content = delta.get("content")
+                    reasoning = _openai_message_reasoning(delta)
+                    if reasoning:
+                        reasoning_parts.append(reasoning)
+                        yield ModelStreamEvent(
+                            type=StreamEventType.REASONING_DELTA, delta=reasoning
+                        )
+                    content = _openai_message_content(delta)
                     if content:
                         text_parts.append(content)
                         yield ModelStreamEvent(
@@ -915,7 +1154,7 @@ async def _stream_openai_compatible(
                             else arguments or ""
                         )
         calls = [
-            ToolCall(
+            _normalized_tool_call(
                 id=value["id"],
                 name=value["name"],
                 arguments=_arguments(value["arguments"]),
@@ -928,6 +1167,7 @@ async def _stream_openai_compatible(
             provider_id=provider.config.id,
             model=response_model,
             text="".join(text_parts),
+            reasoning="".join(reasoning_parts),
             tool_calls=calls,
             usage=usage,
             finish_reason=finish_reason,
@@ -1042,7 +1282,7 @@ class AnthropicProvider(ModelProvider):
                 text_parts.append(block.get("text", ""))
             elif block.get("type") == "tool_use":
                 calls.append(
-                    ToolCall(
+                    _normalized_tool_call(
                         id=block.get("id", ""),
                         name=block.get("name", ""),
                         arguments=_arguments(block.get("input")),
@@ -1212,7 +1452,7 @@ class GeminiProvider(ModelProvider):
         parts = candidate.get("content", {}).get("parts", [])
         text_parts = [part.get("text", "") for part in parts if "text" in part]
         calls = [
-            ToolCall(
+            _normalized_tool_call(
                 id=part.get("functionCall", {}).get("id", ""),
                 name=part["functionCall"]["name"],
                 arguments=_arguments(part["functionCall"].get("args")),
@@ -1373,7 +1613,7 @@ class BedrockProvider(ModelProvider):
             ) from exc
         blocks = data.get("output", {}).get("message", {}).get("content", [])
         calls = [
-            ToolCall(
+            _normalized_tool_call(
                 id=block["toolUse"].get("toolUseId", ""),
                 name=block["toolUse"].get("name", ""),
                 arguments=_arguments(block["toolUse"].get("input")),
@@ -1884,6 +2124,7 @@ __all__ = [
     "ProviderCatalogEntry",
     "ProviderConfig",
     "ProviderError",
+    "ProviderContextLengthError",
     "ProviderFlavor",
     "ProviderHealth",
     "ProviderKind",

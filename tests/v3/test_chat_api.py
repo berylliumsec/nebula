@@ -16,12 +16,14 @@ from nebula.v3.domain import (
     ContextSnapshot,
     ContextSnapshotStatus,
     ContextSourceReference,
+    ChatBackend,
     ChatSession,
     ChatMessage,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
     ProviderProfile,
+    RunBackend,
     Task,
 )
 from nebula.v3.providers import (
@@ -725,6 +727,48 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     assert payload["source_references"][0]["source_id"] == task.id
 
 
+def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
+    store = NebulaStore(tmp_path / "harness-context.db")
+    engagement = store.create(Engagement(id="harness-context", name="Harness context"))
+    session = store.create(
+        ChatSession(
+            id="harness-context-chat",
+            engagement_id=engagement.id,
+            title="Harness-owned context",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="codex-profile",
+            harness_session_id="codex-session",
+            model="gpt-5.6",
+        )
+    )
+    run = store.create(
+        AgentRun(
+            id="harness-context-run",
+            engagement_id=engagement.id,
+            objective="Keep context runtime-owned",
+            backend=RunBackend.HARNESS,
+            harness_profile_id="grok-profile",
+            harness_session_id="grok-session",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    chat_context = client.get(
+        f"/api/v1/chat/sessions/{session.id}/context", headers=_auth()
+    )
+    run_context = client.get(f"/api/v1/runs/{run.id}/context", headers=_auth())
+
+    assert chat_context.status_code == 200
+    assert run_context.status_code == 200
+    for payload in (chat_context.json(), run_context.json()):
+        assert payload["status"] == "runtime_managed"
+        assert payload["capacity_source"] == "runtime"
+        assert payload["context_window"] == 0
+        assert payload["target_input_tokens"] == 0
+        assert payload["max_output_tokens"] == 0
+        assert payload["estimated_input_tokens"] == 0
+
+
 def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
     async def fail_compaction(*_args, **_kwargs):
         raise ChatCompactionError("required context compaction failed")
@@ -752,3 +796,60 @@ def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
     assert payload["request_id"].startswith("req_")
     assert payload["reason_code"]
     assert payload["remediation_id"].startswith("chat.")
+
+
+def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
+    from nebula.v3.domain import ChatSubagent
+
+    store = NebulaStore(tmp_path / "subagent-routes.db")
+    engagement = store.create(Engagement(name="Subagents"))
+    profile = store.create(
+        ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
+    )
+    parent, other, child = (
+        store.create(
+            ChatSession(
+                id=session_id,
+                engagement_id=engagement.id,
+                title=session_id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                **extra,
+            )
+        )
+        for session_id, extra in (
+            ("parent", {}),
+            ("other", {}),
+            ("child", {"parent_session_id": "parent", "metadata": {"subagent_id": "sub"}}),
+        )
+    )
+    store.create(
+        ChatSubagent(
+            id="sub",
+            engagement_id=engagement.id,
+            parent_session_id=parent.id,
+            parent_turn_id="turn",
+            child_session_id=child.id,
+            name="Map routes",
+            task="Map the routes.",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    listed = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
+    foreign = client.post(f"/api/v1/chat/sessions/{other.id}/subagents/sub/stop", headers=_auth())
+    stopped = client.post(f"/api/v1/chat/sessions/{parent.id}/subagents/sub/stop", headers=_auth())
+    after = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
+
+    assert listed.status_code == 200
+    assert listed.headers["cache-control"] == "no-store"
+    assert [item["name"] for item in listed.json()["subagents"]] == ["Map routes"]
+    assert listed.json()["subagents"][0]["status"] == "running"
+    assert foreign.status_code == 404
+    assert stopped.status_code == 200
+    assert stopped.json()["status"] == "stopped"
+    item = after.json()["subagents"][0]
+    assert item["status"] == "stopped"
+    assert item["finished_at"] is not None
+    assert item["result_message_id"] is not None
+    assert client.get("/api/v1/chat/sessions/missing/subagents", headers=_auth()).status_code == 404

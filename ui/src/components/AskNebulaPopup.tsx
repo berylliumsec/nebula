@@ -43,6 +43,13 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
   }, []);
   const drag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
   const launcherDrag = useRef<{ x: number; y: number; left: number; top: number } | undefined>(undefined);
+  const notifyLayoutAfterCommit = () => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event(ASK_NEBULA_LAYOUT_EVENT));
+      });
+    });
+  };
   const moveLauncher = (x: number, y: number) => {
     const rect = launcherShell.current?.getBoundingClientRect();
     const viewport = window.visualViewport;
@@ -289,7 +296,7 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
         <button type="button" className={`icon-button subtle ${styles.move}`} aria-label="Move Ask Nebula" title="Drag to move · arrow keys to reposition"
           onPointerDown={event => { if (event.button !== 0) return; event.currentTarget.setPointerCapture(event.pointerId); drag.current = { x: event.clientX, y: event.clientY, left: position.x, top: position.y }; }}
           onPointerMove={event => { if (drag.current) move(drag.current.left + event.clientX - drag.current.x, drag.current.top + event.clientY - drag.current.y); }}
-          onPointerUp={() => { drag.current = undefined; }} onPointerCancel={() => { drag.current = undefined; }} onLostPointerCapture={() => { drag.current = undefined; }}
+          onPointerUp={() => { drag.current = undefined; notifyLayoutAfterCommit(); }} onPointerCancel={() => { drag.current = undefined; notifyLayoutAfterCommit(); }} onLostPointerCapture={() => { drag.current = undefined; notifyLayoutAfterCommit(); }}
           onKeyDown={event => { const directions: Record<string, [number, number]> = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }; const direction = directions[event.key]; if (direction) { event.preventDefault(); move(position.x + direction[0] * 24, position.y + direction[1] * 24); } }}><GripHorizontal size={18} aria-hidden="true" /></button>
         <div className={styles.title}><h2 id={titleId}>Ask Nebula</h2><small>Temporary · discarded when closed</small></div>
         <button className="icon-button subtle" type="button" aria-label="Hide Ask Nebula" title="Hide and keep this conversation"

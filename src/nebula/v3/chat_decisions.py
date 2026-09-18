@@ -53,7 +53,12 @@ def decision_snapshot(store, session_id, project_id):
 def decision_instructions(snapshot):
     if not snapshot:
         return ""
-    return "\n\nOperator-saved context:\n" + json.dumps(snapshot, ensure_ascii=False)
+    return (
+        "\n\nOperator-saved context (authoritative outside derived summaries). "
+        "Entries with kind=question remain unresolved until the operator explicitly "
+        "supersedes or removes them; do not infer that model prose resolves them.\n"
+        + json.dumps(snapshot, ensure_ascii=False)
+    )
 
 
 def fork_decisions(store, source, fork, boundary_sequence):
@@ -83,7 +88,9 @@ def fork_decisions(store, source, fork, boundary_sequence):
 class DecisionWrite(BaseModel):
     expected_revision: int = Field(ge=0)
     action: str = Field(pattern="^(save|supersede|remove|promote)$", default="save")
-    kind: str = Field(pattern="^(decision|constraint|assumption)$", default="decision")
+    kind: str = Field(
+        pattern="^(decision|constraint|assumption|question)$", default="decision"
+    )
     text: str = Field(default="", max_length=4000)
     source_message_id: str | None = None
     source_selection: str | None = Field(default=None, max_length=200000)

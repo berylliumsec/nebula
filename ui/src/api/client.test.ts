@@ -1,7 +1,334 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiClient, ApiError } from "./client";
+import { ApiClient, ApiError, chatRequestBody } from "./client";
 
 describe("ApiClient", () => {
+  it("maps authoritative goal elapsed, child, and completion evidence", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "goal-1", engagement_id: "project", session_id: "session",
+      objective: "Verify", completion_criteria: ["Checks pass"], plan: [],
+      current_step: 1, status: "completed", elapsed_seconds: 12.5,
+      children_started: 1, child_budget: 2,
+      usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 },
+      linked_turn_ids: ["turn-1"], completion_summary: "Done",
+      completion_evidence: [{ kind: "test", result: "passed" }],
+      skill_snapshots: [{
+        name: "review", path: "/workspace/.agents/skills/review/SKILL.md",
+        source: "project", root: "/workspace/.agents/skills", sha256: "a".repeat(64),
+        instructions: "not mapped into UI state",
+      }], revision: 4,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getChatGoal("session")).resolves.toMatchObject({
+      elapsedSeconds: 12.5,
+      childrenStarted: 1,
+      childBudget: 2,
+      completionSummary: "Done",
+      completionEvidence: [{ kind: "test", result: "passed" }],
+      skillSnapshots: [{
+        name: "review", path: "/workspace/.agents/skills/review/SKILL.md",
+        source: "project", root: "/workspace/.agents/skills", sha256: "a".repeat(64),
+      }],
+    });
+  });
+  it("replaces goal skills with exact identities and an optimistic revision", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "goal-1", engagement_id: "project", session_id: "session",
+      objective: "Verify", completion_criteria: ["Checks pass"], plan: [],
+      current_step: 0, status: "running", usage: {}, linked_turn_ids: [],
+      completion_evidence: [], skill_snapshots: [], revision: 5,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.replaceChatGoalSkills("session/one", {
+      expectedRevision: 4,
+      skills: [{ name: "review", path: "/workspace/.agents/skills/review/SKILL.md" }],
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/chat/sessions/session%2Fone/goal/skills",
+    );
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PUT",
+      body: JSON.stringify({
+        expected_revision: 4,
+        skills: [{ name: "review", path: "/workspace/.agents/skills/review/SKILL.md" }],
+      }),
+    });
+  });
+  it("serializes a Core-owned goal identity on provider turns", () => {
+    expect(chatRequestBody({
+      providerId: "provider",
+      sessionId: "session",
+      goalId: "goal",
+      messages: [{ role: "user", content: "Continue" }],
+    }, true)).toMatchObject({ session_id: "session", goal_id: "goal", stream: true });
+  });
+  it("serializes an exact native skill identity on provider turns", () => {
+    expect(chatRequestBody({
+      providerId: "provider",
+      skill: { name: "review", path: "/workspace/.agents/skills/review/SKILL.md" },
+      messages: [{ role: "user", content: "$review Continue" }],
+    }, true)).toMatchObject({
+      skill: { name: "review", path: "/workspace/.agents/skills/review/SKILL.md" },
+      stream: true,
+    });
+  });
+
+  it("serializes a revision-bound runtime switch confirmation", () => {
+    expect(chatRequestBody({
+      providerId: "provider",
+      model: "smaller-model",
+      runtimeSwitchConfirmation: "a".repeat(64),
+      messages: [{ role: "user", content: "Continue" }],
+    }, true)).toMatchObject({
+      model: "smaller-model",
+      runtime_switch_confirmation: "a".repeat(64),
+      stream: true,
+    });
+  });
+
+  it("maps runtime switch preflight capacity and confirmation", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      session_id: "session-1",
+      session_revision: 4,
+      current_provider_id: "provider-1",
+      current_model: "large-model",
+      target_provider_id: "provider-1",
+      target_model: "small-model",
+      compatible: true,
+      requires_compaction_confirmation: true,
+      confirmation_token: "b".repeat(64),
+      estimated_active_input_tokens: 12_000,
+      target_context_window: 8_000,
+      target_input_tokens: 4_500,
+      target_max_output_tokens: 2_000,
+      metadata_revision: "catalog-2",
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.preflightChatRuntimeSwitch("session-1", {
+      providerId: "provider-1",
+      model: "small-model",
+      toolsEnabled: true,
+      expectedSessionRevision: 4,
+    })).resolves.toMatchObject({
+      sessionId: "session-1",
+      compatible: true,
+      requiresCompactionConfirmation: true,
+      confirmationToken: "b".repeat(64),
+      targetInputTokens: 4_500,
+      metadataRevision: "catalog-2",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/chat/sessions/session-1/runtime-switch/preflight",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      provider_id: "provider-1",
+      model: "small-model",
+      tools_enabled: true,
+      expected_session_revision: 4,
+    });
+  });
+
+  it("loads native skills from the engagement-scoped Nebula catalog", async () => {
+    const skills = [{
+      name: "review",
+      path: "/workspace/.agents/skills/review/SKILL.md",
+      source: "project",
+      root: "/workspace/.agents/skills",
+    }];
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify(skills), { status: 200 }),
+    );
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listSkills("project/one")).resolves.toEqual(skills);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/skills?engagement_id=project%2Fone",
+    );
+  });
+
+  it("loads project and managed shared skill roots", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      project_root: "/workspace/.agents/skills",
+      managed_root: "/data/.agents/skills",
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getSkillCatalog("project/one")).resolves.toEqual({
+      projectRoot: "/workspace/.agents/skills",
+      managedRoot: "/data/.agents/skills",
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/skills/catalog?engagement_id=project%2Fone",
+    );
+  });
+
+  it("loads provider-native hooks and serializes exact selected ids", async () => {
+    const hook = {
+      id: "audit",
+      source: "project",
+      path: "/workspace/.agents/hooks/audit",
+      manifest: {
+        version: 1,
+        name: "Audit lifecycle",
+        description: "Records outcomes.",
+        events: ["chat.turn.started"],
+        command: ["run.sh"],
+        timeout_seconds: 10,
+        side_effects: "workspace",
+        failure_policy: "block",
+      },
+      manifest_sha256: "a".repeat(64),
+      executable_sha256: "b".repeat(64),
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify([hook]), { status: 200 }),
+    );
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listNativeHooks("project/one")).resolves.toMatchObject([{
+      id: "audit",
+      manifest: { timeoutSeconds: 10, sideEffects: "workspace", failurePolicy: "block" },
+    }]);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/hooks?engagement_id=project%2Fone",
+    );
+    expect(chatRequestBody({
+      providerId: "provider",
+      hookIds: ["audit"],
+      messages: [{ role: "user", content: "Run it" }],
+    }, true).hook_ids).toEqual(["audit"]);
+  });
+
+  it("maps restart recovery without hiding unknown tool outcomes", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "turn-recovery",
+      session_id: "session-1",
+      revision: 3,
+      status: "interrupted",
+      approval_id: null,
+      harness_turn_id: null,
+      tool_call_ids: ["tool-unknown"],
+      error: "Core restarted while a tool outcome was unknown.",
+      recovery_blocked: true,
+      unresolved_tool_call_ids: ["tool-unknown"],
+      unresolved_hook_execution_ids: [],
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getPendingChatTurn("session-1")).resolves.toMatchObject({
+      id: "turn-recovery",
+      status: "interrupted",
+      error: "Core restarted while a tool outcome was unknown.",
+      recoveryBlocked: true,
+      unresolvedToolCallIds: ["tool-unknown"],
+      toolCallIds: ["tool-unknown"],
+    });
+  });
+
+  it("maps, lists, and reconciles uncertain hook outcomes without replay", async () => {
+    const responses = [
+      new Response(JSON.stringify({
+        id: "turn-recovery", session_id: "session-1", revision: 3,
+        status: "interrupted", tool_call_ids: [], recovery_blocked: true,
+        unresolved_tool_call_ids: [], unresolved_hook_execution_ids: ["hook-run-1"],
+      }), { status: 200 }),
+      new Response(JSON.stringify([{
+        id: "hook-run-1", hook_id: "audit", event_name: "chat.turn.started",
+        status: "interrupted", side_effects: "external",
+        started_at: "2026-09-18T12:00:00Z", completed_at: "2026-09-18T12:01:00Z",
+      }]), { status: 200 }),
+      new Response(JSON.stringify({
+        id: "turn-recovery", session_id: "session-1", revision: 4,
+        status: "interrupted", tool_call_ids: [], recovery_blocked: false,
+        unresolved_tool_call_ids: [], unresolved_hook_execution_ids: [],
+      }), { status: 200 }),
+    ];
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => responses.shift()!);
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getPendingChatTurn("session-1")).resolves.toMatchObject({
+      recoveryBlocked: true, unresolvedHookExecutionIds: ["hook-run-1"],
+    });
+    await expect(client.listChatHookExecutions("turn-recovery")).resolves.toMatchObject([{
+      hookId: "audit", eventName: "chat.turn.started", sideEffects: "external",
+    }]);
+    await expect(client.reconcileChatHook("turn-recovery", {
+      expectedRevision: 3,
+      hookExecutionId: "hook-run-1",
+      outcome: "complete",
+      detail: "Verified externally.",
+    })).resolves.toMatchObject({ recoveryBlocked: false });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({
+      expected_revision: 3,
+      hook_execution_id: "hook-run-1",
+      outcome: "complete",
+      detail: "Verified externally.",
+    });
+  });
+
+  it("maps a waiting results callback on a pending provider turn", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "turn-callback", session_id: "session-1", revision: 2,
+      status: "waiting_callback", tool_call_ids: ["tool-1"],
+      recovery_blocked: false, unresolved_tool_call_ids: [], unresolved_hook_execution_ids: [],
+      results_url: "http://192.168.1.20:8000/api/v1/automation-processes/proc-1/results",
+      process_id: "proc-1",
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    await expect(client.getPendingChatTurn("session-1")).resolves.toMatchObject({
+      status: "waiting_callback",
+      resultsUrl: "http://192.168.1.20:8000/api/v1/automation-processes/proc-1/results",
+      processId: "proc-1",
+    });
+  });
+
+  it("loads session-scoped hook outcomes for the latest completed turn", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([{
+      id: "hook-run-2", hook_id: "audit", event_name: "chat.turn.completed",
+      status: "complete", side_effects: "none",
+      started_at: "2026-09-18T12:00:00Z", completed_at: "2026-09-18T12:00:01Z",
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listSessionHookExecutions("session/one")).resolves.toMatchObject([{
+      hookId: "audit", eventName: "chat.turn.completed", status: "complete",
+    }]);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/chat/sessions/session%2Fone/hooks",
+    );
+  });
+
+  it("submits an exact operator reconciliation without replaying the tool", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "turn-recovery",
+      session_id: "session-1",
+      revision: 4,
+      status: "interrupted",
+      tool_call_ids: ["tool-unknown"],
+      recovery_blocked: false,
+      unresolved_tool_call_ids: [],
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.reconcileChatTool("turn-recovery", {
+      expectedRevision: 3,
+      toolCallId: "tool-unknown",
+      outcome: "complete",
+      detail: "Verified in the target system.",
+    })).resolves.toMatchObject({ revision: 4, recoveryBlocked: false });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/chat/turns/turn-recovery/reconcile-tool",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      expected_revision: 3,
+      tool_call_id: "tool-unknown",
+      outcome: "complete",
+      detail: "Verified in the target system.",
+    });
+  });
   it("loads the exact approval independently of the pending catalog", async () => {
     const approval = { id: "approval/one", status: "pending", exact_request: { tool_name: "read_file", arguments: { path: "notes.txt" }, cwd: "/workspace", argv: ["read", "notes.txt"] } };
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(approval), { status: 200 }));
@@ -639,7 +966,20 @@ describe("ApiClient", () => {
       provider_id: "provider-vllm",
       healthy: true,
       models: ["security-model", "vision-model"],
+      model_descriptors: [{
+        id: "security-model",
+        name: "Security Model",
+        description: null,
+        canonical_slug: null,
+        context_window: 32_768,
+        max_output_tokens: 4_096,
+        input_modalities: ["text"],
+        output_modalities: ["text"],
+        supported_parameters: ["tools"],
+        pricing: {},
+      }],
       detail: null,
+      provider_revision: 7,
     }), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
@@ -653,7 +993,20 @@ describe("ApiClient", () => {
       providerId: "provider-vllm",
       healthy: true,
       models: ["security-model", "vision-model"],
+      modelDescriptors: [{
+        id: "security-model",
+        name: "Security Model",
+        description: null,
+        canonicalSlug: null,
+        contextWindow: 32_768,
+        maxOutputTokens: 4_096,
+        inputModalities: ["text"],
+        outputModalities: ["text"],
+        supportedParameters: ["tools"],
+        pricing: {},
+      }],
       detail: undefined,
+      providerRevision: 7,
     });
   });
 
@@ -1305,6 +1658,15 @@ describe("ApiClient", () => {
       context_window: 8192,
       max_output_tokens: 2048,
       target_input_tokens: 4608,
+      compacted_input_target: 3686,
+      capacity_source: "model_catalog",
+      capacity_estimated: false,
+      metadata_revision: "catalog-sha",
+      route_limits_verified: true,
+      eligible_route_count: 2,
+      route_context_window: 65536,
+      route_input_limit: 60000,
+      route_limits_required: true,
       estimated_input_tokens: 5000,
       compacted_through: 42,
       source_references: [{ source_kind: "chat_message", source_id: "message-1", sequence: 1 }],
@@ -1352,6 +1714,15 @@ describe("ApiClient", () => {
     expect(chat).toMatchObject({
       status: "ready",
       contextWindow: 8192,
+      compactedInputTarget: 3686,
+      capacitySource: "model_catalog",
+      capacityEstimated: false,
+      metadataRevision: "catalog-sha",
+      routeLimitsVerified: true,
+      eligibleRouteCount: 2,
+      routeContextWindow: 65536,
+      routeInputLimit: 60000,
+      routeLimitsRequired: true,
       compactedThrough: 42,
       compactionUsage: { totalTokens: 15 },
       compactionCostUsd: 0.01,

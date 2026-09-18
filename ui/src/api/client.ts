@@ -9,6 +9,7 @@ import type {
   AssetCreateRequest,
   ChatCitation,
   ChatCompletionRequest,
+  ChatGoal,
   ChatCompletionResponse,
   ChatSessionRenameRequest,
   ChatSessionActivity,
@@ -92,9 +93,13 @@ import type {
   HarnessSessionActivity,
   HarnessSessionSummary,
   ExternalHarnessSessionSummary,
+  HarnessSkillInvocation,
   HarnessSkillSummary,
+  SkillCatalogInfo,
   KnowledgeIngestRequest,
   KnowledgeIndexStatus,
+  NativeHookDescriptor,
+  NativeHookExecution,
   KnowledgeSource,
   KnowledgeUrlIngestRequest,
   LibraryIngestRequest,
@@ -1094,7 +1099,27 @@ interface WireProviderRuntimeHealth extends JsonObject {
   provider_id: string;
   healthy: boolean;
   models?: string[];
+  model_descriptors?: WireModelDescriptor[];
   detail?: string | null;
+  credential_verified?: boolean | null;
+  catalog_source?: string | null;
+  key_expires_at?: string | null;
+  key_limit_remaining?: number | null;
+  provider_revision?: number | null;
+}
+
+interface WireModelDescriptor extends JsonObject {
+  id: string;
+  name: string;
+  description?: string | null;
+  canonical_slug?: string | null;
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  input_modalities?: string[];
+  output_modalities?: string[];
+  supported_parameters?: string[];
+  pricing?: Record<string, string>;
+  expiration_date?: string | null;
 }
 
 interface WireProviderVerificationResponse extends JsonObject {
@@ -1176,7 +1201,7 @@ interface WireChatCompletion extends JsonObject {
   harness_session_id?: string | null;
   harness_turn_id?: string | null;
   model: string;
-  message: { id?: string | null; role: "assistant"; content: string };
+  message: { id?: string | null; role: "assistant"; content: string; reasoning?: string };
   usage?: {
     input_tokens?: number;
     output_tokens?: number;
@@ -1238,6 +1263,15 @@ interface WireContextStatus extends JsonObject {
   context_window: number;
   max_output_tokens: number;
   target_input_tokens: number;
+  compacted_input_target?: number | null;
+  capacity_source?: "model_catalog" | "configured" | "fallback" | "runtime" | null;
+  capacity_estimated?: boolean;
+  metadata_revision?: string | null;
+  route_limits_required?: boolean;
+  route_limits_verified?: boolean;
+  eligible_route_count?: number | null;
+  route_context_window?: number | null;
+  route_input_limit?: number | null;
   estimated_input_tokens?: number;
   compacted_through?: number;
   source_references?: WireContextSourceReference[];
@@ -1251,6 +1285,7 @@ interface WireChatStreamEvent extends JsonObject {
     | "started"
     | "delta"
     | "message_delta"
+    | "reasoning_delta"
     | "item_started"
     | "item_completed"
     | "usage"
@@ -1259,6 +1294,7 @@ interface WireChatStreamEvent extends JsonObject {
     | "tool_started"
     | "tool_completed"
     | "approval_required"
+    | "callback_required"
     | "status"
     | "turn_status"
     | "item_upsert"
@@ -1521,6 +1557,12 @@ interface WireChatTurn extends WireEntity {
   approval_id?: string | null;
   harness_turn_id?: string | null;
   tool_call_ids?: string[];
+  error?: string | null;
+  recovery_blocked?: boolean;
+  unresolved_tool_call_ids?: string[];
+  unresolved_hook_execution_ids?: string[];
+  results_url?: string | null;
+  process_id?: string | null;
 }
 
 interface WirePersistedChatMessage extends WireEntity {
@@ -1529,6 +1571,7 @@ interface WirePersistedChatMessage extends WireEntity {
   sequence: number;
   role: "user" | "assistant";
   content: string;
+  reasoning?: string;
   content_blocks?: Array<{
     type: "text" | "code" | "image" | "artifact" | "citation" | "activity";
     text?: string | null;
@@ -2534,7 +2577,25 @@ function mapProviderRuntimeHealth(
     providerId: value.provider_id,
     healthy: value.healthy,
     models: value.models ?? [],
+    ...(value.model_descriptors ? { modelDescriptors: value.model_descriptors.map((model) => ({
+      id: model.id,
+      name: model.name,
+      description: model.description ?? null,
+      canonicalSlug: model.canonical_slug ?? null,
+      contextWindow: model.context_window ?? null,
+      maxOutputTokens: model.max_output_tokens ?? null,
+      inputModalities: model.input_modalities ?? [],
+      outputModalities: model.output_modalities ?? [],
+      supportedParameters: model.supported_parameters ?? [],
+      pricing: model.pricing ?? {},
+      ...(model.expiration_date ? { expirationDate: model.expiration_date } : {}),
+    })) } : {}),
     detail: value.detail ?? undefined,
+    ...(value.credential_verified != null ? { credentialVerified: value.credential_verified } : {}),
+    ...(value.catalog_source ? { catalogSource: value.catalog_source } : {}),
+    ...(value.key_expires_at ? { keyExpiresAt: value.key_expires_at } : {}),
+    ...(value.key_limit_remaining != null ? { keyLimitRemaining: value.key_limit_remaining } : {}),
+    ...(value.provider_revision != null ? { providerRevision: value.provider_revision } : {}),
   };
 }
 
@@ -2653,6 +2714,7 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
       id: value.message.id ?? undefined,
       role: value.message.role,
       content: value.message.content,
+      reasoning: value.message.reasoning || undefined,
     },
     usage: {
       inputTokens,
@@ -2750,6 +2812,15 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     contextWindow: value.context_window,
     maxOutputTokens: value.max_output_tokens,
     targetInputTokens: value.target_input_tokens,
+    compactedInputTarget: value.compacted_input_target ?? undefined,
+    capacitySource: value.capacity_source ?? undefined,
+    capacityEstimated: value.capacity_estimated === true,
+    metadataRevision: value.metadata_revision ?? undefined,
+    routeLimitsRequired: value.route_limits_required === true,
+    routeLimitsVerified: value.route_limits_verified === true,
+    eligibleRouteCount: value.eligible_route_count ?? undefined,
+    routeContextWindow: value.route_context_window ?? undefined,
+    routeInputLimit: value.route_input_limit ?? undefined,
     estimatedInputTokens: numberField(value.estimated_input_tokens),
     compactedThrough: numberField(value.compacted_through),
     sourceReferences: (value.source_references ?? []).map(mapContextSource),
@@ -3072,8 +3143,10 @@ export function chatRequestBody(
     harness_profile_id: body.harnessProfileId,
     harness_session_id: body.harnessSessionId,
     mcp_server_ids: body.mcpServerIds ?? [],
+    hook_ids: body.hookIds ?? [],
     engagement_id: body.engagementId,
     session_id: body.sessionId,
+    goal_id: body.goalId,
     model: body.model || undefined,
     messages: body.messages.map((message) => ({
       id: message.id,
@@ -3111,6 +3184,10 @@ export function chatRequestBody(
     harness_skill: body.harnessSkill
       ? { name: body.harnessSkill.name, path: body.harnessSkill.path }
       : undefined,
+    runtime_switch_confirmation: body.runtimeSwitchConfirmation,
+    skill: body.skill
+      ? { name: body.skill.name, path: body.skill.path }
+      : undefined,
     stream,
   };
 }
@@ -3131,6 +3208,52 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
+  };
+}
+
+function mapChatGoal(value: Record<string, any>): ChatGoal {
+  return {
+    id: String(value.id),
+    engagementId: String(value.engagement_id),
+    sessionId: String(value.session_id),
+    objective: String(value.objective),
+    completionCriteria: Array.isArray(value.completion_criteria) ? value.completion_criteria.map(String) : [],
+    plan: Array.isArray(value.plan) ? value.plan.map(String) : [],
+    currentStep: Number(value.current_step ?? 0),
+    status: value.status as ChatGoal["status"],
+    tokenBudget: typeof value.token_budget === "number" ? value.token_budget : undefined,
+    timeBudgetSeconds: typeof value.time_budget_seconds === "number" ? value.time_budget_seconds : undefined,
+    stepBudget: typeof value.step_budget === "number" ? value.step_budget : undefined,
+    childBudget: typeof value.child_budget === "number" ? value.child_budget : undefined,
+    elapsedSeconds: Number(value.elapsed_seconds ?? 0),
+    childrenStarted: Number(value.children_started ?? 0),
+    usage: {
+      inputTokens: Number(value.usage?.input_tokens ?? 0),
+      outputTokens: Number(value.usage?.output_tokens ?? 0),
+      totalTokens: Number(value.usage?.total_tokens ?? 0),
+    },
+    linkedTurnIds: Array.isArray(value.linked_turn_ids) ? value.linked_turn_ids.map(String) : [],
+    blockedReason: typeof value.blocked_reason === "string" ? value.blocked_reason : undefined,
+    completionSummary: typeof value.completion_summary === "string" ? value.completion_summary : undefined,
+    completionEvidence: Array.isArray(value.completion_evidence) ? value.completion_evidence : [],
+    parentGoalId: typeof value.parent_goal_id === "string" ? value.parent_goal_id : undefined,
+    childSessionIds: Array.isArray(value.child_session_ids) ? value.child_session_ids.map(String) : [],
+    skillSnapshots: Array.isArray(value.skill_snapshots) ? value.skill_snapshots.flatMap((item: unknown) => {
+      if (!item || typeof item !== "object") return [];
+      const snapshot = item as Record<string, unknown>;
+      return typeof snapshot.name === "string" && typeof snapshot.path === "string"
+        && (snapshot.source === "project" || snapshot.source === "installed")
+        && typeof snapshot.sha256 === "string"
+        ? [{
+          name: snapshot.name,
+          path: snapshot.path,
+          source: snapshot.source,
+          root: typeof snapshot.root === "string" ? snapshot.root : undefined,
+          sha256: snapshot.sha256,
+        }]
+        : [];
+    }) : [],
+    revision: Number(value.revision),
   };
 }
 
@@ -3328,11 +3451,42 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
   return {
     id: value.id,
     sessionId: value.session_id,
+    revision: value.revision,
     status: value.status,
     approvalId: value.approval_id ?? undefined,
     harnessTurnId: value.harness_turn_id ?? undefined,
     toolCallIds: value.tool_call_ids ?? [],
+    error: value.error ?? undefined,
+    recoveryBlocked: value.recovery_blocked === true,
+    unresolvedToolCallIds: value.unresolved_tool_call_ids ?? [],
+    unresolvedHookExecutionIds: value.unresolved_hook_execution_ids ?? [],
+    resultsUrl: typeof value.results_url === "string" ? value.results_url : undefined,
+    processId: typeof value.process_id === "string" ? value.process_id : undefined,
   };
+}
+
+function mapNativeHookExecutions(items: Array<{
+  id: string;
+  hook_id: string;
+  event_name: string;
+  status: NativeHookExecution["status"];
+  side_effects: NativeHookExecution["sideEffects"];
+  started_at: string;
+  completed_at?: string | null;
+  error?: string | null;
+  reconciliation?: Record<string, unknown> | null;
+}>): NativeHookExecution[] {
+  return items.map(item => ({
+    id: item.id,
+    hookId: item.hook_id,
+    eventName: item.event_name,
+    status: item.status,
+    sideEffects: item.side_effects,
+    startedAt: item.started_at,
+    completedAt: item.completed_at ?? undefined,
+    error: item.error ?? undefined,
+    reconciliation: item.reconciliation ?? undefined,
+  }));
 }
 
 function mapHarnessDetailedUsage(
@@ -3441,6 +3595,7 @@ function mapPersistedChatMessage(
     sequence: value.sequence,
     role: value.role,
     content: value.content,
+    reasoning: value.reasoning || undefined,
     contentBlocks: (value.content_blocks ?? []).map((block) => ({
       type: block.type,
       text: block.text ?? undefined,
@@ -5172,6 +5327,64 @@ export class ApiClient {
       `harnesses/${encodeURIComponent(id)}/skills?engagement_id=${encodeURIComponent(engagementId)}`,
       { signal },
     );
+  }
+
+  listSkills(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<HarnessSkillSummary[]> {
+    return this.request<Array<{ name: string; path: string; source: "project" | "installed"; root: string }>>(
+      `skills?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    );
+  }
+
+  listNativeHooks(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<NativeHookDescriptor[]> {
+    return this.request<Array<{
+      id: string;
+      source: "project";
+      path: string;
+      manifest: {
+        version: 1;
+        name: string;
+        description: string;
+        events: string[];
+        timeout_seconds: number;
+        side_effects: "none" | "workspace" | "external";
+        failure_policy: "continue" | "block";
+      };
+    }>>(`hooks?engagement_id=${encodeURIComponent(engagementId)}`, { signal }).then(
+      items => items.map(item => ({
+        id: item.id,
+        source: item.source,
+        path: item.path,
+        manifest: {
+          version: item.manifest.version,
+          name: item.manifest.name,
+          description: item.manifest.description,
+          events: item.manifest.events,
+          timeoutSeconds: item.manifest.timeout_seconds,
+          sideEffects: item.manifest.side_effects,
+          failurePolicy: item.manifest.failure_policy,
+        },
+      })),
+    );
+  }
+
+  getSkillCatalog(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<SkillCatalogInfo> {
+    return this.request<{ project_root: string; managed_root: string }>(
+      `skills/catalog?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    ).then((value) => ({
+      projectRoot: value.project_root,
+      managedRoot: value.managed_root,
+    }));
   }
 
   async deleteHarness(id: string, expectedRevision: number): Promise<void> {
@@ -7572,6 +7785,82 @@ export class ApiClient {
     return this.request<void>(`chat/temporary-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", keepalive: true });
   }
 
+  listChatCheckpoints(sessionId: string): Promise<Array<{
+    id: string; label: string; files: Array<{ path: string; sha256: string; size: number }>; createdAt: string;
+  }>> {
+    return this.request<Array<{
+      id: string; label: string; files: Array<{ path: string; sha256: string; size: number }>; created_at: string;
+    }>>(`chat/sessions/${encodeURIComponent(sessionId)}/checkpoints`).then(items => items.map(item => ({
+      id: item.id, label: item.label, files: item.files, createdAt: item.created_at,
+    })));
+  }
+
+  captureChatCheckpoint(sessionId: string, body: { label: string; paths: string[] }) {
+    return this.request<Record<string, unknown>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  }
+
+  previewChatCheckpoint(checkpointId: string) {
+    return this.request<Array<{ path: string; sha256: string; size: number; status: string }>>(
+      `chat/checkpoints/${encodeURIComponent(checkpointId)}/preview`,
+    );
+  }
+
+  restoreChatCheckpoint(checkpointId: string) {
+    return this.request<Array<{ path: string; status: string }>>(
+      `chat/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
+      { method: "POST" },
+    );
+  }
+
+  listGoalChildren(sessionId: string): Promise<ChatGoal[]> {
+    return this.request<Array<Record<string, any>>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/children`,
+    ).then(items => items.map(mapChatGoal));
+  }
+
+  startGoalChild(sessionId: string, body: {
+    objective: string; completionCriteria: string[]; plan?: string[];
+  }): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/children`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          objective: body.objective,
+          completion_criteria: body.completionCriteria,
+          plan: body.plan ?? [],
+        }),
+      },
+    ).then(mapChatGoal);
+  }
+
+  getChatSchedule(sessionId: string) {
+    return this.request<{
+      id: string; interval_seconds: number; next_run_at: string; enabled: boolean;
+      last_status?: string | null; skip_reason?: string | null; revision: number;
+    }>(`chat/sessions/${encodeURIComponent(sessionId)}/schedule`);
+  }
+
+  createChatSchedule(sessionId: string, intervalSeconds: number) {
+    return this.request<Record<string, unknown>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/schedule`,
+      { method: "POST", body: JSON.stringify({ interval_seconds: intervalSeconds }) },
+    );
+  }
+
+  writeChatSchedule(sessionId: string, body: { expectedRevision: number; enabled: boolean }) {
+    return this.request<Record<string, unknown>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/schedule/actions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: body.expectedRevision, enabled: body.enabled }),
+      },
+    );
+  }
+
   forkChatSession(
     sessionId: string,
     throughMessageId: string | undefined,
@@ -7731,6 +8020,114 @@ export class ApiClient {
     ).then(mapContextStatus);
   }
 
+  preflightChatRuntimeSwitch(
+    sessionId: string,
+    body: {
+      providerId: string;
+      model: string;
+      toolsEnabled: boolean;
+      maxOutputTokens?: number;
+      expectedSessionRevision: number;
+    },
+  ): Promise<import("./types").ChatRuntimeSwitchPreflight> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/runtime-switch/preflight`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider_id: body.providerId,
+          model: body.model,
+          tools_enabled: body.toolsEnabled,
+          max_output_tokens: body.maxOutputTokens,
+          expected_session_revision: body.expectedSessionRevision,
+        }),
+      },
+    ).then((value) => ({
+      sessionId: String(value.session_id),
+      sessionRevision: Number(value.session_revision),
+      currentProviderId: String(value.current_provider_id),
+      currentModel: String(value.current_model),
+      targetProviderId: String(value.target_provider_id),
+      targetModel: String(value.target_model),
+      compatible: value.compatible === true,
+      requiresCompactionConfirmation: value.requires_compaction_confirmation === true,
+      confirmationToken: typeof value.confirmation_token === "string" ? value.confirmation_token : undefined,
+      reason: typeof value.reason === "string" ? value.reason : undefined,
+      estimatedActiveInputTokens: Number(value.estimated_active_input_tokens ?? 0),
+      targetContextWindow: typeof value.target_context_window === "number" ? value.target_context_window : undefined,
+      targetInputTokens: typeof value.target_input_tokens === "number" ? value.target_input_tokens : undefined,
+      targetMaxOutputTokens: typeof value.target_max_output_tokens === "number" ? value.target_max_output_tokens : undefined,
+      metadataRevision: typeof value.metadata_revision === "string" ? value.metadata_revision : undefined,
+    }));
+  }
+
+  getChatGoal(sessionId: string, signal?: AbortSignal): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal`, { signal },
+    ).then(mapChatGoal);
+  }
+
+  createChatGoal(sessionId: string, body: {
+    objective: string;
+    completionCriteria: string[];
+    plan?: string[];
+    tokenBudget?: number;
+    timeBudgetSeconds?: number;
+    stepBudget?: number;
+    childBudget?: number;
+  }): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        method: "POST",
+        body: JSON.stringify({
+          objective: body.objective,
+          completion_criteria: body.completionCriteria,
+          plan: body.plan ?? [],
+          token_budget: body.tokenBudget,
+          time_budget_seconds: body.timeBudgetSeconds,
+          step_budget: body.stepBudget,
+          child_budget: body.childBudget,
+        }),
+      },
+    ).then(mapChatGoal);
+  }
+
+  writeChatGoal(sessionId: string, body: {
+    expectedRevision: number;
+    action: "start" | "pause" | "resume" | "cancel" | "block" | "complete";
+    reason?: string;
+    completionSummary?: string;
+    completionEvidence?: Array<Record<string, unknown>>;
+  }): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/actions`, {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: body.expectedRevision,
+          action: body.action,
+          reason: body.reason,
+          completion_summary: body.completionSummary,
+          completion_evidence: body.completionEvidence ?? [],
+        }),
+      },
+    ).then(mapChatGoal);
+  }
+
+  replaceChatGoalSkills(sessionId: string, body: {
+    expectedRevision: number;
+    skills: HarnessSkillInvocation[];
+  }): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal/skills`, {
+        method: "PUT",
+        body: JSON.stringify({
+          expected_revision: body.expectedRevision,
+          skills: body.skills,
+        }),
+      },
+    ).then(mapChatGoal);
+  }
+
   getRunContext(runId: string, signal?: AbortSignal): Promise<ContextStatus> {
     return this.request<WireContextStatus>(
       `runs/${encodeURIComponent(runId)}/context`,
@@ -7819,6 +8216,16 @@ export class ApiClient {
         });
         return;
       }
+      if (wire.type === "reasoning_delta") {
+        onEvent({
+          type: "reasoning_delta",
+          providerId: wire.provider_id ?? body.providerId,
+          model: wire.model ?? body.model ?? "unknown",
+          delta: wire.delta ?? "",
+          turnId: wire.turn_id ?? undefined,
+        });
+        return;
+      }
       if (wire.type === "tool_started") {
         const turnId = wire.turn_id ?? wire.harness_turn_id;
         const capability = wire.capability ?? wire.tool_name;
@@ -7896,6 +8303,19 @@ export class ApiClient {
             id: wire.approval_id,
             exact_request: wire.payload ?? {},
           },
+        });
+        return;
+      }
+      if (wire.type === "callback_required") {
+        const turnId = wire.turn_id;
+        if (!turnId || !wire.tool_call_id) return;
+        onEvent({
+          type: "callback_required",
+          turnId,
+          toolCallId: wire.tool_call_id,
+          processId: typeof wire.process_id === "string" ? wire.process_id : undefined,
+          resultsUrl: typeof wire.results_url === "string" ? wire.results_url : undefined,
+          summary: typeof wire.summary === "string" ? wire.summary : "Waiting for results.",
         });
         return;
       }
@@ -8073,6 +8493,86 @@ export class ApiClient {
       `chat/turns/${encodeURIComponent(turnId)}/cancel`,
       {
         method: "POST",
+      },
+    ).then(mapChatTurn);
+  }
+
+  reconcileChatTool(
+    turnId: string,
+    request: {
+      expectedRevision: number;
+      toolCallId: string;
+      outcome: "complete" | "failed";
+      detail: string;
+    },
+  ): Promise<ChatTurn> {
+    return this.request<WireChatTurn>(
+      `chat/turns/${encodeURIComponent(turnId)}/reconcile-tool`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: request.expectedRevision,
+          tool_call_id: request.toolCallId,
+          outcome: request.outcome,
+          detail: request.detail,
+        }),
+      },
+    ).then(mapChatTurn);
+  }
+
+  listChatHookExecutions(
+    turnId: string,
+    signal?: AbortSignal,
+  ): Promise<NativeHookExecution[]> {
+    return this.request<Array<{
+      id: string;
+      hook_id: string;
+      event_name: string;
+      status: NativeHookExecution["status"];
+      side_effects: NativeHookExecution["sideEffects"];
+      started_at: string;
+      completed_at?: string | null;
+      error?: string | null;
+      reconciliation?: Record<string, unknown> | null;
+    }>>(`chat/turns/${encodeURIComponent(turnId)}/hooks`, { signal }).then(mapNativeHookExecutions);
+  }
+
+  listSessionHookExecutions(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<NativeHookExecution[]> {
+    return this.request<Array<{
+      id: string;
+      hook_id: string;
+      event_name: string;
+      status: NativeHookExecution["status"];
+      side_effects: NativeHookExecution["sideEffects"];
+      started_at: string;
+      completed_at?: string | null;
+      error?: string | null;
+      reconciliation?: Record<string, unknown> | null;
+    }>>(`chat/sessions/${encodeURIComponent(sessionId)}/hooks`, { signal }).then(mapNativeHookExecutions);
+  }
+
+  reconcileChatHook(
+    turnId: string,
+    request: {
+      expectedRevision: number;
+      hookExecutionId: string;
+      outcome: "complete" | "failed";
+      detail: string;
+    },
+  ): Promise<ChatTurn> {
+    return this.request<WireChatTurn>(
+      `chat/turns/${encodeURIComponent(turnId)}/reconcile-hook`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          expected_revision: request.expectedRevision,
+          hook_execution_id: request.hookExecutionId,
+          outcome: request.outcome,
+          detail: request.detail,
+        }),
       },
     ).then(mapChatTurn);
   }

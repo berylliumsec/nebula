@@ -42,6 +42,14 @@ function selectElementText(element: HTMLElement) {
   fireEvent.pointerUp(element);
 }
 
+function unmatchedCoreResponse(input: RequestInfo | URL) {
+  const pathname = new URL(String(input)).pathname;
+  if (pathname.endsWith("/goal")) {
+    return new Response(JSON.stringify({ detail: "Goal not found" }), { status: 404 });
+  }
+  return new Response(JSON.stringify([]), { status: 200 });
+}
+
 describe("Nebula workspace", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -303,7 +311,7 @@ describe("Nebula workspace", () => {
       if (url.pathname.endsWith("/approvals")) {
         return new Response(JSON.stringify([{ ...entity, id: "approval-first", engagement_id: "engagement-first", run_id: "run-first", status: "pending", risk_class: "active_scan", exact_request: { tool_name: "scan.tcp", arguments: { ports: [443] } }, policy_rationale: "Active scan approval", requested_by: "network-specialist", requested_at: entity.created_at, expected_effects: ["Probe the target"] }]), { status: 200 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal("WebSocket", OnlineWebSocket);
@@ -334,14 +342,14 @@ describe("Nebula workspace", () => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Idle assistant", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderApp("/sessions");
 
     expect(await screen.findByRole("tab", { name: "Analyst chat" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByText("No conversation open")).toBeVisible();
+    expect((await screen.findAllByText("No conversation open"))[0]).toBeVisible();
     expect(screen.queryByRole("textbox", { name: "Message the analyst assistant" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     expect(screen.queryByRole("complementary", { name: "Session inspector" })).not.toBeInTheDocument();
@@ -402,18 +410,31 @@ describe("Nebula workspace", () => {
           metadata: { filename: "scope.md", media_type: "text/markdown", chunk_count: 1 },
         }]), { status: 200 });
       }
+      if (url.pathname.endsWith("/chat/turns/turn-1/hooks") || url.pathname.endsWith("/chat/sessions/session-1/hooks")) {
+        return new Response(JSON.stringify([{
+          id: "hook-run-1", hook_id: "audit", event_name: "chat.turn.completed",
+          status: "complete", side_effects: "none", started_at: "2026-09-18T12:00:00Z", completed_at: "2026-09-18T12:00:01Z",
+        }]), { status: 200 });
+      }
+      if (url.pathname.endsWith("/hooks") && !url.pathname.includes("/chat/")) {
+        return new Response(JSON.stringify([{
+          id: "audit", source: "project", path: "/workspace/.agents/hooks/audit",
+          manifest: { version: 1, name: "Audit lifecycle", description: "Record turn outcomes", events: ["chat.turn.started", "chat.turn.completed"], command: ["run.sh"], timeout_seconds: 10, side_effects: "none", failure_policy: "continue" },
+          manifest_sha256: "a".repeat(64), executable_sha256: "b".repeat(64),
+        }]), { status: 200 });
+      }
       if (url.pathname.endsWith("/chat/completions")) {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(encoder.encode('event: started\ndata: {"type":"started","provider_id":"provider-1","model":"model-1","session_id":"session-1"}\n\n'));
             controller.enqueue(encoder.encode('event: delta\ndata: {"type":"delta","provider_id":"provider-1","model":"model-1","delta":"Bounded "}\n\n'));
-            controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","session_id":"session-1","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"Bounded answer"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","provider_request_id":"request-1","citations":[]}\n\n'));
+            controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","turn_id":"turn-1","session_id":"session-1","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"Bounded answer"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","provider_request_id":"request-1","citations":[]}\n\n'));
             controller.close();
           },
         });
         return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -425,6 +446,8 @@ describe("Nebula workspace", () => {
     expect(await screen.findByRole("combobox", { name: "Chat provider" })).toHaveValue("provider-1");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Chat model" })).toHaveValue("model-1"));
     expect(screen.getByRole("option", { name: "model-2" })).toBeVisible();
+    const hookToggle = await screen.findByRole("checkbox", { name: /Audit lifecycle/ });
+    await user.click(hookToggle);
     expect(fetchMock.mock.calls.some(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-1/health") && init?.method === "POST")).toBe(true);
     const composer = screen.getByRole("textbox", { name: "Message the analyst assistant" });
     await user.type(composer, "Review the scope");
@@ -450,8 +473,177 @@ describe("Nebula workspace", () => {
       engagement_id: "engagement-1",
       include_knowledge: true,
       allow_cloud_knowledge: true,
+      hook_ids: ["audit"],
       messages: [{ role: "user", content: "Review the scope" }],
     });
+    expect(await screen.findByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
+  });
+
+  it("reconciles an interrupted provider hook then resumes from Core state", async () => {
+    const entity = {
+      created_at: "2026-09-18T12:00:00Z",
+      updated_at: "2026-09-18T12:01:00Z",
+      revision: 1,
+    };
+    let recoveryBlocked = true;
+    let turnRevision = 3;
+    let hookStatus = "interrupted";
+    let hookReconciliation: Record<string, unknown> | undefined;
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      const path = url.pathname;
+      if (path.endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      }
+      if (path.endsWith("/engagements")) {
+        return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Hook recovery", status: "active", metadata: {} }]), { status: 200 });
+      }
+      if (path.endsWith("/providers")) {
+        return new Response(JSON.stringify([{
+          ...entity,
+          id: "provider-1",
+          name: "Cloud analyst",
+          provider_type: "openai",
+          endpoint: "https://api.openai.com/v1",
+          enabled: true,
+          is_local: false,
+          secret_ref: "env:OPENAI_API_KEY",
+          model_allowlist: ["model-1"],
+          capabilities: { streaming: true },
+          privacy: { local_only: false, residency: [], permits_sensitive_data: true },
+          metadata: { default_model: "model-1" },
+        }]), { status: 200 });
+      }
+      if (path.endsWith("/chat-sessions")) {
+        return new Response(JSON.stringify([{
+          ...entity,
+          id: "session-hook",
+          engagement_id: "engagement-1",
+          title: "Interrupted hook",
+          backend: "provider",
+          provider_profile_id: "provider-1",
+          model: "model-1",
+          metadata: { message_count: 1 },
+        }]), { status: 200 });
+      }
+      if (path.endsWith("/chat/sessions/session-hook/messages")) {
+        return new Response(JSON.stringify([{
+          ...entity,
+          id: "message-user",
+          engagement_id: "engagement-1",
+          session_id: "session-hook",
+          sequence: 1,
+          role: "user",
+          content: "Audit this turn",
+          citations: [],
+          usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+        }]), { status: 200 });
+      }
+      if (path.endsWith("/chat/sessions/session-hook/pending-turn")) {
+        return new Response(JSON.stringify({
+          id: "turn-hook",
+          session_id: "session-hook",
+          revision: turnRevision,
+          status: "interrupted",
+          tool_call_ids: [],
+          error: "Core restarted before the hook outcome was known.",
+          recovery_blocked: recoveryBlocked,
+          unresolved_tool_call_ids: [],
+          unresolved_hook_execution_ids: recoveryBlocked ? ["hook-run-1"] : [],
+        }), { status: 200 });
+      }
+      if (path.endsWith("/chat/turns/turn-hook/hooks")) {
+        return new Response(JSON.stringify([{
+          id: "hook-run-1",
+          hook_id: "audit",
+          event_name: "chat.turn.started",
+          status: hookStatus,
+          side_effects: "external",
+          started_at: "2026-09-18T12:00:00Z",
+          completed_at: "2026-09-18T12:01:00Z",
+          error: hookStatus === "interrupted" ? "Core restarted before the hook outcome was known." : undefined,
+          reconciliation: hookReconciliation,
+        }]), { status: 200 });
+      }
+      if (path.endsWith("/hooks") && !path.includes("/chat/")) {
+        return new Response(JSON.stringify([{
+          id: "audit",
+          source: "project",
+          path: "/workspace/.agents/hooks/audit",
+          manifest: {
+            version: 1,
+            name: "Audit lifecycle",
+            description: "Record turn outcomes",
+            events: ["chat.turn.started"],
+            command: ["run.sh"],
+            timeout_seconds: 10,
+            side_effects: "external",
+            failure_policy: "continue",
+          },
+          manifest_sha256: "a".repeat(64),
+          executable_sha256: "b".repeat(64),
+        }]), { status: 200 });
+      }
+      if (path.endsWith("/chat/turns/turn-hook/reconcile-hook") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        recoveryBlocked = false;
+        turnRevision += 1;
+        hookStatus = "reconciled";
+        hookReconciliation = { outcome: body.outcome, detail: body.detail };
+        return new Response(JSON.stringify({
+          id: "turn-hook",
+          session_id: "session-hook",
+          revision: turnRevision,
+          status: "interrupted",
+          tool_call_ids: [],
+          error: "Core restarted before the hook outcome was known.",
+          recovery_blocked: false,
+          unresolved_tool_call_ids: [],
+          unresolved_hook_execution_ids: [],
+        }), { status: 200 });
+      }
+      if (path.endsWith("/chat/turns/turn-hook/resume") && init?.method === "POST") {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","turn_id":"turn-hook","session_id":"session-hook","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"Resumed after hook confirmation"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","citations":[]}\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    await user.click(screen.getByRole("button", { name: "Show conversations" }));
+    const conversationPanel = await screen.findByLabelText("Conversations");
+    await user.click(within(conversationPanel).getByRole("button", { name: /Interrupted hookmodel-1/ }));
+
+    expect(await screen.findByText("What happened to Audit lifecycle?")).toBeVisible();
+    expect(screen.getByText("Lifecycle hooks · 0/1 completed")).toBeVisible();
+    expect(screen.getByText("Audit lifecycle")).toBeVisible();
+    await user.type(screen.getByPlaceholderText("Operator verification note"), "Verified the external audit write.");
+    await user.click(screen.getByRole("button", { name: "Confirm completed" }));
+
+    expect(await screen.findByRole("button", { name: "Resume response" })).toBeVisible();
+    expect(screen.getByText("Verified the external audit write.")).toBeVisible();
+    expect(JSON.parse(String(fetchMock.mock.calls.find(([request, requestInit]) =>
+      String(request).endsWith("/chat/turns/turn-hook/reconcile-hook") && requestInit?.method === "POST"
+    )?.[1]?.body))).toMatchObject({
+      expected_revision: 3,
+      hook_execution_id: "hook-run-1",
+      outcome: "complete",
+      detail: "Verified the external audit write.",
+    });
+    await user.click(screen.getByRole("button", { name: "Resume response" }));
+    expect(await screen.findByText("Resumed after hook confirmation")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([request, requestInit]) =>
+      String(request).endsWith("/chat/turns/turn-hook/resume") && requestInit?.method === "POST"
+    )).toBe(true);
   });
 
   it("opens selected text as an editable draft and hashes it only on explicit send", async () => {
@@ -495,7 +687,7 @@ describe("Nebula workspace", () => {
         });
         return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -553,7 +745,7 @@ describe("Nebula workspace", () => {
         const body = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ ...entity, id: "note-selection", ...body, asset_ids: [], service_ids: [], evidence_ids: [], confidence: 1 }), { status: 201 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -616,7 +808,7 @@ describe("Nebula workspace", () => {
           cost_usd: 0,
         },
       }), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -628,13 +820,13 @@ describe("Nebula workspace", () => {
     const conversationPanel = await screen.findByLabelText("Conversations");
     expect(conversationPanel.closest(".session-layout")).toHaveClass("conversation-panel-open");
     expect(localStorage.getItem("nebula.conversations.open")).toBe("true");
-    expect(await screen.findByTitle("Saved context")).toBeVisible();
+    expect(within(conversationPanel).getByTitle("Saved context")).toBeVisible();
     expect(await screen.findByText("Port retained")).toBeVisible();
     const conversationSearch = screen.getByRole("searchbox", { name: "Search conversations" });
     await user.type(conversationSearch, "missing runtime");
     expect(screen.getByText("No conversations match “missing runtime”.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear conversation search" }));
-    expect(await screen.findByTitle("Saved context")).toBeVisible();
+    expect(within(conversationPanel).getByTitle("Saved context")).toBeVisible();
     await user.click(screen.getByRole("button", { name: /Saved contextmodel-1/ }));
     await waitFor(() => expect(screen.getByTestId("router-location")).toHaveTextContent(/session=session-1/));
     expect(await screen.findByText("Port retained")).toBeVisible();
@@ -675,7 +867,7 @@ describe("Nebula workspace", () => {
     await user.clear(renameInput);
     await user.type(renameInput, "Port review");
     await user.click(screen.getByRole("button", { name: "Save conversation name" }));
-    expect(await screen.findByTitle("Port review")).toBeVisible();
+    expect((await screen.findAllByTitle("Port review"))[0]).toBeVisible();
     const renameCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(renameCall?.[1]?.body))).toEqual({ title: "Port review", expected_revision: 1 });
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
@@ -705,15 +897,16 @@ describe("Nebula workspace", () => {
         return new Response(null, { status: 204 });
       }
       if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chats.filter((chat) => !deleted.has(chat.id))), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     renderApp("/sessions");
 
     await user.click(await screen.findByRole("button", { name: "Show conversations" }));
-    expect(await screen.findByText("First conversation")).toBeVisible();
-    expect(screen.getByText("Second conversation")).toBeVisible();
+    const conversationPanel = await screen.findByLabelText("Conversations");
+    expect(within(conversationPanel).getByText("First conversation")).toBeVisible();
+    expect(within(conversationPanel).getByText("Second conversation")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "More conversation actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete all conversations" }));
     const dialog = screen.getByRole("dialog", { name: "Delete all conversations?" });
@@ -781,7 +974,7 @@ describe("Nebula workspace", () => {
           init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
         });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -837,7 +1030,7 @@ describe("Nebula workspace", () => {
         }
         return new Response(JSON.stringify(engagements), { status: 200 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -878,7 +1071,7 @@ describe("Nebula workspace", () => {
         }
         return new Response(JSON.stringify(assets), { status: 200 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -926,7 +1119,7 @@ describe("Nebula workspace", () => {
         return new Response(JSON.stringify(updated), { status: 200 });
       }
       if (url.pathname.endsWith("/operator-profiles")) return new Response(JSON.stringify(profiles), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -960,7 +1153,7 @@ describe("Nebula workspace", () => {
         const body = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ ...entity, id: "provider-vertex", ...body, metadata: body.metadata }), { status: 201 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1002,7 +1195,7 @@ describe("Nebula workspace", () => {
         const body = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ ...entity, id: "provider-orcarouter", ...body }), { status: 201 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1046,7 +1239,7 @@ describe("Nebula workspace", () => {
         return new Response(JSON.stringify(created), { status: 201 });
       }
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify(findings), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1105,7 +1298,7 @@ describe("Nebula workspace", () => {
         return new Response(JSON.stringify(updated), { status: 200 });
       }
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify(findings), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1198,7 +1391,7 @@ describe("Nebula workspace", () => {
       if (url.pathname.endsWith("/findings/finding-confirmed") && init?.method === "PATCH") return new Response(JSON.stringify({ detail: "revision conflict: expected 4, found 5" }), { status: 409 });
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify([finding]), { status: 200 });
       if (url.pathname.endsWith("/evidence")) return new Response(JSON.stringify([evidence]), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1237,7 +1430,7 @@ describe("Nebula workspace", () => {
         return new Response(null, { status: 204 });
       }
       if (url.pathname.endsWith("/providers")) return new Response(JSON.stringify(provider ? [provider] : []), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1288,7 +1481,7 @@ describe("Nebula workspace", () => {
         const body = JSON.parse(String(init.body));
         return new Response(JSON.stringify({ ...report, ...body.changes, revision: 2 }), { status: 200 });
       }
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -1328,7 +1521,7 @@ describe("Nebula workspace", () => {
       if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Signed review", description: "", status: "complete", tags: [], metadata: {} }]), { status: 200 });
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify([finding]), { status: 200 });
       if (url.pathname.endsWith("/reports")) return new Response(JSON.stringify([report]), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/reports");
@@ -1353,7 +1546,7 @@ describe("Nebula workspace", () => {
       if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Evidence review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (url.pathname.endsWith("/operator-profiles")) return new Response(JSON.stringify([{ ...entity, id: "operator-alice", display_name: "Alice Analyst", email: null, role: "Lead", active: true, activated_at: entity.updated_at, metadata: {} }]), { status: 200 });
       if (url.pathname.endsWith("/evidence")) return new Response(JSON.stringify([{ ...entity, id: "evidence-1", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "Proof", artifact_id: "artifact-1", finding_id: null, asset_ids: [], sha256: "a".repeat(64), captured_at: entity.updated_at, captured_by: "operator-alice", source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }]), { status: 200 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     renderApp("/evidence");
@@ -1371,7 +1564,7 @@ describe("Nebula workspace", () => {
       if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Evidence review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (url.pathname.endsWith("/findings")) return new Response(JSON.stringify([finding]), { status: 200 });
       if (url.pathname.endsWith("/evidence/upload") && init?.method === "POST") return new Response(JSON.stringify({ ...entity, id: "evidence-new", engagement_id: "engagement-1", evidence_type: "operator_upload", title: "proof.txt", description: "", artifact_id: "artifact-new", finding_id: "finding-1", asset_ids: [], sha256: "b".repeat(64), captured_at: entity.updated_at, captured_by: null, source_version: null, metadata: { filename: "proof.txt", media_type: "text/plain", size: 5, source: "operator_upload" } }), { status: 201 });
-      return new Response(JSON.stringify([]), { status: 200 });
+      return unmatchedCoreResponse(input);
     });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();

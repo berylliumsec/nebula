@@ -247,7 +247,7 @@
 .operator-profile-list h3 { overflow: hidden; margin: 0 0 3px; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .operator-profile-list p { overflow: hidden; margin: 0; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .operator-active { display: flex; align-items: center; gap: 4px; color: var(--green); font-size: 11px; }
-.dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--canvas) 68%, transparent); backdrop-filter: blur(4px); }
+.dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--canvas) 68%, transparent); backdrop-filter: blur(4px); }
 .provider-dialog { width: min(520px, 100%); display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); box-shadow: none; }
 .provider-dialog header, .provider-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .provider-dialog header h2 { margin: 3px 0 0; }
@@ -375,6 +375,10 @@
 .theme-options strong { font-size: 11px; }
 .theme-options small { color: var(--blue); font-size: 11px; }
 .appearance-help { margin: 0; padding: 0 14px 13px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.text-size-control { display: flex; align-items: center; gap: 4px; padding: 0 14px 13px; color: var(--muted); font-size: 11px; }
+.text-size-control > span { margin-right: auto; }
+.text-size-control output { min-width: 42px; color: var(--text); font-variant-numeric: tabular-nums; text-align: center; }
+.text-size-control .icon-button { min-width: var(--touch-target); min-height: var(--touch-target); }
 .secrets-panel .empty-state { min-height: 210px; }
 .secrets-panel .empty-state .button { margin-top: 13px; }
 .release-panel { grid-column: span 3; }

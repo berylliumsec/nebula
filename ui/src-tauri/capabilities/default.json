@@ -3,5 +3,5 @@
   "identifier": "main-window",
   "description": "Minimal capability set for the Nebula desktop workspace.",
   "webviews": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:webview:allow-set-webview-zoom"]
 }

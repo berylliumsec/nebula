@@ -23,6 +23,7 @@ interface CompletedAssistantMessage {
   durableAssistantId?: string;
   userId: string;
   content: string;
+  reasoning?: string;
   citations: ChatCitation[];
   usage?: ChatUsage;
   harnessTurnId?: string;
@@ -54,6 +55,7 @@ export function reconcileCompletedAssistantMessage(
         : undefined),
     role: "assistant",
     content: finalAssistantContent(existing?.content ?? "", completed.content),
+    reasoning: completed.reasoning || existing?.reasoning,
     citations: completed.citations,
     usage: completed.usage,
     state: "complete",

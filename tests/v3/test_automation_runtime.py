@@ -129,8 +129,14 @@ class FakeSession(RuntimeBackendSession):
         self._network_enabled = True
         self.enable_count += 1
 
-    async def run(self, process_id: str, command: str, cwd: str) -> FakeProcess:
-        del process_id
+    async def run(
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
+    ) -> FakeProcess:
+        del process_id, extra_env
         if command == "write-generated-file":
             (self.workspace / cwd / "generated.txt").write_text(
                 "generated", encoding="utf-8"

@@ -55,7 +55,7 @@ class _Backend:
         self.process = _Process()
         self.closed = False
 
-    async def run(self, process_id: str, command: str, cwd: str) -> _Process:
+    async def run(self, process_id: str, command: str, cwd: str, extra_env=None) -> _Process:
         assert process_id.startswith("adapter-")
         assert command == "exec /usr/bin/python3 -m debugpy.adapter"
         assert cwd == "."

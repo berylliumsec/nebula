@@ -1036,12 +1036,31 @@ class NebulaStore:
                 raise ConflictError(
                     f"revision conflict: expected {expected_revision}, found {row.revision}"
                 )
+            # Subagent conversations belong to their parent and go with it.
+            subagent_rows = session.scalars(
+                select(EntityRow).where(
+                    EntityRow.kind == "chat_subagents",
+                    EntityRow.payload["parent_session_id"].as_string() == session_id,
+                )
+            ).all()
+            if any(item.payload.get("status") == "running" for item in subagent_rows):
+                raise ConflictError(
+                    "conversation cannot be deleted while a subagent is running"
+                )
+            session_ids = [
+                session_id,
+                *(
+                    str(item.payload["child_session_id"])
+                    for item in subagent_rows
+                    if item.payload.get("child_session_id")
+                ),
+            ]
             active_turn = and_(
                 EntityRow.kind == "chat_turns",
-                EntityRow.payload["session_id"].as_string() == session_id,
+                EntityRow.payload["session_id"].as_string().in_(session_ids),
                 EntityRow.payload["status"]
                 .as_string()
-                .in_(("routing", "waiting_approval", "finalizing")),
+                .in_(("routing", "waiting_approval", "waiting_callback", "finalizing")),
             )
             if session.scalar(select(exists().where(active_turn))):
                 raise ConflictError(
@@ -1049,7 +1068,7 @@ class NebulaStore:
                 )
             active_harness_turn = and_(
                 EntityRow.kind == "harness_turns",
-                EntityRow.payload["chat_session_id"].as_string() == session_id,
+                EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
                 EntityRow.payload["status"]
                 .as_string()
                 .in_(("queued", "running", "waiting_approval")),
@@ -1064,26 +1083,35 @@ class NebulaStore:
                         (
                             "chat_messages",
                             "chat_turns",
+                            "chat_goals",
                             "chat_bookmarks",
                             "chat_queues",
                             "chat_decisions",
                             "chat_read_cursors",
                         )
                     ),
-                    EntityRow.payload["session_id"].as_string() == session_id,
+                    EntityRow.payload["session_id"].as_string().in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind == "context_snapshots",
                     EntityRow.payload["owner_type"].as_string() == "chat_session",
-                    EntityRow.payload["owner_id"].as_string() == session_id,
+                    EntityRow.payload["owner_id"].as_string().in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind.in_(("tool_calls", "approvals")),
-                    EntityRow.payload["chat_session_id"].as_string() == session_id,
+                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind.in_(("harness_turns", "harness_interactions")),
-                    EntityRow.payload["chat_session_id"].as_string() == session_id,
+                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+                ),
+                and_(
+                    EntityRow.kind == "chat_subagents",
+                    EntityRow.payload["parent_session_id"].as_string() == session_id,
+                ),
+                and_(
+                    EntityRow.kind == "chat_sessions",
+                    EntityRow.id.in_(session_ids[1:]),
                 ),
             )
             # Operation events are an immutable audit ledger. As with deleted

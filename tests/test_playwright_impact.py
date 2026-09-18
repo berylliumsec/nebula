@@ -29,7 +29,7 @@ def areas(result):
     ("path", "expected"),
     [
         ("ui/src/components/ChatComposer.tsx", "assistant"),
-        ("ui/src/components/BrowserPanel.tsx", "browser"),
+        ("ui/src/components/BrowserPanel.tsx", "browser-complete"),
         ("ui/src/components/MobileDisclosure.tsx", "mobile-layout"),
         ("ui/src/components/ProjectPicker.tsx", "project-lifecycle"),
         ("src/nebula/v3/api.py", "core-api"),
@@ -124,7 +124,7 @@ def test_deleted_and_renamed_paths_preserve_all_impact_paths():
         "ui/src/components/BrowserPanel.tsx",
         "ui/src/components/ThemePicker.tsx",
     ]
-    assert areas(plan(changed_paths(status))) >= {"browser", "themes"}
+    assert areas(plan(changed_paths(status))) >= {"browser-complete", "themes"}
 
 
 def test_invalid_name_status_is_rejected():

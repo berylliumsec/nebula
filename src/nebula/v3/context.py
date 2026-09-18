@@ -39,7 +39,8 @@ DEFAULT_CONTEXT_WINDOW = 8_192
 DEFAULT_MAX_OUTPUT_TOKENS = 2_048
 CONTEXT_TARGET_FRACTION = 0.75
 COMPACTOR_INPUT_FRACTION = 0.60
-COMPACTOR_MAX_OUTPUT_TOKENS = 2_048
+COMPACTOR_OUTPUT_FRACTION = 0.05
+COMPACTOR_MIN_OUTPUT_TOKENS = 32
 CONTEXT_PROMPT_VERSION = "nebula-context-v1"
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{1,}")
@@ -63,10 +64,20 @@ class ContextCapacityError(ContextCompactionError):
 
 
 class ContextLimits(BaseModel):
+    model: str | None = None
     context_window: int = Field(ge=1)
     max_output_tokens: int = Field(ge=1)
     input_capacity: int = Field(ge=1)
     target_input_tokens: int = Field(ge=1)
+    compacted_input_target: int = Field(ge=1)
+    source: str = Field(pattern=r"^(model_catalog|configured|fallback)$")
+    estimated: bool = False
+    metadata_revision: str | None = None
+    route_limits_verified: bool = False
+    eligible_route_count: int | None = Field(default=None, ge=0)
+    route_context_window: int | None = Field(default=None, ge=1)
+    route_input_limit: int | None = Field(default=None, ge=1)
+    route_limits_required: bool = False
 
 
 class ContextStatus(BaseModel):
@@ -76,6 +87,17 @@ class ContextStatus(BaseModel):
     context_window: int
     max_output_tokens: int
     target_input_tokens: int
+    compacted_input_target: int | None = Field(default=None, ge=1)
+    capacity_source: str | None = Field(
+        default=None, pattern=r"^(model_catalog|configured|fallback|runtime)$"
+    )
+    capacity_estimated: bool = False
+    metadata_revision: str | None = None
+    route_limits_verified: bool = False
+    eligible_route_count: int | None = Field(default=None, ge=0)
+    route_context_window: int | None = Field(default=None, ge=1)
+    route_input_limit: int | None = Field(default=None, ge=1)
+    route_limits_required: bool = False
     estimated_input_tokens: int = Field(default=0, ge=0)
     compacted_through: int = Field(default=0, ge=0)
     source_references: list[ContextSourceReference] = Field(default_factory=list)
@@ -118,28 +140,153 @@ def _positive_option(value: Any, fallback: int) -> int:
 def resolve_context_limits(
     profile: ProviderProfile,
     *,
+    model: str | None = None,
     requested_output_tokens: int | None = None,
+    required_parameters: set[str] | None = None,
 ) -> ContextLimits:
     options = profile.metadata.get("options", {})
     if not isinstance(options, dict):
         options = {}
-    context_window = _positive_option(
-        options.get("context_window"), DEFAULT_CONTEXT_WINDOW
+    configured_window = _positive_option(options.get("context_window"), 0)
+    configured_output = _positive_option(options.get("max_output_tokens"), 0)
+    descriptors = profile.metadata.get("model_descriptors", [])
+    descriptor = next(
+        (
+            item
+            for item in descriptors
+            if isinstance(item, dict) and model is not None and item.get("id") == model
+        ),
+        None,
     )
-    configured_output = _positive_option(
-        options.get("max_output_tokens"),
-        min(DEFAULT_MAX_OUTPUT_TOKENS, max(1, context_window // 4)),
+    model_window = (
+        _positive_option(descriptor.get("context_window"), 0)
+        if isinstance(descriptor, dict)
+        else 0
     )
-    output = requested_output_tokens or configured_output
-    output = min(output, configured_output, max(1, context_window - 1))
+    model_output = (
+        _positive_option(descriptor.get("max_output_tokens"), 0)
+        if isinstance(descriptor, dict)
+        else 0
+    )
+    input_limit = (
+        _positive_option(descriptor.get("max_input_tokens"), 0)
+        if isinstance(descriptor, dict)
+        else 0
+    )
+    route_limits_verified = bool(
+        isinstance(descriptor, dict) and descriptor.get("route_limits_verified") is True
+    )
+    route_context_window = 0
+    route_input_limit = 0
+    route_output_limit = 0
+    eligible_route_count: int | None = None
+    if route_limits_verified:
+        required = required_parameters or set()
+        raw_routes = (
+            descriptor.get("route_limits", []) if isinstance(descriptor, dict) else []
+        )
+        eligible_routes = []
+        for route in raw_routes:
+            if not isinstance(route, dict) or route.get("status", 0) != 0:
+                continue
+            parameters = route.get("supported_parameters", [])
+            supported = (
+                {item for item in parameters if isinstance(item, str)}
+                if isinstance(parameters, list)
+                else set()
+            )
+            if required <= supported:
+                eligible_routes.append(route)
+        eligible_route_count = len(eligible_routes)
+        if not eligible_routes:
+            requirement = ", ".join(sorted(required)) or "text generation"
+            raise ContextCapacityError(
+                f"no verified OpenRouter endpoint supports {requirement} for {model}"
+            )
+        route_windows = [
+            _positive_option(item.get("context_window"), 0) for item in eligible_routes
+        ]
+        route_inputs = [
+            _positive_option(item.get("max_input_tokens"), 0)
+            for item in eligible_routes
+        ]
+        route_outputs = [
+            _positive_option(item.get("max_output_tokens"), 0)
+            for item in eligible_routes
+        ]
+        if not all(route_windows) or not all(route_inputs) or not all(route_outputs):
+            raise ContextCapacityError(
+                f"verified OpenRouter endpoint limits are incomplete for {model}"
+            )
+        route_context_window = min(route_windows)
+        route_input_limit = min(route_inputs)
+        route_output_limit = min(route_outputs)
+        model_window = min(
+            value for value in (model_window, route_context_window) if value
+        )
+        model_output = min(
+            value for value in (model_output, route_output_limit) if value
+        )
+        input_limit = min(value for value in (input_limit, route_input_limit) if value)
+    elif profile.provider_type == "openrouter":
+        # Aggregate model metadata is not proof that every automatic route can
+        # accept that window. Stay conservative until the endpoint set is known.
+        if model_window:
+            model_window = min(model_window, DEFAULT_CONTEXT_WINDOW)
+        if configured_window:
+            configured_window = min(configured_window, DEFAULT_CONTEXT_WINDOW)
+        if model_output:
+            model_output = min(model_output, DEFAULT_MAX_OUTPUT_TOKENS)
+        if configured_output:
+            configured_output = min(configured_output, DEFAULT_MAX_OUTPUT_TOKENS)
+    if model_window:
+        context_window = min(
+            value for value in (model_window, configured_window) if value
+        )
+        source = "model_catalog"
+        estimated = profile.provider_type == "openrouter" and not route_limits_verified
+    elif configured_window:
+        context_window = configured_window
+        source = "configured"
+        estimated = True
+    else:
+        context_window = DEFAULT_CONTEXT_WINDOW
+        source = "fallback"
+        estimated = True
+    output_caps = [max(1, context_window - 1)]
+    if model_output:
+        output_caps.append(model_output)
+    if configured_output:
+        output_caps.append(configured_output)
+    default_output = min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
+    output = min(requested_output_tokens or default_output, *output_caps)
     input_capacity = context_window - output
+    if input_limit:
+        input_capacity = min(input_capacity, input_limit)
+    metadata_revision = profile.metadata.get(
+        "route_catalog_revision"
+    ) or profile.metadata.get("model_catalog_revision")
     return ContextLimits(
+        model=model,
         context_window=context_window,
         max_output_tokens=output,
         input_capacity=input_capacity,
         target_input_tokens=max(
             1, math.floor(input_capacity * CONTEXT_TARGET_FRACTION)
         ),
+        compacted_input_target=max(
+            1, math.floor(input_capacity * COMPACTOR_INPUT_FRACTION)
+        ),
+        source=source,
+        estimated=estimated,
+        metadata_revision=(
+            metadata_revision if isinstance(metadata_revision, str) else None
+        ),
+        route_limits_verified=route_limits_verified,
+        eligible_route_count=eligible_route_count,
+        route_context_window=route_context_window or None,
+        route_input_limit=route_input_limit or None,
+        route_limits_required=profile.provider_type == "openrouter",
     )
 
 
@@ -154,12 +301,53 @@ def estimate_messages(messages: Iterable[ModelMessage], instructions: str = "") 
     values = list(messages)
     total = estimate_tokens(instructions)
     for message in values:
-        content = (
-            message.content
-            if isinstance(message.content, str)
-            else json.dumps(message.content, ensure_ascii=False, separators=(",", ":"))
+        if isinstance(message.content, str):
+            total += estimate_tokens(message.content, message_count=1)
+            continue
+        total += 8
+        for block in message.content:
+            if not isinstance(block, dict):
+                total += estimate_tokens(str(block))
+                continue
+            if block.get("type") == "image":
+                # Raw/base64 bytes do not map to text tokens. Reserve a conservative
+                # image budget and count only textual metadata here.
+                total += 2_048
+                text_metadata = {
+                    key: value
+                    for key, value in block.items()
+                    if key not in {"data", "image_url", "url"}
+                }
+                total += estimate_tokens(
+                    json.dumps(text_metadata, ensure_ascii=False, separators=(",", ":"))
+                )
+            else:
+                total += estimate_tokens(
+                    json.dumps(block, ensure_ascii=False, separators=(",", ":"))
+                )
+    return total
+
+
+def estimate_model_request(request: ModelRequest) -> int:
+    """Estimate every text/schema component sent on one provider request."""
+
+    total = estimate_messages(request.messages, request.instructions or "")
+    for value in (
+        request.tools,
+        request.tool_results,
+        request.response_schema,
+        request.metadata.get("continuation") if request.metadata else None,
+    ):
+        if not value:
+            continue
+        payload = (
+            [item.model_dump(mode="json") for item in value]
+            if isinstance(value, list) and value and hasattr(value[0], "model_dump")
+            else value
         )
-        total += estimate_tokens(content, message_count=1)
+        total += estimate_tokens(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        )
     return total
 
 
@@ -393,8 +581,19 @@ class ContextCompactor:
         objective: str | None,
         budget: ContextCallBudget | None,
     ) -> tuple[ContextMemory, ChatTokenUsage]:
-        limits = resolve_context_limits(profile)
-        segment_budget = max(1, int(limits.input_capacity * COMPACTOR_INPUT_FRACTION))
+        limits = resolve_context_limits(profile, model=model)
+        summary_output_tokens = min(
+            limits.max_output_tokens,
+            math.floor(limits.compacted_input_target * COMPACTOR_OUTPUT_FRACTION),
+        )
+        if summary_output_tokens < COMPACTOR_MIN_OUTPUT_TOKENS:
+            raise ContextCapacityError(
+                "model context leaves too little room for a faithful compaction summary"
+            )
+        complete_prompt_capacity = limits.input_capacity - summary_output_tokens
+        segment_budget = max(
+            1, math.floor(complete_prompt_capacity * COMPACTOR_INPUT_FRACTION)
+        )
         pending = self._split_sources(sources, segment_budget)
         total = ChatTokenUsage()
         while len(pending) > 1:
@@ -407,8 +606,8 @@ class ContextCompactor:
                         model,
                         group,
                         objective,
-                        min(COMPACTOR_MAX_OUTPUT_TOKENS, limits.max_output_tokens),
-                        input_capacity=limits.input_capacity,
+                        summary_output_tokens,
+                        input_capacity=complete_prompt_capacity,
                         prior_usage=total,
                         budget=budget,
                     )
@@ -455,8 +654,8 @@ class ContextCompactor:
                 model,
                 pending,
                 objective,
-                min(COMPACTOR_MAX_OUTPUT_TOKENS, limits.max_output_tokens),
-                input_capacity=limits.input_capacity,
+                summary_output_tokens,
+                input_capacity=complete_prompt_capacity,
                 prior_usage=total,
                 budget=budget,
             )
@@ -922,6 +1121,7 @@ __all__ = [
     "ContextStatus",
     "CompactionResult",
     "estimate_messages",
+    "estimate_model_request",
     "estimate_tokens",
     "lexical_score",
     "memory_text",

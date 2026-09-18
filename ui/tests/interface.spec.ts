@@ -147,6 +147,9 @@ async function installTruthfulCore(page: Page) {
     let responseStatus = 200;
     if (path.includes("/chat/sessions/") && path.endsWith("/queue")) {
       body = {revision: 0, paused: false, items: []};
+    } else if (path.includes("/chat/sessions/") && path.endsWith("/goal")) {
+      responseStatus = 404;
+      body = { detail: "Goal not found" };
     } else if (path.includes("/chat/sessions/") && path.endsWith("/catch-up")) {
       body = {initialized: true, revision: 0, through_at: entity.updated_at, items: [], pending: [], truncated: false};
     } else if (path.endsWith("/health")) {
@@ -1035,12 +1038,20 @@ test("browser keeps native bounds and opens scoped live context as a reviewed AI
     return calls.filter(call => call.command === "browser_set_bounds").at(-1)?.args.bounds as { x: number; y: number; width: number; height: number } | undefined;
   });
   const expectNativeClearOfPopup = async () => {
-    await expect.poll(async () => {
-      const [native, overlay] = await Promise.all([nativeBounds(), popup.boundingBox()]);
-      if (!native || !overlay) return false;
-      return native.x + native.width <= overlay.x || overlay.x + overlay.width <= native.x
-        || native.y + native.height <= overlay.y || overlay.y + overlay.height <= native.y;
-    }).toBe(true);
+    let latest: { clear: boolean; native: Awaited<ReturnType<typeof nativeBounds>>; overlay: Awaited<ReturnType<typeof popup.boundingBox>> } | undefined;
+    try {
+      await expect.poll(async () => {
+        const [native, overlay] = await Promise.all([nativeBounds(), popup.boundingBox()]);
+        const clear = Boolean(native && overlay && (
+          native.x + native.width <= overlay.x || overlay.x + overlay.width <= native.x
+          || native.y + native.height <= overlay.y || overlay.y + overlay.height <= native.y
+        ));
+        latest = { clear, native, overlay };
+        return clear;
+      }).toBe(true);
+    } catch (error) {
+      throw new Error(`${error instanceof Error ? error.message : String(error)}\nLast geometry: ${JSON.stringify(latest)}`);
+    }
   };
   const nativeVisible = () => page.evaluate(() => {
     const calls = (window as Window & { __NEBULA_BROWSER_CALLS__?: Array<{ command: string; args: Record<string, unknown> }> }).__NEBULA_BROWSER_CALLS__ ?? [];
@@ -3559,7 +3570,343 @@ test("conversation switching between projects detaches the provider viewer witho
   await expect.poll(() => cancelRequests).toBe(1);
 });
 
-test("harness model controls expose only the selected runtime's advertised options", async ({ page }, testInfo) => {
+test("assistant upgrade provider lifecycle hooks are selected and visible after the turn", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "provider-hooks",
+    name: "Hook provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["model-1"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "model-1" },
+  };
+  const harness = {
+    ...entity,
+    id: "harness-hooks",
+    name: "Grok ACP",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "grok",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "grok-4.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
+    capabilities: { models: ["grok-4.6"], model_options: [], checked_at: entity.updated_at, harness_version: "1.0.5" },
+  };
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [provider] });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
+      await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["model-1"] } });
+      return;
+    }
+    if (path.endsWith("/harnesses") && route.request().method() === "GET") {
+      await route.fulfill({ json: [harness] });
+      return;
+    }
+    if (path.endsWith("/hooks") && !path.includes("/chat/") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{
+        id: "audit",
+        source: "project",
+        path: "/workspace/.agents/hooks/audit",
+        manifest: {
+          version: 1,
+          name: "Audit lifecycle",
+          description: "Record turn outcomes",
+          events: ["chat.turn.started", "chat.turn.completed"],
+          command: ["run.sh"],
+          timeout_seconds: 10,
+          side_effects: "none",
+          failure_policy: "continue",
+        },
+        manifest_sha256: "a".repeat(64),
+        executable_sha256: "b".repeat(64),
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/turns/turn-hook/hooks")) {
+      await route.fulfill({ json: [{
+        id: "hook-run-1",
+        hook_id: "audit",
+        event_name: "chat.turn.completed",
+        status: "complete",
+        side_effects: "none",
+        started_at: entity.created_at,
+        completed_at: entity.updated_at,
+      }] });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds = [];
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const body = JSON.parse(String(init?.body ?? "{}")) as { hook_ids?: string[] };
+      (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds = body.hook_ids ?? [];
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-hooks", model: "model-1", session_id: "session-hook", turn_id: "turn-hook" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", provider_id: "provider-hooks", model: "model-1", delta: "Hooked answer" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-hook", session_id: "session-hook", provider_id: "provider-hooks", model: "model-1", message: { role: "assistant", content: "Hooked answer" }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "stop", citations: [] })}\n\n`));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Assistant settings" });
+  const hookToggle = settings.getByRole("checkbox", { name: /Audit lifecycle/ });
+  await expect(hookToggle).toBeVisible();
+  const hookGeometry = await hookToggle.evaluate((element) => {
+    const bounds = (element.closest("label") ?? element).getBoundingClientRect();
+    return { height: bounds.height, width: bounds.width };
+  });
+  expect(hookGeometry.height).toBeGreaterThanOrEqual(24);
+  await hookToggle.check();
+  expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+  await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Run the audit hook");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.getByText("Hooked answer")).toBeVisible();
+  await expect(page.getByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
+  expect(await page.evaluate(() => (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds)).toEqual(["audit"]);
+  await page.getByRole("button", { name: "Show session details" }).click();
+  await expect(page.getByRole("region", { name: "Workspace controls" })).toBeVisible();
+  const closeDetails = page.getByRole("button", { name: "Close details" });
+  if (await closeDetails.count()) await closeDetails.click();
+  else await page.getByRole("button", { name: "Hide session details" }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+  await expect(page.getByRole("checkbox", { name: /Audit lifecycle/ })).toHaveCount(0);
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("assistant upgrade provider thinking stays collapsed and out of the reply", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "provider-thinking",
+    name: "Thinking provider",
+    provider_type: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1",
+    enabled: true,
+    is_local: false,
+    secret_ref: "env:OPENROUTER_API_KEY",
+    model_allowlist: ["deepseek/deepseek-v4-flash"],
+    capabilities: { streaming: true },
+    privacy: { local_only: false, permits_sensitive_data: false },
+    metadata: { default_model: "deepseek/deepseek-v4-flash" },
+  };
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [provider] });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
+      await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["deepseek/deepseek-v4-flash"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", session_id: "session-thinking", turn_id: "turn-thinking" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", delta: "Private chain of thought." })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", delta: "FLASH_OK" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking", session_id: "session-thinking", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "FLASH_OK", reasoning: "Private chain of thought." }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "stop", citations: [] })}\n\n`));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
+  await page.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+  await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Reply with FLASH_OK.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const reply = page.locator(".chat-message.assistant").last();
+  await expect(reply).toContainText("FLASH_OK");
+  const thinking = reply.getByLabel("Thinking");
+  await expect(thinking).toBeVisible();
+  await expect(thinking).not.toHaveAttribute("open");
+  await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveText("FLASH_OK");
+  await thinking.locator("summary").click();
+  await expect(thinking).toContainText("Private chain of thought.");
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("assistant upgrade provider lifecycle hooks require restart reconciliation before resume", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "provider-hooks",
+    name: "Hook provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["model-1"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "model-1" },
+  };
+  const session = {
+    ...entity,
+    id: "session-hook",
+    engagement_id: "scratch-project",
+    title: "Interrupted hook",
+    backend: "provider",
+    provider_profile_id: provider.id,
+    model: "model-1",
+    metadata: { message_count: 1 },
+  };
+  let recoveryBlocked = true;
+  let turnRevision = 3;
+  let hookStatus = "interrupted";
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+    if (path.endsWith("/providers") && method === "GET") {
+      await route.fulfill({ json: [provider] });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && method === "GET") {
+      await route.fulfill({ json: [session] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/session-hook/messages")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "message-user",
+        engagement_id: "scratch-project",
+        session_id: "session-hook",
+        sequence: 1,
+        role: "user",
+        content: "Audit this turn",
+        citations: [],
+        usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/session-hook/pending-turn")) {
+      await route.fulfill({ json: {
+        id: "turn-hook",
+        session_id: "session-hook",
+        revision: turnRevision,
+        status: "interrupted",
+        tool_call_ids: [],
+        error: "Core restarted before the hook outcome was known.",
+        recovery_blocked: recoveryBlocked,
+        unresolved_tool_call_ids: [],
+        unresolved_hook_execution_ids: recoveryBlocked ? ["hook-run-1"] : [],
+      } });
+      return;
+    }
+    if (path.endsWith("/chat/turns/turn-hook/hooks")) {
+      await route.fulfill({ json: [{
+        id: "hook-run-1",
+        hook_id: "audit",
+        event_name: "chat.turn.started",
+        status: hookStatus,
+        side_effects: "external",
+        started_at: entity.created_at,
+        completed_at: entity.updated_at,
+        reconciliation: recoveryBlocked ? null : { outcome: "complete", detail: "Verified the external audit write." },
+      }] });
+      return;
+    }
+    if (path.endsWith("/hooks") && !path.includes("/chat/") && method === "GET") {
+      await route.fulfill({ json: [{
+        id: "audit",
+        source: "project",
+        path: "/workspace/.agents/hooks/audit",
+        manifest: {
+          version: 1,
+          name: "Audit lifecycle",
+          description: "Record turn outcomes",
+          events: ["chat.turn.started"],
+          command: ["run.sh"],
+          timeout_seconds: 10,
+          side_effects: "external",
+          failure_policy: "continue",
+        },
+        manifest_sha256: "a".repeat(64),
+        executable_sha256: "b".repeat(64),
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/turns/turn-hook/reconcile-hook") && method === "POST") {
+      recoveryBlocked = false;
+      turnRevision += 1;
+      hookStatus = "reconciled";
+      await route.fulfill({ json: {
+        id: "turn-hook",
+        session_id: "session-hook",
+        revision: turnRevision,
+        status: "interrupted",
+        tool_call_ids: [],
+        error: "Core restarted before the hook outcome was known.",
+        recovery_blocked: false,
+        unresolved_tool_call_ids: [],
+        unresolved_hook_execution_ids: [],
+      } });
+      return;
+    }
+    if (path.endsWith("/chat/turns/turn-hook/resume") && method === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: `data: ${JSON.stringify({ type: "done", turn_id: "turn-hook", session_id: "session-hook", provider_id: provider.id, model: "model-1", message: { role: "assistant", content: "Resumed after hook confirmation" }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "stop", citations: [] })}\n\n`,
+      });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=session-hook", "Workbench");
+  await expect(page.getByText("What happened to Audit lifecycle?")).toBeVisible();
+  await page.getByPlaceholder("Operator verification note").fill("Verified the external audit write.");
+  await page.getByRole("button", { name: "Confirm completed" }).click();
+  await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
+  await page.getByRole("button", { name: "Resume response" }).click();
+  await expect(page.getByText("Resumed after hook confirmation")).toBeVisible();
+});
+
+test("assistant settings expose provider metadata and harness model options", async ({ page }, testInfo) => {
   let harnessSessionsCompleted = false;
   let releaseHarnessSessions!: () => void;
   const harnessSessionsGate = new Promise<void>((resolve) => { releaseHarnessSessions = resolve; });
@@ -3642,8 +3989,61 @@ test("harness model controls expose only the selected runtime's advertised optio
       harness_version: "0.149.0",
     },
   }];
+  const openRouterProvider = {
+    ...entity,
+    id: "provider-openrouter-options",
+    name: "OpenRouter",
+    provider_type: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1",
+    enabled: true,
+    is_local: false,
+    secret_ref: "vault:0123456789abcdef0123456789abcdef",
+    model_allowlist: [],
+    capabilities: { streaming: true },
+    privacy: { local_only: false, permits_sensitive_data: false, residency: [] },
+    metadata: {},
+  };
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/skills/catalog") && route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        project_root: "/workspace/.agents/skills",
+        managed_root: "/var/lib/nebula/.agents/skills",
+      }) });
+      return;
+    }
+    if (path.endsWith("/skills") && route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
+        { name: "review", path: "/workspace/.agents/skills/review/SKILL.md", source: "project" },
+        { name: "report", path: "/var/lib/nebula/.agents/skills/report/SKILL.md", source: "installed" },
+      ]) });
+      return;
+    }
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([openRouterProvider]) });
+      return;
+    }
+    if (path.endsWith(`/providers/${openRouterProvider.id}/health`) && route.request().method() === "POST") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        provider_id: openRouterProvider.id,
+        healthy: true,
+        models: ["anthropic/claude-sonnet-4.5"],
+        model_descriptors: [{
+          id: "anthropic/claude-sonnet-4.5",
+          name: "Claude Sonnet 4.5",
+          description: "A capable model",
+          canonical_slug: "anthropic/claude-sonnet-4.5",
+          context_window: 200000,
+          max_output_tokens: 32000,
+          input_modalities: ["text", "image"],
+          output_modalities: ["text"],
+          supported_parameters: ["tools"],
+          pricing: { prompt: "0.000003" },
+        }],
+        detail: "Account model catalog loaded; inference is not yet verified.",
+      }) });
+      return;
+    }
     if (path.endsWith("/harness-sessions")) {
       await harnessSessionsGate;
       harnessSessionsCompleted = true;
@@ -3712,6 +4112,13 @@ test("harness model controls expose only the selected runtime's advertised optio
   // Settings use the viewport rather than the remaining space above the composer.
   await expect(page.getByRole("dialog", { name: "Assistant settings" })).toBeInViewport({ ratio: 1 });
   expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  const providerModel = page.getByRole("combobox", { name: "Chat model" });
+  await expect(providerModel).toHaveValue("anthropic/claude-sonnet-4.5");
+  await expect(providerModel.locator("option")).toContainText([
+    "Select model",
+    "Claude Sonnet 4.5 (anthropic/claude-sonnet-4.5) · 200,000 context",
+  ]);
+  await expect(settingsDialog.getByText("text + image · tools advertised · 32,000 max output")).toBeVisible();
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
   expect(harnessSessionsCompleted).toBe(false);
   await page.getByRole("combobox", { name: "Chat harness", exact: true }).selectOption("harness-grok-options");
@@ -3751,6 +4158,126 @@ test("harness model controls expose only the selected runtime's advertised optio
   await expect(settingsButton).toBeFocused();
 
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Models" }).click();
+  const sharedSkills = page.locator("#native-skill-settings");
+  await expect(sharedSkills.getByRole("heading", { name: "Shared skills" })).toBeVisible();
+  await expect(sharedSkills).toContainText("/workspace/.agents/skills");
+  await expect(sharedSkills).toContainText("/var/lib/nebula/.agents/skills");
+  await expect(sharedSkills).toContainText("review project");
+  await expect(sharedSkills).toContainText("report installed");
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
+test("assistant upgrade provider model switch keeps the saved model until compaction is confirmed", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent provider-switch matrix.");
+  const pageErrors: Error[] = [];
+  page.on("pageerror", error => pageErrors.push(error));
+  const provider = {
+    ...entity,
+    id: "provider-switch",
+    name: "Switch provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["large-model", "small-model"],
+    capabilities: { streaming: true },
+    capability_verifications: {},
+    privacy: { local_only: true, permits_sensitive_data: true, residency: [] },
+    metadata: {
+      default_model: "large-model",
+      model_catalog_revision: "catalog-switch-1",
+      model_descriptors: [
+        { id: "large-model", name: "Large model", context_window: 128000, max_output_tokens: 8000 },
+        { id: "small-model", name: "Small model", context_window: 8000, max_output_tokens: 2000 },
+      ],
+    },
+  };
+  let switched = false;
+  let submitted: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [{
+      ...entity,
+      revision: switched ? 2 : 1,
+      id: "switch-chat",
+      engagement_id: "scratch-project",
+      title: "Model switch review",
+      backend: "provider",
+      provider_profile_id: provider.id,
+      model: switched ? "small-model" : "large-model",
+      metadata: {},
+    }] });
+    if (path.endsWith("/chat/sessions/switch-chat/messages")) return route.fulfill({ json: [] });
+    if (path.endsWith("/chat/sessions/switch-chat/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith("/chat/sessions/switch-chat/goal")) return route.fulfill({ status: 404, json: { detail: "No goal" } });
+    if (path.endsWith("/chat/sessions/switch-chat/context")) return route.fulfill({ json: {
+      owner_type: "chat_session", owner_id: "switch-chat", status: "not_needed",
+      context_window: 128000, max_output_tokens: 8000, target_input_tokens: 90000,
+      compacted_input_target: 72000, capacity_source: "model_catalog", capacity_estimated: false,
+      metadata_revision: "catalog-switch-1", route_limits_required: false,
+      route_limits_verified: false, estimated_input_tokens: 12000, compacted_through: 0,
+      source_references: [], compaction_usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      compaction_cost_usd: 0,
+    } });
+    if (path.endsWith("/chat/sessions/switch-chat/runtime-switch/preflight")) return route.fulfill({ json: {
+      session_id: "switch-chat", session_revision: 1,
+      current_provider_id: provider.id, current_model: "large-model",
+      target_provider_id: provider.id, target_model: "small-model", compatible: true,
+      requires_compaction_confirmation: true, confirmation_token: "c".repeat(64),
+      reason: "Switching requires compaction.", estimated_active_input_tokens: 12000,
+      target_context_window: 8000, target_input_tokens: 4500, target_max_output_tokens: 2000,
+      metadata_revision: "catalog-switch-1",
+    } });
+    if (path.endsWith("/chat/completions") && request.method() === "POST") {
+      submitted = request.postDataJSON() as Record<string, unknown>;
+      switched = true;
+      return route.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify({
+        type: "done", session_id: "switch-chat", turn_id: "switch-turn", provider_id: provider.id,
+        model: "small-model", message: { id: "switch-answer", role: "assistant", content: "Switched safely." },
+        usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 }, finish_reason: "stop", citations: [],
+      })}\n\n` });
+    }
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=switch-chat", "Workbench");
+  await page.waitForTimeout(1_000);
+  expect(pageErrors).toEqual([]);
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const model = page.getByRole("combobox", { name: "Chat model" });
+  await expect(model).toHaveValue("large-model");
+  await model.selectOption("small-model");
+  const firstConfirmation = page.getByRole("dialog", { name: "Switch model and compact context?" });
+  await expect(firstConfirmation).toContainText("12,000");
+  await expect(firstConfirmation).toContainText("4,500");
+  await firstConfirmation.getByRole("button", { name: "Cancel" }).click();
+  if (await page.getByRole("dialog", { name: "Assistant settings" }).count() === 0) {
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  }
+  await expect(model).toHaveValue("large-model");
+  await expect(page.getByRole("status").filter({ hasText: "saved model remains selected" })).toBeVisible();
+
+  await model.selectOption("small-model");
+  const confirmation = page.getByRole("dialog", { name: "Switch model and compact context?" });
+  expect((await new AxeBuilder({ page }).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+  await confirmation.getByRole("button", { name: "Switch and compact" }).click();
+  if (await page.getByRole("dialog", { name: "Assistant settings" }).count() === 0) {
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  }
+  await expect(model).toHaveValue("small-model");
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+  await page.getByPlaceholder("Ask about this project…").fill("Continue with the smaller model.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Switched safely.")).toBeVisible();
+  expect(submitted?.runtime_switch_confirmation).toBe("c".repeat(64));
+  expect(submitted?.model).toBe("small-model");
 });
 
 test("AI writing submits the visible supported model", async ({ page }, testInfo) => {
