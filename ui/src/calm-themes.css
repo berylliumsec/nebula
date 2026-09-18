@@ -20,8 +20,17 @@
 }
 :root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :focus-visible { box-shadow: none; }
 :root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: none; }
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.assistant,
-:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.operator { border-color: transparent; background: transparent; }
+:root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) .chat-message.assistant { border-color: transparent; background: transparent; }
+/* Surface hierarchy: a tinted canvas, a quieter sidebar and top bar, and one
+   raised composer. Operator turns read as compact bubbles in every theme. */
+:root:is([data-theme="dark"], [data-theme="light"]) .top-bar { background: var(--canvas); }
+:root:is([data-theme="dark"], [data-theme="light"]) .chat-composer { border-color: var(--border-soft); background: var(--surface-raised); box-shadow: 0 10px 30px rgb(0 0 0 / 28%); }
+:root[data-theme="dark"] .side-nav { background: #090b0e; }
+:root:is([data-theme="dark"], [data-theme="light"]) .button.primary:disabled { color: var(--muted); background: var(--surface-hover); opacity: 1; }
+:root:is([data-theme="dark"], [data-theme="light"]) .workspace-notices { background: transparent; }
+:root[data-theme="light"] .side-nav { background: var(--surface-muted); }
+:root[data-theme="light"] .chat-composer { box-shadow: 0 8px 24px rgb(41 63 84 / 9%); }
+:root:is([data-theme="dark"], [data-theme="light"]) .chat-message.operator { border: 1px solid var(--border-soft); background: var(--surface-raised); }
 :root:is([data-theme="dark"], [data-theme="light"], [data-theme="zero-dark"]) :where(.command-palette, .modal-surface, .provider-dialog, .engagement-menu, .activity-center) {
   animation: none;
 }

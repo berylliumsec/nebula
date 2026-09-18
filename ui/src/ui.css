@@ -20,6 +20,7 @@
    page plus a sibling banner clips the composer behind the navigation dock. */
 .workspace-notices:empty { display: none; }
 .diagnostics-unavailable.diagnostics-compact { display: flex; align-items: center; gap: 6px; min-height: 44px; margin: 0; padding: 0 8px; border: 0; border-radius: 0; }
+.diagnostics-unavailable.diagnostics-compact.tone-informational { width: fit-content; max-width: calc(100% - 24px); min-height: 40px; margin: 8px auto; padding: 0 2px 0 14px; border: 1px solid var(--border-soft); border-radius: 999px; background: var(--surface-raised); box-shadow: 0 6px 20px rgb(0 0 0 / 16%); }
 .diagnostics-compact > svg { flex: 0 0 17px; margin: 0; }
 .diagnostics-compact .surface-notice-copy { flex: 1; min-width: 0; }
 .diagnostics-compact .surface-notice-copy strong { font-size: 12px; line-height: 16px; }
@@ -233,3 +234,21 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .chat-goal-form > div, .chat-goal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 @media (max-width: 430px) { .chat-goal-panel > header { align-items: flex-start; flex-direction: column; } .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions .button { min-height: 44px; } }
+
+/* A goal is optional: without one, the panel is a compact chip, not a full row. */
+.chat-goal-panel.empty:not(:has(.chat-goal-form)) { display: flex; padding: 0; border: 0; background: transparent; }
+.chat-goal-panel.empty > .chat-goal-chip { min-height: 30px; padding: 4px 10px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--muted-strong); background: var(--surface-hover); font-size: 12px; }
+.chat-goal-panel.empty > .chat-goal-chip:hover:not(:disabled) { color: var(--text-strong); }
+@media (max-width: 760px), (pointer: coarse) { .chat-goal-panel.empty > .chat-goal-chip { min-height: 44px; } }
+/* The empty findings table explains itself and offers the next action. */
+.findings-empty-row > td { padding: 36px 16px; }
+.findings-empty-row .standard-empty-state { margin-inline: auto; border: 0; background: transparent; }
+.chat-composer-context .chat-goal-panel.empty { margin: 2px 0 0 2px; }
+@media (max-width: 760px) {
+  /* Phone chrome: status chips read as ghost icons; the assistant header stays on one line. */
+  .top-bar :where(.connection-chip, .command-trigger, .top-bar-public-ip) { border-color: transparent; background: transparent; box-shadow: none; }
+  .chat-message.assistant header { flex-wrap: nowrap; min-width: 0; }
+  .chat-message.assistant header strong { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-message.assistant header strong + span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-message.assistant header .chat-message-time { flex: 0 0 auto; white-space: nowrap; }
+}

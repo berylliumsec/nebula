@@ -97,8 +97,8 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
     } finally { setBusy(false); }
   };
 
-  if (!goal) return <section className="chat-goal-panel" aria-label="Conversation goal">
-    <button className="button quiet" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Flag size={14} /> Add goal</button>
+  if (!goal) return <section className="chat-goal-panel empty" aria-label="Conversation goal">
+    <button className="button quiet chat-goal-chip" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Flag size={13} aria-hidden="true" /> Add goal</button>
     {expanded && <div className="chat-goal-form">
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
       <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>

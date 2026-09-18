@@ -8,8 +8,8 @@
   --surface-overlay: #141519;
   --surface-muted: rgb(8 9 12 / 82%);
   --surface-hover: rgb(42 45 52 / 72%);
-  --border: rgb(222 233 255 / 20%);
-  --border-soft: rgb(222 233 255 / 9%);
+  --border: rgb(222 233 255 / 13%);
+  --border-soft: rgb(222 233 255 / 7%);
   --text: #d4d9e2;
   --text-strong: #f8f9fb;
   --muted: #9ba4b2;
@@ -29,7 +29,7 @@
   --radius: 20px;
   --zero-glass: linear-gradient(135deg, rgb(27 29 35 / 80%), rgb(8 9 12 / 70%));
   --zero-glass-soft: linear-gradient(135deg, rgb(30 32 38 / 56%), rgb(8 9 12 / 48%));
-  --zero-reflection: linear-gradient(115deg, transparent 8%, rgb(255 255 255 / 5%) 31%, transparent 48%);
+  --zero-reflection: linear-gradient(transparent, transparent);
   --zero-blue-glow: 0 18px 60px rgb(35 101 184 / 12%);
 }
 
@@ -61,15 +61,14 @@
   --shadow: 0 30px 80px rgb(56 79 101 / 18%);
   --zero-glass: linear-gradient(135deg, rgb(255 255 255 / 92%), rgb(230 238 246 / 82%));
   --zero-glass-soft: linear-gradient(135deg, rgb(255 255 255 / 80%), rgb(232 239 246 / 70%));
-  --zero-reflection: linear-gradient(115deg, transparent 8%, rgb(255 255 255 / 60%) 31%, transparent 48%);
+  --zero-reflection: linear-gradient(transparent, transparent);
   --zero-blue-glow: 0 18px 55px rgb(43 102 162 / 10%);
 }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body {
   background:
-    radial-gradient(ellipse at 50% -24%, rgb(69 126 202 / 20%), transparent 48%),
-    radial-gradient(ellipse at 86% 102%, rgb(159 81 35 / 9%), transparent 38%),
-    linear-gradient(145deg, #020203 0%, #07080a 52%, #020203 100%);
+    radial-gradient(ellipse at 50% -24%, rgb(69 126 202 / 17%), transparent 50%),
+    linear-gradient(180deg, #050608 0%, #040506 100%);
 }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body::before,
@@ -84,15 +83,13 @@
   z-index: 0;
   inset: 0;
   background:
-    radial-gradient(circle at 17% 20%, rgb(107 167 244 / 8%), transparent 24%),
-    radial-gradient(circle at 77% 12%, rgb(255 158 87 / 5%), transparent 21%),
-    linear-gradient(108deg, transparent 18%, rgb(255 255 255 / 2.5%) 43%, transparent 64%);
+    radial-gradient(ellipse at 50% 0%, rgb(107 167 244 / 4%), transparent 42%);
 }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body::after {
   z-index: 0;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 52%, rgb(0 0 0 / 48%) 100%);
+  background: radial-gradient(ellipse at center, transparent 58%, rgb(0 0 0 / 30%) 100%);
 }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) #root { position: relative; z-index: 1; }
@@ -148,8 +145,7 @@
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band .top-bar-page-actions { align-items: center; }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .connection-chip,
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .command-trigger,
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band .icon-button {
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .command-trigger {
   border-color: rgb(218 232 255 / 11%);
   border-radius: 999px;
   background: rgb(8 9 12 / 55%);
@@ -217,7 +213,7 @@
 }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .engagement-switcher:hover { border-color: rgb(141 190 255 / 18%); background: rgb(255 255 255 / 7%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .engagement-avatar,
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .operator-avatar { border-radius: 50%; background: linear-gradient(145deg, #315f94, #80523c); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .operator-avatar { border-radius: 50%; color: var(--blue-bright); background: rgb(104 168 255 / 16%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .engagement-menu { top: auto; bottom: calc(100% + 9px); left: 6px; transform-origin: bottom left; }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-list {
@@ -248,14 +244,27 @@
   transition: color 160ms ease, border-color 160ms ease, background-color 160ms ease, transform 130ms ease;
 }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item:hover { color: var(--text-strong); border-color: rgb(193 218 255 / 10%); background: rgb(255 255 255 / 5%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item { position: relative; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item.active {
-  color: #f5f8fc;
-  border-color: rgb(120 174 245 / 22%);
-  background: linear-gradient(145deg, rgb(68 137 226 / 20%), rgb(255 157 82 / 5%));
-  box-shadow: inset 0 1px rgb(255 255 255 / 7%), 0 8px 24px rgb(0 0 0 / 19%);
+  color: var(--text-strong);
+  border-color: transparent;
+  background: rgb(255 255 255 / 3%);
+  box-shadow: none;
+  font-weight: var(--weight-semibold);
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item.active svg { color: #9ac9ff; filter: drop-shadow(0 0 7px rgb(88 155 241 / 38%)); }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item.active::before { display: none; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item.active svg { color: var(--blue-bright); filter: none; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .nav-item.active::before {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  display: block;
+  width: 18px;
+  height: 2px;
+  margin-left: -9px;
+  border-radius: 1px;
+  background: var(--blue-bright);
+  content: "";
+}
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-anchor-dock .side-nav-footer {
   display: flex;
@@ -301,8 +310,7 @@
   overflow: hidden;
   border-radius: inherit;
   background:
-    linear-gradient(105deg, transparent 20%, rgb(143 196 255 / 10%) 46%, rgb(255 165 96 / 5%) 54%, transparent 76%),
-    rgb(63 117 184 / 3%);
+    linear-gradient(105deg, transparent 24%, rgb(143 196 255 / 3%) 48%, transparent 72%);
   pointer-events: none;
   animation: zero-materialize 340ms cubic-bezier(.2, .76, .2, 1);
 }
@@ -317,9 +325,14 @@
     radial-gradient(circle at 50% 0, rgb(51 83 124 / 16%), transparent 42%),
     #050608;
 }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .sessions-page .session-layout.chat { border-color: transparent; background: transparent; box-shadow: none; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .sessions-page.chat-active .session-workspace { background: transparent; }
+@media (max-width: 760px) {
+  :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-status-band :where(.connection-chip, .command-trigger, .top-bar-public-ip) { border-color: transparent; background: transparent; box-shadow: none; }
+}
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .page-header { margin-bottom: 24px; padding-bottom: 0; border: 0; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .page-header::after { display: none; }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .page-header h1 { font-weight: var(--weight-medium); letter-spacing: -.035em; text-shadow: 0 6px 28px rgb(95 156 236 / 10%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .page-header h1 { font-weight: var(--weight-semibold); letter-spacing: -.03em; text-shadow: none; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .page-header p { color: var(--muted); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.eyebrow, .section-kicker, .panel-header small) { color: #91b9e7; letter-spacing: .035em; text-transform: none; }
 
@@ -361,7 +374,7 @@
 }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .progress-track { overflow: hidden; border-radius: 999px; background: rgb(255 255 255 / 7%); box-shadow: inset 0 1px 3px rgb(0 0 0 / 40%); }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .progress-track span { border-radius: inherit; background: linear-gradient(90deg, #5b9be9, #8ac4ff 68%, #e29a62); box-shadow: 0 0 12px rgb(99 166 250 / 22%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .progress-track span { border-radius: inherit; background: linear-gradient(90deg, #5b9be9, #8ac4ff); box-shadow: 0 0 12px rgb(99 166 250 / 22%); }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(input, textarea, select, .search-field, .chat-composer) {
   border-color: rgb(214 229 255 / 13%);
@@ -397,7 +410,7 @@
   border-radius: var(--radius-control);
   transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease, box-shadow 180ms ease, transform 110ms ease, filter 150ms ease;
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button, .icon-button, .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a)::after {
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button:not(.primary), .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a)::after {
   position: absolute;
   inset: -2px auto -2px -44%;
   width: 34%;
@@ -408,23 +421,28 @@
   transition: left 240ms cubic-bezier(.2, .76, .2, 1), opacity 90ms ease;
   content: "";
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button, .icon-button, .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a):hover::after { left: 112%; opacity: 1; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button:not(.primary), .command-trigger, .project-tabs button, .session-tabs button, .settings-tabs a):hover::after { left: 112%; opacity: 1; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(button, .button, .nav-item, .settings-tabs a):active { filter: brightness(1.1); transform: scale(.985); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.primary {
-  border-color: rgb(160 205 255 / 48%);
+  border-color: rgb(190 222 255 / 55%);
   color: #07111b;
-  background: linear-gradient(135deg, #b5daff, #75aeea 68%, #d9905c);
+  background: #a9d0ff;
   box-shadow: none;
 }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.button.secondary, .icon-button) { border-color: rgb(214 229 255 / 13%); background: rgb(15 17 21 / 62%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.primary:hover:not(:disabled) { background: #bcdbff; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.primary:active:not(:disabled) { background: #98c4f7; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.primary:disabled { border-color: var(--border-soft); color: var(--muted); background: rgb(255 255 255 / 6%); box-shadow: none; opacity: 1; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .button.secondary { border-color: rgb(214 229 255 / 13%); background: rgb(15 17 21 / 62%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .icon-button { border-color: transparent; background: transparent; box-shadow: none; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .icon-button:hover:not(:disabled) { background: rgb(255 255 255 / 6%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; box-shadow: 0 0 0 5px rgb(108 173 255 / 16%); }
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.project-tabs, .settings-tabs, .segmented-control) { border-color: rgb(215 230 255 / 10%); border-radius: 18px; background: rgb(5 6 8 / 48%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.project-tabs button.active, .settings-tabs a.active, .session-tabs button[aria-selected="true"], .segmented-control button[aria-selected="true"]) {
   color: #f5f8fc;
   border-color: rgb(127 181 247 / 22%);
-  background: linear-gradient(135deg, rgb(76 144 229 / 21%), rgb(255 157 83 / 5%));
-  box-shadow: inset 0 1px rgb(255 255 255 / 7%);
+  background: rgb(104 168 255 / 14%);
+  box-shadow: none;
 }
 
 /* Workbench and terminal keep their existing persistent component tree. */
@@ -434,8 +452,8 @@
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .terminal-overflow-menu { border-color: var(--border-soft); background: #0d0f12; }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.container-terminal-live > header, .container-terminal-live > footer, .terminal-live-notices > p:not(.terminal-network-warning)) { border-color: var(--border-soft); background: rgb(13 15 18 / 86%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .xterm-shell { box-shadow: inset 0 0 50px rgb(72 130 205 / 4%); }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.assistant { border-color: rgb(121 178 248 / 15%); background: linear-gradient(110deg, rgb(71 133 213 / 7%), transparent 48%); }
-:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.operator { border-color: rgb(255 158 87 / 14%); background: linear-gradient(110deg, rgb(210 123 61 / 7%), transparent 48%); }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.assistant { border-color: transparent; background: transparent; }
+:root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .chat-message.operator { border: 1px solid var(--border-soft); background: rgb(255 255 255 / 5%); }
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) :where(.status-dot.healthy, .pulse-dot, .live-dot.open) { box-shadow: 0 0 8px currentColor; }
 
 /* Materialized overlays are bounded and never run independently. */
@@ -484,15 +502,12 @@
 /* Zero Light keeps the Zero geometry while replacing its dark glass materials. */
 :root[data-theme="zero-light"] body {
   background:
-    radial-gradient(ellipse at 50% -24%, rgb(69 126 202 / 16%), transparent 48%),
-    radial-gradient(ellipse at 86% 102%, rgb(201 131 80 / 9%), transparent 38%),
-    linear-gradient(145deg, #f7fafc 0%, #eaf1f7 52%, #f7fafc 100%);
+    radial-gradient(ellipse at 50% -24%, rgb(69 126 202 / 14%), transparent 50%),
+    linear-gradient(180deg, #f4f7fa 0%, #edf2f7 100%);
 }
 :root[data-theme="zero-light"] body::before {
   background:
-    radial-gradient(circle at 17% 20%, rgb(70 127 190 / 9%), transparent 24%),
-    radial-gradient(circle at 77% 12%, rgb(196 117 58 / 6%), transparent 21%),
-    linear-gradient(108deg, transparent 18%, rgb(255 255 255 / 42%) 43%, transparent 64%);
+    radial-gradient(ellipse at 50% 0%, rgb(70 127 190 / 5%), transparent 42%);
 }
 :root[data-theme="zero-light"] body::after { background: radial-gradient(ellipse at center, transparent 58%, rgb(78 101 123 / 13%) 100%); }
 :root[data-theme="zero-light"] .zero-layer-shell::before {
@@ -511,7 +526,7 @@
   background: linear-gradient(120deg, rgb(255 255 255 / 45%), transparent 28%), linear-gradient(145deg, rgb(250 252 254 / 88%), rgb(232 239 246 / 78%));
   box-shadow: inset 0 1px #fff, inset 0 0 70px rgb(65 112 171 / 4%);
 }
-:root[data-theme="zero-light"] :where(.connection-chip, .command-trigger, .zero-status-band .icon-button, .button.secondary, .icon-button) {
+:root[data-theme="zero-light"] :where(.connection-chip, .command-trigger, .button.secondary) {
   border-color: rgb(43 72 101 / 16%);
   background: rgb(255 255 255 / 68%);
 }
@@ -556,7 +571,7 @@
 :root[data-theme="zero-light"] .zero-anchor-dock .nav-item.active,
 :root[data-theme="zero-light"] :where(.project-tabs button.active, .settings-tabs a.active, .session-tabs button[aria-selected="true"], .segmented-control button[aria-selected="true"]) {
   color: var(--text-strong);
-  background: linear-gradient(145deg, rgb(54 122 202 / 16%), rgb(210 126 63 / 5%));
+  background: rgb(39 105 173 / 10%);
 }
 :root[data-theme="zero-light"] :where(.project-tabs, .settings-tabs, .segmented-control) {
   border-color: rgb(43 72 101 / 14%);
@@ -581,6 +596,16 @@
 :root[data-theme="zero-light"] .activity-center.open { background: linear-gradient(145deg, rgb(255 255 255 / 98%), rgb(229 237 245 / 98%)); box-shadow: -24px 30px 80px rgb(45 67 89 / 20%), inset 0 1px #fff; }
 :root[data-theme="zero-light"] .provider-dialog > :where(header, footer) { background: rgb(244 248 251 / 96%); }
 :root[data-theme="zero-light"] .theme-options button[aria-pressed="true"] { color: var(--text-strong); }
+:root[data-theme="zero-light"] .icon-button:hover:not(:disabled) { background: rgb(38 75 111 / 7%); }
+:root[data-theme="zero-light"] .button.primary { border-color: transparent; color: #fff; background: #2463a6; box-shadow: none; }
+:root[data-theme="zero-light"] .button.primary:hover:not(:disabled) { background: #1d5793; }
+:root[data-theme="zero-light"] .button.primary:active:not(:disabled) { background: #184a7d; }
+:root[data-theme="zero-light"] .button.primary:disabled { border-color: rgb(43 72 101 / 14%); color: var(--muted); background: rgb(38 75 111 / 6%); }
+:root[data-theme="zero-light"] .zero-anchor-dock .engagement-avatar,
+:root[data-theme="zero-light"] .zero-anchor-dock .operator-avatar { color: var(--blue); background: rgb(39 105 173 / 11%); }
+:root[data-theme="zero-light"] .zero-anchor-dock .nav-item.active { background: rgb(38 75 111 / 5%); }
+:root[data-theme="zero-light"] .zero-anchor-dock .nav-item.active::before { background: var(--blue); }
+:root[data-theme="zero-light"] .chat-message.operator { border-color: rgb(43 72 101 / 12%); background: #fff; }
 
 @keyframes zero-materialize {
   0% { opacity: 0; filter: blur(16px) brightness(1.28); transform: scaleX(.82); clip-path: inset(47% 8% 47% 8% round 24px); }
