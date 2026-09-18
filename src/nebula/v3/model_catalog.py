@@ -26,6 +26,8 @@ class ModelDescriptor(BaseModel):
 
 class ModelRouteDescriptor(BaseModel):
     provider_name: str
+    # OpenRouter provider slug (the endpoint tag before "/"), used for allowlists.
+    provider_slug: str | None = None
     context_window: int = Field(ge=1)
     max_input_tokens: int = Field(ge=1)
     max_output_tokens: int = Field(ge=1)
@@ -108,6 +110,33 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
     return list(models.values())
 
 
+class UpstreamProvider(BaseModel):
+    slug: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=200)
+
+
+def openrouter_upstream_providers(payload: Any) -> list[UpstreamProvider]:
+    """Parse OpenRouter's public provider directory; skip malformed rows."""
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list) or len(data) > 2_000:
+        raise ValueError("Invalid OpenRouter provider directory")
+    providers: dict[str, UpstreamProvider] = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        slug, name = item.get("slug"), item.get("name")
+        if (
+            isinstance(slug, str)
+            and isinstance(name, str)
+            and slug.strip()
+            and name.strip()
+        ):
+            key = slug.strip().lower()[:200]
+            providers[key] = UpstreamProvider(slug=key, name=name.strip()[:200])
+    return sorted(providers.values(), key=lambda item: item.name.lower())
+
+
 def openrouter_model_routes(payload: Any, *, model: str) -> list[ModelRouteDescriptor]:
     """Parse the authoritative per-endpoint limits for one exact model."""
 
@@ -123,7 +152,9 @@ def openrouter_model_routes(payload: Any, *, model: str) -> list[ModelRouteDescr
             raise ValueError("Invalid OpenRouter endpoint record")
         provider_name = item.get("provider_name")
         context_window = _positive_int(item.get("context_length"))
-        max_input = _positive_int(item.get("max_prompt_tokens"))
+        # OpenRouter publishes max_prompt_tokens as null for most endpoints; the
+        # prompt may then use the whole context window.
+        max_input = _positive_int(item.get("max_prompt_tokens")) or context_window
         max_output = _positive_int(item.get("max_completion_tokens"))
         status = item.get("status", 0)
         if (
@@ -136,9 +167,12 @@ def openrouter_model_routes(payload: Any, *, model: str) -> list[ModelRouteDescr
             or type(status) is not int
         ):
             raise ValueError("Incomplete OpenRouter endpoint limits")
+        tag = item.get("tag")
+        slug = tag.split("/", 1)[0].strip().lower() if isinstance(tag, str) else ""
         routes.append(
             ModelRouteDescriptor(
                 provider_name=provider_name,
+                provider_slug=slug or None,
                 context_window=context_window,
                 max_input_tokens=max_input,
                 max_output_tokens=max_output,

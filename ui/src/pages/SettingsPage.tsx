@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Contrast, KeyRound, Minus, Moon, Pencil, Plus, RefreshCw, RotateCcw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
+import { UpstreamProviderPicker, upstreamCatalog } from "../components/UpstreamProviderPicker";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
@@ -121,6 +122,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [modelQuery, setModelQuery] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
+  const [upstreamProviderIds, setUpstreamProviderIds] = useState<string[]>([]);
+  const [upstreamQuery, setUpstreamQuery] = useState("");
   const [credentialEnv, setCredentialEnv] = useState("");
   const [credentialSecret, setCredentialSecret] = useState("");
   const [sessionCredential, setSessionCredential] = useState(false);
@@ -284,6 +287,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setModel("");
     setAvailableModels([]);
     setSelectedModelIds([]);
+    setUpstreamProviderIds([]);
+    setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -309,6 +314,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setModel(detected.models[0] ?? "");
     setAvailableModels(detected.models);
     setSelectedModelIds([]);
+    setUpstreamProviderIds([]);
+    setUpstreamQuery("");
     setCredentialEnv("");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -338,6 +345,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       ...(provider.defaultModel ? [provider.defaultModel] : []),
     ])]);
     setSelectedModelIds(provider.modelAllowlist);
+    setUpstreamProviderIds(stringList(provider.options?.openrouter_providers));
+    setUpstreamQuery("");
     setCredentialEnv(provider.credentialEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(provider.credentialRef?.startsWith("session:") ?? false);
@@ -363,6 +372,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setModel("");
     setAvailableModels([]);
     setSelectedModelIds([]);
+    setUpstreamProviderIds([]);
+    setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSecret("");
     setSessionCredential(false);
@@ -387,7 +398,11 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       return;
     }
     const modelAllowlist = selectedModelIds;
-    const options = { ...(editingProvider?.options ?? {}) };
+    const options: Record<string, unknown> = { ...(editingProvider?.options ?? {}) };
+    if (dialogProviderType === "openrouter") {
+      if (upstreamProviderIds.length) options.openrouter_providers = upstreamProviderIds;
+      else delete options.openrouter_providers;
+    }
     const parsedContextWindow = contextWindow ? Number(contextWindow) : undefined;
     const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
     if ((parsedContextWindow !== undefined && (!Number.isInteger(parsedContextWindow) || parsedContextWindow < 1))
@@ -764,6 +779,13 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             <p className="provider-dialog-note" id="provider-model-help">{dialogModelSummary ?? (dialogModels.length ? "Choose a model reported by this runtime, or leave automatic selection enabled." : "Save the profile to run model discovery. Then edit it to choose a default from the reported models.")}</p>
             <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
             {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
+            {dialogProviderType === "openrouter" && <UpstreamProviderPicker
+              catalog={upstreamCatalog(editingProvider?.metadata)}
+              selected={upstreamProviderIds}
+              query={upstreamQuery}
+              onQuery={setUpstreamQuery}
+              onChange={setUpstreamProviderIds}
+            />}
             <details className="provider-advanced"><summary>Advanced provider options</summary>
               <fieldset className="resource-checklist"><legend>Allowed models</legend>{dialogModels.length ? dialogModels.map((item) => <label key={item}><input type="checkbox" checked={selectedModelIds.includes(item)} onChange={(event) => setSelectedModelIds((current) => event.target.checked ? [...new Set([...current, item])] : current.filter((value) => value !== item))} /><span>{item}</span></label>) : <p>Models will appear after the provider health check.</p>}</fieldset>
               <p className="provider-dialog-note">Leave every model unchecked to allow all models reported by the provider. With restrictions enabled, the default is included automatically.</p>
@@ -803,3 +825,8 @@ function TextSizeControl() {
     </div>
   );
 }
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
+}
+

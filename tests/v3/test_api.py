@@ -722,6 +722,7 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
         "healthy": True,
         "models": ["security-model"],
         "model_descriptors": [],
+        "upstream_providers": [],
         "detail": None,
         "credential_verified": None,
         "catalog_source": None,
@@ -905,6 +906,66 @@ def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeyp
     assert len(stored.metadata["route_catalog_revision"]) == 64
 
 
+def test_capability_probe_never_narrows_an_empty_model_allowlist(api, monkeypatch):
+    client, store, _ = api
+    models = ["author/first", "author/second"]
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-open-catalog",
+            name="OpenRouter",
+            provider_type="openrouter",
+            metadata={
+                "model_descriptors": [
+                    {"id": model, "name": model, "context_window": 100_000}
+                    for model in models
+                ]
+            },
+        )
+    )
+
+    async def valid_probe(_runtime, request):
+        nonce = request.tools[0].input_schema["properties"]["nonce"]["enum"][0]
+        return ModelResponse(
+            provider_id=profile.id,
+            model=request.model or "",
+            tool_calls=[
+                ToolCall(
+                    id="probe-call",
+                    name="nebula_capability_probe",
+                    arguments={"nonce": nonce},
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    async def routes(_runtime, model):
+        return [
+            ModelRouteDescriptor(
+                provider_name="Provider A",
+                context_window=65_536,
+                max_output_tokens=4_096,
+                supported_parameters=["tools"],
+            )
+        ]
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
+    monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
+
+    for model in models:
+        revision = store.get(ProviderProfile, profile.id).revision
+        response = client.post(
+            f"/api/v1/providers/{profile.id}/capabilities/verify",
+            headers=_auth(),
+            json={"model": model, "expected_revision": revision},
+        )
+        assert response.status_code == 200, response.text
+
+    stored = store.get(ProviderProfile, profile.id)
+    # Verifying one model must not pin the provider to it; every model stays selectable.
+    assert stored.model_allowlist == []
+    assert sorted(stored.capability_verifications) == models
+
+
 def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
     client, store, _ = api
     engagement = Engagement(id="eng-chat-approval", name="Chat approval")
@@ -982,6 +1043,7 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
         "healthy": False,
         "models": [],
         "model_descriptors": [],
+        "upstream_providers": [],
         "detail": "provider profile is disabled",
         "credential_verified": None,
         "catalog_source": None,

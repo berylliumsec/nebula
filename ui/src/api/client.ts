@@ -3143,7 +3143,9 @@ export function chatRequestBody(
     harness_profile_id: body.harnessProfileId,
     harness_session_id: body.harnessSessionId,
     mcp_server_ids: body.mcpServerIds ?? [],
-    hook_ids: body.hookIds ?? [],
+    // Omit optional newer fields when unused so a desktop app stays compatible
+    // with a slightly older remote Core, whose request models forbid extras.
+    ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
     goal_id: body.goalId,

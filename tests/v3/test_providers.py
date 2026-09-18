@@ -641,6 +641,10 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
                     }
                 },
             )
+        if request.url.path == "/api/v1/providers":
+            return httpx.Response(
+                200, json={"data": [{"name": "Anthropic", "slug": "anthropic"}]}
+            )
         assert request.url.path == "/api/v1/models/user"
         return httpx.Response(
             200,
@@ -677,7 +681,8 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
     health = asyncio.run(provider.health())
 
     assert health.healthy is True
-    assert observed == ["/api/v1/key", "/api/v1/models/user"]
+    assert observed == ["/api/v1/key", "/api/v1/models/user", "/api/v1/providers"]
+    assert [item.slug for item in health.upstream_providers] == ["anthropic"]
     assert health.credential_verified is True
     assert health.catalog_source == "openrouter:/models/user"
     assert health.key_limit_remaining == 74.5
@@ -900,8 +905,8 @@ def test_openrouter_rejects_incomplete_endpoint_limits():
                     "id": "author/model",
                     "endpoints": [
                         {
-                            "provider_name": "Missing prompt limit",
-                            "context_length": 65_536,
+                            "provider_name": "Missing context window",
+                            "max_prompt_tokens": 60_000,
                             "max_completion_tokens": 4_096,
                         }
                     ],
@@ -1185,3 +1190,125 @@ def test_wire_tool_names_never_collide():
     assert names["a_b"] == "a_b"
     assert names["a.b"] != "a_b"
     assert len(set(names.values())) == 2
+
+
+def _allowlisted_openrouter(handler=None, allowed=("anthropic", "Google-Vertex")):
+    return OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-allowlist",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+            default_model="author/model",
+            capabilities=ModelCapabilities(tools=True, strict_tools=True),
+            options={"openrouter_providers": list(allowed)},
+        ),
+        **({"transport": httpx.MockTransport(handler)} if handler else {}),
+    )
+
+
+def test_openrouter_allowlist_restricts_every_request_to_selected_providers():
+    provider = _allowlisted_openrouter()
+    chat = provider._payload(
+        ModelRequest(messages=[ModelMessage(role="user", content="Hi")]), "author/model"
+    )
+    tools = provider._payload(
+        ModelRequest(
+            messages=[ModelMessage(role="user", content="Use the tool")],
+            tools=[TOOL],
+            tool_choice="required",
+        ),
+        "author/model",
+    )
+
+    assert chat["provider"] == {"only": ["anthropic", "google-vertex"]}
+    assert tools["provider"] == {
+        "require_parameters": True,
+        "only": ["anthropic", "google-vertex"],
+    }
+    # Without an allowlist OpenRouter keeps choosing freely.
+    open_provider = _allowlisted_openrouter(allowed=())
+    assert "provider" not in open_provider._payload(
+        ModelRequest(messages=[ModelMessage(role="user", content="Hi")]), "author/model"
+    )
+
+
+def _endpoints(*rows):
+    return {
+        "data": {
+            "id": "author/model",
+            "endpoints": [
+                {
+                    "provider_name": name,
+                    "tag": tag,
+                    "context_length": context,
+                    "max_prompt_tokens": context - 1_000,
+                    "max_completion_tokens": 4_096,
+                    "supported_parameters": ["tools"],
+                    "status": 0,
+                }
+                for name, tag, context in rows
+            ],
+        }
+    }
+
+
+def test_openrouter_route_limits_follow_the_provider_allowlist():
+    payload = _endpoints(
+        ("Anthropic", "anthropic", 200_000),
+        ("Google", "google-vertex/us-east5", 150_000),
+        ("Azure", "azure/global", 32_000),
+    )
+    provider = _allowlisted_openrouter(
+        lambda _request: httpx.Response(200, json=payload)
+    )
+
+    routes = asyncio.run(provider.openrouter_route_limits("author/model"))
+
+    assert [route.provider_slug for route in routes] == ["anthropic", "google-vertex"]
+    assert min(route.context_window for route in routes) == 150_000
+
+
+def test_openrouter_route_limits_explain_when_no_allowed_provider_serves_the_model():
+    payload = _endpoints(("Azure", "azure/global", 32_000))
+    provider = _allowlisted_openrouter(
+        lambda _request: httpx.Response(200, json=payload)
+    )
+
+    with pytest.raises(ProviderError, match="None of the allowed OpenRouter providers"):
+        asyncio.run(provider.openrouter_route_limits("author/model"))
+
+
+def test_openrouter_upstream_directory_is_parsed_and_sorted():
+    from nebula.v3.model_catalog import openrouter_upstream_providers
+
+    providers = openrouter_upstream_providers(
+        {
+            "data": [
+                {"name": "Google Vertex", "slug": "Google-Vertex"},
+                {"name": "Anthropic", "slug": "anthropic"},
+                {"name": "", "slug": "broken"},
+                "not-a-row",
+            ]
+        }
+    )
+
+    assert [(item.slug, item.name) for item in providers] == [
+        ("anthropic", "Anthropic"),
+        ("google-vertex", "Google Vertex"),
+    ]
+
+
+def test_openrouter_null_prompt_limit_uses_the_context_window():
+    """OpenRouter reports max_prompt_tokens as null on real endpoints."""
+
+    payload = _endpoints(("Anthropic", "anthropic", 200_000))
+    payload["data"]["endpoints"][0]["max_prompt_tokens"] = None
+    provider = _allowlisted_openrouter(
+        lambda _request: httpx.Response(200, json=payload), allowed=()
+    )
+
+    (route,) = asyncio.run(provider.openrouter_route_limits("author/model"))
+
+    assert route.context_window == 200_000
+    assert route.max_input_tokens == 200_000
+    assert route.provider_slug == "anthropic"
