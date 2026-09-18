@@ -1856,7 +1856,7 @@ test("all assistant states remain fully visible inside mobile Workbench navigati
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Open conversations" }).click();
   else await page.getByRole("button", { name: "Show conversations" }).click();
-  const conversationRow = page.locator(".session-list nav > button").first();
+  const conversationRow = page.locator(".session-list .session-new-chat").first();
   await expect(conversationRow).toBeVisible();
   expect(await conversationRow.evaluate((element) => element.getBoundingClientRect().height)).toBeLessThanOrEqual(50);
   if ((page.viewportSize()?.width ?? 1_000) <= 760) await page.getByRole("button", { name: "Chat", exact: true }).click();
@@ -2100,7 +2100,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
   await page.getByRole("button", { name: "Start new chat", exact: true }).click();
 
   const geometry = await page.locator(".sessions-page").evaluate((element) => {
-    const toolbar = element.querySelector<HTMLElement>(".session-toolbar")!.getBoundingClientRect();
+    const toolbar = document.querySelector<HTMLElement>(".session-toolbar")!.getBoundingClientRect();
     const composer = element.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
     const navigation = element.querySelector<HTMLElement>(".mobile-companion-nav")!.getBoundingClientRect();
     const composerInput = element.querySelector<HTMLTextAreaElement>(".chat-composer textarea")!;
@@ -2281,7 +2281,7 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
     ...entity, id: "notice-fixture", name: "Configured fixture", kind: "grok_acp",
     connection_mode: "spawn", transport: "stdio", executable: "/bin/true", auth_mode: "existing_session",
     enabled: true, default_model: "fixture", privacy: {local_only: true, permits_sensitive_data: true},
-    capabilities: {models: ["fixture"], checked_at: entity.updated_at},
+    capabilities: {models: ["fixture"], checked_at: entity.updated_at, authentication_state: "verified"},
   }]}));
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
   await page.goto("/?view=chat");
@@ -2300,21 +2300,22 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
         const rect = button.getBoundingClientRect();
         const panel = button.closest('.chat-panel')!;
         const box = button.closest('.chat-composer')!.getBoundingClientRect();
-        const search = panel.querySelector('.assistant-search')!;
-        const summary = search.querySelector('summary')!.getBoundingClientRect();
+        // Transcript search is an on-demand panel behind one toggle; the toggle must stay reachable.
+        const searchToggle = document.querySelector<HTMLElement>('.transcript-search-toggle')!.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
         return {
           bottom: rect.bottom, height: rect.height, width: rect.width, hit: button.contains(hit),
           boundary: document.querySelector("main")!.getBoundingClientRect().bottom,
           composerBottom: box.bottom, panelBottom: panel.getBoundingClientRect().bottom,
-          searchBottom: search.getBoundingClientRect().bottom,
-          summaryBottom: summary.bottom, summaryHeight: summary.height,
+          searchToggleTop: searchToggle.top, searchToggleBottom: searchToggle.bottom,
+          summaryHeight: searchToggle.height,
         };
       });
       await testInfo.attach(`workspace-notices-${landscape ? "landscape" : "portrait"}`, {body: await page.screenshot(), contentType: "image/png"});
       expect(geometry.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.boundary);
       expect(geometry.composerBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.panelBottom);
-      expect(geometry.summaryBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.searchBottom);
+      expect(geometry.searchToggleTop, JSON.stringify(geometry)).toBeGreaterThanOrEqual(0);
+      expect(geometry.searchToggleBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.boundary);
       expect(geometry.height).toBeGreaterThanOrEqual(44);
       expect(geometry.width).toBeGreaterThanOrEqual(44);
       expect(geometry.summaryHeight).toBeGreaterThanOrEqual(44);
@@ -3242,7 +3243,7 @@ test("New chat detaches from an in-flight saved conversation load", async ({ pag
   } else {
     await page.getByRole("button", { name: "Show conversations" }).click();
   }
-  await expect(page.locator(".session-list nav > button.active")).toContainText("New conversation");
+  await expect(page.locator(".session-list .session-new-chat.active")).toContainText("New chat");
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     await page.getByRole("button", { name: "Chat", exact: true }).click();
   }
@@ -6079,7 +6080,7 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
       if (!bounds.width || !bounds.height) return [];
       const label = button.getAttribute("aria-label") || button.textContent?.trim() || "unnamed";
       const issues: string[] = [];
-      const host = button.closest(".top-bar-page-actions")!.getBoundingClientRect();
+      const host = button.closest(".top-bar-page-actions, .top-bar-trailing-actions")!.getBoundingClientRect();
       if (bounds.left < host.left - 1 || bounds.right > host.right + 1) issues.push(`${label}: cropped button ${bounds.left}..${bounds.right}, host ${host.left}..${host.right}`);
       const inside = (box: DOMRect) => box.left >= bounds.left - 1 && box.right <= bounds.right + 1 && box.top >= bounds.top - 1 && box.bottom <= bounds.bottom + 1;
       const icon = button.querySelector("svg")?.getBoundingClientRect();
@@ -6461,10 +6462,13 @@ test("shared actions keep sleek geometry without weakening touch targets", async
         radius: Number.parseFloat(style.borderRadius),
         fontSize: Number.parseFloat(style.fontSize),
         shadow: style.boxShadow,
+        // Named header actions keep 44px targets at every size (docs/design/top-bar-actions.md).
+        headerAction: Boolean(element.closest(".toolbar-page-actions")),
       };
     });
-    expect(resting.height).toBeGreaterThanOrEqual(mobile ? 43.5 : 33.5);
-    expect(resting.height).toBeLessThanOrEqual(mobile ? 44.5 : 36.5);
+    const touchSized = mobile || resting.headerAction;
+    expect(resting.height).toBeGreaterThanOrEqual(touchSized ? 43.5 : 33.5);
+    expect(resting.height).toBeLessThanOrEqual(touchSized ? 44.5 : 36.5);
     expect(resting.radius).toBeLessThanOrEqual(8);
     expect(resting.fontSize).toBeGreaterThanOrEqual(13);
     expect(resting.shadow).toBe("none");
@@ -6485,7 +6489,7 @@ test("calm structure avoids duplicate hierarchy and decorative nesting", async (
         const style = getComputedStyle(element);
         return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
       };
-      const primaryActions = [...document.querySelectorAll<HTMLElement>(".top-bar-page-actions .button.primary, .page > .page-header .button.primary")].filter(visible);
+      const primaryActions = [...document.querySelectorAll<HTMLElement>(".top-bar-page-actions .button.primary, .top-bar-trailing-actions .button.primary, .page > .page-header .button.primary")].filter(visible);
       const activePrimaryNavigation = [...document.querySelectorAll<HTMLElement>(".side-nav .nav-item.active, .mobile-companion-nav [aria-current='page']")].filter(visible);
       const nestedFrames = [...document.querySelectorAll<HTMLElement>(".standard-empty-state, .data-panel, .session-workspace, .settings-group-body")]
         .filter(visible)
