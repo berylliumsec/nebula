@@ -1,6 +1,23 @@
 import { reasoningSummaryState, reasoningSummaryText, type HarnessActivityItem } from "../pages/harnessActivity";
 import { HarnessMarkdown } from "./HarnessMarkdown";
 
+export function ThinkingDisclosure({
+  text,
+  streaming = false,
+}: {
+  text?: string;
+  streaming?: boolean;
+}) {
+  const thought = text?.trim() ?? "";
+  if (!thought && !streaming) return null;
+  return <details className="harness-thinking" aria-label="Thinking">
+    <summary>{streaming ? "Thinking…" : "Thinking"}</summary>
+    {thought
+      ? <div className="harness-reasoning-summary"><HarnessMarkdown content={thought} /></div>
+      : <p className="harness-reasoning-note">Waiting for the model…</p>}
+  </details>;
+}
+
 export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
   const thoughts = items.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
   if (!thoughts.length) return null;

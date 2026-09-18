@@ -3359,7 +3359,9 @@ class ChatDecision(Entity):
     engagement_id: str
     session_id: str | None = None
     scope: str = Field(default="conversation", pattern="^(conversation|project)$")
-    kind: str = Field(default="decision", pattern="^(decision|constraint|assumption)$")
+    kind: str = Field(
+        default="decision", pattern="^(decision|constraint|assumption|question)$"
+    )
     text: str = Field(min_length=1, max_length=4000)
     status: str = Field(default="active", pattern="^(active|superseded|removed)$")
     source_message_id: str | None = None
@@ -3428,6 +3430,82 @@ class ChatSession(Entity):
         return self
 
 
+class ChatGoalStatus(StringEnum):
+    DRAFT = "draft"
+    RUNNING = "running"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class ChatGoal(Entity):
+    """One Core-owned provider-chat objective with explicit lifecycle and limits."""
+
+    entity_kind: ClassVar[str] = "chat_goals"
+    engagement_id: str
+    session_id: str
+    objective: str = Field(min_length=1, max_length=20_000)
+    completion_criteria: list[str] = Field(min_length=1, max_length=50)
+    plan: list[str] = Field(default_factory=list, max_length=200)
+    current_step: int = Field(default=0, ge=0)
+    status: ChatGoalStatus = ChatGoalStatus.DRAFT
+    token_budget: int | None = Field(default=None, ge=1)
+    time_budget_seconds: int | None = Field(default=None, ge=1)
+    step_budget: int | None = Field(default=None, ge=1)
+    child_budget: int | None = Field(default=None, ge=0)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    elapsed_seconds: float = Field(default=0, ge=0)
+    children_started: int = Field(default=0, ge=0)
+    linked_turn_ids: list[str] = Field(default_factory=list, max_length=10_000)
+    started_at: datetime | None = None
+    active_since: datetime | None = None
+    paused_at: datetime | None = None
+    completed_at: datetime | None = None
+    blocked_reason: str | None = Field(default=None, max_length=2_000)
+    completion_summary: str | None = Field(default=None, max_length=20_000)
+    completion_evidence: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=200
+    )
+    consecutive_stalls: int = Field(default=0, ge=0)
+    skill_snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    parent_goal_id: str | None = Field(default=None, max_length=200)
+    child_session_ids: list[str] = Field(default_factory=list, max_length=32)
+    execution_owner_id: str | None = Field(default=None, max_length=200)
+    execution_claim_id: str | None = Field(default=None, max_length=200)
+    execution_claimed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def progress_is_coherent(self) -> "ChatGoal":
+        if self.plan and self.current_step > len(self.plan):
+            raise ValueError("current goal step exceeds the plan")
+        if self.status == ChatGoalStatus.BLOCKED and not self.blocked_reason:
+            raise ValueError("blocked goals require a reason")
+        if self.status == ChatGoalStatus.COMPLETED and (
+            not self.completion_summary or not self.completion_evidence
+        ):
+            raise ValueError("completed goals require a summary and evidence")
+        claim_fields = (
+            self.execution_owner_id,
+            self.execution_claim_id,
+            self.execution_claimed_at,
+        )
+        if any(item is not None for item in claim_fields) and not all(
+            item is not None for item in claim_fields
+        ):
+            raise ValueError("goal execution ownership must be recorded atomically")
+        return self
+
+    def active_elapsed_seconds(self, now: datetime | None = None) -> float:
+        elapsed = self.elapsed_seconds
+        if self.status == ChatGoalStatus.RUNNING and self.active_since is not None:
+            elapsed += max(
+                0.0, ((now or utc_now()) - self.active_since).total_seconds()
+            )
+        return elapsed
+
+
 class ChatContentBlock(NebulaModel):
     """One ordered, durable block in a multimodal chat message."""
 
@@ -3454,6 +3532,7 @@ class ChatContentBlock(NebulaModel):
 class ChatTurnStatus(StringEnum):
     ROUTING = "routing"
     WAITING_APPROVAL = "waiting_approval"
+    WAITING_CALLBACK = "waiting_callback"
     FINALIZING = "finalizing"
     COMPLETE = "complete"
     FAILED = "failed"
@@ -3467,6 +3546,7 @@ class ChatTurn(Entity):
     entity_kind: ClassVar[str] = "chat_turns"
     engagement_id: str
     session_id: str
+    goal_id: str | None = None
     backend: ChatBackend = ChatBackend.PROVIDER
     provider_profile_id: str | None = None
     harness_turn_id: str | None = None
@@ -3487,6 +3567,9 @@ class ChatTurn(Entity):
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     final_message_id: str | None = None
     error: str | None = Field(default=None, max_length=1_000)
+    execution_owner_id: str | None = Field(default=None, max_length=200)
+    execution_claim_id: str | None = Field(default=None, max_length=200)
+    execution_claimed_at: datetime | None = None
 
     @model_validator(mode="after")
     def backend_binding_is_coherent(self) -> "ChatTurn":
@@ -3494,6 +3577,121 @@ class ChatTurn(Entity):
             raise ValueError("provider chat turns require provider_profile_id")
         if self.backend == ChatBackend.HARNESS and self.provider_profile_id is not None:
             raise ValueError("harness chat turns cannot reference a provider")
+        claim_fields = (
+            self.execution_owner_id,
+            self.execution_claim_id,
+            self.execution_claimed_at,
+        )
+        if any(item is not None for item in claim_fields) and not all(
+            item is not None for item in claim_fields
+        ):
+            raise ValueError("turn execution ownership must be recorded atomically")
+        return self
+
+
+class ChatSubagentStatus(StringEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    STOPPED = "stopped"
+    INTERRUPTED = "interrupted"
+
+
+CHAT_SUBAGENT_TERMINAL_STATUSES = frozenset(
+    {
+        ChatSubagentStatus.COMPLETED,
+        ChatSubagentStatus.FAILED,
+        ChatSubagentStatus.STOPPED,
+        ChatSubagentStatus.INTERRUPTED,
+    }
+)
+
+
+class ChatSubagent(Entity):
+    """A provider-chat child conversation delegated by a parent turn."""
+
+    entity_kind: ClassVar[str] = "chat_subagents"
+    engagement_id: str
+    parent_session_id: str = Field(min_length=1, max_length=200)
+    parent_turn_id: str = Field(min_length=1, max_length=200)
+    child_session_id: str = Field(min_length=1, max_length=200)
+    child_turn_id: str | None = Field(default=None, max_length=200)
+    name: str = Field(min_length=1, max_length=120)
+    task: str = Field(min_length=1, max_length=20_000)
+    status: ChatSubagentStatus = ChatSubagentStatus.RUNNING
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    started_at: datetime = Field(default_factory=utc_now)
+    finished_at: datetime | None = None
+    result: str = Field(default="", max_length=20_000)
+    error: str | None = Field(default=None, max_length=1_000)
+    result_message_id: str | None = Field(default=None, max_length=200)
+    # Request flags inherited from the parent turn so a Core-owned continuation
+    # can reuse the same capabilities without re-asking the operator.
+    parent_request: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def terminal_state_is_coherent(self) -> "ChatSubagent":
+        terminal = self.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+        if terminal != (self.finished_at is not None):
+            raise ValueError("finished_at is required exactly for finished subagents")
+        return self
+
+
+class NativeCheckpoint(Entity):
+    """A conflict-aware snapshot of workspace files under Nebula edit control."""
+
+    entity_kind: ClassVar[str] = "native_checkpoints"
+    engagement_id: str
+    chat_session_id: str
+    label: str = Field(min_length=1, max_length=120)
+    files: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+
+
+class ChatSchedule(Entity):
+    """A Core-owned recurring provider-chat occurrence with skip receipts."""
+
+    entity_kind: ClassVar[str] = "chat_schedules"
+    engagement_id: str
+    session_id: str
+    provider_profile_id: str
+    model: str
+    interval_seconds: int = Field(ge=3_600, le=30 * 24 * 3_600)
+    next_run_at: datetime
+    enabled: bool = True
+    last_run_at: datetime | None = None
+    last_turn_id: str | None = Field(default=None, max_length=200)
+    last_status: str | None = Field(default=None, max_length=40)
+    skip_reason: str | None = Field(default=None, max_length=1_000)
+
+
+class NativeHookExecution(Entity):
+    """A durable provider-native lifecycle-hook attempt and recovery boundary."""
+
+    entity_kind: ClassVar[str] = "native_hook_executions"
+    engagement_id: str
+    chat_session_id: str
+    chat_turn_id: str
+    hook_id: str
+    hook_snapshot: dict[str, Any]
+    event_name: str
+    event_version: int = Field(default=1, ge=1)
+    status: Literal[
+        "running", "complete", "failed", "timed_out", "interrupted", "reconciled"
+    ] = "running"
+    side_effects: Literal["none", "workspace", "external"] = "none"
+    started_at: datetime
+    completed_at: datetime | None = None
+    exit_code: int | None = None
+    stdout: str = Field(default="", max_length=64 * 1024)
+    stderr: str = Field(default="", max_length=64 * 1024)
+    error: str | None = Field(default=None, max_length=1_000)
+    reconciliation: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def terminal_state_is_coherent(self) -> "NativeHookExecution":
+        terminal = self.status != "running"
+        if terminal != (self.completed_at is not None):
+            raise ValueError("completed_at is required exactly for terminal hook runs")
         return self
 
 
@@ -3505,7 +3703,8 @@ class ChatMessage(Entity):
     session_id: str
     sequence: int = Field(ge=1)
     role: ChatRole
-    content: str = Field(min_length=1, max_length=200_000)
+    content: str = Field(default="", max_length=200_000)
+    reasoning: str = Field(default="", max_length=200_000)
     content_blocks: list[ChatContentBlock] = Field(default_factory=list, max_length=64)
     source_message_id: str | None = Field(default=None, max_length=200)
     provider_profile_id: str | None = None
@@ -3515,6 +3714,12 @@ class ChatMessage(Entity):
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def user_messages_require_content(self) -> "ChatMessage":
+        if self.role == ChatRole.USER and not self.content.strip():
+            raise ValueError("user messages require content")
+        return self
 
 
 class PairedDeviceSession(Entity):
@@ -4139,11 +4344,16 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     LibraryItem,
     ScopeImport,
     ChatSession,
+    ChatGoal,
     ChatBookmark,
     ChatQueue,
     ChatDecision,
     ChatReadCursor,
     ChatTurn,
+    ChatSubagent,
+    NativeCheckpoint,
+    ChatSchedule,
+    NativeHookExecution,
     ChatMessage,
     PairedDeviceSession,
     ActionIntent,

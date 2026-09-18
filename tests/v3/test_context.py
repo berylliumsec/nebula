@@ -8,6 +8,7 @@ from nebula.v3.context import (
     ContextCompactionError,
     ContextCompactor,
     ContextSource,
+    estimate_messages,
     estimate_tokens,
     lexical_score,
     resolve_context_limits,
@@ -168,6 +169,176 @@ def test_context_limits_use_configured_values_and_safe_fallback():
         _profile(context_window=0)
 
 
+def test_context_limits_follow_exact_model_and_treat_options_as_caps():
+    profile = _profile(context_window=100_000, max_output_tokens=16_000)
+    profile.metadata["model_catalog_revision"] = "catalog-sha"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+        },
+        {
+            "id": "model-b",
+            "context_window": 8_000,
+            "max_output_tokens": 1_000,
+        },
+    ]
+
+    exact = resolve_context_limits(
+        profile, model="model-a", requested_output_tokens=40_000
+    )
+
+    assert exact.context_window == 100_000
+    assert exact.max_output_tokens == 16_000
+    assert exact.input_capacity == 84_000
+    assert exact.target_input_tokens == 63_000
+    assert exact.compacted_input_target == 50_400
+    assert exact.source == "model_catalog"
+    assert exact.estimated is False
+    assert exact.metadata_revision == "catalog-sha"
+
+    unknown = resolve_context_limits(profile, model="unknown")
+    assert unknown.context_window == 100_000
+    assert unknown.source == "configured"
+    assert unknown.estimated is True
+
+
+def test_context_limits_use_each_exact_model_instead_of_provider_maximum():
+    profile = _profile()
+    profile.metadata["model_descriptors"] = [
+        {"id": "large", "context_window": 200_000, "max_output_tokens": 8_000},
+        {"id": "small", "context_window": 8_000, "max_output_tokens": 1_000},
+    ]
+
+    assert resolve_context_limits(profile, model="large").context_window == 200_000
+    small = resolve_context_limits(profile, model="small")
+    assert small.context_window == 8_000
+    assert small.max_output_tokens == 1_000
+    assert small.target_input_tokens == 5_250
+
+
+def test_openrouter_context_limits_use_minimum_compatible_route_capacity():
+    profile = _profile(context_window=200_000, max_output_tokens=32_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["route_catalog_revision"] = "route-sha"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+            "route_limits_verified": True,
+            "route_limits": [
+                {
+                    "provider_name": "wide",
+                    "context_window": 200_000,
+                    "max_input_tokens": 180_000,
+                    "max_output_tokens": 32_000,
+                    "supported_parameters": ["tools"],
+                    "status": 0,
+                },
+                {
+                    "provider_name": "bounded",
+                    "context_window": 64_000,
+                    "max_input_tokens": 60_000,
+                    "max_output_tokens": 8_000,
+                    "supported_parameters": ["tools"],
+                    "status": 0,
+                },
+                {
+                    "provider_name": "inactive",
+                    "context_window": 4_000,
+                    "max_input_tokens": 3_000,
+                    "max_output_tokens": 1_000,
+                    "supported_parameters": ["tools"],
+                    "status": 1,
+                },
+            ],
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile,
+        model="author/model-a",
+        requested_output_tokens=32_000,
+        required_parameters={"tools"},
+    )
+
+    assert limits.context_window == 64_000
+    assert limits.max_output_tokens == 8_000
+    assert limits.input_capacity == 56_000
+    assert limits.route_limits_verified is True
+    assert limits.eligible_route_count == 2
+    assert limits.route_context_window == 64_000
+    assert limits.route_input_limit == 60_000
+    assert limits.route_limits_required is True
+    assert limits.metadata_revision == "route-sha"
+    assert limits.estimated is False
+
+
+def test_openrouter_context_limits_filter_routes_by_required_parameters():
+    profile = _profile()
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 100_000,
+            "max_output_tokens": 10_000,
+            "route_limits_verified": True,
+            "route_limits": [
+                {
+                    "provider_name": "text-only",
+                    "context_window": 8_000,
+                    "max_input_tokens": 7_000,
+                    "max_output_tokens": 1_000,
+                    "supported_parameters": [],
+                },
+                {
+                    "provider_name": "tool-route",
+                    "context_window": 50_000,
+                    "max_input_tokens": 45_000,
+                    "max_output_tokens": 5_000,
+                    "supported_parameters": ["tools"],
+                },
+            ],
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile, model="author/model-a", required_parameters={"tools"}
+    )
+
+    assert limits.context_window == 50_000
+    assert limits.eligible_route_count == 1
+
+    with pytest.raises(ContextCompactionError, match="no verified OpenRouter endpoint"):
+        resolve_context_limits(
+            profile,
+            model="author/model-a",
+            required_parameters={"structured_outputs"},
+        )
+
+
+def test_openrouter_unverified_routes_use_safe_fallback_ceiling():
+    profile = _profile(context_window=200_000, max_output_tokens=32_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+        }
+    ]
+
+    limits = resolve_context_limits(profile, model="author/model-a")
+
+    assert limits.context_window == 8_192
+    assert limits.max_output_tokens == 2_048
+    assert limits.route_limits_verified is False
+    assert limits.route_limits_required is True
+    assert limits.estimated is True
+
+
 def test_token_estimation_and_security_identifier_retrieval_are_deterministic():
     assert estimate_tokens("hello") == 2
     assert estimate_tokens("你好", message_count=1) >= 10
@@ -181,6 +352,20 @@ def test_token_estimation_and_security_identifier_retrieval_are_deterministic():
     )
     generic = "The application returned a normal response"
     assert lexical_score(query, relevant) > lexical_score(query, generic)
+    image_estimate = estimate_messages(
+        [
+            ModelRequest(
+                model="model-a",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "image", "data": "x" * 100_000}],
+                    }
+                ],
+            ).messages[0]
+        ]
+    )
+    assert 2_000 < image_estimate < 3_000
 
 
 def test_compaction_persists_sourced_immutable_snapshot_and_owner_pointer(tmp_path):
@@ -247,6 +432,7 @@ def test_compaction_persists_sourced_immutable_snapshot_and_owner_pointer(tmp_pa
     assert result.snapshot.memory.confirmed_facts[0].sources[0].sequence == 1
     assert result.snapshot.usage.total_tokens == 5
     assert provider.requests[0].temperature == 0
+    assert provider.requests[0].max_output_tokens == 184
     assert provider.requests[0].tools == []
     assert provider.requests[0].response_schema
     updated = store.get(ChatSession, session.id)

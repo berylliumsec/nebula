@@ -2,7 +2,11 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.v3.test_chat_queue import setup_queue, enqueue
-from nebula.v3.chat_decisions import decisions_router, decision_snapshot
+from nebula.v3.chat_decisions import (
+    decision_instructions,
+    decisions_router,
+    decision_snapshot,
+)
 from nebula.v3.domain import ChatSession, ChatMessage, ChatTurn
 
 
@@ -107,6 +111,33 @@ def test_sources_must_be_exact_and_forks_keep_applicable_provenance(tmp_path):
     copied = decision_snapshot(store, after.id, "p")
     assert copied[0]["source_message_id"] == "source"
     assert copied[0]["id"] != "d"
+
+
+def test_unresolved_question_remains_authoritative_until_explicit_resolution(tmp_path):
+    store, _, _, client = fixture(tmp_path)
+    path = "/chat/sessions/s/decisions/question"
+    created = client.put(
+        path,
+        json={
+            "expected_revision": 0,
+            "kind": "question",
+            "text": "Which production region is authoritative?",
+        },
+    )
+    assert created.status_code == 200, created.text
+    snapshot = decision_snapshot(store, "s", "p")
+    assert snapshot[0]["kind"] == "question"
+    instructions = decision_instructions(snapshot)
+    assert "authoritative outside derived summaries" in instructions
+    assert "remain unresolved" in instructions
+    assert "Which production region is authoritative?" in instructions
+
+    removed = client.put(
+        path,
+        json={"expected_revision": 1, "action": "remove"},
+    )
+    assert removed.status_code == 200, removed.text
+    assert decision_snapshot(store, "s", "p") == []
 
 
 def test_queued_dispatch_uses_current_decisions_and_freezes_revision(tmp_path):

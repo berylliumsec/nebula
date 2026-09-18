@@ -623,14 +623,16 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
                 : provider.models;
               return {
                 ...provider,
+                revision: result.providerRevision ?? provider.revision,
                 state: result.healthy ? "healthy" : "offline",
                 models: selectableModels,
                 availableModels: result.healthy ? result.models : provider.availableModels,
+                modelDescriptors: result.healthy ? result.modelDescriptors : provider.modelDescriptors,
                 modelCount: selectableModels.length,
                 lastCheckedAt: new Date().toISOString(),
                 message: result.healthy
                   ? selectableModels.length > 0
-                    ? `Serving ${selectableModels.join(", ")}`
+                    ? `${selectableModels.length} models discovered. ${result.detail ?? "Select a model to use this provider."}`
                     : provider.modelAllowlist.length
                       ? "Provider is healthy but reported no allowed models."
                       : "Provider is healthy but reported no models."

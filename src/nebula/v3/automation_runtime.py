@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import os
-import re
-import signal
 import platform
+import re
+import secrets
+import shlex
+import signal
+import socket
 import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -160,6 +164,21 @@ class CommandResult(BaseModel):
     workspace_changes: list[WorkspaceChange] = Field(default_factory=list)
     network_granted: bool = False
     untrusted_data: bool = True
+    results_url: str | None = None
+    results_api_key: str | None = None
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    tool_call_id: str | None = None
+
+
+class ProcessResultsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["complete", "failed"] = "complete"
+    summary: str | None = Field(default=None, max_length=1_000)
+    exit_code: int | None = Field(default=None, ge=0, le=255)
+    output: dict[str, Any] = Field(default_factory=dict)
+    stdout: str = Field(default="", max_length=64 * 1024)
 
 
 class AutomationRuntimeInfo(BaseModel):
@@ -201,7 +220,11 @@ class RuntimeBackendSession(ABC):
 
     @abstractmethod
     async def run(
-        self, process_id: str, command: str, cwd: str
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
     ) -> RuntimeBackendProcess:
         raise NotImplementedError
 
@@ -329,7 +352,11 @@ class HostRuntimeSession(RuntimeBackendSession):
         return None
 
     async def run(
-        self, process_id: str, command: str, cwd: str
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
     ) -> RuntimeBackendProcess:
         if self._closed:
             raise AutomationRuntimeUnavailable("host session is closed")
@@ -341,6 +368,12 @@ class HostRuntimeSession(RuntimeBackendSession):
             raise AutomationRuntimeUnavailable(
                 "command working directory is not a directory"
             )
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key in {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}
+        }
+        environment.update(extra_env or {})
         process = await asyncio.create_subprocess_exec(
             "/bin/bash",
             "--noprofile",
@@ -348,12 +381,7 @@ class HostRuntimeSession(RuntimeBackendSession):
             "-c",
             command,
             cwd=str(directory),
-            env={
-                key: value
-                for key, value in os.environ.items()
-                if key
-                in {"HOME", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"}
-            },
+            env=environment,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -544,10 +572,20 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         await self.lease.enable()
 
     async def run(
-        self, process_id: str, command: str, cwd: str
+        self,
+        process_id: str,
+        command: str,
+        cwd: str,
+        extra_env: dict[str, str] | None = None,
     ) -> RuntimeBackendProcess:
         if self._closed:
             raise AutomationRuntimeUnavailable("automation session is closed")
+        wrapped = command
+        if extra_env:
+            exports = "; ".join(
+                f"export {key}={shlex.quote(value)}" for key, value in extra_env.items()
+            )
+            wrapped = f"{exports}; {command}"
         pid_file = f"/tmp/nebula-process-{process_id}.pid"
         argv = [
             *self.runner._runtime_argv(),
@@ -559,7 +597,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
             "-c",
             self._PROCESS_WRAPPER,
             pid_file,
-            command,
+            wrapped,
         ]
         try:
             process = await asyncio.create_subprocess_exec(
@@ -688,6 +726,37 @@ RuntimeResolver = Callable[[str], Awaitable[Any]]
 CachedRuntimeProvider = Callable[[], dict[str, Any] | None]
 
 
+def resolve_callback_origin(*, host: str, port: int, tls: bool = False) -> str:
+    """Public Core origin tools use to POST background results over LAN."""
+
+    configured = (os.getenv("NEBULA_CALLBACK_ORIGIN") or "").rstrip("/")
+    if configured:
+        return configured
+    bind = host.strip()
+    if bind in {"0.0.0.0", "::", "[::]"}:
+        bind = _first_lan_ipv4() or "127.0.0.1"
+    if ":" in bind and not bind.startswith("["):
+        bind = f"[{bind}]"
+    scheme = "https" if tls else "http"
+    return f"{scheme}://{bind}:{port}"
+
+
+def _first_lan_ipv4() -> str | None:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("1.1.1.1", 80))
+        address = probe.getsockname()[0]
+    except (
+        OSError
+    ):  # diagnostic-expected: no routable LAN address; callers fall back to loopback
+        return None
+    finally:
+        probe.close()
+    if address.startswith("127."):
+        return None
+    return address
+
+
 class AutomationRuntimeManager:
     """Own runtime sessions, approvals, process I/O, and immutable output."""
 
@@ -703,6 +772,7 @@ class AutomationRuntimeManager:
         cached_runtime_provider: CachedRuntimeProvider | None = None,
         session_factory: SessionFactory | None = None,
         credential_store: CredentialStore | None = None,
+        callback_origin: str | None = None,
     ) -> None:
         if runtime_image is None and runtime_resolver is None:
             raise ValueError("automation runtime requires an image or Kali resolver")
@@ -723,6 +793,9 @@ class AutomationRuntimeManager:
         self.cached_runtime_provider = cached_runtime_provider
         self.session_factory = session_factory or ContainerRuntimeSession.start
         self.credential_store = credential_store
+        self.callback_origin = (
+            callback_origin or os.getenv("NEBULA_CALLBACK_ORIGIN") or ""
+        ).rstrip("/")
         self.capture_root = self.data_root / "automation-runtime" / "captures"
         self.capture_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.capture_root.chmod(0o700)
@@ -1154,6 +1227,8 @@ class AutomationRuntimeManager:
         approval: Approval | None = None,
         requested_by: str = "agent",
         tool_call_id: str | None = None,
+        chat_session_id: str | None = None,
+        chat_turn_id: str | None = None,
         expected_execution_mode: Literal["docker", "host"] | None = None,
     ) -> CommandResult:
         managed = await self._get_or_create_session(
@@ -1214,6 +1289,12 @@ class AutomationRuntimeManager:
                 expected_revision=managed.entity.revision,
             )
         process_id = str(uuid4())
+        results_api_key = secrets.token_urlsafe(32) if request.background else None
+        results_url = (
+            f"{self.callback_origin}/api/v1/automation-processes/{process_id}/results"
+            if request.background and self.callback_origin
+            else None
+        )
         execution = CommandExecution(
             id=self._execution_id(process_id),
             engagement_id=engagement_id,
@@ -1232,17 +1313,39 @@ class AutomationRuntimeManager:
                 "owner_kind": owner_kind,
                 "owner_id": owner_id,
                 "tool_call_id": tool_call_id,
+                "chat_session_id": chat_session_id,
+                "chat_turn_id": chat_turn_id,
                 "approval_id": approval.id if approval is not None else None,
                 "timeout_ms": timeout_ms,
+                **(
+                    {
+                        "results_url": results_url,
+                        "results_key_sha256": hashlib.sha256(
+                            results_api_key.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                    if results_url and results_api_key
+                    else {}
+                ),
             },
         )
         execution = self.store.create(execution)
         workspace_before = await asyncio.to_thread(
             _workspace_snapshot, managed.workspace
         )
+        extra_env = (
+            {
+                "NEBULA_RESULTS_URL": results_url,
+                "NEBULA_RESULTS_KEY": results_api_key,
+                "NEBULA_PROCESS_ID": process_id,
+                **({"NEBULA_TOOL_CALL_ID": tool_call_id} if tool_call_id else {}),
+            }
+            if results_url and results_api_key
+            else None
+        )
         try:
             backend = await managed.backend.run(
-                process_id, request.command, request.cwd
+                process_id, request.command, request.cwd, extra_env=extra_env
             )
         except Exception as exc:
             self.store.update(
@@ -1296,9 +1399,66 @@ class AutomationRuntimeManager:
             failure_message="Command timeout supervision stopped unexpectedly.",
         )
         if request.background:
-            return self._result(managed, process, stdout="", stderr="")
+            return self._result(
+                managed,
+                process,
+                stdout="",
+                stderr="",
+                results_url=results_url,
+                results_api_key=results_api_key,
+                tool_call_id=tool_call_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+            )
         await process.final_task
         return await self._poll(managed, process, MAX_POLL_BYTES)
+
+    def accept_results(
+        self, process_id: str, api_key: str, request: ProcessResultsRequest
+    ) -> CommandExecution:
+        """Complete a background command from a LAN results webhook."""
+
+        execution = self.store.get(CommandExecution, self._execution_id(process_id))
+        expected = execution.metadata.get("results_key_sha256")
+        provided = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        if not isinstance(expected, str) or not hmac.compare_digest(expected, provided):
+            raise AutomationPolicyDenied("invalid results API key")
+        if execution.metadata.get("results_received"):
+            raise ConflictError("results were already recorded for this process")
+        if execution.status not in {
+            CommandExecutionStatus.RUNNING,
+            CommandExecutionStatus.INTERRUPTED,
+        }:
+            raise ConflictError(
+                f"process cannot accept results from {execution.status.value}"
+            )
+        status = (
+            CommandExecutionStatus.COMPLETED
+            if request.status == "complete"
+            else CommandExecutionStatus.FAILED
+        )
+        return self.store.update(
+            CommandExecution,
+            execution.id,
+            {
+                "status": status,
+                "completed_at": utc_now(),
+                "exit_code": request.exit_code
+                if request.exit_code is not None
+                else (0 if request.status == "complete" else 1),
+                "error": None
+                if request.status == "complete"
+                else (request.summary or "callback reported failure"),
+                "metadata": {
+                    **execution.metadata,
+                    "results_received": True,
+                    "results_summary": request.summary,
+                    "results_output": request.output,
+                    "results_stdout": request.stdout[: 64 * 1024],
+                },
+            },
+            expected_revision=execution.revision,
+        )
 
     async def process_io(
         self,
@@ -1882,6 +2042,9 @@ class AutomationRuntimeManager:
                 process.workspace_before, workspace_after
             )
             current = self.store.get(CommandExecution, process.execution.id)
+            if current.metadata.get("results_received"):
+                process.execution = current
+                return current
             process.execution = self.store.update(
                 CommandExecution,
                 current.id,
@@ -1975,6 +2138,11 @@ class AutomationRuntimeManager:
         *,
         stdout: str,
         stderr: str,
+        results_url: str | None = None,
+        results_api_key: str | None = None,
+        tool_call_id: str | None = None,
+        chat_session_id: str | None = None,
+        chat_turn_id: str | None = None,
     ) -> CommandResult:
         execution = process.execution
         return CommandResult(
@@ -1992,6 +2160,12 @@ class AutomationRuntimeManager:
             redacted_stderr_artifact_id=execution.redacted_stderr_artifact_id,
             workspace_changes=execution.workspace_changes,
             network_granted=managed.entity.network_granted,
+            results_url=results_url or execution.metadata.get("results_url"),
+            results_api_key=results_api_key,
+            tool_call_id=tool_call_id or execution.metadata.get("tool_call_id"),
+            chat_session_id=chat_session_id
+            or execution.metadata.get("chat_session_id"),
+            chat_turn_id=chat_turn_id or execution.metadata.get("chat_turn_id"),
         )
 
     @staticmethod

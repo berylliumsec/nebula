@@ -1,4 +1,5 @@
 from datetime import timedelta
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,15 +7,18 @@ from starlette.websockets import WebSocketDisconnect
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
 from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
     Asset,
     ChatSession,
+    ChatGoalStatus,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    NativeHookExecution,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -48,6 +52,508 @@ def api(tmp_path):
 
 def _auth():
     return {"Authorization": "Bearer test-token"}
+
+
+def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
+    client, store, _ = api
+    workspace = tmp_path / "goal-workspace"
+    skill = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("Review carefully.", encoding="utf-8")
+    store.create(
+        Engagement(
+            id="goal-project", name="Goal project", workspace_path=str(workspace)
+        )
+    )
+    provider = store.create(
+        ProviderProfile(
+            id="goal-provider", name="OpenRouter", provider_type="openrouter"
+        )
+    )
+    store.create(
+        ChatSession(
+            id="goal-session",
+            engagement_id="goal-project",
+            title="Goal session",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+
+    created = client.post(
+        "/api/v1/chat/sessions/goal-session/goal",
+        headers=_auth(),
+        json={
+            "objective": "Finish the bounded task",
+            "completion_criteria": ["Focused evidence passes"],
+            "plan": ["Inspect", "Validate"],
+            "step_budget": 4,
+        },
+    )
+    assert created.status_code == 200, created.text
+    goal = created.json()
+    assert goal["status"] == ChatGoalStatus.DRAFT.value
+
+    started = client.post(
+        "/api/v1/chat/sessions/goal-session/goal/actions",
+        headers=_auth(),
+        json={"expected_revision": goal["revision"], "action": "start"},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == ChatGoalStatus.RUNNING.value
+    attached = client.put(
+        "/api/v1/chat/sessions/goal-session/goal/skills",
+        headers=_auth(),
+        json={
+            "expected_revision": started.json()["revision"],
+            "skills": [{"name": "review", "path": str(skill.resolve())}],
+        },
+    )
+    assert attached.status_code == 200, attached.text
+    attached_goal = attached.json()
+    assert attached_goal["skill_snapshots"][0]["name"] == "review"
+    original_digest = attached_goal["skill_snapshots"][0]["sha256"]
+    skill.write_text("Changed after attachment.", encoding="utf-8")
+    loaded = client.get("/api/v1/chat/sessions/goal-session/goal", headers=_auth())
+    assert loaded.status_code == 200
+    assert loaded.json()["revision"] == attached_goal["revision"]
+    assert loaded.json()["skill_snapshots"][0]["sha256"] == original_digest
+    skill.unlink()
+    retained = client.put(
+        "/api/v1/chat/sessions/goal-session/goal/skills",
+        headers=_auth(),
+        json={
+            "expected_revision": loaded.json()["revision"],
+            "skills": [{"name": "review", "path": str(skill.resolve())}],
+        },
+    )
+    assert retained.status_code == 200, retained.text
+    assert retained.json()["skill_snapshots"][0]["sha256"] == original_digest
+
+    removed = client.put(
+        "/api/v1/chat/sessions/goal-session/goal/skills",
+        headers=_auth(),
+        json={"expected_revision": retained.json()["revision"], "skills": []},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["skill_snapshots"] == []
+
+
+def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp_path):
+    client, store, _ = api
+    workspace = tmp_path / "linked-project"
+    shared = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    codex = workspace / ".codex" / "skills" / "review" / "SKILL.md"
+    shared.parent.mkdir(parents=True)
+    codex.parent.mkdir(parents=True)
+    shared.write_text("shared instructions", encoding="utf-8")
+    codex.write_text("codex-only instructions", encoding="utf-8")
+    managed = tmp_path / ".agents" / "skills" / "report" / "SKILL.md"
+    managed.parent.mkdir(parents=True, exist_ok=True)
+    managed.write_text("managed instructions", encoding="utf-8")
+    store.create(
+        Engagement(
+            id="skill-project",
+            name="Skill project",
+            workspace_path=str(workspace),
+        )
+    )
+
+    response = client.get("/api/v1/skills?engagement_id=skill-project", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {
+            "name": "review",
+            "path": str(shared.resolve()),
+            "source": "project",
+            "root": str((workspace / ".agents" / "skills").resolve()),
+        },
+        {
+            "name": "report",
+            "path": str(managed.resolve()),
+            "source": "installed",
+            "root": str((tmp_path / ".agents" / "skills").resolve()),
+        },
+    ]
+    roots = client.get(
+        "/api/v1/skills/catalog?engagement_id=skill-project", headers=_auth()
+    )
+    assert roots.status_code == 200
+    assert roots.json() == {
+        "project_root": str((workspace / ".agents" / "skills").resolve()),
+        "managed_root": str((tmp_path / ".agents" / "skills").resolve()),
+    }
+
+
+def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch):
+    client, store, _ = api
+    workspace = tmp_path / "hook-run-project"
+    hook = workspace / ".agents" / "hooks" / "audit"
+    hook.mkdir(parents=True)
+    executable = hook / "run.sh"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o700)
+    (hook / "hook.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "Audit",
+                "events": ["chat.turn.started", "chat.turn.completed"],
+                "command": ["run.sh"],
+                "side_effects": "none",
+                "failure_policy": "continue",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store.create(
+        Engagement(
+            id="hook-run-project",
+            name="Hook run project",
+            workspace_path=str(workspace),
+        )
+    )
+    profile = store.create(
+        ProviderProfile(
+            id="hook-run-provider",
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            privacy={"local_only": True},
+            metadata={"default_model": "model-a"},
+        )
+    )
+    from nebula.v3.providers import (
+        ModelCapabilities,
+        ModelProvider,
+        ModelRequest,
+        ModelResponse,
+        ModelUsage,
+        ProviderConfig,
+        ProviderHealth,
+        ProviderKind,
+    )
+
+    class ApiHookProvider(ModelProvider):
+        def __init__(self, provider_id: str) -> None:
+            super().__init__(
+                ProviderConfig(
+                    id=provider_id,
+                    kind=ProviderKind.OPENAI_COMPATIBLE,
+                    base_url="http://127.0.0.1:8000/v1",
+                    default_model="model-a",
+                    model_allowlist=["model-a"],
+                    local=True,
+                    capabilities=ModelCapabilities(streaming=True),
+                )
+            )
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            del request
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text="Hooked answer",
+                usage=ModelUsage(input_tokens=2, output_tokens=2, total_tokens=4),
+                finish_reason="stop",
+                provider_request_id="hook-run",
+            )
+
+        async def health(self) -> ProviderHealth:
+            return ProviderHealth(
+                provider_id=self.config.id, healthy=True, models=["model-a"]
+            )
+
+    monkeypatch.setattr(
+        "nebula.v3.chat.provider_from_profile", lambda _: ApiHookProvider(profile.id)
+    )
+
+    response = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "provider_id": profile.id,
+            "engagement_id": "hook-run-project",
+            "hook_ids": ["audit"],
+            "messages": [{"role": "user", "content": "Run the audit hook"}],
+            "include_knowledge": False,
+            "stream": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    executions = client.get(
+        f"/api/v1/chat/sessions/{response.json()['session_id']}/hooks",
+        headers=_auth(),
+    )
+    assert executions.status_code == 200, executions.text
+    assert [(item["event_name"], item["status"]) for item in executions.json()] == [
+        ("chat.turn.started", "complete"),
+        ("chat.turn.completed", "complete"),
+    ]
+
+
+def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
+    client, store, _ = api
+    workspace = tmp_path / "hook-project"
+    hook = workspace / ".agents" / "hooks" / "audit"
+    hook.mkdir(parents=True)
+    executable = hook / "run.sh"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o700)
+    (hook / "hook.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "Audit",
+                "events": ["chat.turn.started"],
+                "command": ["run.sh"],
+                "timeout_seconds": 5,
+                "side_effects": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    ignored = workspace / ".codex" / "hooks" / "ignored"
+    ignored.mkdir(parents=True)
+    store.create(
+        Engagement(
+            id="hook-project",
+            name="Hook project",
+            workspace_path=str(workspace),
+        )
+    )
+
+    response = client.get("/api/v1/hooks?engagement_id=hook-project", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()] == ["audit"]
+    assert response.json()[0]["path"] == str(hook.resolve())
+    assert response.json()[0]["manifest"]["events"] == ["chat.turn.started"]
+
+
+def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(api):
+    client, store, _ = api
+    store.create(Engagement(id="hook-recovery-project", name="Hook recovery"))
+    provider = store.create(
+        ProviderProfile(id="hook-provider", name="Provider", provider_type="ollama")
+    )
+    session = store.create(
+        ChatSession(
+            id="hook-session",
+            engagement_id="hook-recovery-project",
+            title="Hook session",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="hook-turn",
+            engagement_id="hook-recovery-project",
+            session_id=session.id,
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.INTERRUPTED,
+            error="Hook outcome is unknown.",
+            request_snapshot={
+                "recovery": {
+                    "required": True,
+                    "unknown_tool_call_ids": [],
+                    "unknown_hook_execution_ids": ["hook-run"],
+                }
+            },
+        )
+    )
+    store.create(
+        NativeHookExecution(
+            id="hook-run",
+            engagement_id=turn.engagement_id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            hook_id="audit",
+            hook_snapshot={},
+            event_name="chat.turn.started",
+            status="interrupted",
+            side_effects="external",
+            started_at=utc_now(),
+            completed_at=utc_now(),
+            error="Core restarted before the hook outcome was known.",
+        )
+    )
+
+    pending = client.get(
+        f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
+    )
+    assert pending.status_code == 200, pending.text
+    assert pending.json()["recovery_blocked"] is True
+    assert pending.json()["unresolved_hook_execution_ids"] == ["hook-run"]
+    outcomes = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
+    assert outcomes.status_code == 200, outcomes.text
+    assert outcomes.json()[0]["hook_id"] == "audit"
+    assert "hook_snapshot" not in outcomes.json()[0]
+
+    reconciled = client.post(
+        f"/api/v1/chat/turns/{turn.id}/reconcile-hook",
+        headers=_auth(),
+        json={
+            "expected_revision": turn.revision,
+            "hook_execution_id": "hook-run",
+            "outcome": "complete",
+            "detail": "Operator verified the external record.",
+        },
+    )
+    assert reconciled.status_code == 200, reconciled.text
+    assert reconciled.json()["recovery_blocked"] is False
+    assert reconciled.json()["unresolved_hook_execution_ids"] == []
+
+
+def test_hook_execution_summaries_page_beyond_the_store_cap(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(id="hook-page-project", name="Hook pages"))
+    provider = store.create(
+        ProviderProfile(
+            id="hook-page-provider", name="Provider", provider_type="ollama"
+        )
+    )
+    session = store.create(
+        ChatSession(
+            id="hook-page-session",
+            engagement_id=engagement.id,
+            title="Hook pages",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+    decoy = store.create(
+        ChatTurn(
+            id="hook-page-decoy",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.COMPLETE,
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="hook-page-turn",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.COMPLETE,
+        )
+    )
+    started = utc_now()
+    store.create_many(
+        [
+            NativeHookExecution(
+                id=f"decoy-hook-{index}",
+                engagement_id=engagement.id,
+                chat_session_id=session.id,
+                chat_turn_id=decoy.id,
+                hook_id="noise",
+                hook_snapshot={},
+                event_name="chat.turn.started",
+                status="complete",
+                started_at=started,
+                completed_at=started,
+            )
+            for index in range(1_000)
+        ]
+    )
+    store.create(
+        NativeHookExecution(
+            id="visible-hook",
+            engagement_id=engagement.id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            hook_id="audit",
+            hook_snapshot={},
+            event_name="chat.turn.completed",
+            status="complete",
+            started_at=started,
+            completed_at=started,
+        )
+    )
+
+    response = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()] == ["visible-hook"]
+    session_hooks = client.get(
+        f"/api/v1/chat/sessions/{session.id}/hooks", headers=_auth()
+    )
+    assert session_hooks.status_code == 200, session_hooks.text
+    assert [item["id"] for item in session_hooks.json()] == ["visible-hook"]
+
+
+def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(id="switch-project", name="Switch project"))
+    profile = store.create(
+        ProviderProfile(
+            id="switch-provider",
+            name="Local provider",
+            provider_type="vllm",
+            model_allowlist=["model-a", "model-b"],
+            metadata={
+                "model_descriptors": [
+                    {
+                        "id": "model-a",
+                        "context_window": 32_000,
+                        "max_output_tokens": 2_000,
+                    },
+                    {
+                        "id": "model-b",
+                        "context_window": 8_000,
+                        "max_output_tokens": 1_000,
+                    },
+                ]
+            },
+        )
+    )
+    session = store.create(
+        ChatSession(
+            id="switch-session",
+            engagement_id=engagement.id,
+            title="Keep selection",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+
+    response = client.post(
+        "/api/v1/chat/sessions/switch-session/runtime-switch/preflight",
+        headers=_auth(),
+        json={
+            "provider_id": profile.id,
+            "model": "model-b",
+            "tools_enabled": True,
+            "expected_session_revision": session.revision,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["compatible"] is False
+    assert "not verified for the tools" in response.json()["reason"]
+    unchanged = store.get(ChatSession, session.id)
+    assert unchanged.model == "model-a"
+    assert unchanged.revision == session.revision
+
+    stale = client.post(
+        "/api/v1/chat/sessions/switch-session/runtime-switch/preflight",
+        headers=_auth(),
+        json={
+            "provider_id": profile.id,
+            "model": "model-b",
+            "expected_session_revision": session.revision + 1,
+        },
+    )
+    assert stale.status_code == 409, stale.text
+    assert "reload" in stale.json()["detail"].lower()
 
 
 def test_health_and_data_routes_require_auth(api):
@@ -215,8 +721,54 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
         "provider_id": profile.id,
         "healthy": True,
         "models": ["security-model"],
+        "model_descriptors": [],
         "detail": None,
+        "credential_verified": None,
+        "catalog_source": None,
+        "key_expires_at": None,
+        "key_limit_remaining": None,
+        "provider_revision": profile.revision,
     }
+
+
+def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-context",
+            name="OpenRouter",
+            provider_type="openrouter",
+            model_allowlist=["model-a"],
+        )
+    )
+
+    async def healthy(runtime):
+        return ProviderHealth(
+            provider_id=runtime.config.id,
+            healthy=True,
+            models=["model-a"],
+            model_descriptors=[
+                ModelDescriptor(
+                    id="model-a",
+                    name="Model A",
+                    context_window=200_000,
+                    max_output_tokens=32_000,
+                )
+            ],
+            catalog_source="openrouter:/models/user",
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
+
+    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    stored = store.get(ProviderProfile, profile.id)
+    assert response.json()["provider_revision"] == stored.revision
+    assert stored.revision == profile.revision + 1
+    assert stored.metadata["model_descriptors"][0]["context_window"] == 200_000
+    assert stored.metadata["model_descriptors"][0]["max_output_tokens"] == 32_000
+    assert len(stored.metadata["model_catalog_revision"]) == 64
 
 
 def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification(
@@ -283,6 +835,74 @@ def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverif
     assert changed.status_code == 200
     assert changed.json()["capability_verifications"] == {}
     assert changed.json()["capabilities"]["tool_calling"] is False
+
+
+def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeypatch):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-routes",
+            name="OpenRouter",
+            provider_type="openrouter",
+            model_allowlist=["author/model"],
+            metadata={
+                "default_model": "author/model",
+                "model_descriptors": [
+                    {
+                        "id": "author/model",
+                        "name": "Model",
+                        "context_window": 100_000,
+                        "max_output_tokens": 10_000,
+                    }
+                ],
+            },
+        )
+    )
+
+    async def valid_probe(_runtime, request):
+        nonce = request.tools[0].input_schema["properties"]["nonce"]["enum"][0]
+        return ModelResponse(
+            provider_id=profile.id,
+            model="author/model",
+            tool_calls=[
+                ToolCall(
+                    id="probe-call",
+                    name="nebula_capability_probe",
+                    arguments={"nonce": nonce},
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    async def routes(_runtime, model):
+        assert model == "author/model"
+        return [
+            ModelRouteDescriptor(
+                provider_name="Provider A",
+                context_window=65_536,
+                max_input_tokens=60_000,
+                max_output_tokens=4_096,
+                supported_parameters=["tools"],
+            )
+        ]
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
+    monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
+
+    response = client.post(
+        f"/api/v1/providers/{profile.id}/capabilities/verify",
+        headers=_auth(),
+        json={"model": "author/model", "expected_revision": profile.revision},
+    )
+
+    assert response.status_code == 200, response.text
+    stored = store.get(ProviderProfile, profile.id)
+    descriptor = stored.metadata["model_descriptors"][0]
+    assert descriptor["route_limits_verified"] is True
+    assert descriptor["route_limits"][0]["context_window"] == 65_536
+    assert descriptor["route_limits"][0]["max_input_tokens"] == 60_000
+    assert descriptor["route_limits_error"] is None
+    assert len(stored.metadata["route_catalog_revision"]) == 64
 
 
 def test_chat_origin_approval_decision_does_not_require_an_agent_run(api):
@@ -361,7 +981,13 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
         "provider_id": profile.id,
         "healthy": False,
         "models": [],
+        "model_descriptors": [],
         "detail": "provider profile is disabled",
+        "credential_verified": None,
+        "catalog_source": None,
+        "key_expires_at": None,
+        "key_limit_remaining": None,
+        "provider_revision": profile.revision,
     }
     refreshed = client.post("/api/v1/provider-health/refresh", headers=_auth())
     assert refreshed.status_code == 200

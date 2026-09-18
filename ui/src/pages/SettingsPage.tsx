@@ -1,7 +1,8 @@
+import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { useEffect, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Contrast, KeyRound, Moon, Pencil, Plus, RefreshCw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
-import type { LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth } from "../api/types";
+import { Check, Contrast, KeyRound, Minus, Moon, Pencil, Plus, RefreshCw, RotateCcw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
+import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
@@ -12,6 +13,7 @@ import { HarnessSettings } from "../components/HarnessSettings";
 import { PostToolAssistantSettings } from "../components/PostToolAssistantSettings";
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
+import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
@@ -116,6 +118,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [name, setName] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
+  const [modelQuery, setModelQuery] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [credentialEnv, setCredentialEnv] = useState("");
@@ -181,6 +184,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [setupError, setSetupError] = useState<string>();
   const [detectedLocalProviders, setDetectedLocalProviders] = useState<LocalProviderDetection[]>([]);
   const [detectingLocalProviders, setDetectingLocalProviders] = useState(false);
+  const [skillCatalog, setSkillCatalog] = useState<SkillCatalogInfo>();
+  const [nativeSkills, setNativeSkills] = useState<HarnessSkillSummary[]>([]);
+  const [skillCatalogError, setSkillCatalogError] = useState<string>();
 
   useEffect(() => {
     if (!api || !["ready", "degraded"].includes(workspaceState)) {
@@ -201,6 +207,25 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       });
     return () => controller.abort();
   }, [api, workspaceState]);
+
+  useEffect(() => {
+    if (!api || !engagement?.id || !["ready", "degraded"].includes(workspaceState)) {
+      setSkillCatalog(undefined); setNativeSkills([]); setSkillCatalogError(undefined); return;
+    }
+    const controller = new AbortController();
+    setSkillCatalogError(undefined);
+    void Promise.all([
+      api.getSkillCatalog(engagement.id, controller.signal),
+      api.listSkills(engagement.id, controller.signal),
+    ]).then(([catalog, skills]) => {
+      if (!controller.signal.aborted) { setSkillCatalog(catalog); setNativeSkills(skills); }
+    }).catch((error) => {
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
+      void logCaughtDiagnostic("interface.settings_page.skill_catalog_failed", "The skill catalog could not be loaded.", error, "settings_page");
+      setSkillCatalogError(error instanceof Error ? error.message : "Skill catalog could not be loaded.");
+    });
+    return () => controller.abort();
+  }, [api, engagement?.id, workspaceState]);
 
   useEffect(() => {
     if (embedded) return;
@@ -589,6 +614,19 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     ...selectedModelIds,
     ...(model ? [model] : []),
   ])];
+  const dialogModelDescriptors = providers.find(
+    (provider) => provider.id === editingProvider?.id,
+  )?.modelDescriptors;
+  const dialogModelSummary = modelCatalogSummary(model, dialogModelDescriptors);
+  const normalizedModelQuery = modelQuery.trim().toLocaleLowerCase();
+  const filteredDialogModels = normalizedModelQuery
+    ? dialogModels.filter((item) => {
+        const descriptor = dialogModelDescriptors?.find((candidate) => candidate.id === item);
+        return [item, descriptor?.name, descriptor?.description]
+          .some((value) => value?.toLocaleLowerCase().includes(normalizedModelQuery));
+      })
+    : dialogModels;
+  if (model && !filteredDialogModels.includes(model)) filteredDialogModels.unshift(model);
   const unconfiguredDetectedProviders = detectedLocalProviders.filter((detected) =>
     !providers.some((provider) => provider.endpoint === detected.endpoint && provider.enabled));
   const primaryProviderFlavors = ["openai", "anthropic", "gemini"];
@@ -671,6 +709,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           <StandardEmptyState compact icon={<Server size={23} />} title="No provider profiles" explanation="Add a provider here, then choose its discovered model for chat or missions." />
         )}
       </section>
+      <section className="settings-section" id="native-skill-settings">
+        <div className="section-heading"><div><h2>Shared skills</h2><p>Provider-neutral `.agents/skills` catalogs</p></div></div>
+        {skillCatalogError && <DiagnosticErrorNotice error={skillCatalogError} fallback="Skill catalog could not be loaded." />}
+        {skillCatalog && <div className="provider-dialog-note"><p>Project: <code>{skillCatalog.projectRoot}</code></p><p>Managed: <code>{skillCatalog.managedRoot}</code></p></div>}
+        {nativeSkills.length ? <ul>{nativeSkills.map(skill => <li key={skill.path}><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}</small></li>)}</ul> : skillCatalog && <p className="setup-footnote">Add a folder containing <code>SKILL.md</code> to either catalog. Skills then appear in chat’s <code>$</code> picker.</p>}
+      </section>
       </SettingsGroup>
       <SettingsGroup id="automation-settings" title="Automation" summary="Harnesses, follow-up, and isolated runtimes" open={openAdvancedGroup === "automation-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "automation-settings"}>
       <PostToolAssistantSettings api={api} engagementId={engagement?.id} providers={providers} previewMode={previewMode} />
@@ -697,6 +741,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             ))}
           </div>
           <p className="appearance-help">Choose Light, Dark, or Zero Dark for this device.</p>
+          <TextSizeControl />
         </section>
         <section className="panel secrets-panel" id="security-settings">
           <header className="panel-header compact"><div><h2>Credential references</h2><p>Secrets never enter agent context</p></div><KeyRound size={19} /></header>
@@ -714,8 +759,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
             <label>Endpoint<input required={!selected?.defaultBaseUrl} value={endpoint} placeholder={selected?.defaultBaseUrl ?? "https://provider.example/v1"} onChange={(event) => setEndpoint(event.target.value)} /></label>
-            <label>Default model<select aria-describedby="provider-model-help" value={model} disabled={!dialogModels.length} onChange={(event) => setModel(event.target.value)}><option value="">{dialogModels.length ? "Automatic (first available model)" : "Discovered after saving"}</option>{dialogModels.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
-            <p className="provider-dialog-note" id="provider-model-help">{dialogModels.length ? "Choose a model reported by this runtime, or leave automatic selection enabled." : "Save the profile to run model discovery. Then edit it to choose a default from the reported models."}</p>
+            {dialogModels.length > 8 && <label>Find model<input type="search" value={modelQuery} placeholder="Search name or model ID" onChange={(event) => setModelQuery(event.target.value)} /></label>}
+            <label>Default model<select aria-describedby="provider-model-help" value={model} disabled={!dialogModels.length} onChange={(event) => setModel(event.target.value)}><option value="">{dialogModels.length ? "Automatic (first available model)" : "Discovered after saving"}</option>{filteredDialogModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, dialogModelDescriptors)}</option>)}</select></label>
+            <p className="provider-dialog-note" id="provider-model-help">{dialogModelSummary ?? (dialogModels.length ? "Choose a model reported by this runtime, or leave automatic selection enabled." : "Save the profile to run model discovery. Then edit it to choose a default from the reported models.")}</p>
             <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
             {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
             <details className="provider-advanced"><summary>Advanced provider options</summary>
@@ -736,6 +782,24 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         </ModalSurface>
       )}
       {operatorDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="operator-dialog-title" onClose={() => setOperatorDialog(false)} onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required data-autofocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></ModalSurface>}
+    </div>
+  );
+}
+
+function TextSizeControl() {
+  const { zoom, supported, change } = useUiZoom();
+  const modifier = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
+  if (!supported) {
+    return <p className="appearance-help text-size-help">Text size: use your browser zoom ({modifier} + / {modifier} −).</p>;
+  }
+  const percent = `${Math.round(zoom * 100)}%`;
+  return (
+    <div className="text-size-control" role="group" aria-label="Text size">
+      <span>Text size</span>
+      <button className="icon-button subtle" type="button" aria-label="Decrease text size" title={`Decrease text size (${modifier} −)`} disabled={zoom <= UI_ZOOM_STEPS[0]} onClick={() => change("out")}><Minus size={15} aria-hidden="true" /></button>
+      <output aria-live="polite" aria-label="Current text size">{percent}</output>
+      <button className="icon-button subtle" type="button" aria-label="Increase text size" title={`Increase text size (${modifier} +)`} disabled={zoom >= UI_ZOOM_STEPS[UI_ZOOM_STEPS.length - 1]} onClick={() => change("in")}><Plus size={15} aria-hidden="true" /></button>
+      <button className="icon-button subtle" type="button" aria-label="Reset text size" title={`Reset text size (${modifier} 0)`} disabled={zoom === UI_ZOOM_DEFAULT} onClick={() => change("reset")}><RotateCcw size={14} aria-hidden="true" /></button>
     </div>
   );
 }

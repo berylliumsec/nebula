@@ -145,6 +145,9 @@ class ToolResultReceipt(BaseModel):
     next_actions: list[str] = Field(
         default_factory=lambda: ["tool_output.search", "tool_output.read"]
     )
+    results_url: str | None = Field(default=None, max_length=1_000)
+    results_api_key: str | None = Field(default=None, max_length=200)
+    process_id: str | None = Field(default=None, max_length=200)
 
     def as_model_result(self) -> dict[str, Any]:
         return self.model_dump(mode="json", by_alias=True)

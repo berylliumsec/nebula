@@ -129,6 +129,10 @@
   max-width: none; max-height: calc(100dvh - 32px); border-radius: var(--radius-panel);
   box-shadow: 0 16px 64px #0004;
 }
+body:has(.dialog-backdrop) > .chat-settings-floating {
+  z-index: 0;
+  pointer-events: none;
+}
 .chat-settings-floating > header { padding: 8px 12px 8px 20px; }
 .chat-settings-floating > .chat-context-bar { display: block; flex: 1 1 auto; min-height: 0; padding: 20px; overflow-y: auto; scrollbar-gutter: stable; }
 .chat-settings-floating .chat-settings-fields { gap: 16px; }
@@ -213,3 +217,19 @@
 @media (max-width: 760px) {
   .compact-workbench-toolbar .session-conversations-toggle { display: none; }
 }
+.chat-goal-panel { border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px 10px; display: grid; gap: 8px; }
+.chat-goal-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.chat-goal-panel > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.chat-goal-panel > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-goal-panel > header small { flex: none; color: var(--text-muted); }
+.chat-goal-form { display: grid; gap: 8px; }
+.chat-goal-form label { display: grid; gap: 4px; }
+.chat-goal-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 0; }
+.chat-goal-form fieldset legend { padding: 0; margin-bottom: 4px; font-weight: 650; }
+.chat-goal-form fieldset label { grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 6px 0; cursor: pointer; }
+.chat-goal-form fieldset input[type="checkbox"] { width: 18px; height: 18px; margin: 2px 0 0; }
+.chat-goal-form fieldset small { display: block; overflow-wrap: anywhere; color: var(--text-muted); }
+.chat-goal-form textarea { min-height: 64px; resize: vertical; }
+.chat-goal-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.chat-goal-form > div, .chat-goal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 430px) { .chat-goal-panel > header { align-items: flex-start; flex-direction: column; } .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions .button { min-height: 44px; } }

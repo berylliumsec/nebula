@@ -327,6 +327,8 @@ class AutomationBroker:
                     approval=approval,
                     requested_by=invocation.requested_by,
                     tool_call_id=call.id,
+                    chat_session_id=invocation.chat_session_id,
+                    chat_turn_id=invocation.chat_turn_id,
                     expected_execution_mode=self.execution_mode,
                 )
             else:
@@ -367,9 +369,23 @@ class AutomationBroker:
             await self.ledger.transition(running, ToolCallStatus.FAILED, error=str(exc))
             raise
         receipt = self._receipt(call.id, invocation.tool_name, result)
+        waiting_callback = bool(result.results_url and result.results_api_key)
+        if waiting_callback:
+            receipt = receipt.model_copy(
+                update={
+                    "results_url": result.results_url,
+                    "results_api_key": result.results_api_key,
+                    "incomplete": True,
+                    "next_actions": ["process_io"],
+                    "warnings": [
+                        *receipt.warnings,
+                        "POST the results API key to results_url when the work finishes.",
+                    ],
+                }
+            )
         await self.ledger.transition(
             running,
-            ToolCallStatus.COMPLETE,
+            ToolCallStatus.RUNNING if waiting_callback else ToolCallStatus.COMPLETE,
             result=receipt.as_model_result(),
         )
         return ToolExecutionResult(
@@ -460,6 +476,7 @@ class AutomationBroker:
             tool_call_id=receipt_call_id,
             tool_name=name,
             tool_version="1",
+            process_id=execution.process_id,
             status=status,
             exit_code=execution.exit_code,
             summary=(

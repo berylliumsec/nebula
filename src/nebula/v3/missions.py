@@ -574,6 +574,36 @@ class MissionService:
             run = self.store.get(AgentRun, run_id)
             if run.status != RunStatus.QUEUED or self._closed:
                 return
+            series_id = str(run.metadata.get("series_id") or "")
+            if series_id:
+                active = [
+                    item
+                    for item in self.store.list_entities(AgentRun, limit=1_000)
+                    if str(item.metadata.get("series_id") or "") == series_id
+                    and item.id != run.id
+                    and item.status
+                    in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
+                ]
+                if active:
+                    self._finalize_cancelled(
+                        run_id,
+                        "Skipped because the previous occurrence is still active.",
+                        "system",
+                    )
+                    latest = self.store.get(AgentRun, run_id)
+                    self.store.update(
+                        AgentRun,
+                        latest.id,
+                        {
+                            "metadata": {
+                                **latest.metadata,
+                                "skipped": True,
+                                "skip_reason": "previous occurrence is still active",
+                            }
+                        },
+                        expected_revision=latest.revision,
+                    )
+                    return
             async with self._lock:
                 self._scheduled_tasks.pop(run_id, None)
                 self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]

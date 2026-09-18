@@ -1298,6 +1298,20 @@ export interface OperatorProfileUpdateRequest {
   expectedRevision?: number;
 }
 
+export interface ModelDescriptor {
+  id: string;
+  name: string;
+  description: string | null;
+  canonicalSlug: string | null;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+  inputModalities: string[];
+  outputModalities: string[];
+  supportedParameters: string[];
+  pricing: Record<string, string>;
+  expirationDate?: string | null;
+}
+
 export interface ProviderHealth {
   id: Identifier;
   revision: number;
@@ -1310,6 +1324,7 @@ export interface ProviderHealth {
   endpoint?: string;
   models: string[];
   availableModels?: string[];
+  modelDescriptors?: ModelDescriptor[];
   modelAllowlist: string[];
   defaultModel?: string;
   effectiveDefaultModel?: string;
@@ -1341,7 +1356,13 @@ export interface ProviderRuntimeHealth {
   providerId: Identifier;
   healthy: boolean;
   models: string[];
+  modelDescriptors?: ModelDescriptor[];
   detail?: string;
+  credentialVerified?: boolean;
+  catalogSource?: string;
+  keyExpiresAt?: string;
+  keyLimitRemaining?: number;
+  providerRevision?: number;
 }
 
 export interface ProviderCatalogEntry {
@@ -1360,6 +1381,11 @@ export interface LocalProviderDetection {
   displayName: string;
   endpoint: string;
   models: string[];
+}
+
+export interface SkillCatalogInfo {
+  projectRoot: string;
+  managedRoot: string;
 }
 
 export interface ProviderCreateRequest {
@@ -1398,6 +1424,7 @@ export interface ChatMessage {
   id?: Identifier;
   role: ChatRole;
   content: string;
+  reasoning?: string;
   contentBlocks?: ChatContentBlock[];
 }
 
@@ -1598,8 +1625,11 @@ export interface ChatCompletionRequest {
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
   mcpServerIds?: Identifier[];
+  hookIds?: Identifier[];
   engagementId?: Identifier;
   sessionId?: Identifier;
+  goalId?: Identifier;
+  skill?: HarnessSkillInvocation;
   model?: string;
   messages: ChatMessage[];
   contextAttachments?: ChatContextAttachment[];
@@ -1614,6 +1644,51 @@ export interface ChatCompletionRequest {
   harnessReasoningEffort?: string;
   harnessServiceTier?: string;
   harnessSkill?: HarnessSkillInvocation;
+  runtimeSwitchConfirmation?: string;
+}
+
+export interface ChatRuntimeSwitchPreflight {
+  sessionId: Identifier;
+  sessionRevision: number;
+  currentProviderId: Identifier;
+  currentModel: string;
+  targetProviderId: Identifier;
+  targetModel: string;
+  compatible: boolean;
+  requiresCompactionConfirmation: boolean;
+  confirmationToken?: string;
+  reason?: string;
+  estimatedActiveInputTokens: number;
+  targetContextWindow?: number;
+  targetInputTokens?: number;
+  targetMaxOutputTokens?: number;
+  metadataRevision?: string;
+}
+
+export interface ChatGoal {
+  id: Identifier;
+  engagementId: Identifier;
+  sessionId: Identifier;
+  objective: string;
+  completionCriteria: string[];
+  plan: string[];
+  currentStep: number;
+  status: "draft" | "running" | "paused" | "blocked" | "completed" | "cancelled";
+  tokenBudget?: number;
+  timeBudgetSeconds?: number;
+  stepBudget?: number;
+  childBudget?: number;
+  elapsedSeconds: number;
+  childrenStarted: number;
+  usage: ChatUsage;
+  linkedTurnIds: Identifier[];
+  blockedReason?: string;
+  completionSummary?: string;
+  completionEvidence: Array<Record<string, unknown>>;
+  skillSnapshots: Array<HarnessSkillSummary & { sha256: string }>;
+  parentGoalId?: Identifier;
+  childSessionIds?: Identifier[];
+  revision: number;
 }
 
 export interface ChatCompletionResponse {
@@ -1681,6 +1756,15 @@ export interface ContextStatus {
   contextWindow: number;
   maxOutputTokens: number;
   targetInputTokens: number;
+  compactedInputTarget?: number;
+  capacitySource?: "model_catalog" | "configured" | "fallback" | "runtime";
+  capacityEstimated?: boolean;
+  metadataRevision?: string;
+  routeLimitsRequired: boolean;
+  routeLimitsVerified: boolean;
+  eligibleRouteCount?: number;
+  routeContextWindow?: number;
+  routeInputLimit?: number;
   estimatedInputTokens: number;
   compactedThrough: number;
   sourceReferences: ContextSourceReference[];
@@ -1705,6 +1789,13 @@ export type ChatStreamEvent =
       type: "delta" | "message_delta";
       providerId?: Identifier;
       harnessSessionId?: Identifier;
+      model: string;
+      delta: string;
+      turnId?: Identifier;
+    }
+  | {
+      type: "reasoning_delta";
+      providerId?: Identifier;
       model: string;
       delta: string;
       turnId?: Identifier;
@@ -1735,6 +1826,14 @@ export type ChatStreamEvent =
       turnId: Identifier;
       toolCallId: Identifier;
       approval: Record<string, unknown>;
+    }
+  | {
+      type: "callback_required";
+      turnId: Identifier;
+      toolCallId: Identifier;
+      processId?: Identifier;
+      resultsUrl?: string;
+      summary: string;
     }
   | {
       type: "status";
@@ -1771,9 +1870,11 @@ export type ChatStreamEvent =
 export interface ChatTurn {
   id: Identifier;
   sessionId: Identifier;
+  revision: number;
   status:
     | "routing"
     | "waiting_approval"
+    | "waiting_callback"
     | "finalizing"
     | "complete"
     | "failed"
@@ -1782,6 +1883,39 @@ export interface ChatTurn {
   approvalId?: Identifier;
   harnessTurnId?: Identifier;
   toolCallIds: Identifier[];
+  error?: string;
+  recoveryBlocked: boolean;
+  unresolvedToolCallIds: Identifier[];
+  unresolvedHookExecutionIds: Identifier[];
+  resultsUrl?: string;
+  processId?: Identifier;
+}
+
+export interface NativeHookDescriptor {
+  id: Identifier;
+  source: "project";
+  path: string;
+  manifest: {
+    version: 1;
+    name: string;
+    description: string;
+    events: string[];
+    timeoutSeconds: number;
+    sideEffects: "none" | "workspace" | "external";
+    failurePolicy: "continue" | "block";
+  };
+}
+
+export interface NativeHookExecution {
+  id: Identifier;
+  hookId: Identifier;
+  eventName: string;
+  status: "running" | "complete" | "failed" | "timed_out" | "interrupted" | "reconciled";
+  sideEffects: "none" | "workspace" | "external";
+  startedAt: string;
+  completedAt?: string;
+  error?: string;
+  reconciliation?: Record<string, unknown>;
 }
 
 export interface ChatSessionSummary {
@@ -1881,6 +2015,7 @@ export interface HarnessSkillInvocation {
 
 export interface HarnessSkillSummary extends HarnessSkillInvocation {
   source: "project" | "installed";
+  root?: string;
 }
 
 export interface HarnessInteraction {

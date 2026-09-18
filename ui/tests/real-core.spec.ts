@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
@@ -17,7 +17,7 @@ interface RealCore {
   token: string;
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
   // Match the production-test override used by the shared real-Core harness.
@@ -29,8 +29,8 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string 
   ].filter((candidate): candidate is string => Boolean(candidate));
   const coreBinary = coreCandidates.find(existsSync);
   if (!coreBinary) throw new Error(`No nebula-core test binary was found in: ${coreCandidates.join(", ")}`);
-  const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
-  let token = "playwright-real-core-token-2026";
+  const dataDir = options.dataDir ?? await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
+  let token = options.token ?? "playwright-real-core-token-2026";
   const bindHost = options.bindHost ?? "127.0.0.1";
   const browserHost = options.browserHost ?? bindHost;
   const embedded = process.env.NEBULA_TEST_CORE_EMBEDDED_UI === "1";
@@ -98,7 +98,7 @@ function localNetworkIpv4(): string {
   throw new Error("A non-loopback IPv4 address is required for LAN acceptance.");
 }
 
-async function stopRealCore(core: RealCore): Promise<void> {
+async function stopRealCore(core: RealCore, options: { keepData?: boolean } = {}): Promise<void> {
   if (core.process.exitCode === null) {
     core.process.kill("SIGTERM");
     await Promise.race([
@@ -107,7 +107,7 @@ async function stopRealCore(core: RealCore): Promise<void> {
     ]);
     if (core.process.exitCode === null) core.process.kill("SIGKILL");
   }
-  if (process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
+  if (!options.keepData && process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
     await rm(core.dataDir, { recursive: true, force: true });
   }
 }
@@ -249,6 +249,311 @@ async function stopLocalModelStub(stub: LocalModelStub): Promise<void> {
     stub.server.close((error) => error ? reject(error) : resolve());
   });
 }
+
+test("assistant upgrade real Core retains editable goal skills through source loss", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const workspaceRoot = path.join(
+      core.dataDir,
+      "engagement-workspaces",
+      createHash("sha256").update(projectId!).digest("hex"),
+    );
+    const skillPath = path.join(workspaceRoot, ".agents", "skills", "review", "SKILL.md");
+    await mkdir(path.dirname(skillPath), { recursive: true });
+    await writeFile(skillPath, "Apply REAL_CORE_SKILL_SENTINEL before answering.\n", "utf8");
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Goal skill acceptance",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const chatResponse = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      messages: [{ role: "user", content: "Create the acceptance conversation" }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const chat = await chatResponse.json() as { session_id: string };
+    const goalResponse = await api.post(`chat/sessions/${chat.session_id}/goal`, { data: {
+      objective: "Apply the retained review guidance",
+      completion_criteria: ["The exact snapshot survives reload and source loss"],
+      plan: ["Attach", "Use"],
+    } });
+    expect(goalResponse.ok(), await goalResponse.text()).toBe(true);
+    const goal = await goalResponse.json() as { revision: number };
+    const startResponse = await api.post(`chat/sessions/${chat.session_id}/goal/actions`, { data: {
+      expected_revision: goal.revision,
+      action: "start",
+    } });
+    expect(startResponse.ok(), await startResponse.text()).toBe(true);
+
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Goal skill LAN browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Goal skill LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}`;
+    await page.goto(url);
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Edit skills" }).click();
+    await page.getByRole("checkbox", { name: /review.*project/ }).check();
+    expect((await new AxeBuilder({ page }).include(".chat-goal-panel").analyze()).violations).toEqual([]);
+    const skillSaveResponse = page.waitForResponse(response =>
+      response.request().method() === "PUT"
+      && response.url().endsWith(`/chat/sessions/${chat.session_id}/goal/skills`),
+    );
+    await page.getByRole("button", { name: "Save skills" }).click();
+    const savedSkillResponse = await skillSaveResponse;
+    expect(savedSkillResponse.ok(), await savedSkillResponse.text()).toBe(true);
+    expect(await savedSkillResponse.json()).toMatchObject({
+      skill_snapshots: [{ name: "review", path: skillPath }],
+    });
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
+    await rm(skillPath);
+    await page.reload();
+    await page.getByRole("button", { name: "Edit skills" }).click();
+    await expect(page.getByText(/retained snapshot; source unavailable/)).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /review.*retained snapshot/ })).toBeChecked();
+    await page.getByRole("button", { name: "Back" }).click();
+
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Use the retained goal guidance now");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect.poll(
+      () => modelStub.requests.some(request => JSON.stringify(request).includes("REAL_CORE_SKILL_SENTINEL")),
+      { timeout: 30_000 },
+    ).toBe(true);
+    const persisted = await api.get(`chat/sessions/${chat.session_id}/goal`);
+    expect(persisted.ok(), await persisted.text()).toBe(true);
+    expect(await persisted.json()).toMatchObject({
+      status: "running",
+      skill_snapshots: [{ name: "review", path: skillPath }],
+    });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
+async function writeProjectHook(
+  workspaceRoot: string,
+  hookId: string,
+  options: {
+    name?: string;
+    events: string[];
+    script: string;
+    failurePolicy?: "continue" | "block";
+    sideEffects?: "none" | "workspace" | "external";
+    timeoutSeconds?: number;
+  },
+) {
+  const hookDir = path.join(workspaceRoot, ".agents", "hooks", hookId);
+  await mkdir(hookDir, { recursive: true });
+  const executable = path.join(hookDir, "run.sh");
+  await writeFile(executable, options.script, "utf8");
+  await chmod(executable, 0o700);
+  await writeFile(path.join(hookDir, "hook.json"), JSON.stringify({
+    version: 1,
+    name: options.name ?? hookId,
+    events: options.events,
+    command: ["run.sh"],
+    timeout_seconds: options.timeoutSeconds ?? 10,
+    side_effects: options.sideEffects ?? "none",
+    failure_policy: options.failurePolicy ?? "continue",
+  }), "utf8");
+}
+
+test("assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation", async ({ page }) => {
+  test.setTimeout(120_000);
+  const lanAddress = localNetworkIpv4();
+  let core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 20 });
+  let api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const workspaceRoot = path.join(
+      core.dataDir,
+      "engagement-workspaces",
+      createHash("sha256").update(projectId!).digest("hex"),
+    );
+    await writeProjectHook(workspaceRoot, "audit", {
+      name: "Audit lifecycle",
+      events: ["chat.turn.started", "chat.turn.completed"],
+      script: "#!/bin/sh\nexit 0\n",
+    });
+    await writeProjectHook(workspaceRoot, "persist", {
+      name: "Persist workspace",
+      events: ["chat.turn.started"],
+      sideEffects: "workspace",
+      timeoutSeconds: 120,
+      script: "#!/bin/sh\nsleep 120\n",
+    });
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "Hook acceptance",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Hook LAN browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Hook LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Assistant settings" });
+    await expect(settings.getByRole("checkbox", { name: /Audit lifecycle/ })).toBeVisible();
+    await expect(settings.getByRole("checkbox", { name: /Persist workspace/ })).toBeVisible();
+    await settings.getByRole("checkbox", { name: /Audit lifecycle/ }).check();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+    const catalog = await api.get(`hooks?engagement_id=${projectId}`);
+    expect(catalog.ok(), await catalog.text()).toBe(true);
+    expect((await catalog.json() as Array<{ id: string }>).map(item => item.id).sort()).toEqual(["audit", "persist"]);
+    const baseline = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      messages: [{ role: "user", content: "Create the hook conversation" }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(baseline.ok(), await baseline.text()).toBe(true);
+    const chatResponse = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      session_id: ((await baseline.json()) as { session_id: string }).session_id,
+      hook_ids: ["audit"],
+      messages: [{ role: "user", content: "Run the audit hook" }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const chat = await chatResponse.json() as { session_id: string };
+    await page.goto(`${core.origin}/?view=chat&session=${chat.session_id}`);
+    await expect(page.getByText("Real Core retained the exact research context.").first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
+    const sessionId = chat.session_id;
+
+    await page.reload();
+    await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).not.toBeChecked();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+    await rm(path.join(workspaceRoot, ".agents", "hooks", "audit"), { recursive: true, force: true });
+    await page.reload();
+    await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).toHaveCount(0);
+    await page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Persist workspace/ }).check();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Keep this workspace hook running");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+
+    let pendingTurnId = "";
+    await expect.poll(async () => {
+      const response = await api.get(`chat/sessions/${sessionId}/pending-turn`);
+      if (!response.ok()) return "";
+      const turn = await response.json() as { id?: string; status?: string } | null;
+      pendingTurnId = turn?.id && turn.status && turn.status !== "complete" ? turn.id : "";
+      return pendingTurnId;
+    }, { timeout: 20_000 }).not.toEqual("");
+    await expect.poll(async () => {
+      const response = await api.get(`chat/turns/${pendingTurnId}/hooks`);
+      if (!response.ok()) return false;
+      return (await response.json() as Array<{ status: string; hook_id: string }>).some(item => item.hook_id === "persist" && item.status === "running");
+    }, { timeout: 20_000 }).toBe(true);
+
+    const dataDir = core.dataDir;
+    const token = core.token;
+    await api.dispose();
+    await stopRealCore(core, { keepData: true });
+    core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress, dataDir, token });
+    api = await playwrightRequest.newContext({
+      baseURL: `${core.origin}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const restoredPairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const restoredPairingResponse = await restoredPairingApi.post("auth/pairings", { data: { name: "Hook LAN browser restart" } });
+    expect(restoredPairingResponse.ok(), await restoredPairingResponse.text()).toBe(true);
+    const restoredPairing = await restoredPairingResponse.json() as { secret: string; confirmation_code: string };
+    await restoredPairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(restoredPairing.secret)}&code=${encodeURIComponent(restoredPairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Hook LAN browser restart");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
+    await expect(page.getByText("What happened to Persist workspace?")).toBeVisible({ timeout: 20_000 });
+    await page.getByPlaceholder("Operator verification note").fill("Workspace write was verified after restart.");
+    await page.getByRole("button", { name: "Confirm completed" }).click();
+    await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
+    await page.getByRole("button", { name: "Resume response" }).click();
+    await expect(page.getByText("Core is continuing in Project A").first()).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
 
 test("production mission defaults to unlimited duration through real Core", async ({ page }) => {
   test.setTimeout(60_000);
@@ -1734,6 +2039,47 @@ test("assistant upgrade project creation switches canonical project and isolates
   }
 });
 
+test("assistant upgrade real Core retains unresolved operator questions until removal", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const provider = await (await api.post("providers", {data: {name: "Question acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Create question context"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const chat = await response.json() as {session_id: string};
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    const operator = page.locator(".chat-message.operator").first();
+    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
+    let context = page.getByRole("region", {name: "Saved operator context"});
+    await context.getByRole("combobox", {name: "Context type"}).selectOption("question");
+    await context.getByRole("textbox", {name: "Operator context text"}).fill("Which production region is authoritative?");
+    await context.getByRole("button", {name: "Save operator context"}).click();
+    await expect(context).toContainText("question · conversation");
+    expect((await new AxeBuilder({page}).include(".chat-decisions").withTags(["wcag2a", "wcag2aa"]).analyze()).violations).toEqual([]);
+
+    await page.goto(url);
+    await page.getByRole("button", {name: "Results", exact: true}).click();
+    await page.getByRole("button", {name: "Context", exact: true}).click();
+    context = page.getByRole("region", {name: "Saved operator context"});
+    await expect(context).toContainText("Which production region is authoritative?");
+    await context.getByRole("button", {name: "Remove context"}).click();
+    await expect(context).toContainText("No binding context saved");
+    await expect(context.getByRole("button", {name: "Remove context"})).toHaveCount(0);
+    await page.goto(url);
+    await page.getByRole("button", {name: "Results", exact: true}).click();
+    await page.getByRole("button", {name: "Context", exact: true}).click();
+    await expect(page.getByRole("region", {name: "Saved operator context"})).toContainText("No binding context saved");
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(stub);
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   // WebKit's production-LAN pass can spend more than a minute covering the
   // complete durable-conversation lifecycle on shared CI runners.
@@ -1782,11 +2128,11 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.getByRole("button", {name: "Close details"}).click();
     await expect(composer).toHaveValue("Preserve this unsent draft");
     await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
-    const decisions = page.getByRole("region", {name: "Saved decisions and constraints"});
+    const decisions = page.getByRole("region", {name: "Saved operator context"});
     await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Keep future responses concise");
     await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
     await expect(decisions).toContainText("Keep future responses concise");
-    await decisions.getByRole("button", {name: "Edit decision", exact: true}).click();
+    await decisions.getByRole("button", {name: "Edit context", exact: true}).click();
     await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Use concise plain language");
     await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
     await expect(decisions).toContainText("revision 2");
@@ -2210,7 +2556,7 @@ test("assistant upgrade deployed local service retains operator workflow", async
     const operator = page.locator(".chat-message.operator").first();
     await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
     await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
-    const decisions = page.getByRole("region", {name: "Saved decisions and constraints"});
+    const decisions = page.getByRole("region", {name: "Saved operator context"});
     await decisions.getByRole("textbox", {name: "Operator context text"}).fill("This validation conversation uses text-only replies and no tools.");
     await decisions.getByRole("button", {name: "Save operator context"}).click();
     await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
@@ -3335,4 +3681,132 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     expect(new URL(page.url()).searchParams.get("session")).toBe(sourceId);
     await testInfo.attach("harness-popup-origin", { body: JSON.stringify({ origin: core.origin, build: "production", runtime: "real Core with inert harness adapter", source: sourceId, branchDeleted: branch.id }), contentType: "application/json" });
   } finally { await core.stop(); }
+});
+
+test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ page }, testInfo) => {
+  const liveKey = process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY;
+  test.skip(!liveKey, "OPENROUTER_API_KEY is required for the live GUI clickthrough");
+  process.env.OPENROUTER_API_KEY = liveKey;
+  test.setTimeout(180_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  const model = "deepseek/deepseek-v4-flash";
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const workspaceRoot = path.join(
+      core.dataDir,
+      "engagement-workspaces",
+      createHash("sha256").update(projectId!).digest("hex"),
+    );
+    const skillPath = path.join(workspaceRoot, ".agents", "skills", "review", "SKILL.md");
+    await mkdir(path.dirname(skillPath), { recursive: true });
+    await writeFile(skillPath, "When attached, include SKILL_MARKER_FLASH in the first line.\n", "utf8");
+    await writeFile(path.join(workspaceRoot, "notes.md"), "checkpoint source\n", "utf8");
+    await writeProjectHook(workspaceRoot, "audit", {
+      name: "Audit lifecycle",
+      events: ["chat.turn.started", "chat.turn.completed"],
+      script: "#!/bin/sh\nexit 0\n",
+      sideEffects: "none",
+    });
+
+    const providerResponse = await api.post("providers", { data: {
+      name: "OpenRouter live",
+      provider_type: "openrouter",
+      endpoint: "https://openrouter.ai/api/v1",
+      enabled: true,
+      is_local: false,
+      secret_ref: "env:OPENROUTER_API_KEY",
+      model_allowlist: [model],
+      privacy: { local_only: false, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: model },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const health = await api.post(`providers/${provider.id}/health`);
+    expect(health.ok(), await health.text()).toBe(true);
+
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Assistant settings" });
+    await settings.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
+    await settings.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
+    await expect(settings.getByRole("combobox", { name: "Chat model" })).toHaveValue(model, { timeout: 20_000 });
+    const hookToggle = settings.getByRole("checkbox", { name: /Audit lifecycle/ });
+    await expect(hookToggle).toBeVisible();
+    await hookToggle.check();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Think step by step about why a short acknowledgement helps, then reply with exactly FLASH_OK.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    const firstReply = page.locator(".chat-message.assistant").last();
+    await expect(firstReply).toContainText("FLASH_OK", { timeout: 90_000 });
+    await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
+    const session = new URL(page.url()).searchParams.get("session");
+    expect(session).toBeTruthy();
+    const stored = await (await api.get(`chat/sessions/${session}/messages`)).json() as Array<{ role: string; content: string; reasoning?: string }>;
+    const assistant = [...stored].reverse().find((item) => item.role === "assistant");
+    expect(assistant?.content).toContain("FLASH_OK");
+    expect(assistant?.content ?? "").not.toMatch(/Think step by step about why a short acknowledgement helps/i);
+    const thinking = firstReply.getByLabel("Thinking");
+    if ((assistant?.reasoning ?? "").trim()) {
+      await expect(thinking).toBeVisible();
+      await expect(thinking).not.toHaveAttribute("open");
+      await expect(firstReply.locator(".chat-message-body > .assistant-markdown")).toContainText("FLASH_OK");
+      await thinking.locator("summary").click();
+      await expect(thinking).toContainText(assistant!.reasoning!.slice(0, 24));
+    } else {
+      await expect(thinking).toHaveCount(0);
+    }
+    await testInfo.attach("live-openrouter-thinking", {
+      body: JSON.stringify({
+        origin: core.origin,
+        build: "production",
+        model,
+        content: assistant?.content,
+        reasoning: assistant?.reasoning ?? "",
+        thinkingVisible: await thinking.count(),
+      }, null, 2),
+      contentType: "application/json",
+    });
+    await testInfo.attach("live-openrouter-chat", { body: await page.screenshot(), contentType: "image/png" });
+
+    await page.getByRole("button", { name: "Add goal" }).click();
+    await page.getByRole("textbox", { name: "Objective" }).fill("Confirm the operator can see the running goal.");
+    await page.getByRole("textbox", { name: "Completion criteria" }).fill("The reply includes GOAL_SEEN");
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("draft");
+    await page.getByRole("button", { name: "Start" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
+    await page.getByRole("button", { name: "Edit skills" }).click();
+    await page.getByRole("checkbox", { name: /review.*project/ }).check();
+    await page.getByRole("button", { name: "Save skills" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
+
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("If you see the Core-owned goal and review skill, reply GOAL_SEEN SKILL_MARKER_FLASH.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.locator(".chat-message.assistant").last()).toContainText("GOAL_SEEN", { timeout: 90_000 });
+    await expect(page.locator(".chat-message.assistant").last()).toContainText("SKILL_MARKER_FLASH");
+
+    await page.getByRole("button", { name: "Show session details" }).click();
+    const workspace = page.getByRole("region", { name: "Workspace controls" });
+    await expect(workspace).toBeVisible();
+    await workspace.getByRole("textbox", { name: "Checkpoint files" }).fill("notes.md");
+    await workspace.getByRole("button", { name: "Save checkpoint" }).click();
+    await expect(workspace.getByText("Operator checkpoint")).toBeVisible();
+    await workspace.getByRole("button", { name: "Schedule hourly" }).click();
+    await expect(workspace.getByText(/Scheduled · next/)).toBeVisible();
+    await expect(page.getByRole("button", { name: /Open context details/ })).toBeVisible();
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
 });

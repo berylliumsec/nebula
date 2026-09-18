@@ -1,0 +1,117 @@
+{
+  "fileKey": "tVEa0PXZaa7H4ZLflwgcb7",
+  "fileUrl": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7",
+  "phase": "design-review",
+  "approval": "pending revised mockup review",
+  "pages": {
+    "Cover": "0:1",
+    "Getting Started": "4:12",
+    "Foundations": "4:13",
+    "\u2014 Components \u2014": "4:14",
+    "Controls": "4:15",
+    "\u2014 Proposal \u2014": "4:16",
+    "Desktop": "4:17",
+    "Mobile": "4:18",
+    "Action states": "4:19"
+  },
+  "collections": {
+    "p": "VariableCollectionId:2:2",
+    "pm": "2:0",
+    "s": "VariableCollectionId:2:3",
+    "dark": "2:1",
+    "light": "2:2",
+    "z": "VariableCollectionId:2:4",
+    "zm": "2:3"
+  },
+  "components": {
+    "primary": "4:49",
+    "secondary": "4:55",
+    "disabled": "4:53",
+    "field": "4:62",
+    "buttonLabel": "Label#4:0",
+    "fieldLabel": "Label#4:9",
+    "fieldValue": "Value#4:10"
+  },
+  "audits": [
+    {
+      "page": "Desktop",
+      "frames": [
+        {
+          "id": "4:69",
+          "name": "01 \u00b7 Settings / OpenRouter",
+          "width": 1440,
+          "height": 960
+        },
+        {
+          "id": "4:73",
+          "name": "02 \u00b7 Sessions / Running goal",
+          "width": 1440,
+          "height": 1121
+        },
+        {
+          "id": "4:77",
+          "name": "03 \u00b7 Sessions / Details",
+          "width": 1440,
+          "height": 1180
+        },
+        {
+          "id": "16:21",
+          "name": "04 \u00b7 Existing Add model provider dialog / OpenRouter",
+          "width": 560,
+          "height": 619
+        },
+        {
+          "id": "16:96",
+          "name": "05 \u00b7 Existing Assistant settings / harness improvements",
+          "width": 560,
+          "height": 543
+        }
+      ],
+      "overflows": [],
+      "fonts": [
+        "Geist"
+      ]
+    },
+    {
+      "page": "Mobile",
+      "frames": [
+        {
+          "id": "7:112",
+          "name": "Mobile \u00b7 Session \u00b7 390",
+          "width": 390,
+          "height": 844
+        },
+        {
+          "id": "7:113",
+          "name": "Mobile \u00b7 Session \u00b7 320",
+          "width": 320,
+          "height": 844
+        },
+        {
+          "id": "7:114",
+          "name": "Mobile \u00b7 Setup \u00b7 390",
+          "width": 390,
+          "height": 844
+        },
+        {
+          "id": "7:115",
+          "name": "Mobile \u00b7 Details \u00b7 390",
+          "width": 390,
+          "height": 844
+        }
+      ],
+      "overflows": [],
+      "fonts": [
+        "Geist"
+      ]
+    }
+  ],
+  "limitations": [
+    "Static editable mockups; not a functional prototype.",
+    "No product implementation, application tests, real-Core, production/LAN, physical-device or live-provider validation performed.",
+    "Model names, catalog properties, limits and usage are illustrative."
+  ],
+  "scope": "OpenRouter provider support and improvements to Nebula existing harness; no separate operator runtime setup.",
+  "revision": "User scope correction: existing Settings Models and Workbench Chat",
+  "supersedes": "Previous separately branded native-runtime setup proposal"
+}

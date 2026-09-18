@@ -18,6 +18,21 @@ use diagnostics::{
     install_panic_hook,
 };
 use release::{check_for_update, install_available_update, release_info, restart_application};
+
+/// Scale the Nebula workspace like browser zoom (⌘+ / ⌘−). App-owned so the
+/// capability set stays `core:default`; only the main workspace may call it.
+#[tauri::command]
+fn set_interface_zoom(webview: tauri::Webview, scale: f64) -> Result<(), String> {
+    if webview.label() != "main" {
+        return Err("interface zoom is only available to the Nebula workspace".to_string());
+    }
+    if !scale.is_finite() || !(0.5..=2.0).contains(&scale) {
+        return Err("interface zoom must be between 50% and 200%".to_string());
+    }
+    webview
+        .set_zoom(scale)
+        .map_err(|error| format!("cannot change the interface zoom: {error}"))
+}
 use sidecar::{BackendState, backend_status, start_local_backend, stop_local_backend};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager, Wry};
@@ -159,6 +174,7 @@ fn build_app() -> tauri::App<Wry> {
             check_for_update,
             install_available_update,
             restart_application,
+            set_interface_zoom,
             diagnostics_get_settings,
             diagnostics_update_settings,
             diagnostics_log_frontend,

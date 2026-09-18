@@ -203,6 +203,8 @@ class ToolInvocation(BaseModel):
     credential_class: str | None = None
     idempotency_key: str | None = None
     requested_by: str = "agent"
+    provider_call_id: str | None = Field(default=None, max_length=500)
+    provider_step: int | None = Field(default=None, ge=0)
     runtime_session_kind: Literal["chat", "mission", "harness", "api"] | None = None
     runtime_session_id: str | None = None
 
@@ -446,7 +448,19 @@ class StoreToolLedger:
             risk_class=spec.risk_class,
             arguments=invocation.arguments,
             idempotency_key=invocation.idempotency_key,
-            metadata={"budget_class": spec.budget_class},
+            metadata={
+                "budget_class": spec.budget_class,
+                **(
+                    {"provider_call_id": invocation.provider_call_id}
+                    if invocation.provider_call_id
+                    else {}
+                ),
+                **(
+                    {"provider_step": invocation.provider_step}
+                    if invocation.provider_step is not None
+                    else {}
+                ),
+            },
         )
         try:
             if self.enforce_run_budget:

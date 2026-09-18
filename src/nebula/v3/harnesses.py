@@ -6077,13 +6077,12 @@ class HarnessRuntimeService:
             or not profile.capabilities.skill_invocation
         ):
             return []
+        from .skill_catalog import discover_skills, harness_project_skill_roots
+
         workspace = self.workspace_resolver(engagement_id)
-        roots: list[tuple[Path, Literal["project", "installed"]]] = [
-            (workspace / ".agents" / "skills", "project"),
-            (workspace / ".codex" / "skills", "project"),
-            (workspace / ".grok" / "skills", "project"),
-            (workspace / "skills", "project"),
-        ]
+        roots: list[tuple[Path, Literal["project", "installed"]]] = list(
+            harness_project_skill_roots(workspace)
+        )
         if profile.kind == HarnessKind.CODEX_APP_SERVER:
             roots.append((_harness_home(profile) / "skills", "installed"))
         elif profile.kind == HarnessKind.GROK_ACP:
@@ -6115,41 +6114,10 @@ class HarnessRuntimeService:
                     ]
                 )
 
-        discovered: list[HarnessSkillSummary] = []
-        seen: set[str] = set()
-        for candidate_root, source in roots:
-            try:
-                root = candidate_root.resolve(strict=True)
-            except OSError:
-                # diagnostic-expected: unavailable optional skill roots are skipped.
-                continue
-            if not root.is_dir():
-                continue
-            try:
-                children = sorted(root.iterdir(), key=lambda item: item.name.casefold())
-            except OSError:
-                # diagnostic-expected: unreadable optional skill roots are skipped.
-                continue
-            for child in children[:500]:
-                if child.is_symlink() or not child.is_dir():
-                    continue
-                try:
-                    entrypoint = (child / "SKILL.md").resolve(strict=True)
-                    entrypoint.relative_to(root)
-                except (OSError, ValueError):
-                    # diagnostic-expected: invalid or escaping skill entries are excluded.
-                    continue
-                if not entrypoint.is_file() or str(entrypoint) in seen:
-                    continue
-                seen.add(str(entrypoint))
-                discovered.append(
-                    HarnessSkillSummary(
-                        name=child.name,
-                        path=str(entrypoint),
-                        source=source,
-                    )
-                )
-        return discovered
+        return [
+            HarnessSkillSummary(name=item.name, path=item.path, source=item.source)
+            for item in discover_skills(roots)
+        ]
 
     @staticmethod
     def _oci_snapshot(

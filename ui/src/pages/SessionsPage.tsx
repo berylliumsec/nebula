@@ -1,3 +1,4 @@
+import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
 import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
 import { IconAction } from "../components/IconAction";
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
@@ -13,6 +14,8 @@ import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
+import { ProviderGoalPanel } from "../components/ProviderGoalPanel";
+import { ProviderSessionAdvanced } from "../components/ProviderSessionAdvanced";
 import { ChatWorkspaceDrawer } from "../components/ChatWorkspaceDrawer";
 import { ChatAttachments } from "../components/ChatAttachments";
 import { ChatResults } from "../components/ChatResults";
@@ -76,10 +79,12 @@ import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type {
   ChatCompletionRequest,
+  ChatGoal,
   ChatContentBlock,
   ChatSessionActivity,
   ChatSessionSummary,
   ChatStreamEvent,
+  ChatTurn,
   ContextStatus,
   ExecutionCapabilities,
   ExecutionLanguage,
@@ -92,6 +97,8 @@ import type {
   ExternalHarnessSessionSummary,
   HarnessSkillSummary,
   McpServerProfile,
+  NativeHookDescriptor,
+  NativeHookExecution,
   PersistedChatMessage,
   ToolArtifactReference,
   ToolOutputReadResult,
@@ -117,7 +124,7 @@ import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { copySelectionText, createHashedSelectionAttachment } from "../components/selection";
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { HarnessSkillAutocomplete, findHarnessSkillToken, type HarnessSkillTokenRange } from "../components/HarnessSkillAutocomplete";
-import { HarnessThinking } from "../components/HarnessThinking";
+import { HarnessThinking, ThinkingDisclosure } from "../components/HarnessThinking";
 import { HarnessMarkdown } from "../components/HarnessMarkdown";
 import { HarnessCommandHints, isHarnessCommand } from "../components/HarnessCommandHints";
 import { HarnessStatusRail } from "../components/HarnessStatusRail";
@@ -254,6 +261,12 @@ interface PendingChatResponse {
   userId: string;
   request: ChatCompletionRequest;
   approval: Record<string, unknown>;
+}
+
+interface InterruptedChatRecovery {
+  turn: ChatTurn;
+  assistantId: string;
+  request: ChatCompletionRequest;
 }
 
 interface HarnessProgress {
@@ -398,6 +411,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     id: message.id,
     role: message.role,
     content: message.content,
+    reasoning: message.reasoning,
     contentBlocks: message.contentBlocks,
     createdAt: message.createdAt,
     citations: message.citations,
@@ -554,7 +568,14 @@ export function SessionsPage() {
   const [skillToken, setSkillToken] = useState<HarnessSkillTokenRange>();
   const [skillMenuIndex, setSkillMenuIndex] = useState(0);
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
+  const [nativeHooks, setNativeHooks] = useState<NativeHookDescriptor[]>([]);
+  const [selectedHookIds, setSelectedHookIds] = useState<string[]>([]);
+  const [nativeHookError, setNativeHookError] = useState<string>();
+  const [hookExecutions, setHookExecutions] = useState<NativeHookExecution[]>([]);
   const [model, setModel] = useState("");
+  const [runtimeSwitchConfirmation, setRuntimeSwitchConfirmation] = useState<string>();
+  const runtimeSwitchGenerationRef = useRef(0);
+  const [providerModelQuery, setProviderModelQuery] = useState("");
   const [commandRuntimeReady, setCommandRuntimeReady] = useState(false);
   const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
@@ -571,6 +592,34 @@ export function SessionsPage() {
   const [artifactBusy, setArtifactBusy] = useState(false);
   const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
+  const [waitingCallback, setWaitingCallback] = useState<{ turnId: string; assistantId: string; resultsUrl?: string; processId?: string; toolCallId: string; summary: string }>();
+  const [interruptedRecovery, setInterruptedRecovery] = useState<InterruptedChatRecovery>();
+  const [recoveryNote, setRecoveryNote] = useState("");
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  useEffect(() => setRecoveryNote(""), [interruptedRecovery?.turn.id]);
+  useEffect(() => {
+    if (!api || !sessionId || !waitingCallback) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => {
+      void api.getPendingChatTurn(sessionId, controller.signal).then((pending) => {
+        if (!pending || pending.status === "waiting_callback") return;
+        window.clearInterval(timer);
+        setSending(true);
+        void api.followChatTurn(waitingCallback.turnId, {
+          backend: "provider",
+          sessionId,
+          messages: [],
+          toolsEnabled: true,
+        }, (streamEvent) => applyChatEvent(streamEvent, waitingCallback.assistantId, "", {
+          backend: "provider",
+          sessionId,
+          messages: [],
+          toolsEnabled: true,
+        })).finally(() => setSending(false));
+      }).catch(() => { /* diagnostic-expected: callback wait retries until Core resumes. */ });
+    }, 1500);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, sessionId, waitingCallback?.turnId]);
   const [approvalDecisionBusy, setApprovalDecisionBusy] = useState(false);
   const [resolvedApproval, setResolvedApproval] = useState<{ id: string; status: string; turnId: string; harnessTurnId?: string }>();
   const {state: authoritativeState, error: stateSyncError, refresh: refreshSessionState} = useSessionState(api ?? undefined, sessionId, coreState === "online");
@@ -580,6 +629,9 @@ export function SessionsPage() {
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
   const coreQueue = useChatQueue(api, sessionId);
+  const [providerGoal, setProviderGoal] = useState<ChatGoal>();
+  const [providerGoalLoading, setProviderGoalLoading] = useState(false);
+  const [providerGoalError, setProviderGoalError] = useState<string>();
   const [decisionSeed, setDecisionSeed] = useState<DecisionSeed>();
   const [expandedContextIndex, setExpandedContextIndex] = useState<number>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
@@ -628,6 +680,21 @@ export function SessionsPage() {
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
   const previousChatSendingRef = useRef(false);
+
+  useEffect(() => {
+    if (!api || !sessionId || runtimeKind !== "provider") {
+      setProviderGoal(undefined); setProviderGoalError(undefined); setProviderGoalLoading(false); return;
+    }
+    const controller = new AbortController();
+    setProviderGoalLoading(true); setProviderGoalError(undefined);
+    void api.getChatGoal(sessionId, controller.signal).then(setProviderGoal).catch((caught) => {
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer session load
+      if (caught instanceof ApiError && caught.status === 404) { setProviderGoal(undefined); return; } // diagnostic-expected: no goal yet
+      void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
+      setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
+    }).finally(() => { if (!controller.signal.aborted) setProviderGoalLoading(false); });
+    return () => controller.abort();
+  }, [api, sessionId, runtimeKind]);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
@@ -643,6 +710,7 @@ export function SessionsPage() {
   const sessionActionsButtonRef = useRef<HTMLButtonElement>(null);
   const sessionActionsMenuRef = useRef<HTMLDivElement>(null);
   const streamDeltaRef = useRef(new Map<string, string>());
+  const streamReasoningRef = useRef(new Map<string, string>());
   const streamFrameRef = useRef<number | undefined>(undefined);
   const draftStorageKeyRef = useRef("");
   const followUpStorageKeyRef = useRef("");
@@ -795,6 +863,16 @@ export function SessionsPage() {
   const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
     ? Math.min(100, Math.round((activeContextStatus.estimatedInputTokens / activeContextStatus.targetInputTokens) * 100))
     : undefined;
+  const contextCapacityLabel = !activeContextStatus ? ""
+    : activeContextStatus.routeLimitsRequired && activeContextStatus.routeLimitsVerified
+      ? `${activeContextStatus.eligibleRouteCount ?? 0} compatible routes · ${(activeContextStatus.routeContextWindow ?? activeContextStatus.contextWindow).toLocaleString()} route minimum · ${(activeContextStatus.routeInputLimit ?? activeContextStatus.targetInputTokens).toLocaleString()} input ceiling`
+      : activeContextStatus.routeLimitsRequired
+        ? `route limits unverified · safe ${activeContextStatus.contextWindow.toLocaleString()}-token ceiling`
+        : activeContextStatus.capacitySource === "model_catalog"
+          ? "exact model catalog"
+          : activeContextStatus.capacitySource === "configured"
+            ? "configured estimate"
+            : "safe fallback estimate";
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
@@ -1114,6 +1192,7 @@ export function SessionsPage() {
     harnessFollowDetachRef.current = undefined;
     setHarnessProgress(undefined);
     setPendingResponse(undefined);
+    setInterruptedRecovery(undefined);
     setSending(false);
   }, [harnessActivity, resolvedApproval]);
 
@@ -1200,27 +1279,27 @@ export function SessionsPage() {
     setHarnessSkillPath("");
     setSkillToken(undefined);
     setHarnessSkillError(undefined);
-    if (
-      !api
-      || !engagement
-      || !selectedHarness
-      || !selectedHarness.capabilities?.skillInvocation
-      || !selectedHarness.nativeCapabilities.skills
-    ) {
+    const harnessSkillsAvailable = runtimeKind === "harness"
+      && Boolean(selectedHarness?.capabilities?.skillInvocation)
+      && Boolean(selectedHarness?.nativeCapabilities.skills);
+    if (!api || !engagement || (runtimeKind === "harness" && !harnessSkillsAvailable)) {
       setHarnessSkills([]);
       setHarnessSkillsLoading(false);
       return;
     }
     const controller = new AbortController();
     setHarnessSkillsLoading(true);
-    void api.listHarnessSkills(selectedHarness.id, engagement.id, controller.signal)
+    const request = runtimeKind === "provider"
+      ? api.listSkills(engagement.id, controller.signal)
+      : api.listHarnessSkills(selectedHarness!.id, engagement.id, controller.signal);
+    void request
       .then((skills) => {
         setHarnessSkills(skills);
         setHarnessSkillError(undefined);
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
-        logCaughtDiagnostic("interface.chat.skills_list_failed", "Harness skills could not be discovered.", error, "harness-skills");
+        logCaughtDiagnostic("interface.chat.skills_list_failed", "Skills could not be discovered.", error, "chat-skills");
         setHarnessSkills([]);
         setHarnessSkillError(error instanceof Error ? error.message : "Skills could not be discovered.");
       })
@@ -1228,7 +1307,27 @@ export function SessionsPage() {
         if (!controller.signal.aborted) setHarnessSkillsLoading(false);
       });
     return () => controller.abort();
-  }, [api, engagement, selectedHarness]);
+  }, [api, engagement, runtimeKind, selectedHarness]);
+  useEffect(() => {
+    if (!api || !engagement || runtimeKind !== "provider") {
+      setNativeHooks([]);
+      setSelectedHookIds([]);
+      setNativeHookError(undefined);
+      return;
+    }
+    const controller = new AbortController();
+    void api.listNativeHooks(engagement.id, controller.signal).then(items => {
+      setNativeHooks(items);
+      setSelectedHookIds(current => current.filter(id => items.some(item => item.id === id)));
+      setNativeHookError(undefined);
+    }).catch(error => {
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
+      void logCaughtDiagnostic("interface.sessions.hooks_load_failed", "Project lifecycle hooks could not be discovered.", error, "hooks");
+      setNativeHooks([]);
+      setNativeHookError(error instanceof Error ? error.message : "Hooks could not be discovered.");
+    });
+    return () => controller.abort();
+  }, [api, engagement, runtimeKind]);
   useEffect(() => {
     if (runtimeKind !== "provider") return;
     if (!enabledProviders.length) {
@@ -1284,6 +1383,8 @@ export function SessionsPage() {
     setSessions([]);
     pendingSessionNavigationRef.current = undefined;
     setSessionId("");
+    runtimeSwitchGenerationRef.current += 1;
+    setRuntimeSwitchConfirmation(undefined);
     setConversationOpen(Boolean(assistantDrafts.length || requestedSessionId));
     setHarnessSessionId("");
     setHarnessMode("");
@@ -1301,6 +1402,7 @@ export function SessionsPage() {
     setHistoricalActivityState({});
     setHistoricalActivityErrors({});
     setPendingResponse(undefined);
+    setInterruptedRecovery(undefined);
   }, [engagement?.id]);
 
   useEffect(() => {
@@ -1380,16 +1482,31 @@ export function SessionsPage() {
   const flushStreamDeltas = () => {
     streamFrameRef.current = undefined;
     const pending = streamDeltaRef.current;
-    if (!pending.size) return;
+    const pendingReasoning = streamReasoningRef.current;
+    if (!pending.size && !pendingReasoning.size) return;
     streamDeltaRef.current = new Map();
+    streamReasoningRef.current = new Map();
     setMessages((current) => current.map((message) => {
       const delta = pending.get(message.id);
-      return delta ? { ...message, content: message.content + delta } : message;
+      const reasoningDelta = pendingReasoning.get(message.id);
+      if (!delta && !reasoningDelta) return message;
+      return {
+        ...message,
+        content: delta ? message.content + delta : message.content,
+        reasoning: reasoningDelta ? (message.reasoning ?? "") + reasoningDelta : message.reasoning,
+      };
     }));
   };
 
   const queueStreamDelta = (assistantId: string, delta: string) => {
     streamDeltaRef.current.set(assistantId, (streamDeltaRef.current.get(assistantId) ?? "") + delta);
+    if (streamFrameRef.current === undefined) {
+      streamFrameRef.current = requestAnimationFrame(flushStreamDeltas);
+    }
+  };
+
+  const queueStreamReasoning = (assistantId: string, delta: string) => {
+    streamReasoningRef.current.set(assistantId, (streamReasoningRef.current.get(assistantId) ?? "") + delta);
     if (streamFrameRef.current === undefined) {
       streamFrameRef.current = requestAnimationFrame(flushStreamDeltas);
     }
@@ -1449,6 +1566,8 @@ export function SessionsPage() {
     setLoadingHistory(false);
     setAssistantSettingsOpen(false);
     setSessionId("");
+    runtimeSwitchGenerationRef.current += 1;
+    setRuntimeSwitchConfirmation(undefined);
     setConversationOpen(open);
     setHarnessSessionId("");
     setHarnessActivity(undefined);
@@ -1652,10 +1771,73 @@ export function SessionsPage() {
     const provider = enabledProviders.find((item) => item.id === id);
     setProviderId(id);
     setModel(provider?.models[0] ?? "");
+    setRuntimeSwitchConfirmation(undefined);
+  };
+
+  const proposeProviderRuntime = async (nextProviderId: string, nextModel: string) => {
+    const generation = ++runtimeSwitchGenerationRef.current;
+    const activeSession = sessions.find((item) => item.id === sessionId);
+    if (!api || !activeSession || activeSession.backend !== "provider") {
+      setProviderId(nextProviderId);
+      setModel(nextModel);
+      setRuntimeSwitchConfirmation(undefined);
+      setAssistantSettingsStatus("Model updated. Applies to your next message.");
+      return;
+    }
+    if (activeSession.providerId === nextProviderId && activeSession.model === nextModel) {
+      setProviderId(nextProviderId);
+      setModel(nextModel);
+      setRuntimeSwitchConfirmation(undefined);
+      setAssistantSettingsStatus("Using the conversation's saved model.");
+      return;
+    }
+    setAssistantSettingsStatus("Checking the selected model against this conversation…");
+    try {
+      const preflight = await api.preflightChatRuntimeSwitch(activeSession.id, {
+        providerId: nextProviderId,
+        model: nextModel,
+        toolsEnabled: Boolean(canUseTools || selectedMcpIds.length || browserControlEnabled || selectedHarnessSkill),
+        expectedSessionRevision: activeSession.revision,
+      });
+      if (generation !== runtimeSwitchGenerationRef.current) return;
+      if (!preflight.compatible) {
+        setAssistantSettingsStatus(preflight.reason ?? "This model cannot serve the current conversation.");
+        return;
+      }
+      if (preflight.requiresCompactionConfirmation) {
+        const approved = await confirm({
+          title: "Switch model and compact context?",
+          message: `${nextModel} has room for ${preflight.targetInputTokens?.toLocaleString() ?? "fewer"} active input tokens, while this conversation currently uses about ${preflight.estimatedActiveInputTokens.toLocaleString()}. Nebula will preserve the full transcript and compact only the active provider context before the next message.`,
+          confirmLabel: "Switch and compact",
+        });
+        if (generation !== runtimeSwitchGenerationRef.current) return;
+        if (!approved) {
+          setAssistantSettingsStatus("Model switch cancelled. The saved model remains selected.");
+          return;
+        }
+      }
+      setProviderId(nextProviderId);
+      setModel(nextModel);
+      setRuntimeSwitchConfirmation(preflight.confirmationToken);
+      setAssistantSettingsStatus(preflight.requiresCompactionConfirmation
+        ? "Compaction approved. The switch applies to your next message."
+        : "Model updated. Applies to your next message.");
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions.runtime_switch_failed", "The model switch could not be verified.", error, "assistant_settings");
+      setAssistantSettingsStatus(error instanceof Error ? error.message : "Could not verify the model switch.");
+    }
   };
 
   const modelDiscoveryInProgress = discoveringProviderId === providerId;
   const selectedModelIsUnavailable = Boolean(model && selectedProvider && !selectedProvider.models.includes(model));
+  const selectedModelSummary = modelCatalogSummary(model, selectedProvider?.modelDescriptors);
+  const normalizedProviderModelQuery = providerModelQuery.trim().toLocaleLowerCase();
+  const filteredProviderModels = selectedProvider?.models.filter((item) => {
+    if (!normalizedProviderModelQuery || item === model) return true;
+    const descriptor = selectedProvider.modelDescriptors?.find((candidate) => candidate.id === item);
+    return [item, descriptor?.name, descriptor?.description]
+      .some((value) => value?.toLocaleLowerCase().includes(normalizedProviderModelQuery));
+  }) ?? [];
   const modelPlaceholder = modelDiscoveryInProgress
     ? "Discovering models…"
     : selectedProvider?.models.length
@@ -1764,6 +1946,8 @@ export function SessionsPage() {
     detachActiveChatStream();
     setSending(false);
     setSessionId(id);
+    runtimeSwitchGenerationRef.current += 1;
+    setRuntimeSwitchConfirmation(undefined);
     setResolvedApproval(undefined);
     setConversationOpen(true);
     if (updateUrl) {
@@ -1780,6 +1964,9 @@ export function SessionsPage() {
     setActivityItems([]);
     setHarnessInteractions([]);
     setPendingResponse(undefined);
+    setInterruptedRecovery(undefined);
+    setWaitingCallback(undefined);
+    setHookExecutions([]);
     setHistoricalActivityState({});
     setHistoricalActivityErrors({});
     harnessFollowDetachRef.current?.();
@@ -1832,6 +2019,16 @@ export function SessionsPage() {
       const decisionRecorded = approvalRecord && !approval && pendingTurn?.status === "waiting_approval";
       if (decisionRecorded) setResolvedApproval({ id: approvalRecord.id, status: approvalRecord.status, turnId: pendingTurn.id, harnessTurnId: pendingTurn.harnessTurnId });
       setLoadingHistory(false);
+      if (summary?.backend === "provider") {
+        const hookLoader = pendingTurn
+          ? api.listChatHookExecutions(pendingTurn.id, loadController.signal)
+          : api.listSessionHookExecutions(id, loadController.signal);
+        void hookLoader
+          .then(items => { if (selectionIsCurrent()) setHookExecutions(items); })
+          .catch(error => {
+            if (!loadController.signal.aborted) void logCaughtDiagnostic("interface.chat.hook_outcomes_failed", "Hook outcomes could not be loaded.", error, "chat-hooks");
+          });
+      }
       if (pendingTurn && summary?.backend === "provider") {
         const assistantId = makeId("assistant-pending");
         const resumeRequest: ChatCompletionRequest = {
@@ -1849,18 +2046,22 @@ export function SessionsPage() {
           content: "",
           createdAt: new Date().toISOString(),
           citations: [],
-          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "streaming",
+          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : pendingTurn.status === "interrupted" ? "error" : "streaming",
+          detail: pendingTurn.status === "interrupted" ? pendingTurn.error : undefined,
           durable: false,
         }]);
         setToolCards([...restoredToolCards, ...pendingTurn.toolCallIds.map((toolCallId) => ({
           assistantId,
           toolCallId,
           capability: "Command runtime",
-          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : "running",
+          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : pendingTurn.status === "interrupted" ? "failed" : "running",
           evidenceIds: [],
           artifacts: [],
         }))]);
-        if (decisionRecorded) {
+        if (pendingTurn.status === "interrupted") {
+          setPendingResponse(undefined);
+          setInterruptedRecovery({ turn: pendingTurn, assistantId, request: resumeRequest });
+        } else if (decisionRecorded) {
           activeProviderTurnIdRef.current = pendingTurn.id;
           setSending(true);
         } else if (pendingTurn.status === "waiting_approval") {
@@ -1870,6 +2071,15 @@ export function SessionsPage() {
             userId: "",
             request: resumeRequest,
             approval: approval ?? { id: pendingTurn.approvalId },
+          });
+        } else if (pendingTurn.status === "waiting_callback") {
+          setWaitingCallback({
+            turnId: pendingTurn.id,
+            assistantId,
+            resultsUrl: pendingTurn.resultsUrl,
+            processId: pendingTurn.processId,
+            toolCallId: pendingTurn.toolCallIds[0] ?? "",
+            summary: "Waiting for the command to POST results.",
           });
         } else {
           setPendingResponse(undefined);
@@ -2221,6 +2431,9 @@ export function SessionsPage() {
     if ((streamEvent.type === "delta" || streamEvent.type === "message_delta") && streamEvent.delta) {
       queueStreamDelta(assistantId, streamEvent.delta);
     }
+    if (streamEvent.type === "reasoning_delta" && streamEvent.delta) {
+      queueStreamReasoning(assistantId, streamEvent.delta);
+    }
     if (streamEvent.type === "tool_started") {
       setHarnessProgress((current) => request.backend === "harness" ? {
         ...current,
@@ -2250,6 +2463,7 @@ export function SessionsPage() {
       }
     }
     if (streamEvent.type === "tool_completed") {
+      if (streamEvent.status === "complete" || streamEvent.status === "failed") setWaitingCallback(undefined);
       setToolCards((current) => current.some((item) => item.toolCallId === streamEvent.toolCallId)
         ? current.map((item) => item.toolCallId === streamEvent.toolCallId
           ? { ...item, status: streamEvent.status, summary: streamEvent.summary, evidenceIds: streamEvent.evidenceIds, resultArtifactId: streamEvent.resultArtifactId, artifacts: streamEvent.artifacts, receipt: streamEvent.receipt }
@@ -2280,6 +2494,24 @@ export function SessionsPage() {
         }, assistantId));
       }
     }
+    if (streamEvent.type === "callback_required") {
+      setWaitingCallback({
+        turnId: streamEvent.turnId,
+        assistantId,
+        resultsUrl: streamEvent.resultsUrl,
+        processId: streamEvent.processId,
+        toolCallId: streamEvent.toolCallId,
+        summary: streamEvent.summary,
+      });
+      setSending(false);
+      setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
+        ? { ...item, status: "waiting_callback", summary: streamEvent.summary }
+        : item));
+      setMessages((current) => current.map((message) => {
+        if (message.id === userId) return { ...message, durable: true };
+        return message.id === assistantId ? { ...message, state: "streaming", detail: streamEvent.summary } : message;
+      }));
+    }
     if (streamEvent.type === "approval_required") {
       setHarnessProgress((current) => request.backend === "harness" ? {
         ...current,
@@ -2304,11 +2536,17 @@ export function SessionsPage() {
     if (streamEvent.type === "done") {
       setChatReconnecting(false);
       if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
+      if (request.backend === "provider" && streamEvent.turnId && api) {
+        void api.listChatHookExecutions(streamEvent.turnId).then(setHookExecutions).catch(error => {
+          void logCaughtDiagnostic("interface.chat.hook_outcomes_failed", "Hook outcomes could not be loaded.", error, "chat-hooks");
+        });
+      }
       if (streamFrameRef.current !== undefined) {
         cancelAnimationFrame(streamFrameRef.current);
         streamFrameRef.current = undefined;
       }
       streamDeltaRef.current.delete(assistantId);
+      streamReasoningRef.current.delete(assistantId);
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
       if (request.backend === "harness") {
         setHarnessProgress((current) => ({
@@ -2334,6 +2572,7 @@ export function SessionsPage() {
         durableAssistantId: streamEvent.message.id,
         userId,
         content: streamEvent.message.content,
+        reasoning: streamEvent.message.reasoning,
         citations: streamEvent.citations,
         usage: streamEvent.usage,
         harnessTurnId: streamEvent.harnessTurnId,
@@ -2464,9 +2703,10 @@ export function SessionsPage() {
 
   const updateComposerDraft = (nextDraft: string, caret = nextDraft.length) => {
     setDraft(nextDraft);
-      const skillEnabled = runtimeKind === "harness"
-      && Boolean(selectedHarness?.capabilities?.skillInvocation)
-      && Boolean(selectedHarness?.nativeCapabilities.skills);
+    const skillEnabled = runtimeKind === "provider" || (
+      Boolean(selectedHarness?.capabilities?.skillInvocation)
+      && Boolean(selectedHarness?.nativeCapabilities.skills)
+    );
     const nextToken = skillEnabled ? findHarnessSkillToken(nextDraft, caret) : undefined;
     setSkillToken(nextToken);
     setSkillMenuIndex(0);
@@ -2596,8 +2836,13 @@ export function SessionsPage() {
       harnessProfileId: harnessRuntime?.id,
       harnessSessionId: !initialSessionId && harnessSessionId ? harnessSessionId : undefined,
       mcpServerIds: selectedMcpIds,
+      hookIds: runtimeKind === "provider" ? selectedHookIds : undefined,
       engagementId: engagement.id,
       sessionId: returnedSessionId,
+      goalId: runtimeKind === "provider" && providerGoal?.status === "running" ? providerGoal.id : undefined,
+      skill: runtimeKind === "provider" && selectedHarnessSkill
+        ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
+        : undefined,
       model: model.trim(),
       messages: returnedSessionId
         ? [{ role: "user", content, contentBlocks: userMessage.contentBlocks }]
@@ -2620,6 +2865,7 @@ export function SessionsPage() {
       harnessSkill: runtimeKind === "harness" && selectedHarnessSkill
         ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
         : undefined,
+      runtimeSwitchConfirmation: runtimeKind === "provider" ? runtimeSwitchConfirmation : undefined,
     };
     if (queueOptions) {
       if (!sessionId) { setChatError("Send the first message to save this conversation before queueing follow-ups."); return; }
@@ -2656,7 +2902,7 @@ export function SessionsPage() {
     const controller = new AbortController();
     abortRef.current = controller;
     streamBackendRef.current = runtimeKind;
-    if (chatRequest.harnessSkill) {
+    if (chatRequest.harnessSkill || chatRequest.skill) {
       // The structured invocation belongs to this accepted turn only. The
       // visible `$skill-name` remains in the submitted transcript, while the
       // composer is ready for the next request immediately.
@@ -2679,6 +2925,7 @@ export function SessionsPage() {
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
+        if (runtimeKind === "provider") setRuntimeSwitchConfirmation(undefined);
         if (runtimeKind === "harness") {
           const authoritative = await api.listChatMessages(returnedSessionId);
           const recovered = await recoverHarnessHistory(
@@ -2823,6 +3070,72 @@ export function SessionsPage() {
       if (selectionIsCurrent()) setChatError(error instanceof Error ? error.message : "Could not resume the response.");
     } finally {
       if (selectionIsCurrent()) { setApprovalDecisionBusy(false); setSending(false); }
+    }
+  };
+
+  const resumeInterruptedResponse = async () => {
+    if (!api || !interruptedRecovery || interruptedRecovery.turn.recoveryBlocked) return;
+    const recovery = interruptedRecovery;
+    setInterruptedRecovery(undefined);
+    setSending(true);
+    setChatError(undefined);
+    setMessages((current) => current.map((message) => message.id === recovery.assistantId
+      ? { ...message, state: "streaming", detail: undefined }
+      : message));
+    try {
+      const response = await api.resumeChatTurn(
+        recovery.turn.id,
+        recovery.request,
+        (streamEvent) => applyChatEvent(
+          streamEvent,
+          recovery.assistantId,
+          "",
+          recovery.request,
+        ),
+      );
+      if (response?.sessionId) await refreshSessions(response.sessionId);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.recovery_resume_failed", "An interrupted provider response could not resume.", error, "sessions_page");
+      setInterruptedRecovery(recovery);
+      setMessages((current) => current.map((message) => message.id === recovery.assistantId
+        ? { ...message, state: "error", detail: error instanceof Error ? error.message : "Could not resume the interrupted response." }
+        : message));
+      setChatError(error instanceof Error ? error.message : "Could not resume the interrupted response.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const reconcileInterruptedEffect = async (outcome: "complete" | "failed") => {
+    if (!api || !interruptedRecovery || recoveryBusy) return;
+    const toolCallId = interruptedRecovery.turn.unresolvedToolCallIds[0];
+    const hookExecutionId = interruptedRecovery.turn.unresolvedHookExecutionIds[0];
+    const detail = recoveryNote.trim();
+    if ((!toolCallId && !hookExecutionId) || !detail) return;
+    setRecoveryBusy(true);
+    setChatError(undefined);
+    try {
+      const turn = toolCallId
+        ? await api.reconcileChatTool(interruptedRecovery.turn.id, {
+          expectedRevision: interruptedRecovery.turn.revision,
+          toolCallId,
+          outcome,
+          detail,
+        })
+        : await api.reconcileChatHook(interruptedRecovery.turn.id, {
+          expectedRevision: interruptedRecovery.turn.revision,
+          hookExecutionId: hookExecutionId!,
+          outcome,
+          detail,
+        });
+      setInterruptedRecovery((current) => current ? { ...current, turn } : current);
+      if (hookExecutionId) setHookExecutions(await api.listChatHookExecutions(turn.id));
+      setRecoveryNote("");
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.recovery_reconcile_failed", "An interrupted effect outcome could not be reconciled.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : "Could not reconcile the interrupted effect outcome.");
+    } finally {
+      setRecoveryBusy(false);
     }
   };
 
@@ -3192,7 +3505,13 @@ export function SessionsPage() {
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [assistantSettingsOpen]);
-  const composerBusy = sending || Boolean(authoritativeState?.busy) || pendingResponseActive;
+  const composerBusy = sending || Boolean(authoritativeState?.busy) || pendingResponseActive || Boolean(interruptedRecovery) || Boolean(waitingCallback);
+  const unresolvedHookExecution = interruptedRecovery
+    ? hookExecutions.find((item) => interruptedRecovery.turn.unresolvedHookExecutionIds.includes(item.id))
+    : undefined;
+  const unresolvedHookLabel = unresolvedHookExecution
+    ? nativeHooks.find((hook) => hook.id === unresolvedHookExecution.hookId)?.manifest.name ?? unresolvedHookExecution.hookId
+    : interruptedRecovery?.turn.unresolvedHookExecutionIds[0];
   const canSend = Boolean((!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
@@ -3337,8 +3656,8 @@ export function SessionsPage() {
                 <div className="chat-context-bar">
                 <div className="chat-settings-fields">
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy} onChange={(event) => { const next = event.target.value as "provider" | "harness"; if (engagement) runtimeDefaultEngagementRef.current = engagement.id; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); setAssistantSettingsStatus("Runtime updated. Applies to your next message."); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.defaultModel?.trim() || selectedHarness?.models[0] || ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
-                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={composerBusy} onChange={(event) => { selectProvider(event.target.value); setAssistantSettingsStatus("Provider updated. Applies to your next message."); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy} onChange={(event) => { const profile = harnesses.find(item => item.id === event.target.value); setHarnessSessionId(""); setSelectedMcpIds([]); setHarnessId(event.target.value); setModel(profile?.defaultModel || profile?.models[0] || ""); setAssistantSettingsStatus("Harness updated. Applies to your next message."); }}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
-                {runtimeKind === "provider" ? <label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{selectedProvider?.models.map((item) => <option value={item} key={item}>{item}</option>)}</select></label> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
+                {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={composerBusy} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, nextProvider?.models[0] ?? ""); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy} onChange={(event) => { const profile = harnesses.find(item => item.id === event.target.value); setHarnessSessionId(""); setSelectedMcpIds([]); setHarnessId(event.target.value); setModel(profile?.defaultModel || profile?.models[0] || ""); setAssistantSettingsStatus("Harness updated. Applies to your next message."); }}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
+                {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => void proposeProviderRuntime(providerId, event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={composerBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={composerBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
@@ -3350,6 +3669,8 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && !selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>Enable installed skills for this harness in Settings.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness && !selectedHarness.capabilities?.skillInvocation && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>This harness did not advertise structured skill invocation.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project and installed skills…" : harnessSkills.length ? "Type $ in the composer to invoke a skill for one turn." : "No project or installed skills were discovered.")}</small></span></div>}
+                {runtimeKind === "provider" && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project skills…" : harnessSkills.length ? "Type $ in the composer to select a skill. Running goals keep its immutable snapshot." : "No project skills were discovered.")}</small></span></div>}
+                {runtimeKind === "provider" && <div className="chat-harness-mcp"><span>Lifecycle hooks</span>{nativeHookError ? <small role="alert">{nativeHookError}</small> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy} onChange={(event) => setSelectedHookIds(current => event.target.checked ? [...current, hook.id] : current.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <small>No project hooks found in .agents/hooks.</small>}</div>}
                 <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <div className="chat-harness-mcp"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
@@ -3427,6 +3748,7 @@ export function SessionsPage() {
                         {commentaryItems.map((item) => <HarnessMarkdown content={item.text} key={item.key} />)}
                       </div>}
                       {message.role === "assistant" && <HarnessThinking items={messageActivityItems} />}
+                      {message.role === "assistant" && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
                       {message.content && (message.role === "assistant"
                         ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={assistantRunnableLanguages} onRun={setRunCandidate} onRunInTerminal={runInTerminal} />
                         : <p>{message.content}</p>)}
@@ -3490,6 +3812,24 @@ export function SessionsPage() {
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => setSearchParams(current => {const next = new URLSearchParams(current); next.set("turn", id); next.set("drawer", "context"); return next;})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
+              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
+              {waitingCallback && <div className="chat-action-status" role="status">
+                <span>{waitingCallback.summary}</span>
+                {waitingCallback.resultsUrl && <div className="chat-inline-approval-actions">
+                  <code title={waitingCallback.resultsUrl}>{waitingCallback.resultsUrl}</code>
+                  <button className="button quiet" type="button" onClick={() => void navigator.clipboard.writeText(waitingCallback.resultsUrl ?? "")}>Copy results URL</button>
+                  <small>The command received an API key in NEBULA_RESULTS_KEY. POST the result to this LAN URL.</small>
+                </div>}
+              </div>}
+              {interruptedRecovery && <div className="chat-action-status" role={interruptedRecovery.turn.recoveryBlocked ? "alert" : "status"}>
+                <span>{interruptedRecovery.turn.error ?? "Core restarted before this response completed."}</span>
+                {interruptedRecovery.turn.recoveryBlocked ? <div className="chat-inline-approval-actions">
+                  <label><span>What happened to {interruptedRecovery.turn.unresolvedToolCallIds[0] ? `tool call ${interruptedRecovery.turn.unresolvedToolCallIds[0]}` : unresolvedHookLabel ?? "the interrupted hook"}?</span><input value={recoveryNote} onChange={(event) => setRecoveryNote(event.target.value)} placeholder="Operator verification note" disabled={recoveryBusy} /></label>
+                  <button className="button secondary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileInterruptedEffect("failed")}>Mark failed</button>
+                  <button className="button primary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileInterruptedEffect("complete")}>Confirm completed</button>
+                  <small>This records your confirmation as unverified evidence. Nebula will not run the effect again.</small>
+                </div> : <button className="button quiet" type="button" disabled={sending} onClick={() => void resumeInterruptedResponse()}>Resume response</button>}
+              </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
@@ -3499,6 +3839,7 @@ export function SessionsPage() {
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
+              {runtimeKind === "provider" && sessionId && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId} goal={providerGoal} skills={harnessSkills} onChange={setProviderGoal} />}</>}
               {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} authoritativeStatus={authoritativeState?.detail} />}
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
@@ -3714,12 +4055,13 @@ export function SessionsPage() {
           {drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
           {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
           <section><h3>Prepared for your next message</h3>{assistantDrafts.length ? assistantDrafts.map((item, index) => <details key={index}><summary>{item.source.label}{item.truncated ? " · excerpt" : ""}</summary><pre>{item.text}</pre></details>) : <p>No selected excerpts attached.</p>}<p>{pendingImages.length} image attachment{pendingImages.length === 1 ? "" : "s"}</p></section>
+          {runtimeKind === "provider" && api && sessionId && <ProviderSessionAdvanced api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}
           {api && sessionId && <ChatDecisions key={`decisions:${sessionId}`} api={api} sessionId={sessionId} seed={decisionSeed} onSeedConsumed={() => setDecisionSeed(undefined)} onMessage={(id, sourceSession) => {if (sourceSession && sourceSession !== sessionId) {setSearchParams(current => {const next = new URLSearchParams(current); next.set("session", sourceSession); next.set("message", id); next.delete("drawer"); return next;});} else openDrawerMessage(id);}} />}
           {api && sessionId && <ChatRecordedContext key={`recorded-context:${sessionId}`} api={api} sessionId={sessionId} onMessage={openDrawerMessage} />}
 
 
           {sessionId && sessions.find((session) => session.id === sessionId)?.backend === "harness" && <button className="button primary full" type="button" disabled={sending} onClick={() => void continueAsMission()}><Bot size={15} /> Continue as mission</button>}
-          <section className="session-context-health"><h3>Working context</h3>{!sessionId ? <p>Context becomes durable after the first saved turn.</p> : contextStatusLoading && !activeContextStatus ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Reading Core context…</div> : contextStatusError ? <div className="session-context-error"><p>{contextStatusError}</p><button className="button quiet" type="button" onClick={() => setContextRefreshKey((value) => value + 1)}>Retry</button></div> : activeContextStatus ? <><div className="session-context-summary"><span className={`status-dot ${activeContextStatus.status === "failed" ? "unavailable" : activeContextStatus.status === "stale" ? "pending" : "healthy"}`} /><div><strong>{activeContextStatus.status === "runtime_managed" ? "Harness managed" : activeContextStatus.status.replaceAll("_", " ")}</strong><small>{activeContextStatus.status === "runtime_managed" ? "The selected harness owns compaction and reports its usage through activity." : `${activeContextStatus.estimatedInputTokens.toLocaleString()} estimated · ${activeContextStatus.targetInputTokens.toLocaleString()} target input tokens`}</small></div></div>{contextPercent !== undefined && <div className="session-context-progress" aria-label={`${contextPercent} percent of target input used`}><span style={{ width: `${contextPercent}%` }} /></div>}{activeContextStatus.compactedThrough > 0 && <p>Core compacted through message {activeContextStatus.compactedThrough}; the source transcript remains unchanged.</p>}{activeContextStatus.snapshot?.memory && <details className="session-memory"><summary>Inspect saved memory</summary><div>{activeContextStatus.snapshot.memory.objective && <section><strong>Objective</strong><p>{activeContextStatus.snapshot.memory.objective}</p></section>}<section><strong>Summary</strong><p>{activeContextStatus.snapshot.memory.summary}</p></section>{([
+          <section className="session-context-health"><h3>Working context</h3>{!sessionId ? <p>Context becomes durable after the first saved turn.</p> : contextStatusLoading && !activeContextStatus ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Reading Core context…</div> : contextStatusError ? <div className="session-context-error"><p>{contextStatusError}</p><button className="button quiet" type="button" onClick={() => setContextRefreshKey((value) => value + 1)}>Retry</button></div> : activeContextStatus ? <><div className="session-context-summary"><span className={`status-dot ${activeContextStatus.status === "failed" ? "unavailable" : activeContextStatus.status === "stale" ? "pending" : "healthy"}`} /><div><strong>{activeContextStatus.status === "runtime_managed" ? "Harness managed" : activeContextStatus.status.replaceAll("_", " ")}</strong><small>{activeContextStatus.status === "runtime_managed" ? "The selected harness owns compaction and reports its usage through activity." : `${activeContextStatus.estimatedInputTokens.toLocaleString()} estimated · ${activeContextStatus.targetInputTokens.toLocaleString()} target input tokens · ${contextCapacityLabel}`}</small></div></div>{contextPercent !== undefined && <div className="session-context-progress" aria-label={`${contextPercent} percent of target input used`}><span style={{ width: `${contextPercent}%` }} /></div>}{activeContextStatus.compactedThrough > 0 && <p>Core compacted through message {activeContextStatus.compactedThrough}; the source transcript remains unchanged.</p>}{activeContextStatus.snapshot?.memory && <details className="session-memory"><summary>Inspect saved memory</summary><div>{activeContextStatus.snapshot.memory.objective && <section><strong>Objective</strong><p>{activeContextStatus.snapshot.memory.objective}</p></section>}<section><strong>Summary</strong><p>{activeContextStatus.snapshot.memory.summary}</p></section>{([
               ["Confirmed facts", activeContextStatus.snapshot.memory.confirmedFacts],
               ["Decisions", activeContextStatus.snapshot.memory.decisions],
               ["Constraints", activeContextStatus.snapshot.memory.constraints],

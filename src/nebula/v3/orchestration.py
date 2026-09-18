@@ -1352,6 +1352,7 @@ class MissionRuntime:
         )
         limits = resolve_context_limits(
             profile,
+            model=getattr(specialist, "model", None),
             requested_output_tokens=getattr(specialist, "max_output_tokens", None),
         )
         if estimate_tokens(prompt, message_count=1) <= limits.target_input_tokens:

@@ -27,7 +27,7 @@ from sqlalchemy.engine import make_url
 
 from .api import create_app
 from .artifacts import ArtifactStore
-from .automation_runtime import AutomationRuntimeManager
+from .automation_runtime import AutomationRuntimeManager, resolve_callback_origin
 from .automation_tools import (
     AutomationToolPlatform,
     PROCESS_IO_NAME,
@@ -383,6 +383,11 @@ def serve(
     listener.bind((host, port))
     listener.listen(2048)
     port = int(listener.getsockname()[1])
+    runtime = getattr(api.state, "automation_runtime", None)
+    if runtime is not None:
+        runtime.callback_origin = resolve_callback_origin(
+            host=host, port=port, tls=tls_cert is not None
+        )
     if handshake_stdout:
         # The desktop supervisor deliberately reads exactly one bounded line.
         sys.stdout.write(
