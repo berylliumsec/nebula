@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { invoke } from "@tauri-apps/api/core";
 import { isTauriRuntime } from "../api/runtime";
 import { logDiagnostic } from "../diagnostics";
 
@@ -54,7 +54,7 @@ export async function applyZoom(level: number): Promise<number> {
   const normalized = normalizeZoom(level);
   if (!uiZoomSupported()) return normalized;
   try {
-    await getCurrentWebview().setZoom(normalized);
+    await invoke("set_interface_zoom", { scale: normalized });
   } catch (error) {
     void logDiagnostic({
       level: "error",
