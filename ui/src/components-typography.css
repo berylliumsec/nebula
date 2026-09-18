@@ -25,6 +25,18 @@ body { font-size: var(--type-body); line-height: var(--leading-ui); }
   background: var(--status-info-surface);
 }
 .surface-notice > svg { color: var(--status-info); }
+/* Non-blocking information is a quiet pill; warnings and errors keep the full band. */
+.surface-notice.tone-informational {
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  margin-inline: auto;
+  padding: 3px 4px 3px 14px;
+  border-color: var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 16%);
+}
 .surface-notice-copy { display: grid; min-width: 0; gap: 2px; }
 .surface-notice-copy strong { font-size: var(--type-control); }
 .surface-notice-copy span { color: var(--muted-strong); font-size: var(--type-secondary); line-height: var(--leading-ui); overflow-wrap: anywhere; }
