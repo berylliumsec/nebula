@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal, Mapping
 from urllib.parse import quote, urlsplit
 
+import httpx
 from fastapi import (
     Body,
     Depends,
@@ -386,6 +387,11 @@ from .harnesses import (
 )
 from .mcp import McpProbeError, McpProbeReport, McpProbeService
 from .operators import OperatorProfileService
+from .model_catalog import (
+    OPENROUTER_PROVIDER_DIRECTORY_URL,
+    UpstreamProvider,
+    openrouter_upstream_providers,
+)
 from .providers import (
     ModelMessage,
     ModelRequest,
@@ -1189,6 +1195,7 @@ def create_app(
     knowledge_index: KnowledgeIndex | None = None,
     knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
     allow_insecure_device_pairing: bool = False,
+    openrouter_directory_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -7820,6 +7827,41 @@ def create_app(
             },
             expected_revision=profile.revision,
         )
+
+    upstream_directory_cache: dict[str, Any] = {}
+
+    @app.get(
+        f"{API_PREFIX}/providers/openrouter/upstream-providers",
+        response_model=list[UpstreamProvider],
+        tags=["providers"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def openrouter_upstream_directory() -> list[UpstreamProvider]:
+        """OpenRouter's public provider directory, for the routing allowlist picker.
+
+        No credential is sent; the directory is public and cached for an hour.
+        """
+
+        cached = upstream_directory_cache.get("value")
+        if (
+            cached is not None
+            and time.monotonic() - upstream_directory_cache["at"] < 3600
+        ):
+            return cached
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0, transport=openrouter_directory_transport
+            ) as client:
+                response = await client.get(OPENROUTER_PROVIDER_DIRECTORY_URL)
+            response.raise_for_status()
+            providers = openrouter_upstream_providers(response.json())
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="OpenRouter's provider directory is unavailable; retry shortly.",
+            ) from exc
+        upstream_directory_cache.update(value=providers, at=time.monotonic())
+        return providers
 
     @app.post(
         f"{API_PREFIX}/providers/{{provider_id}}/health",

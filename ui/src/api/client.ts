@@ -155,6 +155,7 @@ import type {
   WritingTransformRequest,
   WritingTransformResponse,
   CodeCompletionItem,
+  UpstreamProviderOption,
 } from "./types";
 import { websocketAuthProtocol } from "./events";
 import {
@@ -6600,6 +6601,15 @@ export class ApiClient {
     });
   }
 
+  /** OpenRouter's public provider directory, fetched and cached by Core. */
+  listOpenRouterUpstreamProviders(
+    signal?: AbortSignal,
+  ): Promise<UpstreamProviderOption[]> {
+    return this.request<unknown>("providers/openrouter/upstream-providers", {
+      signal,
+    }).then(mapUpstreamProviders);
+  }
+
   refreshProviderHealth(
     id: string,
     signal?: AbortSignal,
@@ -9475,4 +9485,18 @@ export class ApiClient {
       { method: "POST", body: JSON.stringify({ expected_revision: handoff.revision, desktop_device_id: desktopDeviceId, state, error }) },
     ).then(mapBrowserHandoff);
   }
+}
+
+export function mapUpstreamProviders(value: unknown): UpstreamProviderOption[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const row = item as Record<string, unknown>;
+    if (typeof row.slug !== "string" || typeof row.name !== "string") return [];
+    const headquarters = typeof row.headquarters === "string" ? row.headquarters : undefined;
+    const datacenters = Array.isArray(row.datacenters)
+      ? row.datacenters.filter((code): code is string => typeof code === "string")
+      : [];
+    return [{ slug: row.slug, name: row.name, ...(headquarters ? { headquarters } : {}), ...(datacenters.length ? { datacenters } : {}) }];
+  });
 }

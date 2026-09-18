@@ -2,6 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, chatRequestBody } from "./client";
 
 describe("ApiClient", () => {
+  it("loads OpenRouter's upstream provider directory with locations", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([
+      { slug: "gmicloud", name: "GMICloud", headquarters: "US", datacenters: ["US"] },
+      { slug: "baidu", name: "Baidu", headquarters: null, datacenters: [] },
+      { slug: 4, name: "Broken" },
+    ]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listOpenRouterUpstreamProviders()).resolves.toEqual([
+      { slug: "gmicloud", name: "GMICloud", headquarters: "US", datacenters: ["US"] },
+      { slug: "baidu", name: "Baidu" },
+    ]);
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/providers/openrouter/upstream-providers");
+  });
+
   it("maps authoritative goal elapsed, child, and completion evidence", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       id: "goal-1", engagement_id: "project", session_id: "session",

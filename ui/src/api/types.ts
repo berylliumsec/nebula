@@ -1365,6 +1365,14 @@ export interface ProviderRuntimeHealth {
   providerRevision?: number;
 }
 
+/** One OpenRouter upstream provider; locations are ISO country codes, display-only. */
+export interface UpstreamProviderOption {
+  slug: string;
+  name: string;
+  headquarters?: string;
+  datacenters?: string[];
+}
+
 export interface ProviderCatalogEntry {
   flavor: string;
   adapter: string;
