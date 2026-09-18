@@ -7796,9 +7796,14 @@ def create_app(
             descriptors, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         revision = hashlib.sha256(encoded).hexdigest()
+        upstream = [item.model_dump(mode="json") for item in health.upstream_providers]
+        upstream_changed = bool(upstream) and (
+            profile.metadata.get("openrouter_provider_catalog") != upstream
+        )
         if (
             profile.metadata.get("model_catalog_revision") == revision
             and profile.metadata.get("model_descriptors") == descriptors
+            and not upstream_changed
         ):
             return profile
         return store.update(
@@ -7810,6 +7815,7 @@ def create_app(
                     "model_descriptors": descriptors,
                     "model_catalog_revision": revision,
                     "model_catalog_source": health.catalog_source,
+                    **({"openrouter_provider_catalog": upstream} if upstream else {}),
                 }
             },
             expected_revision=profile.revision,
@@ -11177,10 +11183,9 @@ async def _verify_provider_capability(
         {
             "capability_verifications": verifications,
             "metadata": metadata,
-            # A health-discovered model may be verified before the operator has
-            # configured an allowlist. Persist that explicit verification target
-            # so subsequent profile reads and mission selectors do not forget it.
-            "model_allowlist": profile.model_allowlist or [model],
+            # Verification is recorded per model in capability_verifications.
+            # It must never narrow model_allowlist: an empty allowlist means
+            # every discovered model stays selectable (OpenRouter lists hundreds).
             "capabilities": profile.capabilities.model_copy(
                 update={
                     "tool_calling": has_verified_model,

@@ -37,8 +37,10 @@ from .domain import ProviderProfile
 from .model_catalog import (
     ModelDescriptor,
     ModelRouteDescriptor,
+    UpstreamProvider,
     openrouter_model_routes,
     openrouter_models,
+    openrouter_upstream_providers,
 )
 
 
@@ -404,6 +406,8 @@ class ProviderHealth(BaseModel):
     healthy: bool
     models: list[str] = Field(default_factory=list)
     model_descriptors: list[ModelDescriptor] = Field(default_factory=list)
+    # OpenRouter's upstream provider directory, for the routing allowlist.
+    upstream_providers: list[UpstreamProvider] = Field(default_factory=list)
     detail: str | None = None
     credential_verified: bool | None = None
     catalog_source: str | None = None
@@ -978,6 +982,10 @@ class OpenAICompatibleProvider(ModelProvider):
                 },
             }
         if openrouter:
+            allowed = self.openrouter_allowed_providers
+            if allowed:
+                # Operator-selected upstream providers: never route elsewhere.
+                payload["provider"] = {**payload.get("provider", {}), "only": allowed}
             payload["reasoning"] = {"exclude": False}
             if request.tools:
                 # With require_parameters, any optional parameter the exact
@@ -1082,6 +1090,14 @@ class OpenAICompatibleProvider(ModelProvider):
                     response = await client.get(
                         self._path("/v1/models/user"), timeout=10.0
                     )
+                    directory: httpx.Response | None = None
+                    try:
+                        if not response.is_error:
+                            directory = await client.get(
+                                self._path("/v1/providers"), timeout=10.0
+                            )
+                    except httpx.HTTPError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
+                        directory = None
                 if response.is_error:
                     return ProviderHealth(
                         provider_id=self.config.id,
@@ -1094,11 +1110,18 @@ class OpenAICompatibleProvider(ModelProvider):
                         ),
                     )
                 descriptors = openrouter_models(response.json())
+                upstream: list[UpstreamProvider] = []
+                try:
+                    if directory is not None and not directory.is_error:
+                        upstream = openrouter_upstream_providers(directory.json())
+                except ValueError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
+                    upstream = []
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=True,
                 models=[model.id for model in descriptors],
                 model_descriptors=descriptors,
+                upstream_providers=upstream,
                 credential_verified=True,
                 catalog_source="openrouter:/models/user",
                 key_expires_at=(
@@ -1126,6 +1149,21 @@ class OpenAICompatibleProvider(ModelProvider):
                 detail="OpenRouter model discovery failed. Check the connection and refresh.",
             )
 
+    @property
+    def openrouter_allowed_providers(self) -> list[str]:
+        """Upstream provider slugs the operator allows (empty means any)."""
+
+        raw = self.config.options.get("openrouter_providers")
+        if not isinstance(raw, list):
+            return []
+        return list(
+            dict.fromkeys(
+                item.strip().lower()
+                for item in raw
+                if isinstance(item, str) and item.strip()
+            )
+        )
+
     async def openrouter_route_limits(self, model: str) -> list[ModelRouteDescriptor]:
         """Load the exact automatic-routing endpoint set for one model."""
 
@@ -1150,6 +1188,14 @@ class OpenAICompatibleProvider(ModelProvider):
                     f"OpenRouter endpoint discovery failed (HTTP {response.status_code})"
                 )
             routes = openrouter_model_routes(response.json(), model=model)
+            allowed = self.openrouter_allowed_providers
+            if allowed:
+                routes = [route for route in routes if route.provider_slug in allowed]
+                if not routes:
+                    raise ProviderError(
+                        "None of the allowed OpenRouter providers serve this model; "
+                        "choose another model or allow more providers"
+                    )
             if not routes:
                 raise ProviderError("OpenRouter returned no eligible model endpoints")
             return routes
