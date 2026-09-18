@@ -204,6 +204,10 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         assert record.name == "Count routes"
         child_session = store.get(ChatSession, record.child_session_id)
         assert child_session.parent_session_id == parent.session_id
+        # Approval mode is the project's automation policy; the child runs in the
+        # parent's project, so it inherits always/on-boundary/never unchanged.
+        assert child_session.engagement_id == parent.engagement_id
+        assert store.get(ChatTurn, record.child_turn_id).engagement_id == parent.engagement_id
         # Children never receive the delegation tools and are told they are subagents.
         for request in provider.child_requests:
             assert not any(tool.name.endswith("subagent") or tool.name == "wait_subagents" for tool in request.tools)

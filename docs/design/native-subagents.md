@@ -33,8 +33,12 @@ Static mockups; names, steps and token counts are illustrative.
   conversation as an assistant message with `metadata.kind = "subagent_result"`,
   so later turns remember it. If the parent's goal is running and no children
   remain, Core continues the goal once.
-- Child approvals stay on the child turn and are surfaced through the list API
-  (`status: "waiting_approval"` with the pending approval).
+- Approval mode is inherited: commands follow the project's automation policy
+  and a child always runs in its parent's project, so "always", "on boundary"
+  and "never" (full auto-approval) apply to subagents exactly as to the parent.
+  Pending child approvals stay on the child turn and are surfaced through the
+  list API (`status: "waiting_approval"` with the exact command and rationale);
+  approving and resuming the child turn continues it.
 - Stopping a parent response stops the children it started. Restart marks
   running children `interrupted` without resuming anything. Deleting a parent
   conversation removes its finished subagent conversations and is refused while

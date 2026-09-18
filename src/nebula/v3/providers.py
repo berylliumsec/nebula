@@ -12,6 +12,7 @@ from .diagnostics import record_caught_exception
 
 import asyncio
 import ipaddress
+import hashlib
 import json
 import os
 import re
@@ -562,6 +563,21 @@ def _safe_error(response: httpx.Response) -> ProviderError:
             error.get("code") if isinstance(error, dict) else None
         ) or (body.get("code") if isinstance(body, dict) else None)
         error_code = str(raw_code).casefold() if raw_code is not None else None
+        # OpenRouter wraps the upstream provider's reason in metadata.raw; the
+        # generic "Provider returned error" alone is not actionable.
+        metadata = error.get("metadata") if isinstance(error, dict) else None
+        upstream = metadata.get("raw") if isinstance(metadata, dict) else None
+        if isinstance(upstream, str) and upstream.strip():
+            try:
+                decoded = json.loads(upstream)
+                inner = decoded.get("error") if isinstance(decoded, dict) else None
+                upstream = (
+                    inner.get("message") if isinstance(inner, dict) else None
+                ) or upstream
+            except ValueError:
+                pass
+            upstream = " ".join(str(upstream).split())[:400]
+            detail = f"{detail} (upstream: {upstream})" if detail else upstream
     except (ValueError, AttributeError) as caught_error:
         record_caught_exception(
             "providers",
@@ -834,6 +850,41 @@ class OpenAIResponsesProvider(ModelProvider):
             )
 
 
+_WIRE_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _wire_tool_names(request: ModelRequest) -> dict[str, str]:
+    """Map Nebula tool names to names every Chat Completions vendor accepts.
+
+    Nebula names may contain dots (``tool_output.search``); OpenAI and
+    Anthropic accept only ``[a-zA-Z0-9_-]{1,64}``. The mapping is derived from
+    the request alone, so responses and replayed history decode identically.
+    """
+
+    names = sorted(
+        {tool.name for tool in request.tools}
+        | {result.name for result in request.tool_results}
+    )
+    mapping: dict[str, str] = {}
+    used: set[str] = {name for name in names if _WIRE_TOOL_NAME.match(name)}
+    for name in names:
+        if _WIRE_TOOL_NAME.match(name):
+            mapping[name] = name
+            continue
+        wire = re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:64] or "tool"
+        if wire in used:
+            digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+            wire = f"{wire[:55]}_{digest}"
+        used.add(wire)
+        mapping[name] = wire
+    return mapping
+
+
+def _decode_tool_name(request: ModelRequest, wire: str) -> str:
+    reverse = {value: key for key, value in _wire_tool_names(request).items()}
+    return reverse.get(wire, wire)
+
+
 class OpenAICompatibleProvider(ModelProvider):
     """Adapter for Chat Completions-compatible hosted and local runtimes."""
 
@@ -842,6 +893,7 @@ class OpenAICompatibleProvider(ModelProvider):
 
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
         vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
+        wire_names = _wire_tool_names(request)
         payload: dict[str, Any] = {
             "model": model,
             "messages": [_openai_chat_message(message) for message in request.messages],
@@ -857,7 +909,7 @@ class OpenAICompatibleProvider(ModelProvider):
                                 "id": result.call_id,
                                 "type": "function",
                                 "function": {
-                                    "name": result.name,
+                                    "name": wire_names.get(result.name, result.name),
                                     "arguments": json.dumps(
                                         result.arguments, sort_keys=True
                                     ),
@@ -899,7 +951,7 @@ class OpenAICompatibleProvider(ModelProvider):
                 {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": wire_names.get(tool.name, tool.name),
                         "description": tool.description,
                         "parameters": (
                             _vllm_grammar_schema(tool.input_schema)
@@ -952,7 +1004,9 @@ class OpenAICompatibleProvider(ModelProvider):
         calls = [
             _normalized_tool_call(
                 id=item.get("id", ""),
-                name=item.get("function", {}).get("name", ""),
+                name=_decode_tool_name(
+                    request, item.get("function", {}).get("name", "")
+                ),
                 arguments=_arguments(item.get("function", {}).get("arguments")),
             )
             for item in message.get("tool_calls", [])
@@ -1172,7 +1226,7 @@ async def _stream_openai_compatible(
         calls = [
             _normalized_tool_call(
                 id=value["id"],
-                name=value["name"],
+                name=_decode_tool_name(request, value["name"]),
                 arguments=_arguments(value["arguments"]),
             )
             for _, value in sorted(call_parts.items())

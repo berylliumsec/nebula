@@ -1,4 +1,5 @@
 import asyncio
+import re
 import json
 
 import httpx
@@ -1068,3 +1069,78 @@ def test_openai_compatible_stream_keeps_whitespace_between_deltas():
     assert final.text == "TCP is connection-oriented.\n\nDone"
     assert final.reasoning == "Think step"
     assert [event.delta for event in events if event.type == StreamEventType.TEXT_DELTA][1] == " connection"
+
+
+def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
+    from nebula.v3.providers import ModelToolResult, ToolDefinition, _wire_tool_names
+
+    dotted = ToolDefinition(
+        name="tool_output.search",
+        description="Search tool output.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="Search")],
+        tools=[TOOL, dotted],
+        tool_choice="required",
+        tool_results=[
+            ModelToolResult(call_id="old", name="skill.read_resource", arguments={}, output="{}")
+        ],
+    )
+    names = _wire_tool_names(request)
+    assert names["tool_output.search"] == "tool_output_search"
+    assert names["skill.read_resource"] == "skill_read_resource"
+    assert names[TOOL.name] == TOOL.name
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        body = json.loads(http_request.content)
+        sent = [tool["function"]["name"] for tool in body["tools"]]
+        replayed = body["messages"][1]["tool_calls"][0]["function"]["name"]
+        assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name) for name in [*sent, replayed])
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "tool_calls": [
+                                {"id": "c1", "type": "function", "function": {"name": "tool_output_search", "arguments": "{}"}}
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="wire-names",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+            default_model="test/model",
+            capabilities=ModelCapabilities(tools=True, strict_tools=True),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(provider.complete(request))
+
+    assert response.tool_calls[0].name == "tool_output.search"
+
+
+def test_wire_tool_names_never_collide():
+    from nebula.v3.providers import ToolDefinition, _wire_tool_names
+
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="x")],
+        tools=[
+            ToolDefinition(name="a.b", description="d", input_schema=schema),
+            ToolDefinition(name="a_b", description="d", input_schema=schema),
+        ],
+    )
+    names = _wire_tool_names(request)
+    assert names["a_b"] == "a_b"
+    assert names["a.b"] != "a_b"
+    assert len(set(names.values())) == 2
