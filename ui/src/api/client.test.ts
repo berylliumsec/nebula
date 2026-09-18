@@ -200,6 +200,12 @@ describe("ApiClient", () => {
       hookIds: ["audit"],
       messages: [{ role: "user", content: "Run it" }],
     }, true).hook_ids).toEqual(["audit"]);
+    // An unused hook selection is omitted so an older remote Core, which forbids
+    // unknown request fields, still accepts every chat.
+    expect(chatRequestBody({
+      providerId: "provider",
+      messages: [{ role: "user", content: "Run it" }],
+    }, true)).not.toHaveProperty("hook_ids");
   });
 
   it("maps restart recovery without hiding unknown tool outcomes", async () => {
