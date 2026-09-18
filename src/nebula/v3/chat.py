@@ -102,6 +102,7 @@ from .providers import (
     ModelResponse,
     ModelToolResult,
     ProviderContextLengthError,
+    ProviderFlavor,
     StreamEventType,
     ToolChoice,
     ToolDefinition,
@@ -637,6 +638,7 @@ class ChatService:
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self.subagents = SubagentService(store, self)
+        self.shutting_down = False
 
     @staticmethod
     def _workspace_unavailable(engagement_id: str) -> Path:
@@ -1056,6 +1058,8 @@ class ChatService:
                 schedules.skip(schedule, "Scheduled occurrence failed; it was not retried overlapping.")
 
     async def shutdown(self) -> None:
+        # Cancellation below is Core stopping, not an operator stop.
+        self.shutting_down = True
         tasks = [
             task
             for runtime in self._active_provider_turns.values()
@@ -2531,6 +2535,17 @@ class ChatService:
                 if response.text.strip():
                     raise ChatError(
                         "provider returned routing prose instead of a tool call"
+                    )
+                if (
+                    len(response.tool_calls) > 1
+                    and prepared.provider.config.flavor == ProviderFlavor.OPENROUTER
+                ):
+                    # OpenRouter cannot route parallel_tool_calls=false, so a
+                    # model may batch calls. Run only the first; the rest never
+                    # execute and are absent from replayed history, so the
+                    # model re-issues them one per step.
+                    response = response.model_copy(
+                        update={"tool_calls": response.tool_calls[:1]}
                     )
                 if len(response.tool_calls) != 1:
                     raise ChatError(

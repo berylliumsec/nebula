@@ -433,3 +433,30 @@ def test_parent_with_running_subagent_cannot_be_deleted(tmp_path: Path) -> None:
         assert "subagent is running" in str(exc)
     else:
         raise AssertionError("deleting a parent with a running subagent must fail")
+
+
+def test_core_shutdown_interrupts_rather_than_stops_subagents(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call("p1", "start_subagent", task="Long task.", name="Slow", context=None),
+                _finish("p2"),
+                _response(text="Delegated."),
+            ],
+            child=[],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Go.", allow_subagents=True)
+        )
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(lambda: bool(provider.child_requests))
+
+        await chat.shutdown()
+
+        (record,) = store.list_entities(ChatSubagent)
+        assert record.status == ChatSubagentStatus.INTERRUPTED
+        assert record.error == "Core shut down while this subagent was running."
+
+    asyncio.run(scenario())

@@ -753,6 +753,77 @@ def test_openrouter_tool_payload_requires_compatible_route():
     payload = provider._payload(request, provider.require(request))
 
     assert payload["provider"] == {"require_parameters": True}
+    # No OpenRouter route advertises parallel_tool_calls; sending it with
+    # require_parameters leaves no endpoint (HTTP 404 on every model).
+    assert "parallel_tool_calls" not in payload
+    # Unknown model parameters: drop optional ones rather than fail routing.
+    assert "reasoning" not in payload
+
+
+def test_openrouter_tool_payload_sends_only_parameters_the_model_advertises():
+    config = config_from_catalog(
+        provider_id="openrouter-payload",
+        flavor=ProviderFlavor.OPENROUTER,
+        api_key_value="test-key",
+        default_model="reasoner/model",
+        model_allowlist=["reasoner/model", "plain/model"],
+        capabilities=ModelCapabilities(tools=True, strict_tools=True),
+    ).model_copy(
+        update={
+            "model_parameters": {
+                "reasoner/model": ["tools", "tool_choice", "max_tokens", "reasoning"],
+                "plain/model": ["tools", "tool_choice", "max_tokens", "temperature"],
+            }
+        }
+    )
+    provider = OpenAICompatibleProvider(config)
+
+    def payload(model: str, **extra):
+        request = ModelRequest(
+            model=model,
+            messages=[ModelMessage(role="user", content="Use the tool")],
+            tools=[TOOL],
+            tool_choice="required",
+            temperature=0.2,
+            **extra,
+        )
+        return provider._payload(request, provider.require(request))
+
+    reasoner = payload("reasoner/model")
+    plain = payload("plain/model")
+    assert reasoner["reasoning"] == {"exclude": False}
+    assert "temperature" not in reasoner
+    assert "reasoning" not in plain
+    assert plain["temperature"] == 0.2
+    # Without tools there is no require_parameters, so reasoning is requested.
+    chat = provider._payload(
+        ModelRequest(model="plain/model", messages=[ModelMessage(role="user", content="Hi")]),
+        "plain/model",
+    )
+    assert chat["reasoning"] == {"exclude": False}
+    assert "provider" not in chat
+
+
+def test_provider_from_openrouter_profile_carries_model_parameters():
+    from nebula.v3.domain import ProviderProfile
+    from nebula.v3.providers import provider_from_profile
+
+    profile = ProviderProfile(
+        name="OpenRouter",
+        provider_type="openrouter",
+        is_local=False,
+        secret_ref="env:OPEN_ROUTER_TEST_KEY",
+        model_allowlist=["openai/gpt-4.1-mini"],
+        metadata={
+            "model_descriptors": [
+                {"id": "openai/gpt-4.1-mini", "supported_parameters": ["tools", "tool_choice"]}
+            ]
+        },
+    )
+
+    provider = provider_from_profile(profile)
+
+    assert provider.config.model_parameters == {"openai/gpt-4.1-mini": ["tools", "tool_choice"]}
 
 
 def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
@@ -957,7 +1028,43 @@ def test_openai_compatible_streams_reasoning_apart_from_content():
         StreamEventType.TEXT_DELTA,
         StreamEventType.COMPLETED,
     ]
-    assert events[1].delta == "think"
+    # Deltas keep their exact whitespace; the assembled reasoning is trimmed.
+    assert events[1].delta == "think "
     assert events[2].delta == "FLASH_OK"
     assert events[-1].response.text == "FLASH_OK"
     assert events[-1].response.reasoning == "think"
+
+
+def test_openai_compatible_stream_keeps_whitespace_between_deltas():
+    chunks = [
+        {"choices": [{"delta": {"reasoning": "Think"}}]},
+        {"choices": [{"delta": {"reasoning": " step"}}]},
+        {"choices": [{"delta": {"content": "TCP is"}}]},
+        {"choices": [{"delta": {"content": " connection"}}]},
+        {"choices": [{"delta": {"content": "-oriented.\n\n"}}]},
+        {"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="stream-spaces",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+            default_model="test/model",
+            capabilities=ModelCapabilities(streaming=True),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(ModelRequest(messages=[ModelMessage(role="user", content="Hi")]))]
+
+    events = asyncio.run(collect())
+    final = events[-1].response
+    assert final.text == "TCP is connection-oriented.\n\nDone"
+    assert final.reasoning == "Think step"
+    assert [event.delta for event in events if event.type == StreamEventType.TEXT_DELTA][1] == " connection"

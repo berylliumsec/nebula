@@ -433,6 +433,9 @@ class SubagentService:
             except NotFoundError:
                 result = ""
         error = None if status == ChatSubagentStatus.COMPLETED else (turn.error or status.value)
+        if status == ChatSubagentStatus.STOPPED and self.chat.shutting_down:
+            status = ChatSubagentStatus.INTERRUPTED
+            error = "Core shut down while this subagent was running."
         try:
             record = self.store.update(
                 ChatSubagent,

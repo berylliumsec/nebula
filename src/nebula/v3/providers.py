@@ -137,6 +137,8 @@ class ProviderConfig(BaseModel):
     enabled: bool = True
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     options: dict[str, Any] = Field(default_factory=dict)
+    # Request parameters each exact model advertises (OpenRouter catalog).
+    model_parameters: dict[str, list[str]] = Field(default_factory=dict)
 
     @field_validator("base_url")
     @classmethod
@@ -621,21 +623,23 @@ def _arguments(value: Any) -> dict[str, Any]:
 def _openai_text_parts(value: Any) -> str:
     """Read visible text from an OpenAI-compatible content value."""
 
+    # Streamed deltas carry meaningful edge whitespace ("the" + " quick"), so
+    # text is kept exactly; only empty values are skipped.
     parts: list[str] = []
-    if isinstance(value, str) and value.strip():
-        parts.append(value.strip())
+    if isinstance(value, str) and value:
+        parts.append(value)
     elif isinstance(value, list):
         for block in value:
-            if isinstance(block, str) and block.strip():
-                parts.append(block.strip())
+            if isinstance(block, str) and block:
+                parts.append(block)
                 continue
             if not isinstance(block, dict):
                 continue
             text = block.get("text") or block.get("content")
             if block.get("type") in {None, "text", "output_text"} and isinstance(
                 text, str
-            ) and text.strip():
-                parts.append(text.strip())
+            ) and text:
+                parts.append(text)
     return "\n".join(parts)
 
 
@@ -651,13 +655,13 @@ def _openai_message_reasoning(message: dict[str, Any]) -> str:
     parts: list[str] = []
     for key in ("reasoning_content", "reasoning"):
         value = message.get(key)
-        if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
+        if isinstance(value, str) and value:
+            parts.append(value)
     details = message.get("reasoning_details")
     if isinstance(details, list):
         for item in details:
-            if isinstance(item, str) and item.strip():
-                parts.append(item.strip())
+            if isinstance(item, str) and item:
+                parts.append(item)
                 continue
             if not isinstance(item, dict):
                 continue
@@ -665,8 +669,8 @@ def _openai_message_reasoning(message: dict[str, Any]) -> str:
             if "encrypted" in kind:
                 continue
             text = item.get("text") or item.get("summary") or item.get("content")
-            if isinstance(text, str) and text.strip():
-                parts.append(text.strip())
+            if isinstance(text, str) and text:
+                parts.append(text)
     return "\n".join(parts)
 
 
@@ -880,12 +884,17 @@ class OpenAICompatibleProvider(ModelProvider):
             payload["max_tokens"] = request.max_output_tokens
         if request.temperature is not None:
             payload["temperature"] = request.temperature
+        openrouter = self.config.flavor == ProviderFlavor.OPENROUTER
         if request.tools:
-            if self.config.flavor == ProviderFlavor.OPENROUTER:
+            if openrouter:
                 # Prevent OpenRouter from selecting an endpoint that drops a
                 # parameter Nebula relies on for its verified tool contract.
+                # No OpenRouter route advertises parallel_tool_calls, so
+                # sending it with require_parameters matches no endpoint; Core
+                # enforces one call per routing step instead.
                 payload["provider"] = {"require_parameters": True}
-            payload["parallel_tool_calls"] = request.parallel_tool_calls
+            else:
+                payload["parallel_tool_calls"] = request.parallel_tool_calls
             payload["tools"] = [
                 {
                     "type": "function",
@@ -917,8 +926,15 @@ class OpenAICompatibleProvider(ModelProvider):
                     ),
                 },
             }
-        if self.config.flavor == ProviderFlavor.OPENROUTER:
+        if openrouter:
             payload["reasoning"] = {"exclude": False}
+            if request.tools:
+                # With require_parameters, any optional parameter the exact
+                # model does not advertise leaves no eligible endpoint.
+                supported = set(self.config.model_parameters.get(model, ()))
+                for optional in ("reasoning", "temperature"):
+                    if optional in payload and optional not in supported:
+                        payload.pop(optional)
         return payload
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -945,8 +961,8 @@ class OpenAICompatibleProvider(ModelProvider):
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model", model),
-            text=_openai_message_content(message),
-            reasoning=_openai_message_reasoning(message),
+            text=_openai_message_content(message).strip(),
+            reasoning=_openai_message_reasoning(message).strip(),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("prompt_tokens", 0),
@@ -1166,8 +1182,8 @@ async def _stream_openai_compatible(
         final = ModelResponse(
             provider_id=provider.config.id,
             model=response_model,
-            text="".join(text_parts),
-            reasoning="".join(reasoning_parts),
+            text="".join(text_parts).strip(),
+            reasoning="".join(reasoning_parts).strip(),
             tool_calls=calls,
             usage=usage,
             finish_reason=finish_reason,
@@ -2105,6 +2121,19 @@ def provider_from_profile(
     )
     if profile.privacy.local_only and not config.local:
         raise ValueError("a local-only privacy profile cannot use a cloud provider")
+    descriptors = profile.metadata.get("model_descriptors")
+    if isinstance(descriptors, list):
+        config = config.model_copy(
+            update={
+                "model_parameters": {
+                    str(item["id"]): [
+                        str(value) for value in item.get("supported_parameters") or []
+                    ]
+                    for item in descriptors
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+            }
+        )
     return build_provider(config)
 
 

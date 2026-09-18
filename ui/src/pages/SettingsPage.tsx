@@ -786,18 +786,18 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
 
 function TextSizeControl() {
   const { zoom, supported, change } = useUiZoom();
-  const shortcut = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl+";
+  const modifier = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
   if (!supported) {
-    return <p className="appearance-help text-size-help">Text size: use your browser zoom ({shortcut}+ / {shortcut}−).</p>;
+    return <p className="appearance-help text-size-help">Text size: use your browser zoom ({modifier} + / {modifier} −).</p>;
   }
   const percent = `${Math.round(zoom * 100)}%`;
   return (
     <div className="text-size-control" role="group" aria-label="Text size">
       <span>Text size</span>
-      <button className="icon-button subtle" type="button" aria-label="Decrease text size" title={`Decrease text size (${shortcut}−)`} disabled={zoom <= UI_ZOOM_STEPS[0]} onClick={() => change("out")}><Minus size={15} aria-hidden="true" /></button>
+      <button className="icon-button subtle" type="button" aria-label="Decrease text size" title={`Decrease text size (${modifier} −)`} disabled={zoom <= UI_ZOOM_STEPS[0]} onClick={() => change("out")}><Minus size={15} aria-hidden="true" /></button>
       <output aria-live="polite" aria-label="Current text size">{percent}</output>
-      <button className="icon-button subtle" type="button" aria-label="Increase text size" title={`Increase text size (${shortcut}+)`} disabled={zoom >= UI_ZOOM_STEPS[UI_ZOOM_STEPS.length - 1]} onClick={() => change("in")}><Plus size={15} aria-hidden="true" /></button>
-      <button className="icon-button subtle" type="button" aria-label="Reset text size" title={`Reset text size (${shortcut}0)`} disabled={zoom === UI_ZOOM_DEFAULT} onClick={() => change("reset")}><RotateCcw size={14} aria-hidden="true" /></button>
+      <button className="icon-button subtle" type="button" aria-label="Increase text size" title={`Increase text size (${modifier} +)`} disabled={zoom >= UI_ZOOM_STEPS[UI_ZOOM_STEPS.length - 1]} onClick={() => change("in")}><Plus size={15} aria-hidden="true" /></button>
+      <button className="icon-button subtle" type="button" aria-label="Reset text size" title={`Reset text size (${modifier} 0)`} disabled={zoom === UI_ZOOM_DEFAULT} onClick={() => change("reset")}><RotateCcw size={14} aria-hidden="true" /></button>
     </div>
   );
 }

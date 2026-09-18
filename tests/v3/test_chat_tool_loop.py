@@ -334,3 +334,32 @@ def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
         await service.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_openrouter_batched_calls_run_one_step_at_a_time(tmp_path):
+    from nebula.v3.providers import ProviderFlavor
+
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[
+                ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
+                ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
+            ]
+        ),
+        _response(calls=[ToolCall(id="call-3", name="safe_read", arguments={"value": "b"})]),
+        _response(calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]),
+        _response(text="Read a and b."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    provider.config = provider.config.model_copy(update={"flavor": ProviderFlavor.OPENROUTER})
+
+    asyncio.run(service.complete(prepared))
+
+    assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1", "call-3"]
+    # The dropped call never reaches replayed history.
+    replay = provider.requests[2].tool_results
+    assert [item.call_id for item in replay] == ["call-1", "call-3"]
