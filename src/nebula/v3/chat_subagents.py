@@ -111,13 +111,19 @@ class SubagentService:
 
     def _all(self) -> Iterable[ChatSubagent]:
         offset = 0
-        while page := self.store.list_entities(ChatSubagent, offset=offset, limit=1_000):
+        while page := self.store.list_entities(
+            ChatSubagent, offset=offset, limit=1_000
+        ):
             yield from page
             offset += len(page)
 
     def for_session(self, parent_session_id: str) -> list[ChatSubagent]:
         return sorted(
-            (item for item in self._all() if item.parent_session_id == parent_session_id),
+            (
+                item
+                for item in self._all()
+                if item.parent_session_id == parent_session_id
+            ),
             key=lambda item: (item.started_at, item.id),
         )
 
@@ -130,13 +136,15 @@ class SubagentService:
             return None
         try:
             return self.get(subagent_id)
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: stale subagent reference means the session is not a live child
             return None
 
     @staticmethod
     def active(records: Iterable[ChatSubagent]) -> list[ChatSubagent]:
         return [
-            item for item in records if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
+            item
+            for item in records
+            if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
         ]
 
     def view(self, record: ChatSubagent) -> dict[str, Any]:
@@ -146,7 +154,7 @@ class SubagentService:
         if record.child_turn_id:
             try:
                 turn = self.store.get(ChatTurn, record.child_turn_id)
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: child turn not created or deleted; the view shows record state
                 turn = None
         history = list(turn.tool_history) if turn is not None else []
         recent = [
@@ -164,7 +172,7 @@ class SubagentService:
                 state = "waiting_approval"
                 try:
                     pending = self.store.get(Approval, turn.approval_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: approval deleted; the view reports it as pending
                     pending = None
                 pending_entry = history[-1] if history else {}
                 approval = {
@@ -175,7 +183,11 @@ class SubagentService:
                     "risk_class": pending.risk_class.value if pending else None,
                     "rationale": pending.policy_rationale if pending else None,
                 }
-        usage = turn.usage if turn is not None and record.status == ChatSubagentStatus.RUNNING else record.usage
+        usage = (
+            turn.usage
+            if turn is not None and record.status == ChatSubagentStatus.RUNNING
+            else record.usage
+        )
         finished = record.finished_at or utc_now()
         return {
             "id": record.id,
@@ -191,14 +203,18 @@ class SubagentService:
             "approval": approval,
             "usage": usage.model_dump(mode="json"),
             "started_at": record.started_at.isoformat(),
-            "finished_at": record.finished_at.isoformat() if record.finished_at else None,
+            "finished_at": record.finished_at.isoformat()
+            if record.finished_at
+            else None,
             "elapsed_seconds": max(0.0, (finished - record.started_at).total_seconds()),
             "result": record.result,
             "error": record.error,
             "result_message_id": record.result_message_id,
         }
 
-    def _model_view(self, record: ChatSubagent, *, include_result: bool) -> dict[str, Any]:
+    def _model_view(
+        self, record: ChatSubagent, *, include_result: bool
+    ) -> dict[str, Any]:
         view = self.view(record)
         payload: dict[str, Any] = {
             "subagent_id": record.id,
@@ -214,7 +230,12 @@ class SubagentService:
     # -- start -------------------------------------------------------------
 
     async def start(
-        self, invocation: ToolInvocation, *, task: str, name: str | None, context: str | None
+        self,
+        invocation: ToolInvocation,
+        *,
+        task: str,
+        name: str | None,
+        context: str | None,
     ) -> ChatSubagent:
         from .chat import ChatCompletionRequest, ChatRequestMessage
 
@@ -230,13 +251,19 @@ class SubagentService:
         label = " ".join((name or task).split())[:80] or "Subagent"
         siblings = self.for_session(parent_session.id)
         for existing in siblings:
-            if existing.parent_request.get("idempotency_key") == invocation.idempotency_key:
+            if (
+                existing.parent_request.get("idempotency_key")
+                == invocation.idempotency_key
+            ):
                 return existing
         if len(self.active(siblings)) >= MAX_ACTIVE_SUBAGENTS:
             raise InvalidToolArguments(
                 f"{MAX_ACTIVE_SUBAGENTS} subagents are already running; wait for one to finish"
             )
-        if sum(1 for item in siblings if item.parent_turn_id == parent_turn.id) >= MAX_SUBAGENTS_PER_TURN:
+        if (
+            sum(1 for item in siblings if item.parent_turn_id == parent_turn.id)
+            >= MAX_SUBAGENTS_PER_TURN
+        ):
             raise InvalidToolArguments(
                 f"this response already started {MAX_SUBAGENTS_PER_TURN} subagents"
             )
@@ -278,8 +305,12 @@ class SubagentService:
         with self.store.transaction() as transaction:
             transaction.add(child_session)
             transaction.add(record)
-        content = task if not context or not context.strip() else (
-            f"{task}\n\nContext from the delegating assistant:\n{context.strip()}"
+        content = (
+            task
+            if not context or not context.strip()
+            else (
+                f"{task}\n\nContext from the delegating assistant:\n{context.strip()}"
+            )
         )
         try:
             prepared = await self.chat.prepare_async(
@@ -289,7 +320,9 @@ class SubagentService:
                     session_id=child_session.id,
                     model=parent_turn.model,
                     messages=[
-                        ChatRequestMessage(role=ChatRole.USER, content=_bounded(content, 60_000))
+                        ChatRequestMessage(
+                            role=ChatRole.USER, content=_bounded(content, 60_000)
+                        )
                     ],
                     include_knowledge=False,
                     tools_enabled=tools_enabled,
@@ -371,13 +404,17 @@ class SubagentService:
 
     # -- waiting -----------------------------------------------------------
 
-    def resolve_wait(self, parent_session_id: str, ids: list[str] | None) -> list[ChatSubagent]:
+    def resolve_wait(
+        self, parent_session_id: str, ids: list[str] | None
+    ) -> list[ChatSubagent]:
         records = self.for_session(parent_session_id)
         if ids:
             by_id = {item.id: item for item in records}
             missing = [item for item in ids if item not in by_id]
             if missing:
-                raise InvalidToolArguments(f"unknown subagent ids: {', '.join(missing)}")
+                raise InvalidToolArguments(
+                    f"unknown subagent ids: {', '.join(missing)}"
+                )
             return [by_id[item] for item in dict.fromkeys(ids)]
         return self.active(records) or [
             item for item in records if item.result_message_id is None
@@ -385,15 +422,21 @@ class SubagentService:
 
     def wait_satisfied(self, ids: list[str], mode: str) -> bool:
         records = [self.get(item) for item in ids]
-        finished = [item for item in records if item.status in CHAT_SUBAGENT_TERMINAL_STATUSES]
+        finished = [
+            item for item in records if item.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+        ]
         return bool(finished) if mode == "any" else len(finished) == len(records)
 
     def wait_output(self, ids: list[str]) -> dict[str, Any]:
         records = [self.get(item) for item in ids]
         return {
-            "subagents": [self._model_view(item, include_result=True) for item in records],
+            "subagents": [
+                self._model_view(item, include_result=True) for item in records
+            ],
             "still_running": [
-                item.id for item in records if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
+                item.id
+                for item in records
+                if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
             ],
         }
 
@@ -405,7 +448,7 @@ class SubagentService:
         try:
             turn = self.store.get(ChatTurn, turn_id)
             session = self.store.get(ChatSession, turn.session_id)
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: turn or session deleted before settling; nothing to update
             return
         record = self._for_child_session(session)
         if record is not None and record.child_turn_id == turn.id:
@@ -430,9 +473,13 @@ class SubagentService:
         if status == ChatSubagentStatus.COMPLETED and turn.final_message_id:
             try:
                 result = self.store.get(ChatMessage, turn.final_message_id).content
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: final message deleted; the record keeps an empty report
                 result = ""
-        error = None if status == ChatSubagentStatus.COMPLETED else (turn.error or status.value)
+        error = (
+            None
+            if status == ChatSubagentStatus.COMPLETED
+            else (turn.error or status.value)
+        )
         if status == ChatSubagentStatus.STOPPED and self.chat.shutting_down:
             status = ChatSubagentStatus.INTERRUPTED
             error = "Core shut down while this subagent was running."
@@ -449,7 +496,7 @@ class SubagentService:
                 },
                 expected_revision=record.revision,
             )
-        except ConflictError:
+        except ConflictError:  # diagnostic-expected: another settle path already recorded this terminal state
             return
         parent_turn = self._parent_turn(record)
         if parent_turn is not None and parent_turn.goal_id and turn.usage.total_tokens:
@@ -459,14 +506,16 @@ class SubagentService:
                     turn.usage,
                     exhausted_reason="Token budget exhausted by subagent work.",
                 )
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: parent goal removed; there is no budget to charge
                 pass
         await self._deliver(record)
 
     def _parent_turn(self, record: ChatSubagent) -> ChatTurn | None:
         try:
             return self.store.get(ChatTurn, record.parent_turn_id)
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: parent turn deleted; delivery falls back to the session
             return None
 
     async def _deliver(self, record: ChatSubagent) -> None:
@@ -511,7 +560,8 @@ class SubagentService:
         undelivered = [
             item
             for item in records
-            if item.status in CHAT_SUBAGENT_TERMINAL_STATUSES and item.result_message_id is None
+            if item.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+            and item.result_message_id is None
         ]
         for record in undelivered:
             try:
@@ -531,10 +581,13 @@ class SubagentService:
     def _post_result(self, record: ChatSubagent) -> None:
         session = self.store.get(ChatSession, record.parent_session_id)
         messages = self.chat.session_messages(session.id)
-        sequence = max(
-            [item.sequence for item in messages]
-            + [int(session.metadata.get("last_sequence") or 0)]
-        ) + 1
+        sequence = (
+            max(
+                [item.sequence for item in messages]
+                + [int(session.metadata.get("last_sequence") or 0)]
+            )
+            + 1
+        )
         heading = {
             ChatSubagentStatus.COMPLETED: "Subagent finished",
             ChatSubagentStatus.FAILED: "Subagent failed",
@@ -559,7 +612,9 @@ class SubagentService:
                 "subagent_name": record.name,
                 "subagent_status": record.status.value,
                 "child_session_id": record.child_session_id,
-                "elapsed_seconds": max(0.0, (finished - record.started_at).total_seconds()),
+                "elapsed_seconds": max(
+                    0.0, (finished - record.started_at).total_seconds()
+                ),
             },
         )
         with self.store.transaction() as transaction:
@@ -593,7 +648,9 @@ class SubagentService:
             return
         try:
             goal = self.store.get(ChatGoal, parent_turn.goal_id)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: goal removed; there is nothing to continue
             return
         if goal.status != ChatGoalStatus.RUNNING or goal.execution_claim_id is not None:
             return
@@ -638,14 +695,18 @@ class SubagentService:
             if record.child_turn_id:
                 try:
                     turn = self.store.get(ChatTurn, record.child_turn_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: child turn missing after restart is reconciled as interrupted
                     turn = None
             if turn is not None and turn.status in {
                 ChatTurnStatus.WAITING_APPROVAL,
                 ChatTurnStatus.WAITING_CALLBACK,
             }:
                 continue
-            if turn is not None and turn.status in _TERMINAL_TURN_STATUS and turn.status != ChatTurnStatus.INTERRUPTED:
+            if (
+                turn is not None
+                and turn.status in _TERMINAL_TURN_STATUS
+                and turn.status != ChatTurnStatus.INTERRUPTED
+            ):
                 await self._child_settled(record, turn)
                 continue
             self.store.update(
@@ -693,8 +754,12 @@ class SubagentBroker:
             record = await self.service.start(
                 invocation,
                 task=str(arguments.get("task") or ""),
-                name=arguments.get("name") if isinstance(arguments.get("name"), str) else None,
-                context=arguments.get("context") if isinstance(arguments.get("context"), str) else None,
+                name=arguments.get("name")
+                if isinstance(arguments.get("name"), str)
+                else None,
+                context=arguments.get("context")
+                if isinstance(arguments.get("context"), str)
+                else None,
             )
             if record.status == ChatSubagentStatus.FAILED:
                 raise InvalidToolArguments(record.error or "subagent could not start")
@@ -720,7 +785,9 @@ class SubagentBroker:
             try:
                 record = self.service.get(subagent_id)
             except NotFoundError as exc:
-                raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}") from exc
+                raise InvalidToolArguments(
+                    f"unknown subagent id {subagent_id!r}"
+                ) from exc
             if record.parent_session_id != session_id:
                 raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
             record = await self.service.stop(record.id)
@@ -794,7 +861,9 @@ def subagent_specs() -> dict[str, ToolSpec]:
                 },
             },
         ),
-        _spec("list_subagents", "List this conversation's subagents and their status.", {}),
+        _spec(
+            "list_subagents", "List this conversation's subagents and their status.", {}
+        ),
         _spec(
             "stop_subagent",
             "Stop a running subagent.",

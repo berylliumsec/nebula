@@ -7,7 +7,14 @@ from nebula.v3.api import create_app
 from nebula.v3.chat import ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_schedules import ChatScheduleService, ScheduleCreate
-from nebula.v3.domain import ChatSession, ChatTurn, ChatTurnStatus, Engagement, ProviderProfile, utc_now
+from nebula.v3.domain import (
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
+    Engagement,
+    ProviderProfile,
+    utc_now,
+)
 from nebula.v3.storage import NebulaStore
 from tests.v3.test_chat import FakeProvider
 import nebula.v3.chat as chat_module
@@ -38,9 +45,13 @@ def test_schedule_skips_when_a_turn_is_still_active(tmp_path, monkeypatch):
     goals = ChatGoalService(store)
     created = goals.create(
         "session",
-        GoalCreate(objective="Keep going", completion_criteria=["Scheduled work stays bounded"]),
+        GoalCreate(
+            objective="Keep going", completion_criteria=["Scheduled work stays bounded"]
+        ),
     )
-    goals.write("session", GoalWrite(expected_revision=created.revision, action="start"))
+    goals.write(
+        "session", GoalWrite(expected_revision=created.revision, action="start")
+    )
     schedules = ChatScheduleService(store)
     schedule = schedules.create("session", ScheduleCreate(interval_seconds=3600))
     store.update(
@@ -60,7 +71,11 @@ def test_schedule_skips_when_a_turn_is_still_active(tmp_path, monkeypatch):
             request_snapshot={"recovery": {"required": False}, "context_usage": {}},
         )
     )
-    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: FakeProvider(profile.id, local=True))
+    monkeypatch.setattr(
+        chat_module,
+        "provider_from_profile",
+        lambda _: FakeProvider(profile.id, local=True),
+    )
     asyncio.run(ChatService(store).fire_due_schedules())
     latest = schedules.get("session")
     assert latest.last_status == "skipped"

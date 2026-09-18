@@ -532,9 +532,7 @@ class ModelProvider(ABC):
             yield ModelStreamEvent(
                 type=StreamEventType.ERROR,
                 error=str(exc),
-                context_length_exceeded=isinstance(
-                    exc, ProviderContextLengthError
-                ),
+                context_length_exceeded=isinstance(exc, ProviderContextLengthError),
             )
             return
         if response.text:
@@ -556,12 +554,12 @@ def _safe_error(response: httpx.Response) -> ProviderError:
     try:
         body = response.json()
         error = body.get("error", {}) if isinstance(body, dict) else {}
-        detail = (
-            error.get("message") if isinstance(error, dict) else None
-        ) or (body.get("message") if isinstance(body, dict) else None)
-        raw_code = (
-            error.get("code") if isinstance(error, dict) else None
-        ) or (body.get("code") if isinstance(body, dict) else None)
+        detail = (error.get("message") if isinstance(error, dict) else None) or (
+            body.get("message") if isinstance(body, dict) else None
+        )
+        raw_code = (error.get("code") if isinstance(error, dict) else None) or (
+            body.get("code") if isinstance(body, dict) else None
+        )
         error_code = str(raw_code).casefold() if raw_code is not None else None
         # OpenRouter wraps the upstream provider's reason in metadata.raw; the
         # generic "Provider returned error" alone is not actionable.
@@ -574,7 +572,7 @@ def _safe_error(response: httpx.Response) -> ProviderError:
                 upstream = (
                     inner.get("message") if isinstance(inner, dict) else None
                 ) or upstream
-            except ValueError:
+            except ValueError:  # diagnostic-expected: upstream reason is not JSON; the raw text is shown instead
                 pass
             upstream = " ".join(str(upstream).split())[:400]
             detail = f"{detail} (upstream: {upstream})" if detail else upstream
@@ -588,9 +586,8 @@ def _safe_error(response: httpx.Response) -> ProviderError:
         )
         detail = None
     suffix = f" request_id={request_id}" if request_id else ""
-    message = (
-        f"provider returned HTTP {response.status_code}{suffix}"
-        + (f": {detail}" if detail else "")
+    message = f"provider returned HTTP {response.status_code}{suffix}" + (
+        f": {detail}" if detail else ""
     )
     normalized_detail = str(detail or "").casefold()
     context_codes = {
@@ -652,9 +649,11 @@ def _openai_text_parts(value: Any) -> str:
             if not isinstance(block, dict):
                 continue
             text = block.get("text") or block.get("content")
-            if block.get("type") in {None, "text", "output_text"} and isinstance(
-                text, str
-            ) and text:
+            if (
+                block.get("type") in {None, "text", "output_text"}
+                and isinstance(text, str)
+                and text
+            ):
                 parts.append(text)
     return "\n".join(parts)
 
@@ -1115,7 +1114,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 ),
                 detail="Account model catalog loaded; inference is not yet verified.",
             )
-        except (httpx.HTTPError, TimeoutError, ValueError):
+        except (
+            httpx.HTTPError,
+            TimeoutError,
+            ValueError,
+        ):  # diagnostic-expected: failure is reported as unhealthy; raw text may contain credentials
             # Transport and upstream payload exceptions may contain credentials.
             return ProviderHealth(
                 provider_id=self.config.id,

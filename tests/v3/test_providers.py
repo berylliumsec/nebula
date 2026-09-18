@@ -255,12 +255,19 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
                             "content": "FLASH_OK",
                             "reasoning": "Private chain of thought.",
                             "reasoning_details": [
-                                {"type": "reasoning.text", "text": "Consider the token."}
+                                {
+                                    "type": "reasoning.text",
+                                    "text": "Consider the token.",
+                                }
                             ],
                         },
                     }
                 ],
-                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+                "usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 6,
+                },
             },
         )
 
@@ -798,7 +805,9 @@ def test_openrouter_tool_payload_sends_only_parameters_the_model_advertises():
     assert plain["temperature"] == 0.2
     # Without tools there is no require_parameters, so reasoning is requested.
     chat = provider._payload(
-        ModelRequest(model="plain/model", messages=[ModelMessage(role="user", content="Hi")]),
+        ModelRequest(
+            model="plain/model", messages=[ModelMessage(role="user", content="Hi")]
+        ),
         "plain/model",
     )
     assert chat["reasoning"] == {"exclude": False}
@@ -817,14 +826,19 @@ def test_provider_from_openrouter_profile_carries_model_parameters():
         model_allowlist=["openai/gpt-4.1-mini"],
         metadata={
             "model_descriptors": [
-                {"id": "openai/gpt-4.1-mini", "supported_parameters": ["tools", "tool_choice"]}
+                {
+                    "id": "openai/gpt-4.1-mini",
+                    "supported_parameters": ["tools", "tool_choice"],
+                }
             ]
         },
     )
 
     provider = provider_from_profile(profile)
 
-    assert provider.config.model_parameters == {"openai/gpt-4.1-mini": ["tools", "tool_choice"]}
+    assert provider.config.model_parameters == {
+        "openai/gpt-4.1-mini": ["tools", "tool_choice"]
+    }
 
 
 def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
@@ -1047,8 +1061,13 @@ def test_openai_compatible_stream_keeps_whitespace_between_deltas():
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
-        return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        body = (
+            "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+            + "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
 
     provider = OpenAICompatibleProvider(
         config_from_catalog(
@@ -1062,13 +1081,20 @@ def test_openai_compatible_stream_keeps_whitespace_between_deltas():
     )
 
     async def collect():
-        return [event async for event in provider.stream(ModelRequest(messages=[ModelMessage(role="user", content="Hi")]))]
+        return [
+            event
+            async for event in provider.stream(
+                ModelRequest(messages=[ModelMessage(role="user", content="Hi")])
+            )
+        ]
 
     events = asyncio.run(collect())
     final = events[-1].response
     assert final.text == "TCP is connection-oriented.\n\nDone"
     assert final.reasoning == "Think step"
-    assert [event.delta for event in events if event.type == StreamEventType.TEXT_DELTA][1] == " connection"
+    assert [
+        event.delta for event in events if event.type == StreamEventType.TEXT_DELTA
+    ][1] == " connection"
 
 
 def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
@@ -1077,14 +1103,20 @@ def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
     dotted = ToolDefinition(
         name="tool_output.search",
         description="Search tool output.",
-        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
     )
     request = ModelRequest(
         messages=[ModelMessage(role="user", content="Search")],
         tools=[TOOL, dotted],
         tool_choice="required",
         tool_results=[
-            ModelToolResult(call_id="old", name="skill.read_resource", arguments={}, output="{}")
+            ModelToolResult(
+                call_id="old", name="skill.read_resource", arguments={}, output="{}"
+            )
         ],
     )
     names = _wire_tool_names(request)
@@ -1096,7 +1128,9 @@ def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
         body = json.loads(http_request.content)
         sent = [tool["function"]["name"] for tool in body["tools"]]
         replayed = body["messages"][1]["tool_calls"][0]["function"]["name"]
-        assert all(re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name) for name in [*sent, replayed])
+        assert all(
+            re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", name) for name in [*sent, replayed]
+        )
         return httpx.Response(
             200,
             json={
@@ -1104,7 +1138,14 @@ def test_openai_compatible_tool_names_are_wire_safe_and_decoded():
                     {
                         "message": {
                             "tool_calls": [
-                                {"id": "c1", "type": "function", "function": {"name": "tool_output_search", "arguments": "{}"}}
+                                {
+                                    "id": "c1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "tool_output_search",
+                                        "arguments": "{}",
+                                    },
+                                }
                             ]
                         },
                         "finish_reason": "tool_calls",

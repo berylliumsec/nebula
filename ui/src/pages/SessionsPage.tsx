@@ -688,9 +688,10 @@ export function SessionsPage() {
     const controller = new AbortController();
     setProviderGoalLoading(true); setProviderGoalError(undefined);
     void api.getChatGoal(sessionId, controller.signal).then(setProviderGoal).catch((caught) => {
-      if (controller.signal.aborted) return;
-      if (caught instanceof ApiError && caught.status === 404) setProviderGoal(undefined);
-      else setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer session load
+      if (caught instanceof ApiError && caught.status === 404) { setProviderGoal(undefined); return; } // diagnostic-expected: no goal yet
+      void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
+      setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
     }).finally(() => { if (!controller.signal.aborted) setProviderGoalLoading(false); });
     return () => controller.abort();
   }, [api, sessionId, runtimeKind]);
@@ -1320,7 +1321,8 @@ export function SessionsPage() {
       setSelectedHookIds(current => current.filter(id => items.some(item => item.id === id)));
       setNativeHookError(undefined);
     }).catch(error => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
+      void logCaughtDiagnostic("interface.sessions.hooks_load_failed", "Project lifecycle hooks could not be discovered.", error, "hooks");
       setNativeHooks([]);
       setNativeHookError(error instanceof Error ? error.message : "Hooks could not be discovered.");
     });
@@ -1821,6 +1823,7 @@ export function SessionsPage() {
         ? "Compaction approved. The switch applies to your next message."
         : "Model updated. Applies to your next message.");
     } catch (error) {
+      void logCaughtDiagnostic("interface.sessions.runtime_switch_failed", "The model switch could not be verified.", error, "assistant_settings");
       setAssistantSettingsStatus(error instanceof Error ? error.message : "Could not verify the model switch.");
     }
   };

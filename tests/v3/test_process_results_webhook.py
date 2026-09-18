@@ -127,7 +127,9 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
                 provider_profile_id=profile.id,
                 model="model-a",
                 status=ChatTurnStatus.WAITING_CALLBACK,
-                request_snapshot={"model_request": {"model": "model-a", "messages": []}},
+                request_snapshot={
+                    "model_request": {"model": "model-a", "messages": []}
+                },
             )
         )
         started = await manager.run_command(

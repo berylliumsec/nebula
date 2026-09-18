@@ -2,6 +2,7 @@ import { useState } from "react";
 import { CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
   api: ApiClient;
@@ -42,6 +43,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       }));
       setTransition(undefined); setReason(""); setSummary(""); setEvidence("");
     } catch (caught) {
+      void logCaughtDiagnostic("interface.goal.transition_failed", "A conversation goal state change failed.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal state could not be changed.");
     } finally { setBusy(false); }
   };
@@ -62,6 +64,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       });
       onChange(created); setExpanded(false);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.goal.create_failed", "A conversation goal could not be created.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal could not be created.");
     } finally { setBusy(false); }
   };
@@ -89,6 +92,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       }));
       setEditingSkills(false);
     } catch (caught) {
+      void logCaughtDiagnostic("interface.goal.skills_failed", "Conversation goal skills could not be changed.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal skills could not be changed.");
     } finally { setBusy(false); }
   };

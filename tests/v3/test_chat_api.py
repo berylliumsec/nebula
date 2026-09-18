@@ -820,7 +820,10 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
         for session_id, extra in (
             ("parent", {}),
             ("other", {}),
-            ("child", {"parent_session_id": "parent", "metadata": {"subagent_id": "sub"}}),
+            (
+                "child",
+                {"parent_session_id": "parent", "metadata": {"subagent_id": "sub"}},
+            ),
         )
     )
     store.create(
@@ -837,8 +840,12 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     client = TestClient(create_app(store, auth_token="test-token"))
 
     listed = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
-    foreign = client.post(f"/api/v1/chat/sessions/{other.id}/subagents/sub/stop", headers=_auth())
-    stopped = client.post(f"/api/v1/chat/sessions/{parent.id}/subagents/sub/stop", headers=_auth())
+    foreign = client.post(
+        f"/api/v1/chat/sessions/{other.id}/subagents/sub/stop", headers=_auth()
+    )
+    stopped = client.post(
+        f"/api/v1/chat/sessions/{parent.id}/subagents/sub/stop", headers=_auth()
+    )
     after = client.get(f"/api/v1/chat/sessions/{parent.id}/subagents", headers=_auth())
 
     assert listed.status_code == 200
@@ -852,4 +859,9 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     assert item["status"] == "stopped"
     assert item["finished_at"] is not None
     assert item["result_message_id"] is not None
-    assert client.get("/api/v1/chat/sessions/missing/subagents", headers=_auth()).status_code == 404
+    assert (
+        client.get(
+            "/api/v1/chat/sessions/missing/subagents", headers=_auth()
+        ).status_code
+        == 404
+    )

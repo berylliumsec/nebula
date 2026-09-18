@@ -347,19 +347,28 @@ def test_openrouter_batched_calls_run_one_step_at_a_time(tmp_path):
                 ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
             ]
         ),
-        _response(calls=[ToolCall(id="call-3", name="safe_read", arguments={"value": "b"})]),
-        _response(calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]),
+        _response(
+            calls=[ToolCall(id="call-3", name="safe_read", arguments={"value": "b"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
         _response(text="Read a and b."),
     ]
     store, service, prepared, provider = _prepared(tmp_path, responses, broker)
-    provider.config = provider.config.model_copy(update={"flavor": ProviderFlavor.OPENROUTER})
+    provider.config = provider.config.model_copy(
+        update={"flavor": ProviderFlavor.OPENROUTER}
+    )
 
     asyncio.run(service.complete(prepared))
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
-    assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1", "call-3"]
+    assert [entry["model_call_id"] for entry in turn.tool_history] == [
+        "call-1",
+        "call-3",
+    ]
     # The dropped call never reaches replayed history.
     replay = provider.requests[2].tool_results
     assert [item.call_id for item in replay] == ["call-1", "call-3"]

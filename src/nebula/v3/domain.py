@@ -3464,7 +3464,9 @@ class ChatGoal(Entity):
     completed_at: datetime | None = None
     blocked_reason: str | None = Field(default=None, max_length=2_000)
     completion_summary: str | None = Field(default=None, max_length=20_000)
-    completion_evidence: list[dict[str, Any]] = Field(default_factory=list, max_length=200)
+    completion_evidence: list[dict[str, Any]] = Field(
+        default_factory=list, max_length=200
+    )
     consecutive_stalls: int = Field(default=0, ge=0)
     skill_snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     parent_goal_id: str | None = Field(default=None, max_length=200)
@@ -3498,7 +3500,9 @@ class ChatGoal(Entity):
     def active_elapsed_seconds(self, now: datetime | None = None) -> float:
         elapsed = self.elapsed_seconds
         if self.status == ChatGoalStatus.RUNNING and self.active_since is not None:
-            elapsed += max(0.0, ((now or utc_now()) - self.active_since).total_seconds())
+            elapsed += max(
+                0.0, ((now or utc_now()) - self.active_since).total_seconds()
+            )
         return elapsed
 
 

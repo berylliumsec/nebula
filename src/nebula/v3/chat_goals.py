@@ -59,7 +59,9 @@ class ChatGoalService:
             raise ConflictError("provider-backed goals require a provider conversation")
         try:
             self.get(session_id)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: absence is the precondition for creating a goal
             pass
         else:
             raise ConflictError("conversation already has a goal")
@@ -81,7 +83,9 @@ class ChatGoalService:
     def write(self, session_id: str, body: GoalWrite) -> ChatGoal:
         goal = self.get(session_id)
         if body.expected_revision != goal.revision:
-            raise ConflictError("goal changed on another device; reload before retrying")
+            raise ConflictError(
+                "goal changed on another device; reload before retrying"
+            )
         now = utc_now()
         changes: dict = {}
         if body.action == "start":
@@ -221,14 +225,14 @@ class ChatGoalService:
     def list_children(self, session_id: str) -> list[ChatGoal]:
         try:
             parent = self.get(session_id)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: a conversation without a goal has no children
             return []
         children: list[ChatGoal] = []
         offset = 0
         while page := self.store.list_entities(ChatGoal, offset=offset, limit=1_000):
-            children.extend(
-                item for item in page if item.parent_goal_id == parent.id
-            )
+            children.extend(item for item in page if item.parent_goal_id == parent.id)
             offset += len(page)
         return children
 
@@ -242,8 +246,12 @@ class ChatGoalService:
                 child.id,
                 {
                     "status": status,
-                    "paused_at": now if status == ChatGoalStatus.PAUSED else child.paused_at,
-                    "completed_at": now if status == ChatGoalStatus.CANCELLED else child.completed_at,
+                    "paused_at": now
+                    if status == ChatGoalStatus.PAUSED
+                    else child.paused_at,
+                    "completed_at": now
+                    if status == ChatGoalStatus.CANCELLED
+                    else child.completed_at,
                     "active_since": None,
                     "elapsed_seconds": child.active_elapsed_seconds(now),
                     "blocked_reason": (
@@ -266,11 +274,15 @@ class ChatGoalService:
 
         goal = self.get(session_id)
         if goal.revision != expected_revision:
-            raise ConflictError("goal changed on another device; reload before retrying")
+            raise ConflictError(
+                "goal changed on another device; reload before retrying"
+            )
         if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
             raise ConflictError("terminal goal skills cannot be edited")
         if goal.execution_claim_id is not None:
-            raise ConflictError("pause or wait for active goal work before editing skills")
+            raise ConflictError(
+                "pause or wait for active goal work before editing skills"
+            )
         paths = [item.path for item in snapshots]
         if len(paths) != len(set(paths)):
             raise ConflictError("the same skill cannot be attached more than once")
@@ -287,7 +299,8 @@ def goals_router(
     *,
     skill_snapshot_resolver: Callable[
         [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]
-    ] | None = None,
+    ]
+    | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["chat"])
     service = ChatGoalService(store)
@@ -304,7 +317,9 @@ def goals_router(
     def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:
         return service.write(session_id, body)
 
-    @router.get("/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal])
+    @router.get(
+        "/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal]
+    )
     def list_goal_children(session_id: str) -> list[ChatGoal]:
         return service.list_children(session_id)
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { ApiClient } from "../api/client";
 import type { ChatGoal } from "../api/types";
 import { ApiError } from "../api/client";
+import { logCaughtDiagnostic } from "../diagnostics";
 
 export function ProviderSessionAdvanced({
   api, sessionId, goal, onOpenChild,
@@ -23,7 +24,9 @@ export function ProviderSessionAdvanced({
   const reload = async () => {
     const [saved, kids] = await Promise.all([
       api.listChatCheckpoints(sessionId),
-      api.listGoalChildren(sessionId).catch(() => []),
+      api.listGoalChildren(sessionId).catch(() => {
+        return []; // diagnostic-expected: a session without a goal has no children
+      }),
     ]);
     setCheckpoints(saved);
     setChildren(kids);
@@ -36,13 +39,19 @@ export function ProviderSessionAdvanced({
   };
 
   useEffect(() => {
-    void reload().catch((caught) => setError(caught instanceof Error ? caught.message : "Advanced session controls could not load."));
+    void reload().catch((caught) => {
+      void logCaughtDiagnostic("interface.session_advanced.load_failed", "Advanced session controls could not load.", caught, "session_advanced");
+      setError(caught instanceof Error ? caught.message : "Advanced session controls could not load.");
+    });
   }, [api, sessionId, goal?.revision]);
 
   const act = async (work: () => Promise<void>) => {
     setBusy(true); setError(undefined);
     try { await work(); await reload(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "The session action failed."); }
+    catch (caught) {
+      void logCaughtDiagnostic("interface.session_advanced.action_failed", "An advanced session action failed.", caught, "session_advanced");
+      setError(caught instanceof Error ? caught.message : "The session action failed.");
+    }
     finally { setBusy(false); }
   };
 

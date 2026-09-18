@@ -135,9 +135,7 @@ class ContextRejectingProvider(FakeProvider):
                 )
         return await super().complete(request)
 
-    async def openrouter_route_limits(
-        self, model: str
-    ) -> list[ModelRouteDescriptor]:
+    async def openrouter_route_limits(self, model: str) -> list[ModelRouteDescriptor]:
         self.route_refreshes += 1
         return [
             ModelRouteDescriptor(
@@ -338,9 +336,7 @@ def test_confirmed_context_rejection_refreshes_compacts_and_retries_once(
             for index in range(10)
         ]
     )
-    provider = ContextRejectingProvider(
-        profile.id, reject_attempts=reject_attempts
-    )
+    provider = ContextRejectingProvider(profile.id, reject_attempts=reject_attempts)
     provider.config.default_model = "author/model-a"
     provider.config.model_allowlist = ["author/model-a"]
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
@@ -797,9 +793,9 @@ def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_pa
 
     asyncio.run(service.startup())
     interrupted = store.get(ChatTurn, turn.id)
-    assert interrupted.request_snapshot["recovery"][
-        "unknown_hook_execution_ids"
-    ] == [execution.id]
+    assert interrupted.request_snapshot["recovery"]["unknown_hook_execution_ids"] == [
+        execution.id
+    ]
     assert store.get(NativeHookExecution, execution.id).status == "interrupted"
     with pytest.raises(ChatHistoryConflict, match="unknown hook outcome"):
         service.prepare_resume(turn.id)
@@ -811,9 +807,7 @@ def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_pa
         detail="Operator verified the external audit write completed.",
         expected_revision=interrupted.revision,
     )
-    assert reconciled.request_snapshot["recovery"][
-        "unknown_hook_execution_ids"
-    ] == []
+    assert reconciled.request_snapshot["recovery"]["unknown_hook_execution_ids"] == []
     assert store.get(NativeHookExecution, execution.id).status == "reconciled"
 
 
@@ -872,8 +866,8 @@ def test_failed_provider_turn_emits_failed_hook_without_replacing_primary_error(
         events=["chat.turn.started", "chat.turn.failed"],
         script=(
             "#!/bin/sh\n"
-            "python3 -c 'import json,sys; event=json.load(sys.stdin)[\"event\"]; "
-            "print(event); raise SystemExit(1 if event.endswith(\"failed\") else 0)'\n"
+            'python3 -c \'import json,sys; event=json.load(sys.stdin)["event"]; '
+            'print(event); raise SystemExit(1 if event.endswith("failed") else 0)\'\n'
         ),
         failure_policy="block",
     )

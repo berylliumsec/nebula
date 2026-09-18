@@ -95,13 +95,17 @@ def discover_skills(
     for candidate_root, source in roots:
         try:
             root = candidate_root.resolve(strict=True)
-        except OSError:
+        except (
+            OSError
+        ):  # diagnostic-expected: unreadable skill root is skipped during discovery
             continue
         if not root.is_dir():
             continue
         try:
             children = sorted(root.iterdir(), key=lambda item: item.name.casefold())
-        except OSError:
+        except (
+            OSError
+        ):  # diagnostic-expected: unreadable skill root is skipped during discovery
             continue
         for child in children[:500]:
             if child.is_symlink() or not child.is_dir():
@@ -109,7 +113,10 @@ def discover_skills(
             try:
                 entrypoint = (child / "SKILL.md").resolve(strict=True)
                 entrypoint.relative_to(root)
-            except (OSError, ValueError):
+            except (
+                OSError,
+                ValueError,
+            ):  # diagnostic-expected: unreadable or escaping skill entry is skipped
                 continue
             if not entrypoint.is_file() or str(entrypoint) in seen:
                 continue
@@ -177,7 +184,12 @@ def _referenced_resources(
     for raw_target in _MARKDOWN_LINK.findall(instructions):
         target = raw_target.strip().split(maxsplit=1)[0].strip("<>")
         parsed = urlsplit(target)
-        if parsed.scheme or parsed.netloc or not parsed.path or parsed.path.startswith("/"):
+        if (
+            parsed.scheme
+            or parsed.netloc
+            or not parsed.path
+            or parsed.path.startswith("/")
+        ):
             continue
         relative = unquote(parsed.path)
         if relative in {".", ".."} or "\x00" in relative:
@@ -204,7 +216,9 @@ def _referenced_resources(
         try:
             resource = candidate.read_bytes()
         except OSError as exc:
-            raise ValueError(f"skill resource could not be read: {relative}: {exc}") from exc
+            raise ValueError(
+                f"skill resource could not be read: {relative}: {exc}"
+            ) from exc
         if not resource:
             raise ValueError(f"skill resource is empty: {relative}")
         if len(resource) > MAX_SKILL_RESOURCE_BYTES:
@@ -220,7 +234,9 @@ def _referenced_resources(
             )
         )
         if len(references) > MAX_SKILL_RESOURCES:
-            raise ValueError(f"skill references more than {MAX_SKILL_RESOURCES} resources")
+            raise ValueError(
+                f"skill references more than {MAX_SKILL_RESOURCES} resources"
+            )
     return references
 
 
@@ -231,7 +247,9 @@ def read_skill_resource(
     if len(matches) != 1:
         raise ValueError("skill resource request does not identify one selected skill")
     snapshot = matches[0]
-    resources = [item for item in snapshot.resources if item.relative_path == resource_path]
+    resources = [
+        item for item in snapshot.resources if item.relative_path == resource_path
+    ]
     if len(resources) != 1:
         raise ValueError("skill resource was not declared by the selected SKILL.md")
     reference = resources[0]
@@ -295,11 +313,15 @@ def skill_resource_components(
     manifests = [
         {
             "skill_path": item.path,
-            "resources": [resource.model_dump(mode="json") for resource in item.resources],
+            "resources": [
+                resource.model_dump(mode="json") for resource in item.resources
+            ],
         }
         for item in selected
     ]
-    digest = hashlib.sha256(json.dumps(manifests, sort_keys=True).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(manifests, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     spec = ToolSpec(
         name="skill.read_resource",
         description=(

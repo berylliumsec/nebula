@@ -15,9 +15,13 @@ def test_checkpoint_restore_rejects_later_edits(tmp_path):
     target = workspace / "notes.md"
     target.write_text("original\n", encoding="utf-8")
     store = NebulaStore(tmp_path / "checkpoints.db")
-    store.create(Engagement(id="project", name="Project", workspace_path=str(workspace)))
     store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="vllm", is_local=True)
+        Engagement(id="project", name="Project", workspace_path=str(workspace))
+    )
+    store.create(
+        ProviderProfile(
+            id="provider", name="Provider", provider_type="vllm", is_local=True
+        )
     )
     store.create(
         ChatSession(
@@ -43,7 +47,9 @@ def test_fork_copies_goal_as_independent_draft_without_running_state(tmp_path):
     store = NebulaStore(tmp_path / "fork-goal.db")
     store.create(Engagement(id="project", name="Project"))
     store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="vllm", is_local=True)
+        ProviderProfile(
+            id="provider", name="Provider", provider_type="vllm", is_local=True
+        )
     )
     store.create(
         ChatSession(
@@ -75,7 +81,9 @@ def test_fork_copies_goal_as_independent_draft_without_running_state(tmp_path):
             child_budget=1,
         ),
     )
-    running = goals.write("session", GoalWrite(expected_revision=created.revision, action="start"))
+    running = goals.write(
+        "session", GoalWrite(expected_revision=created.revision, action="start")
+    )
     fork = ChatService(store).fork_session("session", through_message_id="msg-1")
     child = goals.get(fork.id)
     assert child.status == ChatGoalStatus.DRAFT
@@ -90,9 +98,13 @@ def test_checkpoint_http_capture_uses_json_body(tmp_path):
     workspace.mkdir()
     (workspace / "notes.md").write_text("original\n", encoding="utf-8")
     store = NebulaStore(tmp_path / "checkpoint-http.db")
-    store.create(Engagement(id="project", name="Project", workspace_path=str(workspace)))
     store.create(
-        ProviderProfile(id="provider", name="Provider", provider_type="vllm", is_local=True)
+        Engagement(id="project", name="Project", workspace_path=str(workspace))
+    )
+    store.create(
+        ProviderProfile(
+            id="provider", name="Provider", provider_type="vllm", is_local=True
+        )
     )
     store.create(
         ChatSession(

@@ -42,7 +42,7 @@ export function storedZoom(): number {
   try {
     return normalizeZoom(localStorage.getItem(STORAGE_KEY));
   } catch {
-    return UI_ZOOM_DEFAULT;
+    return UI_ZOOM_DEFAULT; // diagnostic-expected: storage unavailable; default zoom applies
   }
 }
 
@@ -70,7 +70,7 @@ export async function applyZoom(level: number): Promise<number> {
   try {
     localStorage.setItem(STORAGE_KEY, String(normalized));
   } catch {
-    // The zoom still applies for this launch when storage is unavailable.
+    // diagnostic-expected: the zoom still applies for this launch when storage is unavailable.
   }
   window.dispatchEvent(new CustomEvent<number>(CHANGE_EVENT, { detail: normalized }));
   return normalized;

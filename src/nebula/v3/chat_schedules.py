@@ -46,7 +46,9 @@ class ChatScheduleService:
             raise ConflictError("schedules require a provider conversation")
         try:
             self.get(session_id)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: absence is the precondition for creating a schedule
             pass
         else:
             raise ConflictError("conversation already has a schedule")
@@ -65,7 +67,9 @@ class ChatScheduleService:
     def write(self, session_id: str, body: ScheduleWrite) -> ChatSchedule:
         schedule = self.get(session_id)
         if schedule.revision != body.expected_revision:
-            raise ConflictError("schedule changed on another device; reload before retrying")
+            raise ConflictError(
+                "schedule changed on another device; reload before retrying"
+            )
         changes: dict = {}
         if body.enabled is not None:
             changes["enabled"] = body.enabled
@@ -82,11 +86,11 @@ class ChatScheduleService:
         now = utc_now()
         items: list[ChatSchedule] = []
         offset = 0
-        while page := self.store.list_entities(ChatSchedule, offset=offset, limit=1_000):
+        while page := self.store.list_entities(
+            ChatSchedule, offset=offset, limit=1_000
+        ):
             items.extend(
-                item
-                for item in page
-                if item.enabled and item.next_run_at <= now
+                item for item in page if item.enabled and item.next_run_at <= now
             )
             offset += len(page)
         return items
@@ -104,7 +108,9 @@ class ChatScheduleService:
             expected_revision=schedule.revision,
         )
 
-    def record_run(self, schedule: ChatSchedule, *, turn_id: str, status: str) -> ChatSchedule:
+    def record_run(
+        self, schedule: ChatSchedule, *, turn_id: str, status: str
+    ) -> ChatSchedule:
         return self.store.update(
             ChatSchedule,
             schedule.id,

@@ -24,9 +24,7 @@ def test_discovery_preserves_duplicate_names_and_exact_source(tmp_path):
     first = _skill(first_root, "review", "first")
     second = _skill(second_root, "review", "second")
 
-    available = discover_skills(
-        [(first_root, "project"), (second_root, "installed")]
-    )
+    available = discover_skills([(first_root, "project"), (second_root, "installed")])
 
     assert [(item.name, item.path, item.source) for item in available] == [
         ("review", str(first), "project"),
@@ -36,7 +34,10 @@ def test_discovery_preserves_duplicate_names_and_exact_source(tmp_path):
         SkillSelection(name="review", path=str(second)), available
     )
     assert selected.instructions == "second"
-    assert selected.sha256 == "16367aacb67a4a017c8da8ab95682ccb390863780f7114dda0a0e0c55644c7c4"
+    assert (
+        selected.sha256
+        == "16367aacb67a4a017c8da8ab95682ccb390863780f7114dda0a0e0c55644c7c4"
+    )
     assert len(selected.sha256) == 64
 
 
@@ -46,15 +47,11 @@ def test_snapshot_fails_closed_when_catalog_path_disappears(tmp_path):
     entrypoint.unlink()
 
     with pytest.raises(ValueError, match="could not be read"):
-        snapshot_skill(
-            SkillSelection(name="review", path=str(entrypoint)), available
-        )
+        snapshot_skill(SkillSelection(name="review", path=str(entrypoint)), available)
 
 
 def test_snapshot_never_substitutes_same_named_skill(tmp_path):
-    available_path = _skill(
-        tmp_path / ".agents" / "skills", "review", "instructions"
-    )
+    available_path = _skill(tmp_path / ".agents" / "skills", "review", "instructions")
     unavailable_path = tmp_path / ".agents" / "skills" / "other" / "SKILL.md"
 
     with pytest.raises(ValueError, match="exact source path"):
@@ -67,7 +64,9 @@ def test_snapshot_never_substitutes_same_named_skill(tmp_path):
 
 def test_referenced_resources_are_manifested_then_loaded_by_exact_digest(tmp_path):
     root = tmp_path / ".agents" / "skills"
-    entrypoint = _skill(root, "review", "Read [the checklist](references/checklist.md).")
+    entrypoint = _skill(
+        root, "review", "Read [the checklist](references/checklist.md)."
+    )
     resource = entrypoint.parent / "references" / "checklist.md"
     resource.parent.mkdir()
     resource.write_text("Verify the focused tests.", encoding="utf-8")

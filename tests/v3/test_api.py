@@ -288,9 +288,7 @@ def test_provider_chat_api_runs_selected_native_hooks(api, tmp_path, monkeypatch
         headers=_auth(),
     )
     assert executions.status_code == 200, executions.text
-    assert [
-        (item["event_name"], item["status"]) for item in executions.json()
-    ] == [
+    assert [(item["event_name"], item["status"]) for item in executions.json()] == [
         ("chat.turn.started", "complete"),
         ("chat.turn.completed", "complete"),
     ]
@@ -327,9 +325,7 @@ def test_native_hook_catalog_uses_only_project_agents_root(api, tmp_path):
         )
     )
 
-    response = client.get(
-        "/api/v1/hooks?engagement_id=hook-project", headers=_auth()
-    )
+    response = client.get("/api/v1/hooks?engagement_id=hook-project", headers=_auth())
 
     assert response.status_code == 200, response.text
     assert [item["id"] for item in response.json()] == ["audit"]
@@ -417,7 +413,9 @@ def test_hook_execution_summaries_page_beyond_the_store_cap(api):
     client, store, _ = api
     engagement = store.create(Engagement(id="hook-page-project", name="Hook pages"))
     provider = store.create(
-        ProviderProfile(id="hook-page-provider", name="Provider", provider_type="ollama")
+        ProviderProfile(
+            id="hook-page-provider", name="Provider", provider_type="ollama"
+        )
     )
     session = store.create(
         ChatSession(

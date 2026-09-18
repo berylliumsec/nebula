@@ -53,7 +53,9 @@ class NativeHookManifest(NebulaModel):
     @field_validator("command")
     @classmethod
     def bounded_command(cls, value: list[str]) -> list[str]:
-        if any(not isinstance(item, str) or not item or len(item) > 2_000 for item in value):
+        if any(
+            not isinstance(item, str) or not item or len(item) > 2_000 for item in value
+        ):
             raise ValueError("hook command entries must be non-empty bounded strings")
         executable = Path(value[0])
         if executable.is_absolute() or ".." in executable.parts:
@@ -100,7 +102,9 @@ def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
         try:
             manifest = NativeHookManifest.model_validate_json(raw)
         except ValueError as exc:
-            raise NativeHookError(f"invalid hook manifest {directory.name}: {exc}") from exc
+            raise NativeHookError(
+                f"invalid hook manifest {directory.name}: {exc}"
+            ) from exc
         executable_source = directory / manifest.command[0]
         if executable_source.is_symlink():
             raise NativeHookError(
@@ -115,7 +119,9 @@ def discover_native_hooks(workspace: Path) -> list[NativeHookDescriptor]:
             ) from exc
         executable_bytes = _read_bounded(executable, maximum=2 * 1024 * 1024)
         if not os.access(executable, os.X_OK):
-            raise NativeHookError(f"hook executable is not executable: {directory.name}")
+            raise NativeHookError(
+                f"hook executable is not executable: {directory.name}"
+            )
         descriptors.append(
             NativeHookDescriptor(
                 id=directory.name,
@@ -154,16 +160,22 @@ class NativeHookRunner:
         payload: dict[str, Any],
     ) -> NativeHookExecution:
         if event_name not in snapshot.manifest.events:
-            raise NativeHookError(f"hook {snapshot.id!r} does not subscribe to {event_name}")
+            raise NativeHookError(
+                f"hook {snapshot.id!r} does not subscribe to {event_name}"
+            )
         directory = Path(snapshot.path)
         manifest_path = directory / HOOK_MANIFEST
         executable = (directory / snapshot.manifest.command[0]).resolve()
         manifest_bytes = _read_bounded(manifest_path, maximum=64 * 1024)
         executable_bytes = _read_bounded(executable, maximum=2 * 1024 * 1024)
         if hashlib.sha256(manifest_bytes).hexdigest() != snapshot.manifest_sha256:
-            raise NativeHookError(f"hook {snapshot.id!r} manifest changed after selection")
+            raise NativeHookError(
+                f"hook {snapshot.id!r} manifest changed after selection"
+            )
         if hashlib.sha256(executable_bytes).hexdigest() != snapshot.executable_sha256:
-            raise NativeHookError(f"hook {snapshot.id!r} executable changed after selection")
+            raise NativeHookError(
+                f"hook {snapshot.id!r} executable changed after selection"
+            )
         started = utc_now()
         execution = self.store.create(
             NativeHookExecution(
@@ -212,10 +224,12 @@ class NativeHookRunner:
             status = "complete" if completed.returncode == 0 else "failed"
             error = None if completed.returncode == 0 else "hook exited unsuccessfully"
             exit_code = completed.returncode
-        except subprocess.TimeoutExpired:
+        except (
+            subprocess.TimeoutExpired
+        ):  # diagnostic-expected: timeout is persisted on the durable hook execution
             stdout, stderr = b"", b""
             status, error, exit_code = "timed_out", "hook timed out", None
-        except OSError as exc:
+        except OSError as exc:  # diagnostic-expected: start failure is persisted on the durable hook execution
             stdout, stderr = b"", b""
             status, error, exit_code = "failed", f"hook could not start: {exc}", None
         return self.store.update(

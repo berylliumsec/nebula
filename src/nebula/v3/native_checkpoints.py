@@ -32,15 +32,21 @@ class CheckpointFileStatus(NebulaModel):
 def _safe_file(workspace: Path, relative: str) -> Path:
     candidate = Path(relative)
     if candidate.is_absolute() or ".." in candidate.parts or not relative.strip():
-        raise NativeCheckpointError(f"checkpoint path is not a bounded relative file: {relative}")
+        raise NativeCheckpointError(
+            f"checkpoint path is not a bounded relative file: {relative}"
+        )
     root = workspace.resolve()
     target = (root / candidate).resolve()
     try:
         target.relative_to(root)
     except ValueError as exc:
-        raise NativeCheckpointError(f"checkpoint path escapes the workspace: {relative}") from exc
+        raise NativeCheckpointError(
+            f"checkpoint path escapes the workspace: {relative}"
+        ) from exc
     if target.is_symlink() or not target.is_file():
-        raise NativeCheckpointError(f"checkpoint path is not a regular file: {relative}")
+        raise NativeCheckpointError(
+            f"checkpoint path is not a regular file: {relative}"
+        )
     return target
 
 
@@ -83,7 +89,9 @@ class NativeCheckpointService:
         session = self.store.get(ChatSession, session_id)
         unique = list(dict.fromkeys(path.strip() for path in paths if path.strip()))
         if not unique:
-            raise NativeCheckpointError("select at least one project file to checkpoint")
+            raise NativeCheckpointError(
+                "select at least one project file to checkpoint"
+            )
         if len(unique) > MAX_CHECKPOINT_FILES:
             raise NativeCheckpointError("checkpoint is limited to 64 files")
         workspace = Path(self.workspace_resolver(session.engagement_id)).resolve()
@@ -120,12 +128,16 @@ class NativeCheckpointService:
             if not current.exists():
                 statuses.append(
                     CheckpointFileStatus(
-                        path=relative, sha256=str(item["sha256"]), size=int(item["size"]),
+                        path=relative,
+                        sha256=str(item["sha256"]),
+                        size=int(item["size"]),
                         status="missing",
                     )
                 )
                 continue
-            digest = hashlib.sha256(_safe_file(workspace, relative).read_bytes()).hexdigest()
+            digest = hashlib.sha256(
+                _safe_file(workspace, relative).read_bytes()
+            ).hexdigest()
             statuses.append(
                 CheckpointFileStatus(
                     path=relative,

@@ -220,7 +220,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     ]).then(([catalog, skills]) => {
       if (!controller.signal.aborted) { setSkillCatalog(catalog); setNativeSkills(skills); }
     }).catch((error) => {
-      if (!controller.signal.aborted) setSkillCatalogError(error instanceof Error ? error.message : "Skill catalog could not be loaded.");
+      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer project load
+      void logCaughtDiagnostic("interface.settings_page.skill_catalog_failed", "The skill catalog could not be loaded.", error, "settings_page");
+      setSkillCatalogError(error instanceof Error ? error.message : "Skill catalog could not be loaded.");
     });
     return () => controller.abort();
   }, [api, engagement?.id, workspaceState]);

@@ -62,7 +62,9 @@ class RoutedProvider(ModelProvider):
                 default_model="model-a",
                 model_allowlist=["model-a"],
                 local=True,
-                capabilities=ModelCapabilities(streaming=True, tools=True, strict_tools=True),
+                capabilities=ModelCapabilities(
+                    streaming=True, tools=True, strict_tools=True
+                ),
             )
         )
         self.parent = list(parent)
@@ -112,7 +114,9 @@ def _setup(tmp_path: Path, provider: RoutedProvider):
     return store, project, profile, chat
 
 
-def _request(project: Engagement, *, content: str, session_id: str | None = None, **flags):
+def _request(
+    project: Engagement, *, content: str, session_id: str | None = None, **flags
+):
     return ChatCompletionRequest(
         provider_id="provider",
         engagement_id=project.id,
@@ -139,7 +143,11 @@ async def _until(predicate, timeout: float = 5.0) -> None:
 
 def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
     return sorted(
-        (item for item in store.list_entities(ChatMessage, limit=1_000) if item.session_id == session_id),
+        (
+            item
+            for item in store.list_entities(ChatMessage, limit=1_000)
+            if item.session_id == session_id
+        ),
         key=lambda item: item.sequence,
     )
 
@@ -170,7 +178,13 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Count the route files.", name="Count routes", context=None),
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Count the route files.",
+                    name="Count routes",
+                    context=None,
+                ),
                 _call("p2", "wait_subagents", subagent_ids=None, mode=None),
                 _finish("p3"),
                 _response(text="There are three route files."),
@@ -191,7 +205,11 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         assert paused.tool_history[-1]["subagent_wait"]["mode"] == "all"
 
         provider.child_gate.set()
-        await _until(lambda: store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
 
         parent = store.get(ChatTurn, parent_turn_id)
         wait_entry = parent.tool_history[1]
@@ -207,11 +225,19 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         # Approval mode is the project's automation policy; the child runs in the
         # parent's project, so it inherits always/on-boundary/never unchanged.
         assert child_session.engagement_id == parent.engagement_id
-        assert store.get(ChatTurn, record.child_turn_id).engagement_id == parent.engagement_id
+        assert (
+            store.get(ChatTurn, record.child_turn_id).engagement_id
+            == parent.engagement_id
+        )
         # Children never receive the delegation tools and are told they are subagents.
         for request in provider.child_requests:
-            assert not any(tool.name.endswith("subagent") or tool.name == "wait_subagents" for tool in request.tools)
-        await _until(lambda: store.get(ChatSubagent, record.id).result_message_id is not None)
+            assert not any(
+                tool.name.endswith("subagent") or tool.name == "wait_subagents"
+                for tool in request.tools
+            )
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
         messages = _messages(store, parent.session_id)
         assert [item.metadata.get("kind") for item in messages][-1] == "subagent_result"
         assert messages[-1].content.startswith("Subagent finished: Count routes")
@@ -225,7 +251,13 @@ def test_late_report_is_posted_after_parent_reply(tmp_path: Path) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Review the auth module.", name=None, context="Focus on session cookies."),
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Review the auth module.",
+                    name=None,
+                    context="Focus on session cookies.",
+                ),
                 _finish("p2"),
                 _response(text="Started a review; it will report back."),
             ],
@@ -243,10 +275,15 @@ def test_late_report_is_posted_after_parent_reply(tmp_path: Path) -> None:
         (record,) = store.list_entities(ChatSubagent)
         assert record.status == ChatSubagentStatus.RUNNING
         await _until(lambda: bool(provider.child_requests))
-        assert "Focus on session cookies." in provider.child_requests[0].messages[-1].content
+        assert (
+            "Focus on session cookies."
+            in provider.child_requests[0].messages[-1].content
+        )
 
         provider.child_gate.set()
-        await _until(lambda: store.get(ChatSubagent, record.id).result_message_id is not None)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
         messages = _messages(store, parent.session_id)
         assert messages[-2].content == "Started a review; it will report back."
         assert messages[-1].metadata["subagent_status"] == "completed"
@@ -262,7 +299,9 @@ def test_stopping_parent_stops_its_subagents(tmp_path: Path) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Long task.", name="Slow", context=None),
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                ),
                 _call("p2", "wait_subagents", subagent_ids=None, mode="any"),
             ],
             child=[],
@@ -282,7 +321,10 @@ def test_stopping_parent_stops_its_subagents(tmp_path: Path) -> None:
         assert store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.CANCELLED
         stopped = store.get(ChatSubagent, record.id)
         assert stopped.status == ChatSubagentStatus.STOPPED
-        assert store.get(ChatTurn, stopped.child_turn_id).status == ChatTurnStatus.CANCELLED
+        assert (
+            store.get(ChatTurn, stopped.child_turn_id).status
+            == ChatTurnStatus.CANCELLED
+        )
         messages = _messages(store, store.get(ChatTurn, parent_turn_id).session_id)
         assert messages[-1].metadata["subagent_status"] == "stopped"
         await chat.shutdown()
@@ -293,7 +335,13 @@ def test_stopping_parent_stops_its_subagents(tmp_path: Path) -> None:
 def test_concurrent_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> None:
     async def scenario() -> None:
         starts = [
-            _call(f"p{index}", "start_subagent", task=f"Task {index}.", name=None, context=None)
+            _call(
+                f"p{index}",
+                "start_subagent",
+                task=f"Task {index}.",
+                name=None,
+                context=None,
+            )
             for index in range(MAX_ACTIVE_SUBAGENTS + 1)
         ]
         provider = RoutedProvider(
@@ -326,7 +374,9 @@ def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> 
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Long task.", name="Slow", context=None),
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                ),
                 _finish("p2"),
                 _response(text="Delegated."),
             ],
@@ -349,7 +399,11 @@ def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> 
         store.update(
             ChatSubagent,
             record.id,
-            {"status": ChatSubagentStatus.RUNNING, "finished_at": None, "result_message_id": None},
+            {
+                "status": ChatSubagentStatus.RUNNING,
+                "finished_at": None,
+                "result_message_id": None,
+            },
             expected_revision=store.get(ChatSubagent, record.id).revision,
         )
         child_turn = store.get(ChatTurn, record.child_turn_id)
@@ -360,7 +414,9 @@ def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> 
             expected_revision=child_turn.revision,
         )
 
-        restarted = ChatService(store, provider_factory=lambda _: provider, worker_id="worker-2")
+        restarted = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker-2"
+        )
         await restarted.startup()
 
         interrupted = store.get(ChatSubagent, record.id)
@@ -372,11 +428,19 @@ def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
-def test_deleting_parent_removes_finished_subagent_conversations(tmp_path: Path) -> None:
+def test_deleting_parent_removes_finished_subagent_conversations(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Quick task.", name="Quick", context=None),
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Quick task.",
+                    name="Quick",
+                    context=None,
+                ),
                 _call("p2", "wait_subagents", subagent_ids=None, mode=None),
                 _finish("p3"),
                 _response(text="Done."),
@@ -388,9 +452,15 @@ def test_deleting_parent_removes_finished_subagent_conversations(tmp_path: Path)
             _request(project, content="Go.", allow_subagents=True)
         )
         parent_turn_id = chat.start_provider_turn(prepared)
-        await _until(lambda: store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
         (record,) = store.list_entities(ChatSubagent)
-        await _until(lambda: store.get(ChatSubagent, record.id).result_message_id is not None)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
         parent_session_id = store.get(ChatTurn, parent_turn_id).session_id
 
         store.delete_chat_session(parent_session_id)
@@ -407,7 +477,13 @@ def test_parent_with_running_subagent_cannot_be_deleted(tmp_path: Path) -> None:
     store = NebulaStore(tmp_path / "subagents.db")
     project = store.create(Engagement(id="project", name="Subagents"))
     parent = store.create(
-        ChatSession(id="parent", engagement_id=project.id, title="Parent", provider_profile_id="provider", model="model-a")
+        ChatSession(
+            id="parent",
+            engagement_id=project.id,
+            title="Parent",
+            provider_profile_id="provider",
+            model="model-a",
+        )
     )
     child = store.create(
         ChatSession(
@@ -443,7 +519,9 @@ def test_core_shutdown_interrupts_rather_than_stops_subagents(tmp_path: Path) ->
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
-                _call("p1", "start_subagent", task="Long task.", name="Slow", context=None),
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                ),
                 _finish("p2"),
                 _response(text="Delegated."),
             ],

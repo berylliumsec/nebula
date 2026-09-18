@@ -67,7 +67,9 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
                 continue
             try:
                 price = Decimal(raw)
-            except InvalidOperation:
+            except (
+                InvalidOperation
+            ):  # diagnostic-expected: non-numeric catalog price is omitted
                 continue
             if price.is_finite() and price >= 0:
                 pricing[unit] = raw

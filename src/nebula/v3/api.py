@@ -278,7 +278,6 @@ from .domain import (
     KnowledgeSource,
     LibraryItem,
     MissionGrant,
-
     NebulaModel,
     OperationEvent,
     OperatorProfile,
@@ -8696,13 +8695,17 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_subagents(session_id: str, response: Response) -> dict[str, Any]:
+    async def list_chat_subagents(
+        session_id: str, response: Response
+    ) -> dict[str, Any]:
         store.get(ChatSession, session_id)
         response.headers["Cache-Control"] = "no-store"
         subagents = chat_service().subagents
         return {
             "session_id": session_id,
-            "subagents": [subagents.view(item) for item in subagents.for_session(session_id)],
+            "subagents": [
+                subagents.view(item) for item in subagents.for_session(session_id)
+            ],
         }
 
     @app.post(
@@ -8729,7 +8732,9 @@ def create_app(
             await subagents.stop(record.id)
         return {
             "session_id": session_id,
-            "subagents": [subagents.view(item) for item in subagents.for_session(session_id)],
+            "subagents": [
+                subagents.view(item) for item in subagents.for_session(session_id)
+            ],
         }
 
     from .native_checkpoints import NativeCheckpointError, NativeCheckpointService

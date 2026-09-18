@@ -583,8 +583,7 @@ class ContainerRuntimeSession(RuntimeBackendSession):
         wrapped = command
         if extra_env:
             exports = "; ".join(
-                f"export {key}={shlex.quote(value)}"
-                for key, value in extra_env.items()
+                f"export {key}={shlex.quote(value)}" for key, value in extra_env.items()
             )
             wrapped = f"{exports}; {command}"
         pid_file = f"/tmp/nebula-process-{process_id}.pid"
@@ -747,7 +746,9 @@ def _first_lan_ipv4() -> str | None:
     try:
         probe.connect(("1.1.1.1", 80))
         address = probe.getsockname()[0]
-    except OSError:
+    except (
+        OSError
+    ):  # diagnostic-expected: no routable LAN address; callers fall back to loopback
         return None
     finally:
         probe.close()
@@ -792,7 +793,9 @@ class AutomationRuntimeManager:
         self.cached_runtime_provider = cached_runtime_provider
         self.session_factory = session_factory or ContainerRuntimeSession.start
         self.credential_store = credential_store
-        self.callback_origin = (callback_origin or os.getenv("NEBULA_CALLBACK_ORIGIN") or "").rstrip("/")
+        self.callback_origin = (
+            callback_origin or os.getenv("NEBULA_CALLBACK_ORIGIN") or ""
+        ).rstrip("/")
         self.capture_root = self.data_root / "automation-runtime" / "captures"
         self.capture_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.capture_root.chmod(0o700)
@@ -1443,13 +1446,15 @@ class AutomationRuntimeManager:
                 "exit_code": request.exit_code
                 if request.exit_code is not None
                 else (0 if request.status == "complete" else 1),
-                "error": None if request.status == "complete" else (request.summary or "callback reported failure"),
+                "error": None
+                if request.status == "complete"
+                else (request.summary or "callback reported failure"),
                 "metadata": {
                     **execution.metadata,
                     "results_received": True,
                     "results_summary": request.summary,
                     "results_output": request.output,
-                    "results_stdout": request.stdout[:64 * 1024],
+                    "results_stdout": request.stdout[: 64 * 1024],
                 },
             },
             expected_revision=execution.revision,
@@ -2158,7 +2163,8 @@ class AutomationRuntimeManager:
             results_url=results_url or execution.metadata.get("results_url"),
             results_api_key=results_api_key,
             tool_call_id=tool_call_id or execution.metadata.get("tool_call_id"),
-            chat_session_id=chat_session_id or execution.metadata.get("chat_session_id"),
+            chat_session_id=chat_session_id
+            or execution.metadata.get("chat_session_id"),
             chat_turn_id=chat_turn_id or execution.metadata.get("chat_turn_id"),
         )
 

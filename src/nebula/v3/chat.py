@@ -413,6 +413,8 @@ def _reference_instructions(
             "\n\nBEGIN NEBULA OPERATOR HELP (JSON)\n"
             + json.dumps(reference_data, ensure_ascii=False, separators=(",", ":"))
             + "\nEND NEBULA OPERATOR HELP"
+            + "\nIf no help article matches an observed Nebula failure, report the "
+            "exact error and say that no verified recovery procedure is available."
         )
     return (
         "\n\nBEGIN REFERENCE DATA (JSON)\n"
@@ -525,8 +527,9 @@ _STOP_WORDS = {
     "with",
 }
 
-_CHAT_BASE_INSTRUCTIONS = """Answer the operator's request. Cite provided
-references with [source_id:chunk_id]."""
+_CHAT_BASE_INSTRUCTIONS = (
+    "Answer the operator's request. Cite provided references with [source_id:chunk_id]."
+)
 
 _CHAT_INSTRUCTIONS = (
     """No tools are available in this turn. """ + _CHAT_BASE_INSTRUCTIONS
@@ -678,15 +681,17 @@ class ChatService:
             )
             offset += len(page)
         offset = 0
-        while page := self.store.list_entities(ToolCall, offset=offset, limit=1_000):
-            calls.extend(page)
-            offset += len(page)
+        while call_page := self.store.list_entities(
+            ToolCall, offset=offset, limit=1_000
+        ):
+            calls.extend(call_page)
+            offset += len(call_page)
         offset = 0
-        while page := self.store.list_entities(
+        while hook_page := self.store.list_entities(
             NativeHookExecution, offset=offset, limit=1_000
         ):
-            hook_executions.extend(page)
-            offset += len(page)
+            hook_executions.extend(hook_page)
+            offset += len(hook_page)
         for turn in turns:
             unknown = [
                 call.id
@@ -761,8 +766,10 @@ class ChatService:
                         expected_revision=goal.revision,
                     )
         offset = 0
-        while page := self.store.list_entities(ChatGoal, offset=offset, limit=1_000):
-            for goal in page:
+        while goal_page := self.store.list_entities(
+            ChatGoal, offset=offset, limit=1_000
+        ):
+            for goal in goal_page:
                 if (
                     goal.status == ChatGoalStatus.RUNNING
                     and goal.execution_claim_id is not None
@@ -786,7 +793,7 @@ class ChatService:
                         },
                         expected_revision=goal.revision,
                     )
-            offset += len(page)
+            offset += len(goal_page)
         await self.subagents.reconcile_after_restart()
 
     def _claim_execution(self, prepared: PreparedChat) -> None:
@@ -1015,7 +1022,7 @@ class ChatService:
                 continue
             try:
                 goal = goals.get(schedule.session_id)
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: missing goal is recorded as a schedule skip receipt
                 schedules.skip(schedule, "No conversation goal is available.")
                 continue
             if goal.status != ChatGoalStatus.RUNNING:
@@ -1033,10 +1040,10 @@ class ChatService:
                         goal_id=goal.id,
                         model=schedule.model,
                         messages=[
-                            {
-                                "role": "user",
-                                "content": "Continue the scheduled conversation goal.",
-                            }
+                            ChatRequestMessage(
+                                role=ChatRole.USER,
+                                content="Continue the scheduled conversation goal.",
+                            )
                         ],
                         include_knowledge=False,
                     )
@@ -1055,7 +1062,10 @@ class ChatService:
                     exc,
                     stage="schedule",
                 )
-                schedules.skip(schedule, "Scheduled occurrence failed; it was not retried overlapping.")
+                schedules.skip(
+                    schedule,
+                    "Scheduled occurrence failed; it was not retried overlapping.",
+                )
 
     async def shutdown(self) -> None:
         # Cancellation below is Core stopping, not an operator stop.
@@ -1831,9 +1841,10 @@ class ChatService:
                         workspace=self.workspace_resolver(engagement_id),
                         scope=tool_components.scope if tool_components else None,
                     )
-                    tool_components = combine_tool_components(
-                        tool_components, skill_components
-                    )
+                    if skill_components is not None:
+                        tool_components = combine_tool_components(
+                            tool_components, skill_components
+                        )
                 if subagents_enabled:
                     tool_components = combine_tool_components(
                         tool_components,
@@ -1991,7 +2002,9 @@ class ChatService:
             return
         try:
             latest = self.store.get(ChatTurn, turn.id)
-        except NotFoundError:
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: turn already deleted; nothing to fail closed
             return
         if latest.status in {
             ChatTurnStatus.COMPLETE,
@@ -2002,10 +2015,7 @@ class ChatService:
         }:
             return
         claim_id = prepared.execution_claim_id
-        if (
-            claim_id is not None
-            and latest.execution_claim_id not in {None, claim_id}
-        ):
+        if claim_id is not None and latest.execution_claim_id not in {None, claim_id}:
             return
         prepared.turn = self.store.update(
             ChatTurn,
@@ -2039,9 +2049,7 @@ class ChatService:
             )
             raise
 
-    async def _complete_claimed(
-        self, prepared: PreparedChat
-    ) -> ChatCompletionResponse:
+    async def _complete_claimed(self, prepared: PreparedChat) -> ChatCompletionResponse:
         self._claim_execution(prepared)
         await self._run_native_hooks(prepared, "chat.turn.started")
         if prepared.tools_enabled:
@@ -2134,9 +2142,7 @@ class ChatService:
         """Refresh exact limits and rebuild canonical context for one safe retry."""
 
         turn = prepared.turn
-        if (
-            (turn is not None and (turn.execution_tool_calls or turn.tool_history))
-        ):
+        if turn is not None and (turn.execution_tool_calls or turn.tool_history):
             raise ChatConfigurationError(
                 "the provider rejected the request context after tool routing began; "
                 "Nebula will not repeat tool work"
@@ -2285,7 +2291,10 @@ class ChatService:
             None,
         )
         if descriptor is None:
-            descriptor = {"id": prepared.resolved_model, "name": prepared.resolved_model}
+            descriptor = {
+                "id": prepared.resolved_model,
+                "name": prepared.resolved_model,
+            }
             descriptors.append(descriptor)
         checked_at = utc_now().isoformat()
         if profile.provider_type == "openrouter":
@@ -2518,9 +2527,7 @@ class ChatService:
                 )
                 routing = self._fit_turn_goal_request(prepared, routing)
                 self._ensure_request_capacity(prepared.provider_profile, routing)
-                response = await self._complete_with_context_recovery(
-                    prepared, routing
-                )
+                response = await self._complete_with_context_recovery(prepared, routing)
                 self._assert_execution_owner(prepared)
                 turn = self._refresh_turn(turn)
                 turn = self._add_usage(turn, response)
@@ -2650,7 +2657,7 @@ class ChatService:
                     prepared.turn = turn
                     self._release_execution(prepared)
                     return
-                except SubagentWaitPending as waiting:
+                except SubagentWaitPending as waiting:  # diagnostic-expected: subagent wait is control flow that pauses the turn durably
                     summary = (
                         f"Waiting for {len(waiting.subagent_ids)} subagent"
                         f"{'' if len(waiting.subagent_ids) == 1 else 's'} to report."
@@ -2742,7 +2749,8 @@ class ChatService:
                             ),
                         }
                     )
-                    if waiting_callback:
+                    receipt = result.receipt
+                    if waiting_callback and receipt is not None:
                         turn = self._save_tool_step(
                             turn,
                             entry,
@@ -2754,8 +2762,8 @@ class ChatService:
                                 "type": "callback_required",
                                 "turn_id": turn.id,
                                 "tool_call_id": durable_call_id,
-                                "process_id": result.receipt.process_id,
-                                "results_url": result.receipt.results_url,
+                                "process_id": receipt.process_id,
+                                "results_url": receipt.results_url,
                                 "summary": entry.get("result_summary")
                                 or "Waiting for the command to POST results.",
                             },
@@ -3436,7 +3444,9 @@ class ChatService:
             "schema": "nebula.tool-result/v2",
             "tool_call_id": entry["tool_call_id"],
             "tool_name": entry["name"],
-            "status": "completed" if execution.status.value == "completed" else "failed",
+            "status": "completed"
+            if execution.status.value == "completed"
+            else "failed",
             "summary": execution.metadata.get("results_summary")
             or execution.error
             or f"Callback recorded {execution.status.value}",
@@ -3463,7 +3473,9 @@ class ChatService:
                     ToolCall,
                     call.id,
                     {
-                        "status": ToolCallStatus.FAILED if failed else ToolCallStatus.COMPLETE,
+                        "status": ToolCallStatus.FAILED
+                        if failed
+                        else ToolCallStatus.COMPLETE,
                         "completed_at": utc_now(),
                         "result": output,
                         "error": execution.error,
@@ -3903,13 +3915,13 @@ class ChatService:
             offset=offset,
             limit=1_000,
         ):
-            executions.extend(
-                item for item in page if item.chat_turn_id == turn.id
-            )
+            executions.extend(item for item in page if item.chat_turn_id == turn.id)
             offset += len(page)
         return sorted(executions, key=lambda item: (item.started_at, item.id))
 
-    def list_session_hook_executions(self, session_id: str) -> list[NativeHookExecution]:
+    def list_session_hook_executions(
+        self, session_id: str
+    ) -> list[NativeHookExecution]:
         """Return hook attempts for the pending or latest provider turn."""
 
         pending = self.pending_turn(session_id)
@@ -4071,7 +4083,7 @@ class ChatService:
                 "request_snapshot": {
                     **turn.request_snapshot,
                     "recovery": {
-                        **recovery,
+                        **(recovery or {}),
                         "unknown_tool_call_ids": remaining,
                         "last_reconciled_at": utc_now().isoformat(),
                     },
@@ -4102,7 +4114,10 @@ class ChatService:
             if isinstance(recovery, dict)
             else []
         )
-        if turn.status != ChatTurnStatus.INTERRUPTED or hook_execution_id not in unknown:
+        if (
+            turn.status != ChatTurnStatus.INTERRUPTED
+            or hook_execution_id not in unknown
+        ):
             raise ChatHistoryConflict(
                 "hook execution is not an unresolved outcome for this interrupted response"
             )
@@ -4148,7 +4163,7 @@ class ChatService:
                 "request_snapshot": {
                     **turn.request_snapshot,
                     "recovery": {
-                        **recovery,
+                        **(recovery or {}),
                         "unknown_hook_execution_ids": remaining,
                         "last_reconciled_at": utc_now().isoformat(),
                     },
@@ -4415,7 +4430,9 @@ class ChatService:
         if source.backend == ChatBackend.PROVIDER:
             try:
                 goal = ChatGoalService(self.store).get(source.id)
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: fork without a goal copies no goal
                 goal = None
             if goal is not None:
                 self.store.create(
@@ -4519,7 +4536,10 @@ class ChatService:
         """Validate a proposed provider/model switch against durable active context."""
 
         session = self.store.get(ChatSession, session_id)
-        if session.backend != ChatBackend.PROVIDER or session.provider_profile_id is None:
+        if (
+            session.backend != ChatBackend.PROVIDER
+            or session.provider_profile_id is None
+        ):
             raise ChatConfigurationError(
                 "runtime switching is only available for provider conversations"
             )
@@ -4532,7 +4552,7 @@ class ChatService:
                 "conversation has an active response; wait for it before changing provider or model"
             )
         profile = self.store.get(ProviderProfile, request.provider_id)
-        current = {
+        current: dict[str, Any] = {
             "session_id": session.id,
             "session_revision": session.revision,
             "current_provider_id": session.provider_profile_id,
@@ -4570,7 +4590,11 @@ class ChatService:
                 requested_output_tokens=request.max_output_tokens,
                 required_parameters={"tools"} if request.tools_enabled else None,
             )
-        except (ChatPrivacyError, ContextCapacityError, ProviderPrivacyViolation) as exc:
+        except (
+            ChatPrivacyError,
+            ContextCapacityError,
+            ProviderPrivacyViolation,
+        ) as exc:  # diagnostic-expected: incompatibility is returned to the operator as the preflight result
             return ChatRuntimeSwitchPreflight(
                 **current,
                 compatible=False,
@@ -5346,7 +5370,7 @@ class ChatService:
                     expected_revision=latest.revision,
                 )
                 return
-            except ConflictError:
+            except ConflictError:  # diagnostic-expected: concurrent writer won; the next candidate is tried
                 continue
 
     @staticmethod
@@ -5628,9 +5652,7 @@ class ChatService:
                             "message_count": messages[-1].sequence,
                             "last_sequence": messages[-1].sequence,
                         }
-                        title_state = latest_session.metadata.get(
-                            "initial_title_state"
-                        )
+                        title_state = latest_session.metadata.get("initial_title_state")
                         if title_state in {"generated", "operator", "failed"}:
                             metadata["initial_title_state"] = title_state
                         prepared.session = transaction.update(
@@ -5650,7 +5672,7 @@ class ChatService:
                         transaction.add_all(messages)
                     last_error = None
                     break
-                except ConflictError as exc:
+                except ConflictError as exc:  # diagnostic-expected: revision conflict is retried; exhaustion raises ChatHistoryConflict
                     last_error = exc
             if last_error is not None:
                 raise ChatHistoryConflict(
