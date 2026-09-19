@@ -315,16 +315,50 @@ evidence, raw execution output, and raw results for selected human-terminal secu
 tools; it also contains metadata-only terminal records. Do not promise a restore path
 that Nebula 3 does not provide.
 
+## mcp-servers | Add, import, or troubleshoot MCP servers
+
+Keywords: mcp, mcp server, mcpServers, mcp.json, claude_desktop_config.json, cursor, vscode, import mcp, export mcp, mcp json format, probe failed, trust local program, stdio, streamable http
+
+Sources: docs/MCP-SERVERS.md, src/nebula/v3/mcp_import.py:import_mcp_config, src/nebula/v3/mcp.py:McpProbeService
+
+MCP servers are managed in Settings → Automation → MCP servers. Add one with
+Add MCP server, or import the JSON file another client already uses:
+`nebula-core mcp import FILE` previews the import and
+`nebula-core mcp import FILE --apply` saves it. The file keeps servers under
+`"mcpServers"` (Claude Desktop, Claude Code, Cursor), `"servers"` (VS Code
+`.vscode/mcp.json`), or `"mcp": {"servers": ...}` (VS Code `settings.json`),
+each keyed by name. A local server uses `command`, optional `args`, `env`, and
+an absolute `cwd`; a remote server uses an `https://` `url` and optional
+`headers`. The legacy SSE transport and VS Code `${input:...}` prompts are not
+supported. The full field reference is docs/MCP-SERVERS.md.
+
+Write credentials as `${NAME}` or `${env:NAME}`; Nebula stores a reference to
+that environment variable of the Core process. Literal credentials in headers or
+credential-named `env` entries move to the operating-system credential vault,
+and are reported invalid when the vault is unavailable. An optional `nebula`
+object per server sets `default_approval`, `tool_overrides`, `enabled_tools`,
+`disabled_tools`, `required`, and timeouts. A server with an existing name is
+skipped unless `--replace` is given. `nebula-core mcp export FILE` writes the
+same format without secret values.
+
+Imported servers start disabled, and local programs start untrusted. To use one,
+choose Edit and tick I trust this local program for a stdio server you trust,
+then Probe, then Enable. If Probe fails, read the detail on the server card: a
+stdio command must exist on the Nebula host, `${NAME}` variables must be set in
+the Core environment, and HTTP endpoints must use HTTPS unless they are on
+loopback. Do not suggest enabling a server the operator has not reviewed, and do
+not ask the operator to paste secret values into chat.
+
 ## release-boundary | Requested feature is not in the initial Nebula 3 release
 
-Keywords: feature missing, topology, scanner import, comparison, screenshot, multiple terminals, html notes, command search, remote worker, mcp, a2a, third party plugin, restore
+Keywords: feature missing, topology, scanner import, comparison, screenshot, multiple terminals, html notes, command search, remote worker, a2a, third party plugin, restore
 
 Sources: docs/NEBULA3.md#current-release-boundary, NEBULA3-TODO.md
 
 The initial Nebula 3 release does not include scanner import, topology, comparison,
 full-desktop capture, multiple detached terminals, rich HTML notes, legacy Chroma
 command search, or always-on AI suggestions. PostgreSQL team authorization,
-OIDC/RBAC, remote workers, MCP/A2A, signed third-party plugins, and advanced
+OIDC/RBAC, remote workers, A2A, signed third-party plugins, and advanced
 specialist environments are separate projects. Engagement bundle restore is also
 not currently available.
 

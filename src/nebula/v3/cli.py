@@ -33,6 +33,7 @@ from .automation_tools import (
     PROCESS_IO_NAME,
     RUN_COMMAND_NAME,
 )
+from .credentials import CredentialStore
 from .database import Database
 from .diagnostics import (
     configure_diagnostics,
@@ -44,11 +45,18 @@ from .domain import (
     AgentRun,
     Artifact,
     Engagement,
+    McpServerProfile,
     ProviderProfile,
     RunBudget,
 )
 from .missions import MissionService
 from .mcp_gateway import serve as serve_mcp_gateway
+from .mcp_import import (
+    McpImportRequest,
+    export_mcp_config,
+    import_mcp_config,
+    mcp_config_json_schema,
+)
 from .exporter import export_engagement
 from .importer import import_2x_engagement
 from .knowledge_index import ChromaKnowledgeIndex
@@ -81,8 +89,14 @@ diagnostics_app = typer.Typer(
     help="Inspect and configure privacy-preserving local diagnostics.",
     no_args_is_help=True,
 )
+mcp_app = typer.Typer(
+    name="mcp",
+    help="Import and export MCP server profiles as mcpServers JSON.",
+    no_args_is_help=True,
+)
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(diagnostics_app, name="diagnostics")
+app.add_typer(mcp_app, name="mcp")
 
 
 @app.command("mcp-gateway", hidden=True)
@@ -177,6 +191,89 @@ def runtime_prepare(
     _print(result.model_dump(mode="json"))
     if not result.ready:
         raise typer.Exit(code=1)
+
+
+@mcp_app.command("import")
+def mcp_import(
+    source: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
+    apply: Annotated[
+        bool, typer.Option(help="Save the servers; without it, only preview.")
+    ] = False,
+    replace: Annotated[
+        bool, typer.Option(help="Overwrite existing servers with the same name.")
+    ] = False,
+    reject_literal_secrets: Annotated[
+        bool,
+        typer.Option(
+            help="Fail entries with literal credentials instead of vaulting them."
+        ),
+    ] = False,
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Import MCP servers from a Claude, Cursor, or VS Code style JSON file.
+
+    Imported servers start disabled and untrusted; enable them in Nebula after
+    reviewing and probing their tools.
+    """
+
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        record_caught_exception(
+            "harnesses",
+            "harnesses.cli.mcp_import_unreadable",
+            "An MCP import file could not be read.",
+            exc,
+            stage="cli",
+        )
+        raise typer.BadParameter(f"{source} is not a readable JSON file") from exc
+    if not isinstance(document, dict):
+        raise typer.BadParameter("the MCP configuration must be a JSON object")
+    _, store, _ = _services(data_dir)
+    report = import_mcp_config(
+        McpImportRequest(
+            config=document,
+            dry_run=not apply,
+            on_conflict="replace" if replace else "skip",
+            literal_secrets="reject" if reject_literal_secrets else "vault",
+            source_name=source.name,
+        ),
+        store=store,
+        credential_store=CredentialStore(),
+    )
+    _print(report.model_dump(mode="json"))
+    if report.invalid:
+        raise typer.Exit(code=1)
+
+
+@mcp_app.command("export")
+def mcp_export(
+    destination: Annotated[
+        Path | None, typer.Argument(help="Write here instead of standard output.")
+    ] = None,
+    overwrite: Annotated[bool, typer.Option()] = False,
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Export MCP servers as mcpServers JSON; stored credentials become ${NAME}."""
+
+    _, store, _ = _services(data_dir)
+    report = export_mcp_config(store.list_entities(McpServerProfile, limit=1000))
+    for warning in report.warnings:
+        typer.echo(warning, err=True)
+    text = json.dumps(report.config, indent=2, sort_keys=True) + "\n"
+    if destination is None:
+        typer.echo(text, nl=False)
+        return
+    if destination.exists() and not overwrite:
+        raise typer.BadParameter(f"{destination} exists; pass --overwrite")
+    destination.write_text(text, encoding="utf-8")
+
+
+@mcp_app.command("schema")
+def mcp_schema() -> None:
+    """Print the JSON Schema for MCP import files, for editor validation."""
+
+    typer.echo(json.dumps(mcp_config_json_schema(), indent=2))
 
 
 def _is_loopback(host: str) -> bool:

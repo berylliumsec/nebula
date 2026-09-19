@@ -46,8 +46,19 @@ MAX_MCP_MESSAGE_BYTES = 4 * 1024 * 1024
 MAX_MCP_TOOL_RESPONSE_BYTES = 100 * 1024 * 1024
 
 
+JSONRPC_METHOD_NOT_FOUND = -32601
+
+
 class McpProbeError(RuntimeError):
-    """An operator-safe discovery failure."""
+    """An operator-safe discovery failure.
+
+    ``code`` carries the JSON-RPC error code when the server answered with an
+    error response, so callers can branch on it instead of on message text.
+    """
+
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class McpProbeReport(NebulaModel):
@@ -78,7 +89,13 @@ class _McpClient:
         if response.get("error") is not None:
             error = response["error"]
             message = error.get("message") if isinstance(error, dict) else error
-            raise McpProbeError(f"MCP {method} failed: {_safe(message)}")
+            code = error.get("code") if isinstance(error, dict) else None
+            raise McpProbeError(
+                f"MCP {method} failed: {_safe(message)}",
+                code=code
+                if isinstance(code, int) and not isinstance(code, bool)
+                else None,
+            )
         return response.get("result")
 
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
@@ -339,12 +356,20 @@ class McpProbeService:
                     "MCP server requires elicitation/forms, which this release does not support"
                 )
             await client.notify("notifications/initialized")
+            # tools/list is always attempted so servers that omit the tools
+            # capability still work; resources and prompts are only requested
+            # when advertised, as the MCP lifecycle requires.
             tools_result = await self._optional_list(client, "tools/list")
-            resources_result = await self._optional_list(client, "resources/list")
-            templates_result = await self._optional_list(
-                client, "resources/templates/list"
-            )
-            prompts_result = await self._optional_list(client, "prompts/list")
+            resources_result: dict[str, Any] = {}
+            templates_result: dict[str, Any] = {}
+            if "resources" in server_capabilities:
+                resources_result = await self._optional_list(client, "resources/list")
+                templates_result = await self._optional_list(
+                    client, "resources/templates/list"
+                )
+            prompts_result: dict[str, Any] = {}
+            if "prompts" in server_capabilities:
+                prompts_result = await self._optional_list(client, "prompts/list")
             tools = self._tools(tools_result)
             snapshot = McpCapabilitySnapshot(
                 protocol_version=str(
@@ -540,7 +565,7 @@ class McpProbeService:
                 exc,
                 stage="mcp",
             )
-            if "-32601" in str(exc) or "not found" in str(exc).lower():
+            if exc.code == JSONRPC_METHOD_NOT_FOUND:
                 return {}
             raise
         return result if isinstance(result, dict) else {}
