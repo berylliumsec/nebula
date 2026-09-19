@@ -17,19 +17,17 @@ from keyring.backends.SecretService import Keyring
 from pydantic import SecretStr, field_validator
 
 from .domain import NebulaModel
+from .vault_probe import (
+    VaultState,
+    backend_usable,
+    secret_service_collection,
+)
+from .vault_probe import vault_state as probe_vault_state
 
 _REFERENCE = re.compile(
     r"^(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})$"
 )
 _SERVICE_NAME = "io.berylliumsec.nebula.provider-credentials"
-_TRUSTED_VAULT_BACKEND_MODULES = frozenset(
-    {
-        "keyring.backends.SecretService",
-        "keyring.backends.macOS",
-    }
-)
-
-VaultState = Literal["available", "locked", "unavailable"]
 
 _VAULT_LOCKED_DETAIL = (
     "the operating-system credential vault is locked; unlock it on the Nebula "
@@ -111,55 +109,28 @@ class CredentialStore:
         the lock state is part of the answer.
         """
 
-        if not self._backend_usable():
-            return "unavailable"
-        if isinstance(self.keyring_backend, Keyring):
-            return self._secret_service_state()
-        return "available"
+        return probe_vault_state(
+            self.keyring_backend, on_caught=self._record_vault_probe_failure
+        )
 
     @property
     def vault_available(self) -> bool:
         return self.vault_state == "available"
 
     def _backend_usable(self) -> bool:
-        if self.keyring_backend is None:
-            return False
-        # keyring can discover third-party fallback backends, including
-        # plaintext files. Nebula only treats the two supported OS vault
-        # integrations as durable credential storage and otherwise offers
-        # session-only or env: references.
-        backend_module = type(self.keyring_backend).__module__
-        if backend_module not in _TRUSTED_VAULT_BACKEND_MODULES:
-            return False
-        try:
-            priority = self.keyring_backend.priority
-            return bool(priority and priority > 0)
-        except Exception as caught_error:
-            record_caught_exception(
-                "providers",
-                "providers.credentials.caught_failure_002",
-                "A handled providers operation raised an exception.",
-                caught_error,
-                stage="credentials",
-            )
-            return False
+        return backend_usable(
+            self.keyring_backend, on_caught=self._record_vault_probe_failure
+        )
 
-    def _secret_service_state(self) -> VaultState:
-        """Read the Linux collection's lock state without raising a prompt."""
-
-        try:
-            with closing(secretstorage.dbus_init()) as connection:
-                collection = self._secret_service_collection(connection)
-                return "locked" if collection.is_locked() else "available"
-        except Exception as caught_error:
-            record_caught_exception(
-                "providers",
-                "providers.credentials.caught_failure_006",
-                "A handled providers operation raised an exception.",
-                caught_error,
-                stage="credentials",
-            )
-            return "unavailable"
+    @staticmethod
+    def _record_vault_probe_failure(caught_error: Exception) -> None:
+        record_caught_exception(
+            "providers",
+            "providers.credentials.caught_failure_002",
+            "A handled providers operation raised an exception.",
+            caught_error,
+            stage="credentials",
+        )
 
     def create(self, request: CredentialCreateRequest) -> CredentialStatus:
         value = request.secret.get_secret_value()
@@ -302,12 +273,7 @@ class CredentialStore:
             return None
 
     def _secret_service_collection(self, connection: object) -> Any:
-        """The collection keyring itself would use, resolved without a prompt."""
-
-        preferred = getattr(self.keyring_backend, "preferred_collection", None)
-        if preferred is not None:
-            return secretstorage.Collection(connection, preferred)
-        return secretstorage.get_collection_by_alias(connection, "default")
+        return secret_service_collection(self.keyring_backend, connection)
 
     def _secret_service_write(self, identifier: str, value: str) -> None:
         """Save in an unlocked existing collection without running any prompt."""

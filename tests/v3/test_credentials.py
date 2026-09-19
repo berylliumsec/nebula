@@ -187,9 +187,11 @@ def _fake_secret_service(monkeypatch, *, locked, reachable=True):
         "get_collection_by_alias",
         lambda *_: SimpleNamespace(is_locked=lambda: locked),
     )
-    monkeypatch.setattr(CredentialStore, "_backend_usable", lambda _: True)
     from keyring.backends.SecretService import Keyring
 
+    # A positive priority is keyring's own "this backend is usable" answer; the
+    # real one probes the session bus, which no test may depend on.
+    monkeypatch.setattr(Keyring, "priority", 5, raising=False)
     return CredentialStore(Keyring())
 
 

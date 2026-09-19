@@ -100,3 +100,47 @@ def test_sensitive_detail_falls_back_to_session_memory_without_vault(tmp_path) -
     assert capture.persistence == "session-memory"
     assert store.reveal("err_memory") == "memory-only detail"
     assert not (tmp_path / "core").exists()
+
+
+def test_locked_host_vault_selects_session_memory_without_prompting(
+    monkeypatch, tmp_path
+) -> None:
+    """A locked collection must never reach keyring's blocking get_password."""
+
+    import secretstorage
+    from types import SimpleNamespace
+
+    from keyring.backends.SecretService import Keyring
+
+    monkeypatch.setattr(Keyring, "priority", 5, raising=False)
+    monkeypatch.setattr(
+        Keyring,
+        "get_password",
+        lambda *_: pytest.fail("a locked vault must not be read interactively"),
+    )
+    monkeypatch.setattr(
+        Keyring,
+        "set_password",
+        lambda *_: pytest.fail("a locked vault must not be written interactively"),
+    )
+    monkeypatch.setattr(
+        secretstorage, "dbus_init", lambda: SimpleNamespace(close=lambda: None)
+    )
+    monkeypatch.setattr(
+        secretstorage,
+        "get_collection_by_alias",
+        lambda *_: SimpleNamespace(is_locked=lambda: True),
+    )
+
+    store = SensitiveDiagnosticStore(tmp_path, enabled=True, keyring_backend=Keyring())
+
+    capture = store.capture(
+        "err_locked_vault",
+        "locked-vault detail",
+        source="core",
+        application_version="3.0.0-alpha.1",
+    )
+
+    assert capture.persistence == "session-memory"
+    assert store.reveal("err_locked_vault") == "locked-vault detail"
+    assert not (tmp_path / "core").exists()

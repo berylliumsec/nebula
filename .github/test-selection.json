@@ -1,17 +1,18 @@
 {
-  "change_digest": "454636bc41090c7a6c6b92a71acf34748f336bf4cbcd48bcd31d3f9853b7d361",
+  "change_digest": "ccf4b6f9bb765852fc3fa04442298d8ea883b4ceef2708fef0222b7bb159cc05",
   "reviewed_by": "Claude review of locked credential vault handling",
-  "reason": "CredentialStore.vault_available only checked that a trusted keyring backend existed with a positive priority, so a Linux host whose SecretService collection is locked \u2014 the normal state when Core runs headless under systemd, where nothing performs the PAM unlock a graphical login would \u2014 reported the vault as available. Every dialog that defaults to vault storage (the Jev key, provider credentials, harness and MCP credentials, VPN profile passwords) therefore offered a save that always failed with a 503. vault_state now reports available/locked/unavailable, probing the collection without ever raising a desktop prompt, vault_available derives from it, create/delete name the locked case, a GET /credentials/vault endpoint and the Jev status carry the state, and the four dialogs fall back to session storage with a note that names the remedy. test_credentials.py covers the locked, unlocked and unreachable states, the refused vault write, and the new endpoint and Jev status; test_mcp_import.py covers the import guard that now reads vault_state. useCredentialVault.test.tsx covers the shared hook and its copy, ToolSuggestions.test.tsx the locked Jev panel, HarnessSettings.test.tsx and EngagementPolicySettings.loading.test.tsx the dialogs and fixtures that carry the new field.",
+  "reason": "CredentialStore.vault_available only checked that a trusted keyring backend existed with a positive priority, so a Linux host whose SecretService collection is locked \u2014 the normal state when Core runs headless under systemd, where nothing performs the PAM unlock a graphical login would \u2014 reported the vault as available. Every dialog that defaults to vault storage (the Jev key, provider credentials, harness and MCP credentials, VPN profile passwords) therefore offered a save that always failed with a 503. vault_state now reports available/locked/unavailable, probing the collection without ever raising a desktop prompt, vault_available derives from it, create/delete name the locked case, a GET /credentials/vault endpoint and the Jev status carry the state, and the four dialogs fall back to session storage with a note that names the remedy. test_credentials.py covers the locked, unlocked and unreachable states, the refused vault write, and the new endpoint and Jev status; test_mcp_import.py covers the import guard that now reads vault_state. useCredentialVault.test.tsx covers the shared hook and its copy, ToolSuggestions.test.tsx the locked Jev panel, HarnessSettings.test.tsx and EngagementPolicySettings.loading.test.tsx the dialogs and fixtures that carry the new field. A second commit moves that prompt-free probe into vault_probe.py so the sensitive diagnostic store shares it: its _vault_available only checked the backend's priority and then called keyring.get_password, which waits forever on a locked collection when no prompter is running (confirmed on the LAN Core host, where the call never returns), hanging Core the moment an operator switched sensitive-detail capture on. It now reads the lock state first and selects memory-only capture for anything but an unlocked, reachable vault. test_diagnostic_sensitive.py covers a locked vault selecting session memory with get_password and set_password wired to fail the test if they are reached.",
   "exclusions": "No native tests: no Tauri or catalog change. No screenshot baselines change: the new notes render only when Core reports a vault that cannot take a secret, and every baseline captures a dialog-free surface. Playwright is limited to tool-suggestions, whose real-Core journey saves a Jev key against a host vault that is locked or absent, and mcp-import, which covers the MCP credential and import dialogs; both exercise the changed branch end to end. Other areas are excluded because the change is confined to credential storage copy and the persistence argument, with no routing, layout or theme effect. No full suites.",
   "expected_tests": {
-    "python": 45,
+    "python": 48,
     "frontend": 33,
     "native": 0,
     "playwright": 12
   },
   "python": [
     "tests/v3/test_credentials.py",
-    "tests/v3/test_mcp_import.py"
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_diagnostic_sensitive.py"
   ],
   "frontend": [
     "ui/src/hooks/useCredentialVault.test.tsx",
