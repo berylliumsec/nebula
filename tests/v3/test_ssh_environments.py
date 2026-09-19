@@ -335,6 +335,22 @@ def test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled(service):
         resolve_ssh_environments(service.store, ["ssh:jetson"])
 
 
+def test_several_hosts_can_be_enabled_for_one_chat_at_once(service):
+    service.save("research3", SshEnvironmentSettings(enabled=True))
+    service.save("jetson", SshEnvironmentSettings(enabled=True))
+
+    discovery = service.discover()
+    assert [host.environment.enabled for host in discovery.hosts] == [True, True]
+    automatic = resolve_ssh_environments(service.store, None)
+    assert [item.alias for item in automatic] == ["jetson", "research3"]
+    explicit = resolve_ssh_environments(service.store, ["ssh:research3", "ssh:jetson"])
+    assert [item.alias for item in explicit] == ["research3", "jetson"]
+    assert [plugin.spec.name for plugin in build_ssh_tool_plugins(automatic)] == [
+        "ssh.jetson.run_command",
+        "ssh.research3.run_command",
+    ]
+
+
 def test_api_lists_saves_probes_and_forgets(service):
     client = TestClient(
         create_app(

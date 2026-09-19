@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { Check, ChevronDown, Command, Server, Sparkles, TerminalSquare } from "lucide-react";
 import type { ApiClient } from "../api/client";
@@ -36,6 +37,8 @@ export function EnvironmentTargetPicker({ api, value, onChange, disabled = false
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<CSSProperties>();
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -59,10 +62,40 @@ export function EnvironmentTargetPicker({ api, value, onChange, disabled = false
     if (environments && value !== "auto" && value !== "core" && !environments.some((item) => item.id === value)) onChange("auto");
   }, [environments, onChange, value]);
 
+  // The composer clips its overflow, so the menu floats above the trigger in the viewport.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const anchor = triggerRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const width = Math.min(320, window.innerWidth - 32);
+      setPlacement({
+        left: Math.max(16, Math.min(anchor.left, window.innerWidth - width - 16)),
+        bottom: window.innerHeight - anchor.top + 8,
+        width,
+        maxHeight: Math.max(120, Math.min(420, anchor.top - 24)),
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  // Focus the current choice: the keyboard lands in the menu and the trigger's
+  // focus tooltip never covers the menu's last row.
+  useEffect(() => {
+    if (open) menuRef.current?.querySelector<HTMLElement>("[aria-pressed='true']")?.focus();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const closeOnOutside = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!wrapperRef.current?.contains(target) && !menuRef.current?.contains(target)) setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -121,7 +154,7 @@ export function EnvironmentTargetPicker({ api, value, onChange, disabled = false
       <span>{triggerLabel}</span>
       <ChevronDown size={13} aria-hidden="true" />
     </button>
-    {open && <div className={styles.menu} id="environment-target-menu" role="group" aria-label="Where should commands run?">
+    {open && createPortal(<div ref={menuRef} className={styles.menu} style={placement} id="environment-target-menu" role="group" aria-label="Where should commands run?">
       <p className={styles.heading}>Where should commands run?</p>
       {options.map((option) => {
         const active = option.target === value;
@@ -133,6 +166,6 @@ export function EnvironmentTargetPicker({ api, value, onChange, disabled = false
         </button>;
       })}
       <Link className={styles.manage} to="/settings#ssh-environment-settings" onClick={() => setOpen(false)}>Manage environments…</Link>
-    </div>}
+    </div>, wrapperRef.current?.closest("dialog[open]") ?? document.body)}
   </div>;
 }

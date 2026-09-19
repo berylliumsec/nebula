@@ -4246,7 +4246,8 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Environments acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    // The phone shell hides the ready chip, so read its label rather than its visibility.
+    await expect(page.locator(".connection-chip")).toHaveAttribute("aria-label", /Nebula Core (ready|degraded)/, {timeout: 20_000});
     await page.goto(`${core.origin}/settings#ssh-environment-settings`);
     const section = page.locator("#ssh-environment-settings");
 
@@ -4294,8 +4295,19 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     const saved = await (await core.api.get("ssh-environments?resolve=false")).json();
     expect(saved.hosts.find((host: {alias: string}) => host.alias === "lab-mac").environment).toMatchObject({display_name: "Lab Mac", working_directory: "~/lab", command_approval: "allow", enabled: true});
 
-    // Disable is immediate and durable.
+    // Several hosts stay enabled together; chats get every enabled host.
+    await section.getByRole("switch", {name: "Use pi-one from Nebula"}).click();
+    await expect(section.getByText(/2 hosts · 2 enabled/)).toBeVisible();
+    await page.reload();
+    await expect(section.getByRole("switch", {name: "Use Lab Mac from Nebula"})).toBeChecked();
+    await expect(section.getByRole("switch", {name: "Use pi-one from Nebula"})).toBeChecked();
+    const both = await (await core.api.get("ssh-environments?resolve=false")).json();
+    expect(both.hosts.map((host: {environment?: {enabled: boolean}}) => host.environment?.enabled)).toEqual([true, true]);
+
+    // Disable is immediate and durable, one host at a time.
     await section.getByRole("switch", {name: "Use Lab Mac from Nebula"}).click();
+    await expect(section.getByText(/2 hosts · 1 enabled/)).toBeVisible();
+    await section.getByRole("switch", {name: "Use pi-one from Nebula"}).click();
     await expect(section.getByText(/2 hosts · 0 enabled/)).toBeVisible();
   } finally {
     await core.stop();

@@ -46,6 +46,7 @@ from nebula.v3.providers import (
     ModelUsage,
     ProviderConfig,
     ProviderContextLengthError,
+    ProviderError,
     ProviderHealth,
     ProviderKind,
     StreamEventType,
@@ -375,6 +376,84 @@ def test_confirmed_context_rejection_refreshes_compacts_and_retries_once(
     assert prepared.context_snapshot is not None
     turn = store.get(ChatTurn, prepared.turn.id)
     assert turn.request_snapshot["context_length_recovery"]["attempted"] is True
+
+
+@pytest.mark.parametrize("routes_available", [True, False])
+def test_openrouter_chat_verifies_route_limits_before_sizing_context(
+    tmp_path, monkeypatch, routes_available
+):
+    class RoutedProvider(FakeProvider):
+        route_refreshes = 0
+
+        async def openrouter_route_limits(
+            self, model: str
+        ) -> list[ModelRouteDescriptor]:
+            self.route_refreshes += 1
+            if not routes_available:
+                raise ProviderError("OpenRouter endpoint discovery failed")
+            return [
+                ModelRouteDescriptor(
+                    provider_name="wide",
+                    context_window=1_048_576,
+                    max_input_tokens=1_048_576,
+                    max_output_tokens=262_144,
+                    supported_parameters=["tools"],
+                )
+            ]
+
+    store = NebulaStore(tmp_path / "chat-route-limits.db")
+    engagement = store.create(Engagement(id="eng-routes", name="Routes"))
+    payload = _profile(local=False, permits_sensitive_data=True).model_dump(
+        mode="python"
+    )
+    payload["provider_type"] = "openrouter"
+    payload["model_allowlist"] = ["deepseek/model-a"]
+    payload["metadata"] = {
+        "default_model": "deepseek/model-a",
+        "model_descriptors": [
+            {
+                "id": "deepseek/model-a",
+                "name": "Model A",
+                "context_window": 1_048_576,
+                "max_output_tokens": 262_144,
+                "route_limits": [],
+                "route_limits_verified": False,
+                "route_limits_checked_at": None,
+            }
+        ],
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = RoutedProvider(profile.id, local=False)
+    provider.config.default_model = "deepseek/model-a"
+    provider.config.model_allowlist = ["deepseek/model-a"]
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    def prepare():
+        return service.prepare(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                model="deepseek/model-a",
+                messages=[{"role": "user", "content": "hello"}],
+                include_knowledge=False,
+            )
+        )
+
+    first = prepare()
+    second = prepare()
+
+    limits = json.loads(second.model_request.metadata["resolved_context_limits"])
+    if routes_available:
+        assert provider.route_refreshes == 1
+        assert limits["route_limits_verified"] is True
+        assert limits["context_window"] == 1_048_576
+    else:
+        # Unverified routes keep the conservative cap; the chat still proceeds.
+        assert provider.route_refreshes == 2
+        assert limits["route_limits_verified"] is False
+        assert limits["context_window"] == 8_192
+    assert first.provider_profile.id == profile.id
 
 
 def test_provider_chat_persists_reasoning_apart_from_the_reply(tmp_path, monkeypatch):

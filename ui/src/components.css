@@ -386,7 +386,7 @@ textarea { border-radius: var(--radius-control); }
 .chat-composer footer .chat-runtime-summary.button.quiet:hover:not(:disabled),
 .chat-composer footer .chat-runtime-summary.button.quiet[aria-expanded="true"] { border-color: transparent; background: transparent; }
 .chat-runtime-summary > svg { flex: 0 0 auto; }
-.chat-runtime-summary > span { display: flex; min-width: 0; flex: 0 1 auto; align-items: baseline; text-align: left; }
+.chat-runtime-summary > span { display: flex; column-gap: .3em; min-width: 0; flex: 0 1 auto; align-items: baseline; text-align: left; }
 .chat-runtime-summary strong,
 .chat-runtime-summary small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-runtime-summary strong { color: var(--text); font-size: var(--type-control); }

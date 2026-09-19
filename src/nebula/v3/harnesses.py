@@ -5615,9 +5615,7 @@ class HarnessRuntimeService:
     def _project_execution_mode(self, engagement_id: str) -> Literal["docker", "host"]:
         if self.automation_tool_platform is None:
             return "docker"
-        return self.automation_tool_platform.manager.project_policy(
-            engagement_id
-        ).execution_mode
+        return self.automation_tool_platform.project_execution_mode(engagement_id)
 
     def bind_browser_automation_platform(
         self, platform: BrowserAutomationToolPlatform
