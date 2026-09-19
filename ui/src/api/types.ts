@@ -2188,16 +2188,31 @@ export interface McpImportSecret {
   reference?: string;
 }
 
+export interface McpImportChange {
+  field: string;
+  before?: string;
+  after?: string;
+}
+
 export interface McpImportEntry {
   sourceName: string;
   name?: string;
-  action: "create" | "replace" | "skip" | "invalid";
+  action: "create" | "update" | "unchanged" | "replace" | "skip" | "invalid";
   transport?: McpServerProfile["transport"];
   command?: string;
   arguments: string[];
   url?: string;
   profileId?: string;
   secrets: McpImportSecret[];
+  /** Settings that differ from the saved server, for an update. */
+  changes: McpImportChange[];
+  /** Whether the server is enabled once saved. */
+  enabled: boolean;
+  defaultApproval?: McpServerProfile["defaultApproval"];
+  /** A local program saved disabled until it is trusted. */
+  needsTrust: boolean;
+  /** Enabled once saved but not probed yet. */
+  needsProbe: boolean;
   warnings: string[];
   error?: string;
 }
@@ -2206,6 +2221,8 @@ export interface McpImportReport {
   dryRun: boolean;
   entries: McpImportEntry[];
   created: number;
+  updated: number;
+  unchanged: number;
   replaced: number;
   skipped: number;
   invalid: number;

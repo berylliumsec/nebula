@@ -4,8 +4,14 @@ Operators already keep MCP configuration in the format used by Claude Desktop,
 Cursor, and VS Code. This module turns such a file into ``McpServerProfile``
 records without weakening the profile's security contract:
 
-* imported profiles are always disabled and stdio servers are never trusted;
-  the operator reviews, probes, and enables them explicitly;
+* a file can never enable or trust a server by itself; new servers start
+  disabled unless the operator enables them for this import, and a local
+  (stdio) program is only trusted when the operator says so for this import;
+* importing a server that already exists updates only what differs: the file
+  owns the connection (command, args, env, cwd, url, headers), Nebula-side
+  settings the file does not mention are kept, and a trusted program whose
+  launch settings changed becomes untrusted again unless the operator
+  re-confirms trust;
 * ``${VAR}`` and ``${env:VAR}`` values become ``env:VAR`` references, and
   literal credentials are moved into the credential store (or rejected), so no
   secret is persisted in a profile;
@@ -18,7 +24,9 @@ document.
 
 from __future__ import annotations
 
+import hmac
 import re
+import shlex
 import shutil
 from dataclasses import dataclass, field
 from collections.abc import Callable, Mapping
@@ -28,7 +36,7 @@ from typing import Any, Literal
 from pydantic import Field, SecretStr, ValidationError
 
 from .diagnostics import record_caught_exception
-from .credentials import CredentialCreateRequest, CredentialStore
+from .credentials import CredentialCreateRequest, CredentialError, CredentialStore
 from .domain import (
     McpApprovalMode,
     McpAuthMode,
@@ -69,7 +77,7 @@ _TRANSPORT_ALIASES = {
 }
 # Fields other clients use that have no safe Nebula equivalent.
 _IGNORED_FIELDS = {
-    "disabled": "imported servers always start disabled",
+    "disabled": "whether a server is enabled is chosen in Nebula when importing",
     "alwaysAllow": "tool approvals were not imported; review them in Nebula",
     "autoApprove": "tool approvals were not imported; review them in Nebula",
     "timeout": "use nebula.tool_timeout_seconds for tool timeouts",
@@ -116,12 +124,33 @@ class McpImportOptions(NebulaModel):
     )
 
 
+class McpImportDefaults(NebulaModel):
+    """Choices for the servers an import creates; a server's nebula block wins."""
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable new servers. Local programs also need trust.",
+    )
+    default_approval: McpApprovalMode = Field(
+        default=McpApprovalMode.RISK_BASED,
+        description="Approval for new servers whose file sets no default_approval.",
+    )
+
+
 class McpImportRequest(NebulaModel):
     config: dict[str, Any]
     dry_run: bool = True
-    on_conflict: Literal["skip", "replace"] = "skip"
+    on_conflict: Literal["update", "skip", "replace"] = "update"
     literal_secrets: Literal["vault", "session", "reject"] = "vault"
     source_name: str | None = Field(default=None, max_length=200)
+    defaults: McpImportDefaults = Field(default_factory=McpImportDefaults)
+    trust_local_programs: bool = Field(
+        default=False,
+        description=(
+            "Trust the local programs this import would otherwise leave disabled: "
+            "new ones being enabled, and enabled ones whose launch settings changed."
+        ),
+    )
 
 
 class McpImportSecret(NebulaModel):
@@ -132,16 +161,38 @@ class McpImportSecret(NebulaModel):
     reference: str | None = Field(default=None, max_length=200)
 
 
+class McpImportChange(NebulaModel):
+    """One setting that differs from the saved server; secrets are described."""
+
+    field: str = Field(max_length=300)
+    before: str | None = None
+    after: str | None = None
+
+
 class McpImportEntry(NebulaModel):
     source_name: str = Field(max_length=300)
     name: str | None = Field(default=None, max_length=200)
-    action: Literal["create", "replace", "skip", "invalid"]
+    action: Literal["create", "update", "unchanged", "replace", "skip", "invalid"]
     transport: McpTransport | None = None
     command: str | None = None
     arguments: list[str] = Field(default_factory=list)
     url: str | None = None
     profile_id: str | None = None
     secrets: list[McpImportSecret] = Field(default_factory=list)
+    changes: list[McpImportChange] = Field(default_factory=list)
+    enabled: bool = Field(default=False, description="Enabled once saved.")
+    default_approval: McpApprovalMode | None = None
+    needs_trust: bool = Field(
+        default=False,
+        description=(
+            "A local program that is enabled only if this import trusts it "
+            "(trust_local_programs)."
+        ),
+    )
+    needs_probe: bool = Field(
+        default=False,
+        description="Enabled once saved but without probed tools yet.",
+    )
     warnings: list[str] = Field(default_factory=list)
     error: str | None = Field(default=None, max_length=2_000)
 
@@ -150,6 +201,8 @@ class McpImportReport(NebulaModel):
     dry_run: bool
     entries: list[McpImportEntry]
     created: int = 0
+    updated: int = 0
+    unchanged: int = 0
     replaced: int = 0
     skipped: int = 0
     invalid: int = 0
@@ -167,7 +220,9 @@ class _Draft:
     entry: McpImportEntry
     fields: dict[str, Any]
     literals: dict[str, str] = field(default_factory=dict, repr=False)
+    options: dict[str, Any] = field(default_factory=dict)
     existing_id: str | None = None
+    existing_revision: int | None = None
 
 
 def import_mcp_config(
@@ -203,17 +258,24 @@ def import_mcp_config(
                     f"{len(matches)} existing MCP servers are named "
                     f"{draft.entry.name!r}; rename them before importing"
                 )
-            if matches and request.on_conflict == "skip":
+            current = matches[0] if matches else None
+            if current and request.on_conflict == "skip":
                 entry.action = "skip"
-                entry.profile_id = matches[0].id
+                entry.profile_id = current.id
                 entry.warnings.append(
-                    "an MCP server with this name already exists; choose replace "
-                    "to overwrite it"
+                    "an MCP server with this name already exists; choose update "
+                    "or replace to change it"
                 )
+            elif current and request.on_conflict == "update":
+                entry.profile_id = current.id
+                _plan_update(draft, current, request, credential_store)
+                if entry.action == "update":
+                    drafts.append(draft)
             else:
-                entry.action = "replace" if matches else "create"
-                draft.existing_id = matches[0].id if matches else None
+                entry.action = "replace" if current else "create"
+                draft.existing_id = current.id if current else None
                 entry.profile_id = draft.existing_id
+                _plan_new(draft, request)
                 drafts.append(draft)
         except (McpImportError, ValidationError) as exc:
             # diagnostic-expected: an invalid entry is reported in the preview
@@ -241,6 +303,8 @@ def import_mcp_config(
         dry_run=request.dry_run,
         entries=entries,
         created=sum(entry.action == "create" for entry in entries),
+        updated=sum(entry.action == "update" for entry in entries),
+        unchanged=sum(entry.action == "unchanged" for entry in entries),
         replaced=sum(entry.action == "replace" for entry in entries),
         skipped=sum(entry.action == "skip" for entry in entries),
         invalid=sum(entry.action == "invalid" for entry in entries),
@@ -629,7 +693,213 @@ def _draft(
             fields[key] = value
     # Validate now so the preview reports the same errors an apply would.
     McpServerProfile.model_validate(fields)
-    return _Draft(entry=entry, fields=fields, literals=literals)
+    return _Draft(
+        entry=entry,
+        fields=fields,
+        literals=literals,
+        options={
+            key: getattr(options, key)
+            for key in options.model_fields_set
+            if getattr(options, key) is not None
+        },
+    )
+
+
+# Settings a file fully describes. Re-importing replaces them as a whole, so a
+# variable or header removed from the file is removed from the server too.
+_CONNECTION_FIELDS = (
+    "transport",
+    "command",
+    "arguments",
+    "url",
+    "auth_mode",
+    "bearer_secret_ref",
+    "header_secret_refs",
+    "environment",
+    "environment_secret_refs",
+    "cwd_policy",
+    "cwd",
+)
+# What a trusted local program runs; changing any of it needs trust again.
+_LAUNCH_FIELDS = (
+    "transport",
+    "command",
+    "arguments",
+    "environment",
+    "cwd_policy",
+    "cwd",
+)
+
+
+def _plan_new(draft: _Draft, request: McpImportRequest) -> None:
+    """Apply this import's choices to a server it creates or replaces."""
+
+    fields = draft.fields
+    fields.setdefault("default_approval", request.defaults.default_approval)
+    enabled = request.defaults.enabled
+    trusted = False
+    if enabled and fields["transport"] == McpTransport.STDIO:
+        trusted = request.trust_local_programs
+        enabled = trusted
+        draft.entry.needs_trust = True
+    fields["enabled"] = enabled
+    fields["trusted_stdio"] = trusted
+    draft.entry.enabled = enabled
+    draft.entry.default_approval = fields["default_approval"]
+    draft.entry.needs_probe = enabled
+
+
+def _plan_update(
+    draft: _Draft,
+    current: McpServerProfile,
+    request: McpImportRequest,
+    credential_store: CredentialStore,
+) -> None:
+    """Turn ``draft`` into ``current`` with only what the file changes.
+
+    Sets the entry to ``unchanged`` when nothing differs, otherwise to
+    ``update`` with the list of changes and the resulting state.
+    """
+
+    entry = draft.entry
+    _reuse_saved_secrets(draft, current, credential_store)
+    reset = _reset_fields()
+    merged = current.model_dump()
+    for key in _CONNECTION_FIELDS:
+        merged[key] = draft.fields[key] if key in draft.fields else reset[key]
+    merged.update(draft.options)
+    changes = _changes(current.model_dump(), merged)
+    entry.enabled = current.enabled
+    entry.default_approval = merged["default_approval"]
+    if not changes:
+        entry.action = "unchanged"
+        return
+
+    launch_changed = any(merged[key] != getattr(current, key) for key in _LAUNCH_FIELDS)
+    launch_changed |= set(merged["environment_secret_refs"]) != set(
+        current.environment_secret_refs
+    )
+    connection_changed = any(
+        merged[key] != getattr(current, key) for key in _CONNECTION_FIELDS
+    )
+    stdio = merged["transport"] == McpTransport.STDIO
+    trusted = stdio and current.trusted_stdio and not launch_changed
+    enabled = current.enabled
+    if enabled and stdio and not trusted:
+        trusted = request.trust_local_programs
+        enabled = trusted
+        entry.needs_trust = True
+    merged["trusted_stdio"] = trusted
+    merged["enabled"] = enabled
+    if connection_changed:
+        merged["capabilities"] = McpCapabilitySnapshot()
+    # Validate now so the preview reports the same errors an apply would.
+    McpServerProfile.model_validate(merged)
+    entry.action = "update"
+    entry.changes = changes
+    entry.enabled = enabled
+    entry.needs_probe = enabled and connection_changed
+    draft.fields = merged
+    draft.existing_id = current.id
+    draft.existing_revision = current.revision
+
+
+def _reuse_saved_secrets(
+    draft: _Draft, current: McpServerProfile, credential_store: CredentialStore
+) -> None:
+    """Keep a saved credential whose value the file repeats instead of a copy."""
+
+    saved = {
+        "Authorization bearer token": current.bearer_secret_ref,
+        **{f"env {key}": ref for key, ref in current.environment_secret_refs.items()},
+        **{f"header {key}": ref for key, ref in current.header_secret_refs.items()},
+    }
+    reused: dict[str, str] = {}
+    for target, value in draft.literals.items():
+        reference = saved.get(target)
+        if not reference or not reference.startswith(("vault:", "session:")):
+            continue
+        try:
+            stored = credential_store.resolve(reference).get_secret_value()
+        except (CredentialError, ValueError):
+            # diagnostic-expected: an unreadable credential counts as changed
+            continue
+        if hmac.compare_digest(stored.encode(), value.encode()):
+            reused[target] = reference
+    if not reused:
+        return
+    draft.fields = _fill_references(draft.fields, reused)
+    for target in reused:
+        del draft.literals[target]
+    for secret in draft.entry.secrets:
+        if secret.target in reused:
+            secret.reference = reused[secret.target]
+            secret.source = (
+                "vault" if secret.reference.startswith("vault:") else "session"
+            )
+
+
+def _changes(
+    before: Mapping[str, Any], after: Mapping[str, Any]
+) -> list[McpImportChange]:
+    old, new = _describe(before), _describe(after)
+    return [
+        McpImportChange(field=name, before=old.get(name), after=new.get(name))
+        for name in dict.fromkeys([*old, *new])
+        if old.get(name) != new.get(name)
+    ]
+
+
+def _describe(values: Mapping[str, Any]) -> dict[str, str]:
+    """Flatten a profile into the file's field names, describing secrets."""
+
+    def secret(reference: str | None) -> str | None:
+        if not reference:
+            return None
+        if reference == _PLACEHOLDER_REF:
+            return "new credential"
+        if reference.startswith("env:"):
+            return "${" + reference.removeprefix("env:") + "}"
+        if reference.startswith("session:"):
+            return "credential for this session"
+        return "stored credential"
+
+    transport = McpTransport(values["transport"])
+    fields: dict[str, str | None] = {
+        "type": "stdio" if transport == McpTransport.STDIO else "http",
+        "command": values.get("command"),
+        "args": shlex.join(values.get("arguments") or []) or None,
+        "url": values.get("url"),
+        "bearer token": secret(values.get("bearer_secret_ref")),
+    }
+    if transport == McpTransport.STDIO:
+        fields["cwd"] = (
+            values.get("cwd")
+            if values.get("cwd_policy") == McpCwdPolicy.FIXED
+            else "project workspace"
+        )
+    for key, value in sorted((values.get("environment") or {}).items()):
+        fields[f"env {key}"] = value
+    for key, ref in sorted((values.get("environment_secret_refs") or {}).items()):
+        fields[f"env {key}"] = secret(ref)
+    for key, ref in sorted((values.get("header_secret_refs") or {}).items()):
+        fields[f"header {key}"] = secret(ref)
+    approval = values.get("default_approval") or McpApprovalMode.RISK_BASED
+    fields["nebula.default_approval"] = McpApprovalMode(approval).value
+    overrides = values.get("tool_overrides") or {}
+    fields["nebula.tool_overrides"] = (
+        ", ".join(
+            f"{name}={McpApprovalMode(mode).value}"
+            for name, mode in sorted(overrides.items())
+        )
+        or None
+    )
+    for key in ("enabled_tools", "disabled_tools"):
+        fields[f"nebula.{key}"] = ", ".join(values.get(key) or []) or None
+    fields["nebula.required"] = "true" if values.get("required") else "false"
+    for key in ("startup_timeout_seconds", "tool_timeout_seconds"):
+        fields[f"nebula.{key}"] = f"{values[key]:g}"
+    return {name: value for name, value in fields.items() if value is not None}
 
 
 def _apply(
@@ -671,11 +941,15 @@ def _apply(
             entry.profile_id = created.id
             return
         current = store.get(McpServerProfile, draft.existing_id)
+        if entry.action == "update" and current.revision != draft.existing_revision:
+            raise McpImportError(
+                f"{current.name} changed while importing; preview the file again"
+            )
         previous_refs = _owned_references(current)
+        base = fields if entry.action == "update" else {**_reset_fields(), **fields}
         replacement = McpServerProfile.model_validate(
             {
-                **_reset_fields(),
-                **fields,
+                **base,
                 "id": current.id,
                 "created_at": current.created_at,
                 "metadata": {**current.metadata, **fields["metadata"]},

@@ -126,7 +126,7 @@
           "$ref": "#/$defs/NebulaOptions"
         },
         "disabled": {
-          "description": "Not imported: imported servers always start disabled."
+          "description": "Not imported: whether a server is enabled is chosen in Nebula when importing."
         },
         "alwaysAllow": {
           "description": "Not imported: tool approvals were not imported; review them in Nebula."
