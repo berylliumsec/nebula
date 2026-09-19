@@ -665,7 +665,9 @@ def unarchive_chat_session(store: NebulaStore, session_id: str) -> None:
                 expected_revision=current.revision,
             )
             return
-        except ConflictError:  # diagnostic-expected: concurrent writer won; re-read and retry
+        except (
+            ConflictError
+        ):  # diagnostic-expected: concurrent writer won; re-read and retry
             continue
 
 
