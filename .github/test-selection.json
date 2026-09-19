@@ -1,8 +1,8 @@
 {
-  "change_digest": "153b382d91a5c0bc87b32ee36d28a17e1906ad620926f764824e87a00c004f90",
+  "change_digest": "198583edb4e5c387bf9f9bb1f4b2bec1910158bd3812aa6dbcf07552aa4cca52",
   "reviewed_by": "Claude review of the skill autocomplete and phone typography fixes",
   "reason": "Two tests that fail on main. (1) The harness skill autocomplete never opened: opening or closing Assistant settings bumps the project catalog key and the skills effect then cleared the typed skill token (regressed with #344); operator skill state now resets only when the runtime, harness, modes or project change. (2) The phone typography contract caught 10.5px tab labels from #355; they return to the 13px control size. Also: the Vite dev server serves the real path of a linked ui/node_modules so fonts load in worktrees (local 403s were masking the typography check). Selected: the skill autocomplete component test, the stabilization area on all eight desktop/compact/phone projects (includes the completed-harness-output journey that exercises the autocomplete), and the phone-shell area, which now includes the typography contract.",
-  "exclusions": "No full suites. No Python changes. The phone panoramic baselines change with the tab label size and are captured from CI renders. The mobile Browser-engine switch flake in 'mobile Workbench navigation' predates this change and is being fixed separately.",
+  "exclusions": "No full suites. No Python changes. The phone panoramic baselines change with the tab label size and are captured from CI renders. The mobile Browser-engine switch flake was fixed separately in #357.",
   "expected_tests": {
     "python": 0,
     "frontend": 2,
