@@ -926,7 +926,7 @@ describe("Nebula workspace", () => {
     const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
     expect(archivedToggle).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument();
-    const archiveCall = fetchMock.mock.calls.findLast(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
+    const archiveCall = [...fetchMock.mock.calls].reverse().find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(archiveCall?.[1]?.body))).toEqual({ archived: true, expected_revision: 2 });
     await user.click(archivedToggle);
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
