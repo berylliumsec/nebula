@@ -4185,9 +4185,18 @@ test("assistant settings expose provider metadata and harness model options", as
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 
   await openWorkspace(page, "/settings", "Settings");
-  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
-  await page.locator("details.settings-group > summary", { hasText: "Models" }).click();
-  const sharedSkills = page.locator("#native-skill-settings");
+  let sharedSkills: Locator;
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    // Phones start from the grouped settings list; the Models row opens its focused lens.
+    await page.getByRole("region", { name: "Models", exact: true }).getByRole("button", { name: /^Model providers/ }).click();
+    const modelsLens = page.getByRole("dialog", { name: "Model providers" });
+    await expect(modelsLens).toBeVisible();
+    sharedSkills = modelsLens.locator("#native-skill-settings");
+  } else {
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Models" }).click();
+    sharedSkills = page.locator("#native-skill-settings");
+  }
   await expect(sharedSkills.getByRole("heading", { name: "Shared skills" })).toBeVisible();
   await expect(sharedSkills).toContainText("/workspace/.agents/skills");
   await expect(sharedSkills).toContainText("/var/lib/nebula/.agents/skills");
