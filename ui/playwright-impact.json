@@ -10,6 +10,7 @@
   "rules": [
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "ui/src/components/EngagementPolicySettings*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
+    {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant"]},
     {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
@@ -22,6 +23,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "ssh-environments": [
+      {"area":"ssh-environments","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
+      {"area":"ssh-environments","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"}
+    ],
     "assistant-settings-navigation": [
       {"area":"assistant-settings-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata and harness model options","runtime":"mock","shard":"1/1"},
       {"area":"assistant-settings-navigation","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata and harness model options","runtime":"mock","shard":"1/1"},
