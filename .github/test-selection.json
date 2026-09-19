@@ -1,5 +1,5 @@
 {
-  "change_digest": "1f27dc29d454a42b218bb75804ae712c9c70e152a56de5a0e827b8e4268d6504",
+  "change_digest": "aa05ccb1b88d1343998b78c7daeebe5d88a8d1a5ad61fb6ab957120f8a25e67b",
   "reviewed_by": "Claude review of the optional TypeSafe Jev tool-suggestion layer",
   "reason": "Adds opt-in, per-project Jev tool suggestions: MCP-sourced tools are deferred behind tool_catalog.search/load, Jev ranks them before each provider turn, the TypeSafe key is stored through the credential store with GET/PUT/test/DELETE routes, and the chat shows a collapsed per-turn chip. Selected tests cover the new module and routes, the tool-loop and resume paths it modifies, scope API field preservation, the settings/opt-in/chip UI in unit and mocked Playwright on desktop, mobile Chromium and mobile WebKit, and one real-Core journey against a local Jev stub.",
   "exclusions": "No full suites. Harness chats are unchanged. Real-Core coverage uses a local stub instead of api.typesafe.ai and session-only key storage because test hosts have no unlocked OS vault; vault storage is covered by the mocked UI and backend tests. No LAN-origin check: no origin, cookie or socket behavior changed.",

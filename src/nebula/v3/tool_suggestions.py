@@ -295,7 +295,8 @@ async def suggest_tools(
             error=f"{type(exc).__name__}: {exc}"[:500],
         )
     preloaded, suggested = rank(gate, probabilities)
-    usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+    raw_usage = body.get("usage")
+    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
     return ToolSuggestionReceipt(
         status="suggested" if preloaded or suggested else "no_tool_needed",
         deferred=names,
@@ -488,7 +489,10 @@ def load_settings(store: Any) -> ToolSuggestionSettings | None:
         return None
 
 
-def key_source(store: Any, credentials: Any) -> tuple[str | None, bool]:
+KeySource = Literal["vault", "session", "environment"]
+
+
+def key_source(store: Any, credentials: Any) -> tuple[KeySource | None, bool]:
     """Where the key comes from ("vault", "session", "environment") and if usable."""
 
     settings = load_settings(store)
