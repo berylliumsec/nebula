@@ -1828,6 +1828,112 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   }
 });
 
+test("phone shell and critical workspace navigation mark the section that owns detail and tab routes", async ({ page }) => {
+  test.setTimeout(120_000);
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const finding = {
+    ...entity,
+    id: "finding-current",
+    engagement_id: "scratch-project",
+    title: "Reflected script injection",
+    description: "Untrusted search input is reflected into an executable response context.",
+    severity: "high",
+    severity_rationale: "An unauthenticated remote user can execute script in another user's session.",
+    status: "validated",
+    asset_ids: [],
+    evidence_ids: [],
+    cve_ids: [],
+    cwe_ids: [],
+    verifier_id: null,
+    verified_at: null,
+  };
+  const report = {
+    ...entity,
+    id: "report-current",
+    engagement_id: "scratch-project",
+    title: "Current report",
+    status: "draft",
+    executive_summary: "",
+    finding_ids: [],
+    observation_ids: [],
+    note_transforms: [],
+    artifact_ids: [],
+    executive_summary_provenance: null,
+    signed_off_by: null,
+    signed_off_at: null,
+    metadata: {},
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET" && path.endsWith("/findings")) return route.fulfill({ json: [finding] });
+    if (request.method() === "GET" && path.endsWith("/reports")) return route.fulfill({ json: [report] });
+    return route.fallback();
+  });
+
+  const navigation = page.getByRole("complementary", { name: "Primary navigation" });
+  // Phones reach the primary navigation through the sidebar drawer.
+  const openNavigation = async () => {
+    if (!mobile) return;
+    await page.getByRole("button", { name: "Show sidebar" }).click();
+    await expect(page.getByRole("button", { name: "Hide sidebar" })).toHaveAttribute("aria-expanded", "true");
+  };
+  const closeNavigation = async () => {
+    if (!mobile) return;
+    const scrim = page.getByRole("button", { name: "Close sidebar" });
+    const bounds = await scrim.boundingBox();
+    await scrim.click({ position: { x: bounds!.width - 8, y: bounds!.height / 2 } });
+    await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
+  };
+  const expectCurrentSection = async (pathname: string, label: string) => {
+    await expect.poll(() => page.evaluate(() => location.pathname)).toBe(pathname);
+    await openNavigation();
+    const current = navigation.getByRole("link", { name: label, exact: true });
+    await expect(current).toBeVisible();
+    await expect(current).toHaveAttribute("aria-current", "page");
+    await expect(current).toHaveClass(/(^|\s)active(\s|$)/);
+    await expect(navigation.locator("[aria-current='page']")).toHaveCount(1);
+    await expect(navigation.locator(".nav-item.active")).toHaveCount(1);
+    await expect(page.locator(".top-bar-title strong")).toHaveText(label);
+    await closeNavigation();
+  };
+  const followNavigation = async (label: string) => {
+    await openNavigation();
+    await navigation.getByRole("link", { name: label, exact: true }).click();
+    if (mobile) await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
+  };
+
+  // The Zero dock (first-run default) and the standard side navigation share one authority.
+  for (const theme of ["zero-dark", "dark"] as const) {
+    await openWorkspace(page, "/findings", "Findings");
+    if (theme === "dark") await setTheme(page, theme);
+    await expect(page.locator(".zero-anchor-dock")).toHaveCount(theme === "dark" ? 0 : 1);
+    await page.getByRole("button", { name: `Edit ${finding.title}` }).click();
+    const inspector = page.getByRole("complementary", { name: finding.title });
+    await expect(inspector).toBeVisible();
+    if (mobile) {
+      // The full-width phone inspector covers the sidebar drawer, so return to the list before using it.
+      await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/projects/scratch-project/findings/finding-current");
+      await expect(page.locator(".top-bar-title strong")).toHaveText("Findings");
+      await inspector.getByRole("button", { name: "Close finding details" }).click();
+      await expectCurrentSection("/projects/scratch-project/findings", "Findings");
+    } else {
+      await expectCurrentSection("/projects/scratch-project/findings/finding-current", "Findings");
+    }
+
+    // Reports opens its first report, so the section link must own the detail route.
+    await followNavigation("Reports");
+    await expectCurrentSection("/projects/scratch-project/reports/report-current", "Reports");
+
+    await followNavigation("Project");
+    await expectCurrentSection("/projects/scratch-project", "Project");
+    for (const [tab, surface] of [["Assets", "assets"], ["Evidence", "evidence"], ["Sources", "sources"]] as const) {
+      await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: tab, exact: true }).click();
+      await expectCurrentSection(`/projects/scratch-project/${surface}`, "Project");
+    }
+  }
+});
+
 test("all task workspaces keep responsive content inside its owning surface", async ({ page }) => {
   test.setTimeout(60_000);
   for (const [name, route, heading] of workspaces) {

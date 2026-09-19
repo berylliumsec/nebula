@@ -1,21 +1,24 @@
 {
-  "change_digest": "198583edb4e5c387bf9f9bb1f4b2bec1910158bd3812aa6dbcf07552aa4cca52",
-  "reviewed_by": "Claude review of the skill autocomplete and phone typography fixes",
-  "reason": "Two tests that fail on main. (1) The harness skill autocomplete never opened: opening or closing Assistant settings bumps the project catalog key and the skills effect then cleared the typed skill token (regressed with #344); operator skill state now resets only when the runtime, harness, modes or project change. (2) The phone typography contract caught 10.5px tab labels from #355; they return to the 13px control size. Also: the Vite dev server serves the real path of a linked ui/node_modules so fonts load in worktrees (local 403s were masking the typography check). Selected: the skill autocomplete component test, the stabilization area on all eight desktop/compact/phone projects (includes the completed-harness-output journey that exercises the autocomplete), and the phone-shell area, which now includes the typography contract.",
-  "exclusions": "No full suites. No Python changes. The phone panoramic baselines change with the tab label size and are captured from CI renders. The mobile Browser-engine switch flake was fixed separately in #357.",
+  "change_digest": "6a171295b699a3fcd6294fd67638a407684f20367605778dfe590aae8d74e649",
+  "reviewed_by": "Claude review of side navigation current-page authority",
+  "reason": "SideNav NavLinks matched their canonical base path with `end`, so no primary navigation item was current on finding/report detail URLs (ReportsPage auto-opens its first report, so Reports was rarely highlighted), Library detail URLs, or the Project page's assets/evidence/sources tabs. SideNav now derives the current item from navigationItemForPath, the same authority TopBar uses, and sets aria-current=\"page\" and the active class from one boolean; navigationItemForPath also maps the legacy /assets, /evidence and /knowledge routes (which render the Project page in place when no project is loaded) to Project. SideNav.test.tsx covers every canonical detail and tab route in the standard and Zero variants, section-root hrefs from a detail page, and the legacy routes; TopBar.test.tsx covers the helper change. The new Playwright journey opens a finding, follows the side navigation to Reports (auto-selected detail) and Project, and switches Project tabs in Zero Dark and Dark: critical-workspaces runs it on desktop and compact beside the unchanged side-nav baselines, and the phone-shell entries run it through the sidebar drawer on mobile Chromium and WebKit beside the existing phone shell, navigation and typography contracts. App.test.tsx renders the full shell with the side navigation.",
+  "exclusions": "No Python or native tests: no backend, catalog or Tauri change. No screenshot baselines change: every baseline captures a base route where `end` already matched, and Link renders the same anchor markup as NavLink, so critical-workspaces re-runs them unchanged. Other mobile widths (small/wide/narrow) are excluded because the fix is width-independent URL state covered on phone viewports in mobile Chromium (Pixel 5) and mobile WebKit (iPhone 13). The calm-structure single-active-navigation check is not catalogued narrowly; the new journey asserts exactly one current item on each route, and it passed locally on desktop and compact. No full suites.",
   "expected_tests": {
     "python": 0,
-    "frontend": 2,
+    "frontend": 72,
     "native": 0,
-    "playwright": 191
+    "playwright": 24
   },
   "python": [],
   "frontend": [
-    "ui/src/components/HarnessSkillAutocomplete.test.tsx"
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/App.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:stabilization",
-    "area:phone-shell"
+    "area:critical-workspaces",
+    "entry:phone-shell/mobile-chromium",
+    "entry:phone-shell/mobile-webkit"
   ]
 }
