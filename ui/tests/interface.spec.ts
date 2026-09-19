@@ -1499,6 +1499,24 @@ test("universal search opens a focused setting without leaving the active pane",
   await expect(search).toBeFocused();
 });
 
+test("universal search reaches shared skills and focuses that section", async ({ page }) => {
+  // Findings keeps the top bar at every width; the phone Workbench replaces it with tabs.
+  await openWorkspace(page, "/findings", "Findings");
+  const search = page.getByRole("button", { name: "Search pages, actions, and settings" });
+  await search.click();
+  await page.getByRole("textbox", { name: "Search pages, actions, and settings" }).fill("skills");
+  await page.getByRole("option", { name: /Shared skills/ }).click();
+
+  const lens = page.getByRole("dialog", { name: "Shared skills" });
+  const heading = lens.locator("#native-skill-settings").getByRole("heading", { name: "Shared skills" });
+  await expect(heading).toBeVisible();
+  await expect(heading).toBeFocused();
+
+  await lens.getByRole("button", { name: "Done" }).click();
+  await expect(lens).toBeHidden();
+  await expect(search).toBeFocused();
+});
+
 test("primary navigation exposes only the five task destinations", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   if ((page.viewportSize()?.width ?? 1440) <= 760) {
