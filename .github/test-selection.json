@@ -1,25 +1,19 @@
 {
-  "change_digest": "690587359efea4f89ac07c0c62cad7edbd5368106dc49ef3135343e1f4b28c95",
-  "reviewed_by": "Claude review of the AGENTS.md symlink rule after a live project was refused",
-  "reason": "The live imessage project links AGENTS.md to its parent program's AGENTS.md (../../AGENTS.md), which the first rule refused, blocking provider chats there. A symlink may now resolve inside the workspace or to an AGENTS.md in the workspace or one of its ancestor folders; links to other files or to AGENTS.md files in unrelated trees are still refused. The new test covers the shared-parent link and both rejection cases; the existing AGENTS.md tests and turn-preparation selections are kept.",
-  "exclusions": "No full suites and no browser coverage: there is no UI change. Verified against the three real project workspaces on the Linux host (two with AGENTS.md, one via the shared parent link).",
+  "change_digest": "20468a9133917d065c3a50d222bb79829ae47c6ae88158d233f5a8d174ea7200",
+  "reviewed_by": "Claude review of the MCP JSON import/export backend",
+  "reason": "Adds mcp_import.py plus POST /mcp-servers/import, GET /mcp-servers/export and `nebula-core mcp import|export`. Imported mcpServers/VS Code servers become disabled, untrusted McpServerProfile records; ${VAR} values become env: references, literal credentials go to the vault/session store or are rejected, and replace resets trust and capabilities. test_mcp_import.py covers preview, apply, secret handling and rollback, invalid-entry messages, conflicts, export round trip, the API routes and the CLI. test_cli.py covers the CLI module the new commands were added to; the credential API test and OpenAPI contract test cover the shared credential store and the new routes' registration.",
+  "exclusions": "No full suites. No frontend, native or Playwright coverage: there is no UI change yet (the import dialog waits on an approved Figma mockup). The existing MCP probe/harness suites are not affected because McpServerProfile and the probe service are unchanged. A real-Core run was done by hand: import through the API, probe refused until trusted, probe returned tools with an env: reference resolved from the host, replace reset trust, and the CLI previewed and exported.",
   "expected_tests": {
-    "python": 19,
+    "python": 38,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_project_instructions.py",
-    "tests/v3/test_chat.py::test_provider_skill_is_snapshotted_on_turn_and_running_goal",
-    "tests/v3/test_chat.py::test_long_durable_chat_uses_a_bounded_user_led_model_context",
-    "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
-    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
-    "tests/v3/test_chat.py::test_chat_retrieves_bundled_operator_help_without_project_documents",
-    "tests/v3/test_chat_goals.py::test_running_goal_is_injected_linked_and_charged_by_provider_turn",
-    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
-    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
-    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches"
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_cli.py",
+    "tests/v3/test_credentials.py::test_credential_api_is_write_only_and_persists_only_opaque_reference",
+    "tests/v3/test_api.py::test_artifact_content_and_openapi_contract"
   ],
   "frontend": [],
   "native": [],
