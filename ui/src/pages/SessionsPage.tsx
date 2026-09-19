@@ -37,6 +37,8 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
+  Archive,
+  ArchiveRestore,
   Bot,
   Bookmark,
   Boxes,
@@ -521,6 +523,7 @@ export function SessionsPage() {
     refreshProvider,
     reverifyProvider,
     resolveApproval,
+    updateProvider,
     setupStatus,
     startMission,
     uploadEvidence,
@@ -571,6 +574,8 @@ export function SessionsPage() {
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
+  const [archivingSessionId, setArchivingSessionId] = useState<string>();
+  const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
   const [providerId, setProviderId] = useState("");
@@ -884,13 +889,14 @@ export function SessionsPage() {
     for (const session of visibleSessions) {
       const activity = sessionActivity[session.id] ?? "idle";
       const updated = Date.parse(session.updatedAt);
-      const label = activity === "waiting" ? "Needs you"
+      const label = session.archivedAt ? "Archived"
+        : activity === "waiting" ? "Needs you"
         : activity === "working" ? "Working"
           : updated >= startOfToday.getTime() ? "Today"
             : updated >= weekAgo ? "Previous 7 days" : "Older";
       groups.set(label, [...(groups.get(label) ?? []), session]);
     }
-    return ["Needs you", "Working", "Today", "Previous 7 days", "Older"]
+    return ["Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
       .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
   }, [sessionActivity, visibleSessions]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
@@ -1401,14 +1407,15 @@ export function SessionsPage() {
       lastModelDiscoveryProviderIdRef.current = undefined;
       return;
     }
-    if (coreState !== "online" || sessionId) return;
+    // Existing conversations discover models when the operator opens Assistant settings.
+    if (coreState !== "online" || (sessionId && !assistantSettingsOpen)) return;
     if (lastModelDiscoveryProviderIdRef.current === providerId) return;
     lastModelDiscoveryProviderIdRef.current = providerId;
     setDiscoveringProviderId(providerId);
     void refreshProvider(providerId).finally(() => {
       setDiscoveringProviderId((current) => current === providerId ? undefined : current);
     });
-  }, [coreState, providerId, refreshProvider, runtimeKind, sessionId]);
+  }, [assistantSettingsOpen, coreState, providerId, refreshProvider, runtimeKind, sessionId]);
 
   useEffect(() => {
     sessionLoadAbortRef.current?.abort();
@@ -1708,6 +1715,22 @@ export function SessionsPage() {
     setDeletingAllSessions(false);
   };
 
+  const setConversationArchived = async (session: ChatSessionSummary, archived: boolean) => {
+    if (!api || archivingSessionId) return;
+    setSessionActionsId(undefined);
+    setArchivingSessionId(session.id);
+    setChatError(undefined);
+    try {
+      const updated = await api.setChatSessionArchived(session.id, archived, session.revision);
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_22", "A conversation could not be archived or restored.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : `Could not ${archived ? "archive" : "unarchive"} the conversation.`);
+    } finally {
+      setArchivingSessionId(undefined);
+    }
+  };
+
   const toggleConversationPanel = () => {
     setConversationPanelOpen((current) => {
       const next = !current;
@@ -1874,12 +1897,47 @@ export function SessionsPage() {
   const selectedModelIsUnavailable = Boolean(model && selectedProvider && !selectedProvider.models.includes(model));
   const selectedModelSummary = modelCatalogSummary(model, selectedProvider?.modelDescriptors);
   const normalizedProviderModelQuery = providerModelQuery.trim().toLocaleLowerCase();
-  const filteredProviderModels = selectedProvider?.models.filter((item) => {
+  const matchesProviderModelQuery = (item: string) => {
     if (!normalizedProviderModelQuery || item === model) return true;
-    const descriptor = selectedProvider.modelDescriptors?.find((candidate) => candidate.id === item);
+    const descriptor = selectedProvider?.modelDescriptors?.find((candidate) => candidate.id === item);
     return [item, descriptor?.name, descriptor?.description]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedProviderModelQuery));
-  }) ?? [];
+  };
+  const filteredProviderModels = selectedProvider?.models.filter(matchesProviderModelQuery) ?? [];
+  // Discovered models outside the provider's allowlist; choosing one adds it to the allowlist.
+  const unlistedProviderModels = selectedProvider?.modelAllowlist.length
+    ? (selectedProvider.availableModels ?? []).filter((item) => !selectedProvider.models.includes(item))
+    : [];
+  const filteredUnlistedProviderModels = unlistedProviderModels.filter((item) => item !== model && matchesProviderModelQuery(item));
+  const chooseProviderModel = async (nextModel: string) => {
+    const provider = selectedProvider;
+    if (provider && nextModel && provider.modelAllowlist.length && !provider.modelAllowlist.includes(nextModel)) {
+      setAssistantSettingsStatus(`Adding ${nextModel} to ${provider.name}'s allowed models…`);
+      try {
+        await updateProvider(provider.id, {
+          name: provider.name,
+          providerType: provider.providerType,
+          endpoint: provider.endpoint,
+          local: provider.local,
+          defaultModel: provider.defaultModel,
+          modelAllowlist: [...provider.modelAllowlist, nextModel],
+          credentialEnv: provider.credentialRef ? undefined : provider.credentialEnv,
+          credentialRef: provider.credentialRef,
+          permitsSensitiveData: provider.permitsSensitiveData,
+          retention: provider.retention,
+          residency: provider.residency,
+          options: provider.options,
+          metadata: provider.metadata,
+          expectedRevision: provider.revision,
+        });
+      } catch (error) {
+        void logCaughtDiagnostic("interface.sessions.model_allowlist_update_failed", "The model could not be added to the provider's allowed models.", error, "assistant_settings");
+        setAssistantSettingsStatus(error instanceof Error ? error.message : `Could not add ${nextModel} to ${provider.name}'s allowed models.`);
+        return;
+      }
+    }
+    await proposeProviderRuntime(providerId, nextModel);
+  };
   const modelPlaceholder = modelDiscoveryInProgress
     ? "Discovering models…"
     : selectedProvider?.models.length
@@ -3722,7 +3780,9 @@ export function SessionsPage() {
                 <div className="chat-settings-fields" data-guide="assistant-runtime">
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy} onChange={(event) => { const next = event.target.value as "provider" | "harness"; if (engagement) runtimeDefaultEngagementRef.current = engagement.id; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); setAssistantSettingsStatus("Runtime updated. Applies to your next message."); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.defaultModel?.trim() || selectedHarness?.models[0] || ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
                 {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={composerBusy} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, nextProvider?.models[0] ?? ""); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy} onChange={(event) => { const profile = harnesses.find(item => item.id === event.target.value); setHarnessSessionId(""); setSelectedMcpIds([]); setHarnessId(event.target.value); setModel(profile?.defaultModel || profile?.models[0] || ""); setAssistantSettingsStatus("Harness updated. Applies to your next message."); }}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
-                {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => void proposeProviderRuntime(providerId, event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
+                {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) + unlistedProviderModels.length > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredUnlistedProviderModels.length > 0
+                  ? <><optgroup label="Allowed models">{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup><optgroup label={`More ${selectedProvider?.name ?? "provider"} models · adds to allowed`}>{filteredUnlistedProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup></>
+                  : filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={composerBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={composerBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
@@ -3972,10 +4032,10 @@ export function SessionsPage() {
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
-            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label}</h3>{group.sessions.map((session) => {
+            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.sessions.length}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.sessions.map((session) => {
               const actionsOpen = sessionActionsId === session.id;
               const activityState = sessionActivity[session.id] ?? "idle";
-              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
+              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
               return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
@@ -3996,7 +4056,7 @@ export function SessionsPage() {
                   }
                   const bounds = event.currentTarget.getBoundingClientRect();
                   const menuWidth = 196;
-                  const menuHeight = 176;
+                  const menuHeight = 212;
                   const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
                   setSessionActionsPosition({
                     left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
@@ -4005,7 +4065,7 @@ export function SessionsPage() {
                   });
                   setSessionActionsId(session.id);
                 }}
-              >{deletingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
+              >{deletingSessionId === session.id || archivingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
                 ref={sessionActionsMenuRef}
                 id={`conversation-actions-${session.id}`}
                 className="session-actions-menu"
@@ -4021,7 +4081,7 @@ export function SessionsPage() {
                   const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
                   items[next]?.focus();
                 }}
-              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
+              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
             {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}

@@ -462,6 +462,28 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         json={"title": "Stale title", "expected_revision": 1},
     )
     assert stale_rename.status_code == 409
+    archived = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={"archived": True, "expected_revision": renamed.json()["revision"]},
+    )
+    assert archived.status_code == 200
+    assert archived.json()["title"] == "Renamed API conversation"
+    assert archived.json()["metadata"]["archived_at"]
+    assert store.get(ChatSession, session_id).metadata["archived_at"]
+    unarchived = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={"archived": False},
+    )
+    assert unarchived.status_code == 200
+    assert "archived_at" not in unarchived.json()["metadata"]
+    assert (
+        client.patch(
+            f"/api/v1/chat-sessions/{session_id}", headers=_auth(), json={}
+        ).status_code
+        == 422
+    )
     assert (
         client.post("/api/v1/chat-sessions", headers=_auth(), json={}).status_code
         == 405

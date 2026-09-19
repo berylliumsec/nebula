@@ -1312,3 +1312,87 @@ def test_openrouter_null_prompt_limit_uses_the_context_window():
     assert route.context_window == 200_000
     assert route.max_input_tokens == 200_000
     assert route.provider_slug == "anthropic"
+
+
+def _openrouter_discovery(allowed, *, filtered_status=200):
+    observed = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append((request.url.path, dict(request.url.params)))
+        if request.url.path == "/api/v1/key":
+            return httpx.Response(200, json={"data": {}})
+        if request.url.path == "/api/v1/providers":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"name": "Together", "slug": "together"},
+                        {"name": "Fireworks", "slug": "fireworks"},
+                    ]
+                },
+            )
+        if request.url.path == "/api/v1/models/user":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "us/served"},
+                        {"id": "offshore/only"},
+                        {"id": "us/paged"},
+                    ]
+                },
+            )
+        assert request.url.path == "/api/v1/models"
+        if filtered_status != 200:
+            return httpx.Response(filtered_status, json={})
+        if request.url.params.get("offset") == "1":
+            return httpx.Response(
+                200, json={"data": [{"id": "us/paged"}], "links": {"next": None}}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "us/served"}, {"id": "not/visible-to-account"}],
+                "links": {"next": "/api/v1/models?providers=together&offset=1&limit=1"},
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-us",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+            options={"openrouter_providers": list(allowed)},
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    return asyncio.run(provider.health()), observed
+
+
+def test_openrouter_discovery_lists_only_models_the_allowed_providers_serve():
+    health, observed = _openrouter_discovery(["together", "unknown-host"])
+
+    assert health.healthy is True
+    # Account visibility and upstream allowlist both apply; pagination is followed.
+    assert health.models == ["us/served", "us/paged"]
+    filtered = [params for path, params in observed if path == "/api/v1/models"]
+    assert filtered == [
+        {"providers": "together"},
+        {"providers": "together", "offset": "1"},
+    ]
+
+
+def test_openrouter_discovery_lists_nothing_when_no_allowed_provider_is_known():
+    # OpenRouter would ignore unknown slugs and return every model.
+    health, observed = _openrouter_discovery(["unknown-host"])
+
+    assert health.healthy is True
+    assert health.models == []
+    assert all(path != "/api/v1/models" for path, _params in observed)
+
+
+def test_openrouter_discovery_fails_closed_when_the_provider_filter_fails():
+    health, _observed = _openrouter_discovery(["together"], filtered_status=500)
+
+    assert health.healthy is False
+    assert health.models == []
