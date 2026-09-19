@@ -24,6 +24,15 @@ class ModelDescriptor(BaseModel):
     route_limits_checked_at: str | None = None
 
 
+# Descriptor keys owned by endpoint verification, not by catalog discovery.
+ROUTE_LIMIT_FIELDS = (
+    "route_limits",
+    "route_limits_verified",
+    "route_limits_checked_at",
+    "route_limits_error",
+)
+
+
 class ModelRouteDescriptor(BaseModel):
     provider_name: str
     # OpenRouter provider slug (the endpoint tag before "/"), used for allowlists.

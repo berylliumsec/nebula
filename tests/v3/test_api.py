@@ -9,6 +9,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
+from nebula.v3.context import resolve_context_limits
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
 from nebula.v3.domain import (
     AgentRun,
@@ -774,6 +775,70 @@ def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
     assert stored.metadata["model_descriptors"][0]["context_window"] == 200_000
     assert stored.metadata["model_descriptors"][0]["max_output_tokens"] == 32_000
     assert len(stored.metadata["model_catalog_revision"]) == 64
+
+
+def test_provider_health_keeps_verified_openrouter_route_limits(api, monkeypatch):
+    client, store, _ = api
+    routes = {
+        "route_limits": [
+            {
+                "provider_name": "Provider A",
+                "provider_slug": "provider-a",
+                "context_window": 1_048_576,
+                "max_input_tokens": 1_048_576,
+                "max_output_tokens": 262_144,
+                "supported_parameters": ["tools"],
+                "status": 0,
+            }
+        ],
+        "route_limits_verified": True,
+        "route_limits_checked_at": "2026-09-19T20:33:00+00:00",
+        "route_limits_error": None,
+    }
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-verified-routes",
+            name="OpenRouter",
+            provider_type="openrouter",
+            model_allowlist=["deepseek/model"],
+            metadata={
+                "model_descriptors": [
+                    {"id": "deepseek/model", "name": "Model", **routes}
+                ]
+            },
+        )
+    )
+
+    async def healthy(runtime):
+        return ProviderHealth(
+            provider_id=runtime.config.id,
+            healthy=True,
+            models=["deepseek/model"],
+            model_descriptors=[
+                ModelDescriptor(
+                    id="deepseek/model",
+                    name="Model",
+                    context_window=1_048_576,
+                    max_output_tokens=262_144,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
+
+    first = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+    second = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+
+    assert first.status_code == second.status_code == 200
+    stored = store.get(ProviderProfile, profile.id)
+    assert stored.revision == profile.revision + 1
+    descriptor = stored.metadata["model_descriptors"][0]
+    assert {key: descriptor[key] for key in routes} == routes
+    limits = resolve_context_limits(
+        stored, model="deepseek/model", required_parameters={"tools"}
+    )
+    assert limits.route_limits_verified is True
+    assert limits.context_window == 1_048_576
 
 
 def test_provider_health_reports_discovered_models_outside_the_allowlist(
