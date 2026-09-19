@@ -3,6 +3,7 @@ import { Sparkles } from "lucide-react";
 import type { TypeSafeIntegration } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
+import { vaultUnavailableNote } from "../hooks/useCredentialVault";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
 import { useConfirmation } from "./DialogSystem";
 
@@ -126,7 +127,7 @@ export function TypeSafeIntegrationSettings() {
       {showForm ? <form className="typesafe-form" onSubmit={(event) => void save(event)}>
         <label>TypeSafe API key<input type="password" autoComplete="new-password" value={secret} placeholder="API key" disabled={disabled} onChange={(event) => setSecret(event.target.value)} /></label>
         {status?.vaultAvailable === false
-          ? <p className="provider-dialog-note">The operating-system credential vault is unavailable, so the key is kept for this Nebula session only.</p>
+          ? <p className="provider-dialog-note">{vaultUnavailableNote(status.vaultState, "key")}</p>
           : <label className="provider-consent"><input type="checkbox" checked={sessionOnly} disabled={disabled} onChange={(event) => setSessionOnly(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the key in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
         <footer>
           <span>{status?.source === "environment" ? "A saved key replaces the environment key." : "Without a saved key, Core uses TYPESAFE_API_KEY from its environment."}</span>

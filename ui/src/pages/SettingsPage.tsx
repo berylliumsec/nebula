@@ -17,6 +17,7 @@ import { PostToolAssistantSettings } from "../components/PostToolAssistantSettin
 import { announceSettingsSaved, SettingsSaveFeedback } from "../components/SettingsSaveFeedback";
 import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
+import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
 import { ShowMeHow } from "../guides/ShowMeHow";
@@ -123,6 +124,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     workspaceState,
     engagement,
   } = useWorkspace();
+  const vault = useCredentialVault();
   const [adding, setAdding] = useState(false);
   const [editingProvider, setEditingProvider] = useState<ProviderHealth>();
   const [selected, setSelected] = useState<ProviderCatalogEntry>();
@@ -451,7 +453,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         if (!api) throw new Error("Nebula Core must be available to store a credential.");
         const credential = await api.createCredential(
           credentialSecret,
-          sessionCredential ? "session" : "vault",
+          sessionCredential || !vault.available ? "session" : "vault",
         );
         createdCredentialRef = credential.reference;
       }
@@ -825,7 +827,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             <label>Default model<select aria-describedby="provider-model-help" value={model} disabled={!dialogModels.length} onChange={(event) => setModel(event.target.value)}><option value="">{dialogModels.length ? "Automatic (first available model)" : "Discovered after saving"}</option>{filteredDialogModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, dialogModelDescriptors)}</option>)}</select></label>
             <p className="provider-dialog-note" id="provider-model-help">{dialogModelSummary ?? (dialogModels.length ? "Choose a model reported by this runtime, or leave automatic selection enabled." : "Save the profile to run model discovery. Then edit it to choose a default from the reported models.")}</p>
             <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
-            {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
+            {credentialSecret && (vault.available
+              ? <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>
+              : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "credential")}</p>)}
             {dialogProviderType === "openrouter" && <UpstreamProviderPicker
               catalog={upstreamDirectory.length ? upstreamDirectory : upstreamCatalog(editingProvider?.metadata)}
               directoryState={upstreamDirectoryState}
@@ -846,7 +850,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
               {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow project and document data</strong><small>Automatically permit bounded excerpts for knowledge-enabled requests. Local-only items remain blocked.</small></span></label>}
             </div>
             </details>
-            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
+            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential || !vault.available ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
             <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}

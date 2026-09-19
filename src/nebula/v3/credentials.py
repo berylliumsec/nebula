@@ -8,7 +8,7 @@ import os
 from contextlib import closing
 import re
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 import keyring
@@ -27,6 +27,17 @@ _TRUSTED_VAULT_BACKEND_MODULES = frozenset(
         "keyring.backends.SecretService",
         "keyring.backends.macOS",
     }
+)
+
+VaultState = Literal["available", "locked", "unavailable"]
+
+_VAULT_LOCKED_DETAIL = (
+    "the operating-system credential vault is locked; unlock it on the Nebula "
+    "host, or use an environment reference or session-only credential"
+)
+_VAULT_UNAVAILABLE_DETAIL = (
+    "the operating-system credential vault is unavailable; use an "
+    "environment reference or session-only credential"
 )
 
 
@@ -91,7 +102,26 @@ class CredentialStore:
                 self.keyring_backend = None
 
     @property
+    def vault_state(self) -> VaultState:
+        """Whether the OS vault can store a credential right now.
+
+        A Linux vault is usually present but locked on a headless host: nothing
+        unlocks the collection when Core runs as a service with no desktop
+        login. Reporting that as available offers a save that always fails, so
+        the lock state is part of the answer.
+        """
+
+        if not self._backend_usable():
+            return "unavailable"
+        if isinstance(self.keyring_backend, Keyring):
+            return self._secret_service_state()
+        return "available"
+
+    @property
     def vault_available(self) -> bool:
+        return self.vault_state == "available"
+
+    def _backend_usable(self) -> bool:
         if self.keyring_backend is None:
             return False
         # keyring can discover third-party fallback backends, including
@@ -114,6 +144,23 @@ class CredentialStore:
             )
             return False
 
+    def _secret_service_state(self) -> VaultState:
+        """Read the Linux collection's lock state without raising a prompt."""
+
+        try:
+            with closing(secretstorage.dbus_init()) as connection:
+                collection = self._secret_service_collection(connection)
+                return "locked" if collection.is_locked() else "available"
+        except Exception as caught_error:
+            record_caught_exception(
+                "providers",
+                "providers.credentials.caught_failure_006",
+                "A handled providers operation raised an exception.",
+                caught_error,
+                stage="credentials",
+            )
+            return "unavailable"
+
     def create(self, request: CredentialCreateRequest) -> CredentialStatus:
         value = request.secret.get_secret_value()
         if not value or len(value) > 16_384:
@@ -125,10 +172,10 @@ class CredentialStore:
             return CredentialStatus(
                 reference=reference, persistence="session", available=True
             )
-        if not self.vault_available or self.keyring_backend is None:
+        state = self.vault_state
+        if state != "available" or self.keyring_backend is None:
             raise CredentialUnavailableError(
-                "the operating-system credential vault is unavailable; use an "
-                "environment reference or session-only credential"
+                _VAULT_LOCKED_DETAIL if state == "locked" else _VAULT_UNAVAILABLE_DETAIL
             )
         try:
             if isinstance(self.keyring_backend, Keyring):
@@ -197,9 +244,10 @@ class CredentialStore:
         if reference.startswith("session:"):
             self._session.pop(reference, None)
             return
-        if self.keyring_backend is None or not self.vault_available:
+        state = self.vault_state
+        if self.keyring_backend is None or state != "available":
             raise CredentialUnavailableError(
-                "the operating-system credential vault is unavailable"
+                _VAULT_LOCKED_DETAIL if state == "locked" else _VAULT_UNAVAILABLE_DETAIL
             )
         if isinstance(self.keyring_backend, Keyring):
             try:
@@ -231,7 +279,7 @@ class CredentialStore:
                 ) from exc
 
     def _vault_value(self, reference: str) -> str | None:
-        if self.keyring_backend is None or not self.vault_available:
+        if self.keyring_backend is None or not self._backend_usable():
             return None
         try:
             if (
@@ -253,18 +301,21 @@ class CredentialStore:
             )
             return None
 
+    def _secret_service_collection(self, connection: object) -> Any:
+        """The collection keyring itself would use, resolved without a prompt."""
+
+        preferred = getattr(self.keyring_backend, "preferred_collection", None)
+        if preferred is not None:
+            return secretstorage.Collection(connection, preferred)
+        return secretstorage.get_collection_by_alias(connection, "default")
+
     def _secret_service_write(self, identifier: str, value: str) -> None:
         """Save in an unlocked existing collection without running any prompt."""
         from secretstorage.collection import SS_PREFIX, format_secret, open_session
 
         backend = cast(Keyring, self.keyring_backend)
         with closing(secretstorage.dbus_init()) as connection:
-            preferred = getattr(backend, "preferred_collection", None)
-            collection = (
-                secretstorage.Collection(connection, preferred)
-                if preferred is not None
-                else secretstorage.get_collection_by_alias(connection, "default")
-            )
+            collection = self._secret_service_collection(connection)
             if collection.is_locked():
                 raise CredentialUnavailableError(
                     "The host credential vault is locked. Unlock it on the Nebula host "
@@ -297,12 +348,7 @@ class CredentialStore:
         """Never invoke a desktop unlock or confirmation prompt from Core."""
         backend = self.keyring_backend
         with closing(secretstorage.dbus_init()) as connection:
-            preferred = getattr(backend, "preferred_collection", None)
-            collection = (
-                secretstorage.Collection(connection, preferred)
-                if preferred is not None
-                else secretstorage.get_collection_by_alias(connection, "default")
-            )
+            collection = self._secret_service_collection(connection)
             if collection.is_locked():
                 raise CredentialUnavailableError(
                     "The host credential vault is locked. Unlock it on the Nebula host and retry."
@@ -330,12 +376,7 @@ class CredentialStore:
         """
         backend = self.keyring_backend
         with closing(secretstorage.dbus_init()) as connection:
-            preferred = getattr(backend, "preferred_collection", None)
-            collection = (
-                secretstorage.Collection(connection, preferred)
-                if preferred is not None
-                else secretstorage.get_collection_by_alias(connection, "default")
-            )
+            collection = self._secret_service_collection(connection)
             if collection.is_locked():
                 return None
             query = backend._query(  # type: ignore[union-attr]
@@ -364,5 +405,6 @@ __all__ = [
     "CredentialStatus",
     "CredentialStore",
     "CredentialUnavailableError",
+    "VaultState",
     "valid_credential_reference",
 ]

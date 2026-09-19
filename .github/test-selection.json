@@ -1,24 +1,27 @@
 {
-  "change_digest": "850290ca4d917bacf6fd83ce601ed3705bfb987b7dcb9dff0fb70c6232f45459",
-  "reviewed_by": "Claude review of side navigation current-page authority",
-  "reason": "SideNav NavLinks matched their canonical base path with `end`, so no primary navigation item was current on finding/report detail URLs (ReportsPage auto-opens its first report, so Reports was rarely highlighted), Library detail URLs, or the Project page's assets/evidence/sources tabs. SideNav now derives the current item from navigationItemForPath, the same authority TopBar uses, and sets aria-current=\"page\" and the active class from one boolean; navigationItemForPath also maps the legacy /assets, /evidence and /knowledge routes (which render the Project page in place when no project is loaded) to Project. SideNav.test.tsx covers every canonical detail and tab route in the standard and Zero variants, section-root hrefs from a detail page, and the legacy routes; TopBar.test.tsx covers the helper change. The new Playwright journey opens a finding, follows the side navigation to Reports (auto-selected detail) and Project, and switches Project tabs in Zero Dark and Dark: critical-workspaces runs it on desktop and compact beside the unchanged side-nav baselines, and the phone-shell entries run it through the sidebar drawer on mobile Chromium and WebKit beside the existing phone shell, navigation, typography and drawer-layering contracts. Merging main brought #361, which keeps the phone drawer above resource inspectors, so the phone path now reads the section from the drawer on the finding detail route itself instead of closing the inspector first. App.test.tsx renders the full shell with the side navigation.",
-  "exclusions": "No Python or native tests: no backend, catalog or Tauri change. No screenshot baselines change: every baseline captures a base route where `end` already matched, and Link renders the same anchor markup as NavLink, so critical-workspaces re-runs them unchanged. Other mobile widths (small/wide/narrow) are excluded because the fix is width-independent URL state covered on phone viewports in mobile Chromium (Pixel 5) and mobile WebKit (iPhone 13). The calm-structure single-active-navigation check is not catalogued narrowly; the new journey asserts exactly one current item on each route, and it passed locally on desktop and compact. No full suites.",
+  "change_digest": "454636bc41090c7a6c6b92a71acf34748f336bf4cbcd48bcd31d3f9853b7d361",
+  "reviewed_by": "Claude review of locked credential vault handling",
+  "reason": "CredentialStore.vault_available only checked that a trusted keyring backend existed with a positive priority, so a Linux host whose SecretService collection is locked \u2014 the normal state when Core runs headless under systemd, where nothing performs the PAM unlock a graphical login would \u2014 reported the vault as available. Every dialog that defaults to vault storage (the Jev key, provider credentials, harness and MCP credentials, VPN profile passwords) therefore offered a save that always failed with a 503. vault_state now reports available/locked/unavailable, probing the collection without ever raising a desktop prompt, vault_available derives from it, create/delete name the locked case, a GET /credentials/vault endpoint and the Jev status carry the state, and the four dialogs fall back to session storage with a note that names the remedy. test_credentials.py covers the locked, unlocked and unreachable states, the refused vault write, and the new endpoint and Jev status; test_mcp_import.py covers the import guard that now reads vault_state. useCredentialVault.test.tsx covers the shared hook and its copy, ToolSuggestions.test.tsx the locked Jev panel, HarnessSettings.test.tsx and EngagementPolicySettings.loading.test.tsx the dialogs and fixtures that carry the new field.",
+  "exclusions": "No native tests: no Tauri or catalog change. No screenshot baselines change: the new notes render only when Core reports a vault that cannot take a secret, and every baseline captures a dialog-free surface. Playwright is limited to tool-suggestions, whose real-Core journey saves a Jev key against a host vault that is locked or absent, and mcp-import, which covers the MCP credential and import dialogs; both exercise the changed branch end to end. Other areas are excluded because the change is confined to credential storage copy and the persistence argument, with no routing, layout or theme effect. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 72,
+    "python": 45,
+    "frontend": 33,
     "native": 0,
-    "playwright": 26
+    "playwright": 12
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_credentials.py",
+    "tests/v3/test_mcp_import.py"
+  ],
   "frontend": [
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/App.test.tsx"
+    "ui/src/hooks/useCredentialVault.test.tsx",
+    "ui/src/components/ToolSuggestions.test.tsx",
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:critical-workspaces",
-    "entry:phone-shell/mobile-chromium",
-    "entry:phone-shell/mobile-webkit"
+    "area:tool-suggestions",
+    "area:mcp-import"
   ]
 }

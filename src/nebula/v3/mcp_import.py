@@ -222,13 +222,17 @@ def import_mcp_config(
         entries.append(entry)
 
     if any(draft.literals for draft in drafts):
-        if request.literal_secrets == "vault" and not credential_store.vault_available:
+        vault_state = credential_store.vault_state
+        if request.literal_secrets == "vault" and vault_state != "available":
+            reason = (
+                "vault is locked" if vault_state == "locked" else "vault is unavailable"
+            )
             for draft in drafts:
                 if draft.literals:
                     draft.entry.action = "invalid"
                     draft.entry.error = (
                         "this server has literal credentials and the host credential "
-                        "vault is unavailable; replace them with ${NAME} environment "
+                        f"{reason}; replace them with ${{NAME}} environment "
                         "references or store them for this session only"
                     )
             drafts = [draft for draft in drafts if draft.entry.action != "invalid"]

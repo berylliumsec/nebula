@@ -170,6 +170,85 @@ def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_pat
     assert b"never-persist-this" not in database_path.read_bytes()
 
 
+def _fake_secret_service(monkeypatch, *, locked, reachable=True):
+    """Stand in for the host SecretService with a known lock state."""
+
+    import secretstorage
+    from types import SimpleNamespace
+
+    def dbus_init():
+        if not reachable:
+            raise RuntimeError("no session bus")
+        return SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(secretstorage, "dbus_init", dbus_init)
+    monkeypatch.setattr(
+        secretstorage,
+        "get_collection_by_alias",
+        lambda *_: SimpleNamespace(is_locked=lambda: locked),
+    )
+    monkeypatch.setattr(CredentialStore, "_backend_usable", lambda _: True)
+    from keyring.backends.SecretService import Keyring
+
+    return CredentialStore(Keyring())
+
+
+def test_locked_linux_vault_is_reported_and_not_offered(monkeypatch):
+    store = _fake_secret_service(monkeypatch, locked=True)
+
+    assert store.vault_state == "locked"
+    assert store.vault_available is False
+    with pytest.raises(CredentialUnavailableError, match="vault is locked"):
+        store.create(CredentialCreateRequest(secret=SecretStr("secret")))
+    with pytest.raises(CredentialUnavailableError, match="vault is locked"):
+        store.delete("vault:" + "a" * 32)
+
+    # Session storage stays open while the host vault is locked.
+    session = store.create(
+        CredentialCreateRequest(secret=SecretStr("secret"), persistence="session")
+    )
+    assert session.persistence == "session"
+    assert store.resolve(session.reference).get_secret_value() == "secret"
+
+
+def test_unlocked_linux_vault_is_available_and_unreachable_one_is_not(monkeypatch):
+    assert _fake_secret_service(monkeypatch, locked=False).vault_state == "available"
+    unreachable = _fake_secret_service(monkeypatch, locked=False, reachable=False)
+    assert unreachable.vault_state == "unavailable"
+    assert unreachable.vault_available is False
+
+
+def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
+    credential_store = _fake_secret_service(monkeypatch, locked=True)
+    client = TestClient(
+        create_app(
+            NebulaStore(tmp_path / "vault-status.db"),
+            auth_token="test-token",
+            credential_store=credential_store,
+        )
+    )
+    auth = {"Authorization": "Bearer test-token"}
+
+    with client:
+        status = client.get("/api/v1/credentials/vault", headers=auth)
+        assert status.status_code == 200
+        assert status.json() == {"state": "locked", "available": False}
+
+        integration = client.get("/api/v1/integrations/typesafe", headers=auth)
+        assert integration.status_code == 200
+        assert integration.json()["vault_state"] == "locked"
+        assert integration.json()["vault_available"] is False
+
+        refused = client.post(
+            "/api/v1/credentials",
+            headers=auth,
+            json={"secret": "never-persist-this", "persistence": "vault"},
+        )
+        assert refused.status_code == 503
+        assert "locked" in refused.json()["detail"]
+        assert "never-persist-this" not in refused.text
+
+
 @pytest.mark.parametrize(
     "collection_locked,item_locked,expected",
     [
@@ -220,7 +299,7 @@ def test_linux_vault_reads_never_prompt(
     monkeypatch.setattr(
         Keyring, "get_password", lambda *_: pytest.fail("interactive read used")
     )
-    monkeypatch.setattr(CredentialStore, "vault_available", property(lambda _: True))
+    monkeypatch.setattr(CredentialStore, "_backend_usable", lambda _: True)
     store = CredentialStore(Keyring())
     assert store._vault_value("vault:" + "a" * 32) == expected
     assert connection.closed
@@ -262,7 +341,7 @@ def test_linux_vault_mutations_never_prompt(monkeypatch, operation, state):
     monkeypatch.setattr(
         Keyring, "delete_password", lambda *_: pytest.fail("interactive delete")
     )
-    monkeypatch.setattr(CredentialStore, "vault_available", property(lambda _: True))
+    monkeypatch.setattr(CredentialStore, "vault_state", property(lambda _: "available"))
     store = CredentialStore(Keyring())
 
     def mutate():
