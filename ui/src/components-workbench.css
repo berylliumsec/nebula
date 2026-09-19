@@ -592,6 +592,9 @@ kbd { font-size: 11px; }
 .session-list-group-toggle svg { transition: transform .12s ease; }
 .session-list-group-toggle svg.collapsed { transform: rotate(-90deg); }
 .session-list-group-toggle span { font-variant-numeric: tabular-nums; opacity: .8; }
+.chat-archived-notice { display: flex; align-items: center; gap: 8px; margin: 6px 12px 0; padding: 5px 6px 5px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); color: var(--muted-strong); font-size: 12px; }
+.chat-archived-notice > span { flex: 1; min-width: 0; }
+.chat-archived-notice > svg { flex: none; }
 .session-list nav > button { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 46px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }

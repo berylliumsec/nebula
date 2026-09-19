@@ -484,6 +484,24 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         ).status_code
         == 422
     )
+    rearchived = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={"archived": True},
+    )
+    assert rearchived.json()["metadata"]["archived_at"]
+    continued = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "provider_id": profile.id,
+            "session_id": session_id,
+            "messages": [{"role": "user", "content": "Back again"}],
+        },
+    )
+    assert continued.status_code == 200
+    assert "archived_at" not in store.get(ChatSession, session_id).metadata
     assert (
         client.post("/api/v1/chat-sessions", headers=_auth(), json={}).status_code
         == 405

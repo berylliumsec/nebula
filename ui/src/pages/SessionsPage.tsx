@@ -902,6 +902,7 @@ export function SessionsPage() {
     return ["Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
       .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
   }, [sessionActivity, visibleSessions]);
+  const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
     ? Math.min(100, Math.round((activeContextStatus.estimatedInputTokens / activeContextStatus.targetInputTokens) * 100))
@@ -2897,6 +2898,9 @@ export function SessionsPage() {
       return;
     }
 
+    // Core returns an archived conversation to the active list when the operator writes to it.
+    if (sessionId) setSessions((current) => current.map((item) => item.id === sessionId && item.archivedAt ? { ...item, archivedAt: undefined } : item));
+
     if (queuedFollowUp && !queueOptions) {
       setQueuedFollowUps((current) => current.map((item) => item.id === queuedFollowUp.id
         ? { ...item, status: "sending", detail: undefined }
@@ -3975,6 +3979,7 @@ export function SessionsPage() {
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
               {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
+              {activeArchivedSession && <div className="chat-archived-notice" role="status"><Archive size={14} aria-hidden="true" /><span>This conversation is archived. Sending a message moves it back to your conversations.</span><button className="button quiet" type="button" disabled={Boolean(archivingSessionId)} onClick={() => void setConversationArchived(activeArchivedSession, false)}>Unarchive</button></div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}
               {queuedFollowUps.length > 0 && <section className="chat-follow-up-queue"><strong>Old browser queue</strong><p>Import these messages into Core, paused for review. Uncertain sending entries need review.</p>{queuedFollowUps.map(item => <div key={item.id}><p>{item.text}</p><button type="button" onClick={() => void (async () => { if (await submit(undefined, item, {paused: true, key: `legacy-${item.id}`, uncertain: item.status !== "queued"})) { setQueuedFollowUps(current => current.filter(row => row.id !== item.id)); } })()}>Import paused</button><button type="button" onClick={() => setQueuedFollowUps(current => current.filter(row => row.id !== item.id))}>Discard</button></div>)}</section>}

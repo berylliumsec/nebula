@@ -156,6 +156,7 @@ from .chat import (
     ChatRuntimeSwitchPreflight,
     ChatRuntimeSwitchPreflightRequest,
     ChatService,
+    unarchive_chat_session,
 )
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
@@ -8257,6 +8258,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
+        if request.session_id:
+            unarchive_chat_session(store, request.session_id)
         if request.backend == ChatBackend.HARNESS:
             engagement_id = request.engagement_id
             if request.session_id:

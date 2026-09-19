@@ -925,6 +925,7 @@ describe("Nebula workspace", () => {
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Archive" }));
     const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
     expect(archivedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("This conversation is archived. Sending a message moves it back to your conversations.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument();
     const archiveCall = [...fetchMock.mock.calls].reverse().find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(archiveCall?.[1]?.body))).toEqual({ archived: true, expected_revision: 2 });
@@ -932,6 +933,7 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Unarchive" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: /Archived\s*1/ })).not.toBeInTheDocument());
+    expect(screen.queryByText("This conversation is archived. Sending a message moves it back to your conversations.")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     const portReviewMenu = screen.getByRole("menu", { name: "Actions for Port review" });
     await user.click(within(portReviewMenu).getByRole("menuitem", { name: "Delete" }));
