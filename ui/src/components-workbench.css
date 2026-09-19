@@ -2755,3 +2755,26 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .code-editor-security-actions > .code-editor-secondary-workflow-action { display: none; }
   .code-editor-action-rail.mobile-actions-open .code-editor-security-actions > .code-editor-secondary-workflow-action { display: inline-flex; width: 100%; min-height: 44px; flex: 0 0 100%; }
 }
+
+/* Chat with the live terminal beside it (the same persistent shell as the Terminal tab). */
+.session-layout.chat .session-workspace.chat-terminal-open { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto minmax(0, 1fr); column-gap: 12px; min-height: 0; }
+.session-workspace.chat-terminal-open > * { grid-column: 1; min-width: 0; }
+.session-workspace.chat-terminal-open > .conversation-toolbar { grid-row: 1; }
+.session-workspace.chat-terminal-open > :not(.conversation-toolbar, .chat-side-terminal) { grid-row: 2; min-height: 0; }
+.session-workspace.chat-terminal-open > .persistent-terminal.chat-side-terminal { position: relative; grid-column: 2; grid-row: 1 / -1; width: 520px; height: auto; min-width: 0; min-height: 0; }
+.chat-side-terminal .terminal-companion-page { min-width: 0; }
+.session-layout.chat .session-workspace.chat-terminal-open.stacked { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) min(40dvh, 340px); row-gap: 8px; }
+.session-workspace.chat-terminal-open.stacked > .persistent-terminal.chat-side-terminal { grid-column: 1; grid-row: 3; width: auto; border-radius: 16px 16px 0 0; }
+/* The side pane is narrow: terminal tabs get their own row and actions wrap beneath. */
+.chat-side-terminal .terminal-toolbar-host > .terminal-tab-bar { flex-wrap: wrap; }
+.chat-side-terminal .terminal-toolbar-host .terminal-tab-strip { flex-basis: 100%; }
+.chat-side-terminal .terminal-toolbar-host .terminal-tab-actions { flex: 1 1 auto; flex-wrap: wrap; border-left: 0; padding: 2px; }
+.chat-side-terminal .terminal-companion-toolbar > button { flex: none; align-self: flex-start; margin-top: 2px; }
+.chat-side-terminal .terminal-active-actions { flex-wrap: wrap; }
+.chat-side-terminal .terminal-connection-label { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (pointer: fine) {
+  .chat-side-terminal .terminal-toolbar-host .terminal-tab-item { height: 36px; }
+  .chat-side-terminal .terminal-tab-actions :is(.icon-button, .terminal-screenshot-button) { flex-basis: 36px; width: 36px; height: 36px; min-height: 36px; }
+}
+/* On phones the stacked pane keeps only tab controls; "Open Terminal tab" has the rest. */
+.session-workspace.stacked .chat-side-terminal .terminal-header-actions { display: none; }

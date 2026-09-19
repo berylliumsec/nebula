@@ -5500,6 +5500,62 @@ test("terminal and notes keep a visible focused caret", async ({ page }, testInf
   expect(caretColor).not.toBe("rgba(0, 0, 0, 0)");
 });
 
+test("Assistant opens the live terminal beside the chat and runs commands there", async ({ page }) => {
+  const sent: string[] = [];
+  await page.routeWebSocket("**/container-terminals/terminal-preview/ws**", (socket) => {
+    socket.send(JSON.stringify({ type: "ready", reconnect_grace_seconds: 600, replay_max_bytes: 1_048_576 }));
+    socket.onMessage((message) => { sent.push(String(message)); });
+  });
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "side-terminal-chat", engagement_id: "scratch-project", title: "Side terminal", backend: "provider", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/side-terminal-chat/messages")) {
+      await route.fulfill({ json: [{ ...entity, id: "side-terminal-message", engagement_id: "scratch-project", session_id: "side-terminal-chat", sequence: 1, role: "assistant", content: "Scan first:\n\n```bash\nnmap -sV --top-ports 200 staging.example.test\n```", citations: [], metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/side-terminal-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=side-terminal-chat", "Workbench");
+  const pane = page.getByRole("region", { name: "Terminal beside chat" });
+  await expect(pane).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Run bash code in terminal" }).click();
+  await expect(pane).toBeVisible();
+  await expect(page).toHaveURL(/view=chat/);
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await expect.poll(() => sent.some((frame) => frame.includes("nmap -sV --top-ports 200 staging.example.test\\r"))).toBe(true);
+
+  const viewport = page.viewportSize()!;
+  const bounds = (await pane.boundingBox())!;
+  expect(bounds.x).toBeGreaterThanOrEqual(0);
+  expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const resizeHandle = pane.getByRole("separator", { name: "Resize terminal" });
+  if (viewport.width > 760) {
+    const composer = (await page.locator(".chat-composer").boundingBox())!;
+    expect(composer.x + composer.width).toBeLessThanOrEqual(bounds.x + 1);
+    const initialWidth = bounds.width;
+    await resizeHandle.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await pane.boundingBox())!.width).toBeGreaterThan(initialWidth);
+  } else {
+    await expect(resizeHandle).toHaveCount(0);
+  }
+
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.chat-terminal.open"))).toBe("true");
+  await openWorkspace(page, "/?view=chat&session=side-terminal-chat", "Workbench");
+  await expect(page.getByRole("region", { name: "Terminal beside chat" })).toBeVisible();
+  await page.getByRole("region", { name: "Terminal beside chat" }).getByRole("button", { name: "Hide terminal" }).click();
+  await expect(page.getByRole("region", { name: "Terminal beside chat" })).toHaveCount(0);
+  const toggle = page.getByRole("button", { name: "Show terminal" });
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await toggle.click();
+  await expect(page.getByRole("region", { name: "Terminal beside chat" })).toBeVisible();
+  await page.getByRole("region", { name: "Terminal beside chat" }).getByRole("button", { name: "Open Terminal tab" }).click();
+  await expect(page).toHaveURL(/view=terminal/);
+});
+
 test("Terminal opens Assistant beside the live shell", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   const toggle = page.getByRole("button", { name: "Assistant", exact: true });

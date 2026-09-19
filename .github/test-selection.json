@@ -1,30 +1,39 @@
 {
-  "change_digest": "8f7f6864dc7b05a2053ed272b2816af920aa3b9c7d193bcc37bdae90e47952e6",
-  "reviewed_by": "Claude review of the approved aesthetic pass (Zero Dark, Zero Light, Dark and Light on desktop and mobile) and the repaired stale interface journeys",
-  "reason": "CSS/theme refinement across all four themes plus small component edits: ProviderGoalPanel empty goal chip class and a Findings empty state with a 'Record a finding' action. Frontend tests cover the goal panel, the diagnostics notice, surface primitives and the Findings journey in App.test. Catalogued browser entries cover theme journeys (including the refreshed Zero Dark workbench, overlay and appearance baselines), sleek toolbar-action geometry with 44px touch targets on desktop, compact and mobile engines, Workbench header/sidebar navigation icons and the transcript-search layout (whose test selectors were repaired) across all eight stabilization viewports.",
-  "exclusions": "No full suites. Broader assistant, stabilization and desktop-shell catalog areas were run locally against the branch and against clean main: every branch failure there also fails on main (branch 8/3/13 vs main 14/9/22; the streaming-scroll test is flaky on main and passed 3/3 on the branch), so they are excluded as pre-existing. Zero Dark screenshot baselines were regenerated only for the intended new look. Real-Core, physical devices and the desktop Tauri window are not part of this styling change. Python is unaffected (no backend changes).",
+  "change_digest": "pending",
+  "reviewed_by": "Claude review of the approved chat side terminal (Figma 'Chat side terminal', nodes 44:3 and 44:88)",
+  "reason": "The Workbench chat gains a terminal toggle that shows the existing persistent live shell beside the conversation (resizable, width and open state remembered per device; stacked below the chat on phones with secondary controls deferred to the full Terminal tab). 'Run in terminal' from the chat now opens that pane and sends the command there instead of switching screens; from other views it keeps the previous behaviour. The new catalogued journey drives a mocked terminal websocket and asserts the command frame, side-by-side geometry, keyboard resize, remembered state, hide/show, and handoff to the Terminal tab on desktop, compact, narrow and all six mobile projects; the existing Terminal-with-Assistant journey, compact terminal, Workbench header/sidebar icons, transcript search layout and toolbar-action geometry areas guard neighbouring layouts. Frontend tests cover App and the Workbench session hooks.",
+  "exclusions": "No full suites. Python is unaffected. Visual review used the branch build against the live Core with its real terminal at 1512px and 390px in Zero Dark with no horizontal overflow; physical devices and the desktop Tauri window were not exercised.",
   "expected_tests": {
     "python": 0,
-    "frontend": 55,
+    "frontend": 47,
     "native": 0,
-    "playwright": 35
+    "playwright": 79
   },
   "python": [],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/diagnostics/DiagnosticsAvailabilityBanner.test.tsx",
-    "ui/src/components/SurfacePrimitives.test.tsx",
-    "ui/src/App.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/pages/useSessionState.test.tsx",
+    "ui/src/pages/useComposerAutosize.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:themes/desktop",
-    "entry:themes/mobile-chromium",
-    "entry:themes/mobile-webkit",
-    "entry:toolbar-actions/desktop",
-    "entry:toolbar-actions/compact",
-    "entry:toolbar-actions/mobile-chromium",
-    "entry:toolbar-actions/mobile-webkit",
+    "entry:terminal-assistant/desktop",
+    "entry:terminal-assistant/compact",
+    "entry:terminal-assistant/narrow",
+    "entry:terminal-assistant/mobile-chromium-small",
+    "entry:terminal-assistant/mobile-chromium-ledger-390",
+    "entry:terminal-assistant/mobile-chromium-wide",
+    "entry:terminal-assistant/mobile-webkit-small",
+    "entry:terminal-assistant/mobile-webkit",
+    "entry:terminal-assistant/mobile-webkit-wide",
+    "entry:compact-terminal/desktop",
+    "entry:compact-terminal/compact",
+    "entry:compact-terminal/mobile-chromium-small",
+    "entry:compact-terminal/mobile-chromium-ledger-390",
+    "entry:compact-terminal/mobile-chromium-wide",
+    "entry:compact-terminal/mobile-webkit-small",
+    "entry:compact-terminal/mobile-webkit",
+    "entry:compact-terminal/mobile-webkit-wide",
     "entry:workbench-navigation/desktop",
     "entry:workbench-navigation/compact",
     "entry:workbench-navigation/mobile-chromium-small",
@@ -40,6 +49,10 @@
     "entry:transcript-search-layout/mobile-chromium-wide",
     "entry:transcript-search-layout/mobile-webkit-small",
     "entry:transcript-search-layout/mobile-webkit",
-    "entry:transcript-search-layout/mobile-webkit-wide"
+    "entry:transcript-search-layout/mobile-webkit-wide",
+    "entry:toolbar-actions/desktop",
+    "entry:toolbar-actions/compact",
+    "entry:toolbar-actions/mobile-chromium",
+    "entry:toolbar-actions/mobile-webkit"
   ]
 }
