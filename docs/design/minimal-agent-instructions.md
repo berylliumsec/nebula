@@ -50,8 +50,9 @@ instruction precedence.
   never part of the transcript that context compaction summarizes, so the file
   survives compaction verbatim and edits apply from the next turn.
 - The first 64 KiB is included; a larger file is cut at a character boundary and the
-  instructions say so. A symlinked `AGENTS.md` must resolve inside the workspace;
-  otherwise the turn is refused with an explicit error. Each turn records the file's
+  instructions say so. A symlinked `AGENTS.md` may resolve inside the workspace or to
+  an `AGENTS.md` in the workspace or a parent folder (a sub-project sharing its
+  program's rules); any other target refuses the turn with an explicit error. Each turn records the file's
   path, SHA-256, size and truncation in its request snapshot.
 - Harness sessions keep their runtime-native handling: the harness starts in the
   project workspace and reads `AGENTS.md` itself.

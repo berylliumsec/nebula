@@ -45,7 +45,8 @@ class ProjectInstructions(NebulaModel):
 def load_project_instructions(workspace: Path) -> ProjectInstructions | None:
     """Read `<workspace>/AGENTS.md` if present.
 
-    A symlink is followed only when it resolves inside the workspace. Content beyond
+    A symlink is followed when it resolves inside the workspace or to an AGENTS.md
+    in the workspace or one of its parent folders. Content beyond
     the size cap is cut at a UTF-8 boundary and marked as truncated.
     """
 
@@ -54,9 +55,16 @@ def load_project_instructions(workspace: Path) -> ProjectInstructions | None:
     if not os.path.lexists(candidate):
         return None
     resolved = candidate.resolve()
-    if not resolved.is_relative_to(root):
+    # Sub-projects commonly link to a parent program's AGENTS.md. Allow a link into
+    # the workspace or to an AGENTS.md in the workspace or one of its ancestors, but
+    # never to an arbitrary file elsewhere (which would expose it to the model).
+    shared_parent = resolved.name == AGENTS_FILENAME and root.is_relative_to(
+        resolved.parent
+    )
+    if not resolved.is_relative_to(root) and not shared_parent:
         raise ProjectInstructionsError(
-            "AGENTS.md must stay inside the project workspace"
+            "AGENTS.md must stay inside the project workspace or link to an "
+            "AGENTS.md in one of its parent folders"
         )
     if not resolved.is_file():
         raise ProjectInstructionsError("AGENTS.md must be a regular file")

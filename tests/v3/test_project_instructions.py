@@ -194,3 +194,29 @@ def test_unusable_agents_md_is_reported_before_the_turn(tmp_path, monkeypatch):
 
     with pytest.raises(ChatConfigurationError, match="AGENTS.md could not be used"):
         service.prepare(_request(profile, engagement, session))
+
+
+def test_agents_md_may_link_to_a_parent_programs_agents_md(tmp_path):
+    program = tmp_path / "program"
+    workspace = program / "projects" / "research"
+    workspace.mkdir(parents=True)
+    (program / "AGENTS.md").write_text(RULES, encoding="utf-8")
+    (workspace / "AGENTS.md").symlink_to("../../AGENTS.md")
+
+    loaded = load_project_instructions(workspace)
+
+    assert loaded is not None and loaded.content == RULES
+
+    # Only an AGENTS.md in an ancestor qualifies, not other files or sibling trees.
+    (program / "notes.md").write_text("secret", encoding="utf-8")
+    (workspace / "AGENTS.md").unlink()
+    (workspace / "AGENTS.md").symlink_to("../../notes.md")
+    with pytest.raises(ProjectInstructionsError, match="parent folders"):
+        load_project_instructions(workspace)
+    sibling = tmp_path / "other"
+    sibling.mkdir()
+    (sibling / "AGENTS.md").write_text("elsewhere", encoding="utf-8")
+    (workspace / "AGENTS.md").unlink()
+    (workspace / "AGENTS.md").symlink_to(sibling / "AGENTS.md")
+    with pytest.raises(ProjectInstructionsError, match="parent folders"):
+        load_project_instructions(workspace)

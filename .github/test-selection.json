@@ -1,10 +1,10 @@
 {
-  "change_digest": "63ceae59a90098fd9ba2d5203de3c02a6b2bf65fe1db60f895c111554d8f5202",
-  "reviewed_by": "Claude review of per-turn project-root AGENTS.md injection for provider-backed chats",
-  "reason": "Provider chats now re-read <project>/AGENTS.md on every turn and add it to the per-turn system instructions, which are rebuilt each turn and never part of the transcript that context compaction summarizes. The new tests cover: missing file, exact read and hash, symlinks allowed only inside the workspace, directory rejection, the 64 KiB cap cut on a character boundary, re-reading edits on the next turn with a changed receipt, verbatim survival across a 1,000-message compaction while compaction inputs never contain it, the context-usage estimate counting it, chats without a workspace, and an explicit refusal for an escaping symlink. Existing selections guard skill snapshots, compaction and context-limit retries, restart reconciliation, operator help, running goals, subagent resume, the tool loop and the chat API around the modified turn preparation.",
-  "exclusions": "No full suites and no browser coverage: there is no UI change. Harness sessions are unchanged; they start in the project workspace and read AGENTS.md natively. Live-provider behaviour was not exercised.",
+  "change_digest": "690587359efea4f89ac07c0c62cad7edbd5368106dc49ef3135343e1f4b28c95",
+  "reviewed_by": "Claude review of the AGENTS.md symlink rule after a live project was refused",
+  "reason": "The live imessage project links AGENTS.md to its parent program's AGENTS.md (../../AGENTS.md), which the first rule refused, blocking provider chats there. A symlink may now resolve inside the workspace or to an AGENTS.md in the workspace or one of its ancestor folders; links to other files or to AGENTS.md files in unrelated trees are still refused. The new test covers the shared-parent link and both rejection cases; the existing AGENTS.md tests and turn-preparation selections are kept.",
+  "exclusions": "No full suites and no browser coverage: there is no UI change. Verified against the three real project workspaces on the Linux host (two with AGENTS.md, one via the shared parent link).",
   "expected_tests": {
-    "python": 18,
+    "python": 19,
     "frontend": 0,
     "native": 0,
     "playwright": 0
