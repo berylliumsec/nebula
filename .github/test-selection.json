@@ -1,25 +1,18 @@
 {
-  "change_digest": "129da4920ed12bbc1771a67e4c0575651e8515906cc3b4a31ca19f4578ac2403",
-  "reviewed_by": "Claude review of the OpenRouter unlisted-model picker fix",
-  "reason": "Provider health (_provider_health behind POST /providers/{id}/health) trimmed discovered models to the profile's model allowlist, so Assistant settings never showed the 'More <provider> models' group added in #345. Health now also returns unlisted_models and unlisted_model_descriptors; models/model_descriptors stay allowlisted, so routing and the persisted catalog are unchanged. The UI client maps the new fields, WorkspaceContext merges them into availableModels and modelDescriptors, and the chat model select stays enabled when only unlisted models exist. Selected: test_api.py (exact health JSON for allowlisted vLLM and disabled profiles plus a new OpenRouter unlisted-model route test) and test_providers.py (OpenRouter discovery and upstream filtering); App.test.tsx (Assistant settings allowlist-extension flow, now mocking the real Core response shape) and client.test.ts (health mapping); the mocked Assistant settings and provider model-switch journeys on desktop, mobile Chromium and mobile WebKit.",
-  "exclusions": "No full suites. Native unchanged. tests/v3/test_provider_verification.py::test_health_discovered_model_is_persisted_when_verified already fails on origin/main (capability verification, untouched here) and is left out. The live OpenRouter clickthrough needs the real key and is checked on the LAN Core after deploy. No LAN-origin check in CI: no origin, cookie or socket behavior changed.",
+  "change_digest": "fffa62d82ca799200c031ac0234bd51843706b3a32497c832409762b07e05796",
+  "reviewed_by": "Claude review of the stale provider verification allowlist test",
+  "reason": "Test-only change. tests/v3/test_provider_verification.py::test_health_discovered_model_is_persisted_when_verified asserted the pre-#333 behavior where verifying a model on a provider with no model allowlist wrote it into the allowlist; #333 intentionally stopped that and the test has failed on main since. Renamed to test_verifying_a_discovered_model_keeps_an_open_allowlist and it now asserts the allowlist stays empty while the verification is recorded. Selected: the whole test_provider_verification.py file (the capability verification route tests).",
+  "exclusions": "No full suites. No source, UI, native or browser changes, so frontend, native and Playwright layers are empty.",
   "expected_tests": {
-    "python": 68,
-    "frontend": 100,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_providers.py"
+    "tests/v3/test_provider_verification.py"
   ],
-  "frontend": [
-    "ui/src/App.test.tsx",
-    "ui/src/api/client.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:assistant-settings-navigation",
-    "area:provider-runtime-switch"
-  ]
+  "playwright": []
 }
