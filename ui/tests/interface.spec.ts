@@ -302,6 +302,18 @@ async function installTruthfulCore(page: Page) {
           next_offset: requested === "/home/agent" && !filter && offset === 0 ? 1 : null,
         };
       }
+    } else if (path.endsWith("/engagements/scratch-project/automation-policy")) {
+      body = {
+        ...entity,
+        id: "automation-policy-scratch",
+        engagement_id: "scratch-project",
+        approval_policy: "on_boundary",
+        network_enabled: false,
+        runner_profile_id: "local",
+        vpn_profile_id: null,
+        max_timeout_ms: 300000,
+        ...(request.method() === "PUT" ? request.postDataJSON() as Record<string, unknown> : {}),
+      };
     } else if (path.endsWith("/engagements/scratch-project/scope")) {
       body = {
         ...entity,
@@ -691,7 +703,7 @@ reloadTest("assistant upgrade uses the configured harness default for new chats"
     ...entity, id: "configured-harness", name: "Configured harness", kind: "codex_app_server",
     connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
     enabled: true, default_model: "configured-model", privacy: { local_only: true, permits_sensitive_data: true },
-    capabilities: { models: ["first-discovered", "configured-model"], checked_at: entity.updated_at },
+    capabilities: { models: ["first-discovered", "configured-model"], checked_at: entity.updated_at, authentication_state: "verified" },
   }] }));
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
@@ -1534,7 +1546,7 @@ test("mission workflow freezes harness options, stages, and URL identity", async
         service_tiers: [{ id: "priority", label: "Priority", description: "Faster execution." }],
         default_service_tier: "priority",
       }],
-      checked_at: entity.updated_at,
+      checked_at: entity.updated_at, authentication_state: "verified",
       harness_version: "0.149.0",
     },
   };
@@ -2796,7 +2808,7 @@ test("assistant live guidance steers an active Codex turn with advertised steeri
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true, skills: true },
-    capabilities: { models: ["gpt-5.6"], steering: true, interruption: true, checked_at: entity.updated_at, harness_version: "0.149.0" },
+    capabilities: { models: ["gpt-5.6"], steering: true, interruption: true, checked_at: entity.updated_at, authentication_state: "verified", harness_version: "0.149.0" },
   };
   let guidance = "";
   await page.route("**/api/v1/**", async (route) => {
@@ -2896,7 +2908,7 @@ test("assistant live guidance exposes interruption as stop and Core queue priori
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true },
-    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", steering: false, interruption: true },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0.5", steering: false, interruption: true },
   };
   let stopped = false;
   await page.route("**/api/v1/**", async (route) => {
@@ -3038,7 +3050,7 @@ test("assistant live guidance releases stale busy UI when Core reports a termina
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true },
-    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", steering: false, interruption: true },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0.5", steering: false, interruption: true },
   };
   let activityReads = 0;
   await page.route("**/api/v1/**", async (route) => {
@@ -3130,7 +3142,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0" },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0" },
       }]) });
       return;
     }
@@ -3270,7 +3282,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
         ...entity, id: "harness-ready", name: "Ready harness", kind: "codex_app_server",
         connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
         enabled: true, default_model: "gpt-5-codex", privacy: {local_only: true, permits_sensitive_data: true},
-        capabilities: {models: ["gpt-5-codex"], checked_at: entity.updated_at},
+        capabilities: {models: ["gpt-5-codex"], checked_at: entity.updated_at, authentication_state: "verified"},
       }]});
       return;
     }
@@ -4313,7 +4325,7 @@ test("AI writing submits the visible supported model", async ({ page }, testInfo
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5" },
+    capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0.5" },
   };
   let submittedModel = "";
   await page.route("**/api/v1/**", async (route) => {
@@ -4710,7 +4722,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0", live_command_output: true, planning_mode: true, goal_monitoring: true, skill_invocation: true, steering: true, interruption: true, modes: ["default", "plan"] },
+        capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0", live_command_output: true, planning_mode: true, goal_monitoring: true, skill_invocation: true, steering: true, interruption: true, modes: ["default", "plan"] },
       }]) });
       return;
     }
@@ -4735,6 +4747,31 @@ test("stabilization completed harness output keeps one continuous transcript scr
       return;
     }
     if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+      return;
+    }
+    // After the stream completes, Workbench reloads the durable transcript and turn activity.
+    if (path.endsWith("/chat/sessions/chat-harness-completion/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
+        { ...entity, id: "user-harness-completion", engagement_id: "scratch-project", session_id: "chat-harness-completion", sequence: 1, role: "user", content: "$review Run the verification.", citations: [], metadata: {} },
+        { ...entity, id: "assistant-harness-completion", engagement_id: "scratch-project", session_id: "chat-harness-completion", sequence: 2, role: "assistant", content: "**Verification completed successfully.** The operator remains in control of the next action.\n\n".repeat(30), citations: [], metadata: { harness_turn_id: harnessTurnId } },
+      ]) });
+      return;
+    }
+    if (path.endsWith(`/harness-turns/${harnessTurnId}/events`)) {
+      const base = { schema_version: "nebula.harness-activity/v1", vendor: "codex_app_server", harness_session_id: harnessSessionId, harness_turn_id: harnessTurnId, artifact_ids: [] };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        events: [
+          { ...base, id: "event-commentary", sequence: 1, type: "output_delta", item_id: "commentary-1", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I found the verification path. I’m checking the production behavior before changing anything.", payload: {} },
+          { ...base, id: "event-command-start", sequence: 2, type: "item_upsert", item_id: "command-1", item_kind: "command", item_status: "running", title: "Run verification", payload: { command: "npm test" } },
+          { ...base, id: "event-command-output", sequence: 3, type: "output_delta", item_id: "command-1", item_kind: "command", item_status: "streaming", title: "Run verification", stream: "stdout", delta: "Completed command output stays available behind its disclosure without creating a second transcript scroll.\n".repeat(80), payload: {} },
+          { ...base, id: "event-command-done", sequence: 4, type: "item_upsert", item_id: "command-1", item_kind: "command", item_status: "completed", title: "Run verification", summary: "Verification passed.", payload: { command: "npm test", exit_code: 0 } },
+        ],
+        next_sequence: 4,
+      }) });
+      return;
+    }
+    if (path.endsWith(`/harness-turns/${harnessTurnId}/interactions`)) {
       await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
       return;
     }
@@ -4892,7 +4929,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);
   // A long article's center can lie behind fixed chrome even after scrolling.
   // Exercise the visible end of the answer where the operator reaches actions.
-  await completedMessage.locator(".assistant-markdown p").last().hover();
+  await completedMessage.locator(".assistant-markdown p", { hasText: "Verification completed successfully" }).last().hover();
   await expect(completedMessage.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
   await forkAction.scrollIntoViewIfNeeded();
   await expect(forkAction).toBeInViewport();
@@ -4927,7 +4964,7 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: false },
-        capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, harness_version: "1.0.5", interruption: true },
+        capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0.5", interruption: true },
       }]) });
       return;
     }
@@ -5039,10 +5076,11 @@ test("the workbench expands to the full viewport with compact chrome and complet
 
   const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
   const focusToolbarHeight = await focusToolbar.evaluate((element) => element.getBoundingClientRect().height);
-  expect(focusToolbarHeight).toBeLessThanOrEqual(mobile ? 53 : 55);
+  // 44px icon targets (docs/design/top-bar-actions.md) plus the toolbar padding and border.
+  expect(focusToolbarHeight).toBeLessThanOrEqual(mobile ? 53 : 57);
   if (!mobile) {
     const selectedTabHeight = await page.getByRole("tab", { name: "Analyst chat", exact: true }).evaluate((element) => element.getBoundingClientRect().height);
-    expect(selectedTabHeight).toBeLessThanOrEqual(39);
+    expect(selectedTabHeight).toBeLessThanOrEqual(44);
   }
 
   const fullScreenViews = [
@@ -5063,12 +5101,15 @@ test("the workbench expands to the full viewport with compact chrome and complet
     await expect(content).toBeVisible();
     const bounds = await content.evaluate((element) => {
       const root = element.getBoundingClientRect();
-      const workspace = element.closest(".session-workspace")!.getBoundingClientRect();
+      const container = element.closest(".session-workspace")!;
+      const workspace = container.getBoundingClientRect();
+      // The chat view keeps its conversation toolbar above the content.
+      const toolbar = container.querySelector(":scope > .conversation-toolbar")?.getBoundingClientRect().height ?? 0;
       return {
         contentWidth: root.width,
         contentHeight: root.height,
         workspaceWidth: workspace.width,
-        workspaceHeight: workspace.height,
+        workspaceHeight: workspace.height - toolbar,
       };
     });
     expect(bounds.contentWidth, tabName).toBeGreaterThanOrEqual(bounds.workspaceWidth - 26);
@@ -5247,13 +5288,25 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   }
 
   const inputSurface = page.getByRole("textbox", { name: "Code editor" });
-  await inputSurface.click({ force: true });
+  // Click the editor centre like an operator; on short phones that point sits under the
+  // fixed bottom navigation, so focus and jump to the document end instead.
+  const focusEditorEnd = async () => {
+    const box = await inputSurface.boundingBox();
+    const hidden = await page.evaluate(([x, y]) => {
+      const hit = document.elementFromPoint(x, y);
+      return Boolean(hit && !hit.closest(".code-mirror-host, .code-editor-surfaces"));
+    }, [box!.x + box!.width / 2, box!.y + box!.height / 2]);
+    if (!hidden) return inputSurface.click({ force: true });
+    await inputSurface.focus();
+    await page.keyboard.press("Control+End");
+  };
+  await focusEditorEnd();
   const editor = inputSurface.locator("..").locator("..");
   const enterText = (text: string) => page.keyboard.insertText(text);
   await enterText("#include <stdio.h>");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(2);
-  await inputSurface.click({ force: true });
+  await focusEditorEnd();
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
   await expect(page.locator(".cm-line")).toHaveCount(3);
@@ -5300,7 +5353,8 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   });
   expect(geometry.hasShadowBoundary).toBe(true);
   const compactEditor = testInfo.project.name === "compact" || (page.viewportSize()?.width ?? 1_000) <= 760;
-  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? 240 : 400);
+  // A 700px-tall window keeps 44px touch targets in the header, tabs and action rail.
+  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? 230 : 400);
   expect(geometry.lineTops).toHaveLength(5);
   expect(geometry.numberTops).toHaveLength(5);
   geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
@@ -5317,6 +5371,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     await page.getByRole("button", { name: "More editor actions" }).click();
     await page.getByRole("button", { name: "Editor settings" }).click();
   } else {
+    await page.getByRole("button", { name: "More editor tools" }).click();
     await page.getByRole("button", { name: "Editor settings" }).click();
   }
   const editorSettings = page.getByRole("dialog", { name: "Editor settings and keybindings" });
@@ -5342,6 +5397,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
     await page.getByRole("button", { name: "More editor actions" }).click();
     await page.getByRole("button", { name: "Split editor" }).click();
   } else {
+    await page.getByRole("button", { name: "More editor tools" }).click();
     await page.getByRole("button", { name: "Split" }).click();
   }
   await expect(page.getByRole("textbox", { name: "Primary code editor: untitled.txt" })).toBeVisible();
@@ -6004,7 +6060,7 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
     enabled: true,
     privacy: { local_only: true, permits_sensitive_data: true },
     native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: true },
-    capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, harness_version: "1.0" },
+    capabilities: { models: ["gpt-5-codex"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0" },
   };
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -6032,7 +6088,7 @@ test("tool follow-up runtime lives in Settings and its Workbench toggles persist
   await suggestions.click();
   await expect(suggestions).toBeChecked();
   await expect.poll(() => postToolConfig.suggest_next_steps).toBe(true);
-  const enabledFeedback = page.getByRole("status");
+  const enabledFeedback = page.getByRole("status").filter({ hasText: "Next-step suggestions" });
   await expect(enabledFeedback).toContainText("Next-step suggestions enabled");
   await expect(enabledFeedback.getByRole("link", { name: "Open Settings" })).toHaveCount(0);
   if (testInfo.project.name === "desktop") await expect(page.locator(".session-toolbar")).toHaveScreenshot("tool-follow-up-workbench-toolbar.png");
@@ -6757,7 +6813,7 @@ for (const imageInput of [true, false]) {
     await page.route("**/api/v1/**", async route => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/harnesses") && route.request().method() === "GET") {
-        await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at } }] });
+        await route.fulfill({ json: [{ ...entity, id: "image-harness", name: "Image harness", kind: "codex_app_server", connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session", default_model: "image-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["image-model"], model_options: [{ model: "image-model", image_input: imageInput }], checked_at: entity.updated_at, authentication_state: "verified" } }] });
       } else if (path.endsWith("/harness-sessions/image-harness-session/activity")) {
         await route.fulfill({ json: { session_id: "image-harness-session", session_status: "idle", busy: false, live: true, last_activity_at: entity.updated_at, detail: "Ready for the next message.", plan: [] } });
       } else if (path.endsWith("/chat/sessions/image-chat/messages")) {
@@ -6855,7 +6911,7 @@ test("advanced session binding: resume existing session discovers and filters ex
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, skills: true, subagents: true },
-        capabilities: { models: ["grok-4.6"], model_options: [{ model: "grok-4.6" }], checked_at: entity.updated_at },
+        capabilities: { models: ["grok-4.6"], model_options: [{ model: "grok-4.6" }], checked_at: entity.updated_at, authentication_state: "verified" },
       }] });
       return;
     }
@@ -7298,7 +7354,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await page.route("**/api/v1/**", async route => {
       const path = new URL(route.request().url()).pathname;
       const json = (value: unknown) => route.fulfill({ json: value });
-      if (path.endsWith("/harnesses")) return json([{ ...entity, id: "harness-command-thinking", name: "Harness", kind: vendor, connection_mode: "spawn", transport: "stdio", executable: vendor === "grok_acp" ? "grok" : "codex", auth_mode: "existing_session", default_model: "security-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["security-model"], checked_at: entity.updated_at } }]);
+      if (path.endsWith("/harnesses")) return json([{ ...entity, id: "harness-command-thinking", name: "Harness", kind: vendor, connection_mode: "spawn", transport: "stdio", executable: vendor === "grok_acp" ? "grok" : "codex", auth_mode: "existing_session", default_model: "security-model", enabled: true, privacy: { local_only: true, permits_sensitive_data: true }, capabilities: { models: ["security-model"], checked_at: entity.updated_at, authentication_state: "verified" } }]);
       if (path.endsWith("/chat-sessions")) return json([{ ...entity, id: chat, engagement_id: "scratch-project", title: "Command thinking", backend: "harness", harness_profile_id: "harness-command-thinking", harness_session_id: session, model: "security-model", metadata: {} }]);
       if (path.endsWith(`/chat/sessions/${chat}/messages`)) return json([{ ...entity, id: "answer-command-thinking", engagement_id: "scratch-project", session_id: chat, sequence: 1, role: "assistant", content: "Saved response", citations: [], metadata: { harness_turn_id: turn } }]);
       if (path.endsWith(`/harness-turns/${turn}/events`)) return json({ events: [{ id: "thought", type: "item_upsert", schema_version: "nebula.harness-activity/v2", sequence: 1, vendor, harness_session_id: session, harness_turn_id: turn, item_id: "thinking-1", item_kind: "reasoning", item_status: "completed", title: "Reasoning", payload: { reasoning_summary_state: "available", reasoning_summary_text: text }, artifact_ids: [] }], next_sequence: 1 });
