@@ -1,5 +1,5 @@
 {
-  "change_digest": "pending",
+  "change_digest": "690587359efea4f89ac07c0c62cad7edbd5368106dc49ef3135343e1f4b28c95",
   "reviewed_by": "Claude review of the AGENTS.md symlink rule after a live project was refused",
   "reason": "The live imessage project links AGENTS.md to its parent program's AGENTS.md (../../AGENTS.md), which the first rule refused, blocking provider chats there. A symlink may now resolve inside the workspace or to an AGENTS.md in the workspace or one of its ancestor folders; links to other files or to AGENTS.md files in unrelated trees are still refused. The new test covers the shared-parent link and both rejection cases; the existing AGENTS.md tests and turn-preparation selections are kept.",
   "exclusions": "No full suites and no browser coverage: there is no UI change. Verified against the three real project workspaces on the Linux host (two with AGENTS.md, one via the shared parent link).",
