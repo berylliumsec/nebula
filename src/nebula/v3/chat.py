@@ -645,6 +645,30 @@ def _decoded_result(value: object) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
+def unarchive_chat_session(store: NebulaStore, session_id: str) -> None:
+    """Return an archived conversation to the active list when the operator writes to it."""
+    for _ in range(3):
+        current = store.get(ChatSession, session_id)
+        if "archived_at" not in current.metadata:
+            return
+        try:
+            store.update(
+                ChatSession,
+                session_id,
+                {
+                    "metadata": {
+                        key: value
+                        for key, value in current.metadata.items()
+                        if key != "archived_at"
+                    }
+                },
+                expected_revision=current.revision,
+            )
+            return
+        except ConflictError:  # diagnostic-expected: concurrent writer won; re-read and retry
+            continue
+
+
 class ChatService:
     """Resolve profiles, isolate retrieval, and persist completed exchanges."""
 
