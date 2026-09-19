@@ -362,6 +362,56 @@ describe("Nebula workspace", () => {
     expect(screen.getByTestId("router-location")).toHaveTextContent("/projects/engagement-1/workbench?view=chat");
   });
 
+  it("lets Assistant settings choose an OpenRouter model outside the provider allowlist", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const provider = {
+      ...entity,
+      id: "provider-1",
+      name: "OpenRouter",
+      provider_type: "openrouter",
+      endpoint: "https://openrouter.ai/api/v1",
+      enabled: true,
+      is_local: false,
+      secret_ref: "env:OPENROUTER_API_KEY",
+      model_allowlist: ["model-1"],
+      capabilities: { streaming: true },
+      privacy: { local_only: false, residency: [], permits_sensitive_data: true },
+      metadata: { default_model: "model-1" },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/providers/provider-1/health")) {
+        return new Response(JSON.stringify({ provider_id: "provider-1", healthy: true, models: ["model-1", "model-2", "model-3"], detail: null }), { status: 200 });
+      }
+      if (url.pathname.endsWith("/providers/provider-1") && init?.method === "PATCH") {
+        const { changes } = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ ...provider, ...changes, revision: 2 }), { status: 200 });
+      }
+      if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (url.pathname.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Live engagement", status: "active", metadata: {} }]), { status: 200 });
+      if (url.pathname.endsWith("/providers")) return new Response(JSON.stringify([provider]), { status: 200 });
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderApp("/sessions");
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await user.click(screen.getByRole("button", { name: "Assistant settings" }));
+    const modelSelect = await screen.findByRole("combobox", { name: "Chat model" });
+    await waitFor(() => expect(screen.getByRole("option", { name: "model-3" })).toBeInTheDocument());
+    expect(screen.getByRole("group", { name: "More OpenRouter models · adds to allowed" })).toBeInTheDocument();
+    await user.selectOptions(modelSelect, "model-3");
+
+    await waitFor(() => expect(modelSelect).toHaveValue("model-3"));
+    const patch = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-1") && init?.method === "PATCH");
+    expect(JSON.parse(String(patch?.[1]?.body))).toMatchObject({
+      changes: { model_allowlist: ["model-1", "model-3"], secret_ref: "env:OPENROUTER_API_KEY", metadata: { default_model: "model-1" } },
+      expected_revision: 1,
+    });
+  });
+
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",

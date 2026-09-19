@@ -1098,6 +1098,17 @@ class OpenAICompatibleProvider(ModelProvider):
                             )
                     except httpx.HTTPError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
                         directory = None
+                    upstream: list[UpstreamProvider] = []
+                    try:
+                        if directory is not None and not directory.is_error:
+                            upstream = openrouter_upstream_providers(directory.json())
+                    except ValueError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
+                        upstream = []
+                    served: set[str] | None = None
+                    if not response.is_error and self.openrouter_allowed_providers:
+                        served = await self._openrouter_models_served_by(
+                            client, {item.slug for item in upstream}
+                        )
                 if response.is_error:
                     return ProviderHealth(
                         provider_id=self.config.id,
@@ -1110,12 +1121,13 @@ class OpenAICompatibleProvider(ModelProvider):
                         ),
                     )
                 descriptors = openrouter_models(response.json())
-                upstream: list[UpstreamProvider] = []
-                try:
-                    if directory is not None and not directory.is_error:
-                        upstream = openrouter_upstream_providers(directory.json())
-                except ValueError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
-                    upstream = []
+                detail = "Account model catalog loaded; inference is not yet verified."
+                if served is not None:
+                    descriptors = [item for item in descriptors if item.id in served]
+                    detail = (
+                        "Showing only models served by the allowed upstream providers; "
+                        "inference is not yet verified."
+                    )
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=True,
@@ -1135,7 +1147,7 @@ class OpenAICompatibleProvider(ModelProvider):
                     and not isinstance(key_data.get("limit_remaining"), bool)
                     else None
                 ),
-                detail="Account model catalog loaded; inference is not yet verified.",
+                detail=detail,
             )
         except (
             httpx.HTTPError,
@@ -1148,6 +1160,36 @@ class OpenAICompatibleProvider(ModelProvider):
                 healthy=False,
                 detail="OpenRouter model discovery failed. Check the connection and refresh.",
             )
+
+    async def _openrouter_models_served_by(
+        self, client: httpx.AsyncClient, directory: set[str]
+    ) -> set[str]:
+        """Model ids at least one allowed upstream provider serves.
+
+        OpenRouter ignores unknown slugs in the `providers` filter and returns the
+        whole catalog when none are known, so only directory slugs are sent and an
+        empty match yields no models instead of every model.
+        """
+
+        known = [slug for slug in self.openrouter_allowed_providers if slug in directory]
+        if not known:
+            return set()
+        served: set[str] = set()
+        params = {"providers": ",".join(known)}
+        for _page in range(20):
+            response = await client.get(
+                self._path("/v1/models"), params=params, timeout=10.0
+            )
+            response.raise_for_status()
+            payload = response.json()
+            served.update(item.id for item in openrouter_models(payload))
+            links = payload.get("links") if isinstance(payload, dict) else None
+            following = links.get("next") if isinstance(links, dict) else None
+            offset = httpx.URL(following).params.get("offset") if isinstance(following, str) else None
+            if not offset:
+                break
+            params = {**params, "offset": offset}
+        return served
 
     @property
     def openrouter_allowed_providers(self) -> list[str]:
