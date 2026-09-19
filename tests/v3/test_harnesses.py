@@ -35,6 +35,7 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    AutomationProjectPolicy,
     ChatBackend,
     ChatMessage,
     ChatContentBlock,
@@ -1649,10 +1650,18 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
     async def scenario() -> None:
         store, engagement, profile, _, _, first_runtime = _runtime(tmp_path)
 
+        class Manager:
+            def project_policy(self, engagement_id: str) -> AutomationProjectPolicy:
+                return AutomationProjectPolicy(
+                    id=f"policy:{engagement_id}", engagement_id=engagement_id
+                )
+
         class Commands:
             def __init__(self, digest: str) -> None:
                 self.store = store
                 self.digest = digest
+                # Session creation reads the project execution mode through the manager.
+                self.manager = Manager()
 
             def chat_components(self, *, engagement_id: str):
                 return AutomationToolComponents(
