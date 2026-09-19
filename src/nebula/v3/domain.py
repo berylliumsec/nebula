@@ -727,8 +727,24 @@ class ScopePolicy(Entity):
     # Tools from connected sources (MCP and other non-standard sources) are
     # searched and loaded on demand instead of sent with every request.
     on_demand_tools: bool = True
+    # Sourced tools the operator keeps in every request's function list, by
+    # runtime name. Names that no longer resolve to a tool are simply unused.
+    always_loaded_tools: list[str] = Field(default_factory=list, max_length=500)
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
+
+    @field_validator("always_loaded_tools")
+    @classmethod
+    def normalize_always_loaded_tools(cls, values: list[str]) -> list[str]:
+        normalized: set[str] = set()
+        for value in values:
+            name = value.strip()
+            if not name:
+                continue
+            if len(name) > 300:
+                raise ValueError(f"tool name is too long: {name[:80]}")
+            normalized.add(name)
+        return sorted(normalized)
 
     @field_validator("allowed_cidrs")
     @classmethod

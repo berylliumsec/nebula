@@ -65,6 +65,17 @@ def test_scope_normalizes_targets_and_validates_window():
         ScopePolicy(engagement_id="eng-1", allowed_domains=["bad domain"])
 
 
+def test_scope_normalizes_always_loaded_tool_names():
+    scope = ScopePolicy(
+        engagement_id="eng-1",
+        always_loaded_tools=["  mcp.b.search ", "mcp.a.read", "mcp.b.search", "  "],
+    )
+    assert scope.always_loaded_tools == ["mcp.a.read", "mcp.b.search"]
+    assert ScopePolicy(engagement_id="eng-1").always_loaded_tools == []
+    with pytest.raises(ValidationError, match="too long"):
+        ScopePolicy(engagement_id="eng-1", always_loaded_tools=["m" * 301])
+
+
 def test_scope_treats_root_urls_as_domains_but_rejects_lossy_domain_urls():
     scope = ScopePolicy(
         engagement_id="eng-1",

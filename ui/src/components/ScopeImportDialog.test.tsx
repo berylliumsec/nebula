@@ -18,7 +18,7 @@ const scope: EngagementScopePolicy = {
   allowedPorts: [443],
   allowAllTargets: false,
   prohibitedActions: [],
-  localOnly: true, toolSuggestions: false,
+  localOnly: true, toolSuggestions: false, alwaysLoadedTools: [],
   maxConcurrency: 1,
   grants: [],
   revision: 4,

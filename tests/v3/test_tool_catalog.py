@@ -13,9 +13,15 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    McpApprovalMode,
+    McpCapabilitySnapshot,
+    McpServerProfile,
+    McpToolSnapshot,
     ScopePolicy,
+    utc_now,
 )
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
+from nebula.v3.mcp import mcp_tool_runtime_name
 from nebula.v3.providers import ToolCall
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
@@ -27,6 +33,7 @@ from nebula.v3.tool_catalog import (
     ToolCatalogBroker,
     catalog_components,
     catalog_instructions,
+    deferrable_specs,
     fingerprint,
     index_document,
     loaded_tool_names,
@@ -104,6 +111,20 @@ def test_on_demand_loading_is_on_by_default_and_can_be_turned_off():
     # Jev ranks the deferred catalog, so opting into it keeps deferral on.
     assert on_demand_enabled(
         ScopePolicy(engagement_id="e", on_demand_tools=False, tool_suggestions=True)
+    )
+
+
+def test_always_loaded_tools_stay_out_of_the_deferred_catalog():
+    specs = {**_catalog(), "run_command": _spec("run_command", "Run.", source=None)}
+    scope = ScopePolicy(engagement_id="e", always_loaded_tools=[f" {MCP_TOOL} "])
+
+    deferred = deferrable_specs(specs, always_loaded=scope.always_loaded_tools)
+
+    assert MCP_TOOL not in deferred
+    assert set(deferred) == {CREDENTIAL_TOOL, DATABASE_TOOL}
+    # A pin for a tool this runtime no longer offers defers nothing extra.
+    assert set(deferrable_specs(specs, always_loaded=["mcp.gone.tool"])) == set(
+        _catalog()
     )
 
 
@@ -529,6 +550,36 @@ def test_prepare_sends_every_tool_when_on_demand_loading_is_off(tmp_path, monkey
     assert set(prepared.tool_components.specs) == {MCP_TOOL}
 
 
+def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
+    tmp_path, monkeypatch
+):
+    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None)
+    original = service.tool_platform.chat_components
+
+    def pinned(**kwargs):
+        components = original(**kwargs)
+        return RuntimeToolComponents(
+            broker=components.broker,
+            scope=components.scope.model_copy(
+                update={
+                    "tool_suggestions": False,
+                    "always_loaded_tools": [MCP_TOOL],
+                }
+            ),
+            workspace=components.workspace,
+            specs=components.specs,
+            runtime_digest=components.runtime_digest,
+        )
+
+    service.tool_platform.chat_components = pinned
+
+    prepared = service.prepare(request)
+
+    # Nothing was left to defer, so the turn runs without the catalog tools.
+    assert prepared.turn.request_snapshot["tool_catalog"] is None
+    assert set(prepared.tool_components.specs) == {MCP_TOOL}
+
+
 def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     client = TestClient(
@@ -550,3 +601,100 @@ def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
     assert off.json()["on_demand_tools"] is False
     kept = client.put(url, json={"allowed_domains": ["example.com"]}, headers=headers)
     assert kept.json()["on_demand_tools"] is False
+
+
+def _scope_client(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=ArtifactStore(tmp_path / "artifacts"),
+            auth_token="test-token",
+        )
+    )
+    engagement = store.create(Engagement(id="eng-scope", name="Scope"))
+    return store, client, engagement, {"Authorization": "Bearer test-token"}
+
+
+def test_always_loaded_tools_are_normalized_and_kept_by_older_clients(tmp_path):
+    _, client, engagement, headers = _scope_client(tmp_path)
+    url = f"/api/v1/engagements/{engagement.id}/scope"
+
+    created = client.put(
+        url,
+        json={"always_loaded_tools": [f" {MCP_TOOL} ", MCP_TOOL, "", DATABASE_TOOL]},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["always_loaded_tools"] == sorted([MCP_TOOL, DATABASE_TOOL])
+
+    kept = client.put(url, json={"local_only": True}, headers=headers)
+    assert kept.json()["always_loaded_tools"] == sorted([MCP_TOOL, DATABASE_TOOL])
+    cleared = client.put(url, json={"always_loaded_tools": []}, headers=headers)
+    assert cleared.json()["always_loaded_tools"] == []
+
+
+def test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools(tmp_path):
+    store, client, engagement, headers = _scope_client(tmp_path)
+
+    def tool(name):
+        return McpToolSnapshot(name=name, description=f"  {name}  does work ")
+
+    store.create(
+        McpServerProfile(
+            id="mcp-tracker",
+            name="tracker",
+            transport="stdio",
+            command="/usr/bin/tracker",
+            enabled=True,
+            trusted_stdio=True,
+            disabled_tools=["delete_everything"],
+            tool_overrides={"rotate_password": McpApprovalMode.DENY},
+            capabilities=McpCapabilitySnapshot(
+                checked_at=utc_now(),
+                tools=[
+                    tool("search_issues"),
+                    tool("delete_everything"),
+                    tool("rotate_password"),
+                ],
+            ),
+        )
+    )
+    store.create(
+        McpServerProfile(
+            id="mcp-offline",
+            name="offline",
+            transport="stdio",
+            command="/usr/bin/offline",
+            enabled=False,
+            capabilities=McpCapabilitySnapshot(checked_at=utc_now(), tools=[tool("x")]),
+        )
+    )
+    store.create(
+        McpServerProfile(
+            id="mcp-unprobed",
+            name="unprobed",
+            transport="stdio",
+            command="/usr/bin/unprobed",
+            enabled=True,
+            trusted_stdio=True,
+        )
+    )
+
+    found = client.get(
+        f"/api/v1/engagements/{engagement.id}/scope/tool-candidates", headers=headers
+    )
+    assert found.status_code == 200, found.text
+    assert found.json() == [
+        {
+            "name": mcp_tool_runtime_name("mcp-tracker", "search_issues"),
+            "server_id": "mcp-tracker",
+            "server_name": "tracker",
+            "tool_name": "search_issues",
+            "description": "search_issues does work",
+        }
+    ]
+    missing = client.get(
+        "/api/v1/engagements/eng-missing/scope/tool-candidates", headers=headers
+    )
+    assert missing.status_code == 404

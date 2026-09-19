@@ -173,7 +173,7 @@ export interface BrowserScopeAddition {
   addsOrigin: boolean;
   addsPort: boolean;
   changed: boolean;
-  update: Omit<EngagementScopePolicy, "engagementId" | "revision">;
+  update: Omit<EngagementScopePolicy, "engagementId" | "revision" | "alwaysLoadedTools">;
 }
 
 /** Build the least-privilege durable scope change for a page context-menu request. */

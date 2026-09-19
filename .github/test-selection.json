@@ -1,18 +1,37 @@
 {
-  "change_digest": "87d482fe6227aea573fa87c5b5128982bf3be86ae48f64e87020dde27dd91515",
-  "reviewed_by": "Claude review of phone-width critical workspace baselines",
-  "reason": "area:critical-workspaces listed only the desktop and compact projects, so the narrow (390x844) renders of the same six workspaces were reconciled only in the full scope that playwright-impact.yml gates behind RUN_FULL_SUITE plus explicit approval. That scope does not run on pull requests, and the phone-width baselines had not moved since #190/#211: the Settings captures still showed the pre-#355 Setup/Advanced/Diagnostics tab strip instead of CompactSettingsList, and the rest still showed the pre-#355 Chat/Conversations/Activity/More companion nav that SessionsPage.tsx now renders as Chat/Terminal/Activity/More. Adding the narrow project to the area with the same \"critical workspace|navigable panoramic shell\" grep runs the same seven tests desktop and compact already run, so phone-width workspace renders are checked on every PR that maps to this area. Ten baselines are refreshed from this PR's own CI actuals (six dark, four light); reports-light and project-light already matched. The captures were byte-identical across all three CI attempts except workbench-light, which varied by two pixels. The 18 orphaned *-zero-light-*.png files are deleted: the only theme-interpolated capture is `${name}-${theme}.png` in \"Light preserves each critical workspace hierarchy\" and its loop is [\"light\"], so no test can emit a zero-light snapshot name.",
-  "exclusions": "No Python, frontend or native tests: this change touches only the Playwright impact manifest and PNG baselines, no product or backend source. No mobile-chromium/mobile-webkit phone-shell entries: those projects capture different snapshot names and none of their baselines change. The desktop and compact critical-workspaces entries stay selected because the manifest edit and the deleted desktop/compact zero-light files sit in the same area, and both projects passed unchanged on the previous runs of this branch.",
+  "change_digest": "6c16fe84fe7f9d4535d381abba685df5e00760e67670ca63b5c14a19c9ddb85f",
+  "reviewed_by": "Claude review of the always-loaded tools selector",
+  "reason": "ScopePolicy gains always_loaded_tools: a normalized, deduplicated list of runtime tool names that tool_catalog.deferrable_specs() now subtracts from the deferred catalog, so chat.py sends those schemas in the function list instead of hiding them behind tool_catalog.search. api.py accepts the field on the scope PUT with the same None-keeps-stored contract as tool_suggestions/on_demand_tools, and adds GET engagements/{id}/scope/tool-candidates, which names selectable tools exactly as the runtime does (enabled, probed MCP servers, minus enabled_tools/disabled_tools/DENY-override exclusions). tests/v3/test_tool_catalog.py covers the deferral subtraction, an unknown pin, the prepare path where a pinned tool leaves nothing to defer, the PUT normalization and keep-on-omission, and the candidates endpoint's filtering, sorting and 404. tests/v3/test_domain.py covers the validator's trimming, dedupe, sort and length rejection. tests/v3/test_tool_suggestions.py and test_chat_tool_loop.py hold the Jev and chat-loop consumers of the same deferred catalog; test_api_crud_validation.py and test_scope_import.py hold the other scope-policy API and import contracts. On the interface, ui/src/components/EngagementPolicySettings.tsx adds the Always loaded tools checklist to Project Settings › Scope with a new src/components/AlwaysLoadedTools.test.tsx (pin, unpin, a pin no server offers any more, and the empty state that links to MCP settings); client.test.ts covers the wire mapping and the PUT body; the remaining frontend files are the scope fixtures and the Omit that the new required field touches. Playwright area:tool-suggestions renders this exact panel on desktop, mobile-chromium and mobile-webkit and saves the scope through real Core, and entry:stabilization/desktop plus the narrowest and widest mobile entries re-run the Project Policy overflow audit that the new checklist sits inside. ui/tests/interface.spec.ts: the same journey opened /settings and clicked Advanced settings, which only exists once a section is showing, so it timed out at phone widths on this branch and on main alike; it now opens a section first, the way the stabilization audit already does.",
+  "exclusions": "No full suites and no native entries: no Rust or src-tauri file changed. The remaining Playwright areas are excluded because the only rendered surface that changed is the Network scope panel inside Advanced settings › Project Policy, which the /settings landing captures never open, so no screenshot baseline moves; the six stabilization projects not listed repeat the same overflow audit at intermediate viewports already bracketed by desktop, mobile-chromium-small and mobile-webkit-wide. Other Python suites are excluded because the field is additive with a default of [], no storage migration or shared schema changed, and deferrable_specs keeps its old behaviour when nothing is pinned. Frontend suites beyond the scope client, the policy form and its fixtures are excluded because no shared component, route or style outside the new checklist changed; the one CSS line is scoped to .policy-form .always-loaded-tools. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell fails on main for unrelated reasons and is tracked separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 91,
+    "frontend": 125,
     "native": 0,
-    "playwright": 21
+    "playwright": 70
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_domain.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_scope_import.py"
+  ],
+  "frontend": [
+    "ui/src/components/AlwaysLoadedTools.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
+    "ui/src/components/EngagementPolicySettings.test.ts",
+    "ui/src/components/ToolSuggestions.test.tsx",
+    "ui/src/components/ScopeImportDialog.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/api/workbenchBrowser.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "area:critical-workspaces"
+    "area:tool-suggestions",
+    "entry:stabilization/desktop",
+    "entry:stabilization/mobile-chromium-small",
+    "entry:stabilization/mobile-webkit-wide"
   ]
 }

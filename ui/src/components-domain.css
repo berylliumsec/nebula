@@ -550,6 +550,7 @@
 .policy-form .resource-checklist label > span, .mission-tool-selection .resource-checklist label > span { display: flex; flex-direction: column; gap: 2px; }
 .policy-form .resource-checklist label strong, .mission-tool-selection .resource-checklist label strong { color: var(--text); font-size: 11px; }
 .policy-form .resource-checklist label small, .mission-tool-selection .resource-checklist label small { color: var(--muted); font-size: 11px; }
+.policy-form .always-loaded-tools label > span { overflow-wrap: anywhere; }
 .mission-grants { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); }
 .mission-grants > header, .mission-grants article { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mission-grants > header > div, .mission-grants article > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }

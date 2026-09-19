@@ -1969,7 +1969,10 @@ class ChatService:
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
             deferred_specs = (
-                deferrable_specs(tool_components.specs)
+                deferrable_specs(
+                    tool_components.specs,
+                    always_loaded=tool_components.scope.always_loaded_tools,
+                )
                 if on_demand_enabled(tool_components.scope)
                 else {}
             )

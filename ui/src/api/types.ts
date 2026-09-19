@@ -329,9 +329,20 @@ export interface EngagementScopePolicy {
   localOnly: boolean;
   /** Opt-in: send redacted operator messages and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
+  /** Runtime names of connected-source tools kept in every request. */
+  alwaysLoadedTools: string[];
   maxConcurrency: number;
   grants: MissionGrant[];
   revision: number;
+}
+
+/** One connected-source tool an operator can keep loaded, as Core names it. */
+export interface ScopeToolCandidate {
+  name: string;
+  serverId: Identifier;
+  serverName: string;
+  toolName: string;
+  description: string;
 }
 
 export interface MissionGrant {
@@ -344,10 +355,15 @@ export interface MissionGrant {
 }
 
 export interface EngagementScopeUpdateRequest
-  extends Omit<EngagementScopePolicy, "engagementId" | "revision" | "toolSuggestions"> {
+  extends Omit<
+    EngagementScopePolicy,
+    "engagementId" | "revision" | "toolSuggestions" | "alwaysLoadedTools"
+  > {
   expectedRevision: number;
   /** Omitted keeps the stored value. */
   toolSuggestions?: boolean;
+  /** Omitted keeps the stored value. */
+  alwaysLoadedTools?: string[];
 }
 
 export interface TypeSafeKeyTest {

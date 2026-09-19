@@ -2420,3 +2420,33 @@ describe("ApiClient", () => {
     });
   });
 });
+
+describe("project scope tool pinning", () => {
+  it("maps always-loaded tools in both directions and lists the choices", async () => {
+    const scope = {
+      id: "scope:project", engagement_id: "project", allowed_cidrs: [], allowed_domains: [],
+      allowed_urls: [], allowed_ports: [], allow_all_targets: false, prohibited_actions: [],
+      local_only: true, tool_suggestions: false, always_loaded_tools: ["mcp.abc123abc123.search"],
+      max_concurrency: 1, grants: [], revision: 3,
+    };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        name: "mcp.abc123abc123.search", server_id: "mcp-1", server_name: "tracker",
+        tool_name: "search", description: "Search issues.",
+      }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const loaded = await client.getEngagementScope("project");
+    expect(loaded.alwaysLoadedTools).toEqual(["mcp.abc123abc123.search"]);
+    await expect(client.listScopeToolCandidates("project")).resolves.toEqual([{
+      name: "mcp.abc123abc123.search", serverId: "mcp-1", serverName: "tracker",
+      toolName: "search", description: "Search issues.",
+    }]);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("http://127.0.0.1:8765/api/v1/engagements/project/scope/tool-candidates");
+
+    await client.updateEngagementScope("project", { ...loaded, alwaysLoadedTools: [], expectedRevision: 3 });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({ always_loaded_tools: [] });
+  });
+});
