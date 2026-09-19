@@ -1,23 +1,23 @@
 {
-  "change_digest": "29515ec48c10360e65b0272777953c56a6ddf7b0ad755dbb3a7c4476ec15fdc6",
-  "reviewed_by": "Claude review of the frozen Core Kali build helper bundling",
-  "reason": "Packaging-only change. sandbox.py copies public_ip_update.py and terminal_entrypoint.sh (added in a27a8f5) into the Kali image build context via Path(__file__).with_name(), but scripts/build_nebula_core.py never bundled them, so a PyInstaller Core raised FileNotFoundError before docker build and could never prepare the workstation image. The build script now bundles both, package_audit.REQUIRED_MEMBERS requires every Kali build helper (egress_helper.py was also unaudited), and a new test fails when any file read beside its module is not bundled and audited. Selected: the new bundling test, the artifact member audit tests (their required-member list changed) and the build script import check.",
-  "exclusions": "No runtime source, UI, native or browser changes, so frontend, native and Playwright layers are empty. The rest of test_packaging.py is not selected because it does not exercise the changed lists; test_nebula3_runtime_has_no_conditional_import_fallbacks already fails on main (chat.py) independently of this change.",
+  "change_digest": "c84de5fd308b9e0e80d17179a44e0243e9493b85398cd29fd66b8febcffbd338",
+  "reviewed_by": "Claude review of published model context windows",
+  "reason": "resolve_context_limits now falls back to a generated table of published context/output limits (src/nebula/v3/known_model_limits.py, built by scripts/refresh_known_model_limits.py) when a non-local provider has no exact catalog descriptor, reporting capacity source known_model. Catalog descriptors, configured caps and the unverified-OpenRouter 8k ceiling take precedence as before. The UI maps the new source to a 'published model limits' label. Selected tests cover limit resolution and model-id folding in test_context.py, chat compaction that consumes these limits in test_chat.py, the context-status client mapping in client.test.ts, and the assistant Playwright area. The conversation actions Playwright test is updated to step through the Archive item (added in #347) between Delete and Rename; it runs in the selected assistant area.",
+  "exclusions": "No full suites. Orchestration uses the same resolve_context_limits path with local fixture profiles, which the table intentionally skips; test_orchestration.py has two compaction failures that already reproduce on main. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 9,
-    "frontend": 0,
+    "python": 72,
+    "frontend": 62,
     "native": 0,
-    "playwright": 0
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_packaging.py::test_core_bundles_and_audits_every_source_file_read_beside_its_module",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_rejects_gui_or_heavy_payload",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_fails_when_legal_payload_is_absent",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_rejects_build_residue",
-    "tests/v3/test_packaging.py::test_core_build_script_supports_direct_path_imports"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_context.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:assistant"
+  ]
 }

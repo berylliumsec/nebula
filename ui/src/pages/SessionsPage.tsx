@@ -914,9 +914,11 @@ export function SessionsPage() {
         ? `route limits unverified · safe ${activeContextStatus.contextWindow.toLocaleString()}-token ceiling`
         : activeContextStatus.capacitySource === "model_catalog"
           ? "exact model catalog"
-          : activeContextStatus.capacitySource === "configured"
-            ? "configured estimate"
-            : "safe fallback estimate";
+          : activeContextStatus.capacitySource === "known_model"
+            ? "published model limits"
+            : activeContextStatus.capacitySource === "configured"
+              ? "configured estimate"
+              : "safe fallback estimate";
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);

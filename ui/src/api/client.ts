@@ -1281,7 +1281,7 @@ interface WireContextStatus extends JsonObject {
   max_output_tokens: number;
   target_input_tokens: number;
   compacted_input_target?: number | null;
-  capacity_source?: "model_catalog" | "configured" | "fallback" | "runtime" | null;
+  capacity_source?: "model_catalog" | "known_model" | "configured" | "fallback" | "runtime" | null;
   capacity_estimated?: boolean;
   metadata_revision?: string | null;
   route_limits_required?: boolean;

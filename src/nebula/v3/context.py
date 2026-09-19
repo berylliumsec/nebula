@@ -32,6 +32,7 @@ from .domain import (
     Task,
     utc_now,
 )
+from .known_model_limits import KNOWN_MODEL_LIMITS, KNOWN_MODEL_LIMITS_REVISION
 from .providers import ModelMessage, ModelProvider, ModelRequest
 from .storage import ConflictError, NebulaStore, NotFoundError
 
@@ -43,6 +44,11 @@ COMPACTOR_OUTPUT_FRACTION = 0.05
 COMPACTOR_MIN_OUTPUT_TOKENS = 32
 CONTEXT_PROMPT_VERSION = "nebula-context-v1"
 
+_HOSTED_MODEL_PREFIX = re.compile(
+    r"^(?:(?:us|eu|apac|au|jp|global)\.)?"
+    r"(?:anthropic|amazon|meta|mistral|deepseek|qwen|openai|cohere|moonshot|"
+    r"moonshotai|minimax|zai|writer)\."
+)
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{1,}")
 _SECURITY_IDENTIFIER = re.compile(
     r"(?i)(?:CVE-\d{4}-\d{4,}|[a-f0-9]{32,}|"
@@ -70,7 +76,7 @@ class ContextLimits(BaseModel):
     input_capacity: int = Field(ge=1)
     target_input_tokens: int = Field(ge=1)
     compacted_input_target: int = Field(ge=1)
-    source: str = Field(pattern=r"^(model_catalog|configured|fallback)$")
+    source: str = Field(pattern=r"^(model_catalog|known_model|configured|fallback)$")
     estimated: bool = False
     metadata_revision: str | None = None
     route_limits_verified: bool = False
@@ -89,7 +95,8 @@ class ContextStatus(BaseModel):
     target_input_tokens: int
     compacted_input_target: int | None = Field(default=None, ge=1)
     capacity_source: str | None = Field(
-        default=None, pattern=r"^(model_catalog|configured|fallback|runtime)$"
+        default=None,
+        pattern=r"^(model_catalog|known_model|configured|fallback|runtime)$",
     )
     capacity_estimated: bool = False
     metadata_revision: str | None = None
@@ -137,6 +144,30 @@ def _positive_option(value: Any, fallback: int) -> int:
     return fallback
 
 
+def known_model_limits(model: str | None) -> tuple[int, int | None] | None:
+    """Published (context_window, max_output_tokens) for a well-known hosted model.
+
+    Provider spellings of one model are folded together: vendor paths
+    ("deepseek/deepseek-v3.2", "models/gemini-2.5-pro"), Bedrock prefixes and
+    version suffixes ("us.anthropic.claude-opus-5-v1:0"), Vertex snapshots
+    ("claude-haiku-4-5@20251001") and dotted versions. The longest known id that
+    the model equals or extends with a "-" suffix (dated snapshot) wins.
+    """
+
+    if not model:
+        return None
+    normalized = model.strip().lower().rsplit("/", 1)[-1]
+    normalized = normalized.split(":", 1)[0].split("@", 1)[0]
+    normalized = _HOSTED_MODEL_PREFIX.sub("", normalized)
+    normalized = normalized.replace(".", "-").replace("_", "-")
+    candidate = normalized
+    while candidate:
+        if candidate in KNOWN_MODEL_LIMITS:
+            return KNOWN_MODEL_LIMITS[candidate]
+        candidate = candidate.rpartition("-")[0]
+    return None
+
+
 def resolve_context_limits(
     profile: ProviderProfile,
     *,
@@ -173,6 +204,14 @@ def resolve_context_limits(
         if isinstance(descriptor, dict)
         else 0
     )
+    known_model = False
+    if not model_window and not profile.is_local:
+        # Local runtimes serve their own configured window (e.g. Ollama num_ctx),
+        # not the model's published maximum.
+        known = known_model_limits(model)
+        if known is not None:
+            model_window, model_output = known[0], model_output or known[1] or 0
+            known_model = True
     route_limits_verified = bool(
         isinstance(descriptor, dict) and descriptor.get("route_limits_verified") is True
     )
@@ -243,7 +282,7 @@ def resolve_context_limits(
         context_window = min(
             value for value in (model_window, configured_window) if value
         )
-        source = "model_catalog"
+        source = "known_model" if known_model else "model_catalog"
         estimated = profile.provider_type == "openrouter" and not route_limits_verified
     elif configured_window:
         context_window = configured_window
@@ -263,9 +302,11 @@ def resolve_context_limits(
     input_capacity = context_window - output
     if input_limit:
         input_capacity = min(input_capacity, input_limit)
-    metadata_revision = profile.metadata.get(
-        "route_catalog_revision"
-    ) or profile.metadata.get("model_catalog_revision")
+    metadata_revision = (
+        profile.metadata.get("route_catalog_revision")
+        or profile.metadata.get("model_catalog_revision")
+        or (f"known-models:{KNOWN_MODEL_LIMITS_REVISION}" if known_model else None)
+    )
     return ContextLimits(
         model=model,
         context_window=context_window,
@@ -1123,6 +1164,7 @@ __all__ = [
     "estimate_messages",
     "estimate_model_request",
     "estimate_tokens",
+    "known_model_limits",
     "lexical_score",
     "memory_text",
     "resolve_context_limits",

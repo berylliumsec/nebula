@@ -2080,6 +2080,8 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
   await page.keyboard.press("End");
   await expect(menu.getByRole("menuitem", { name: "Delete" })).toBeFocused();
   await page.keyboard.press("ArrowUp");
+  await expect(menu.getByRole("menuitem", { name: "Archive" })).toBeFocused();
+  await page.keyboard.press("ArrowUp");
   await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
