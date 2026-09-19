@@ -27,6 +27,7 @@ def test_bundled_operator_help_is_complete_auditable_and_documented():
         "workspace-limits",
         "context-compaction",
         "migration-import-export",
+        "mcp-servers",
         "release-boundary",
     ]
     assert len({article.source_id for article in articles}) == len(articles)
@@ -51,9 +52,15 @@ def test_operator_help_search_requires_product_or_failure_intent_and_ranks_detai
     terminal = search_operator_help(["terminal disconnected after ten minutes"])
     nmap = search_operator_help(["nmap failed with operation not permitted"])
     restore = search_operator_help(["How do I restore a Nebula zip export?"])
+    mcp = search_operator_help(
+        ["How do I import MCP servers from my claude_desktop_config.json?"]
+    )
 
     assert runner[0].article.article_id == "runner-setup"
     assert terminal[0].article.article_id == "human-terminal"
     assert nmap[0].article.article_id == "human-terminal"
     assert restore[0].article.article_id == "migration-import-export"
-    assert all(match.score >= 6 for match in [*runner, *terminal, *nmap, *restore])
+    assert mcp[0].article.article_id == "mcp-servers"
+    assert all(
+        match.score >= 6 for match in [*runner, *terminal, *nmap, *restore, *mcp]
+    )
