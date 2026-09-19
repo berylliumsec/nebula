@@ -8,16 +8,21 @@ model serialization and repr output.
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
 import ipaddress
 import hashlib
 import json
 import os
+import random
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from enum import Enum
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -50,6 +55,21 @@ class ProviderError(RuntimeError):
 
 class ProviderContextLengthError(ProviderError):
     """The provider explicitly rejected the request for exceeding context."""
+
+
+class ProviderOverloadedError(ProviderError):
+    """A transient upstream failure that the identical request can retry."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 class UnsupportedCapability(ProviderError):
@@ -509,6 +529,22 @@ class ModelProvider(ABC):
             headers[header] = f"{scheme}{key.get_secret_value()}"
         return headers
 
+    async def _post(
+        self,
+        client: httpx.AsyncClient,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        operation: str,
+    ) -> httpx.Response:
+        """POST one provider request, retrying transient upstream failures."""
+
+        return await _send_with_retry(
+            self.config,
+            lambda: client.post(path, json=payload),
+            operation=operation,
+        )
+
     @abstractmethod
     async def complete(self, request: ModelRequest) -> ModelResponse:
         raise NotImplementedError
@@ -551,6 +587,251 @@ class ModelProvider(ABC):
     @abstractmethod
     async def health(self) -> ProviderHealth:
         raise NotImplementedError
+
+
+# Statuses that mean the upstream produced nothing, so replaying the identical
+# request cannot duplicate work.  Other 4xx answers are request defects that a
+# retry would only repeat.
+_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+_DEFAULT_RETRY_ATTEMPTS = 3
+_MAX_RETRY_ATTEMPTS = 8
+_DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
+_MAX_RETRY_DELAY_SECONDS = 20.0
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """Bounded automatic retries for one provider."""
+
+    attempts: int = _DEFAULT_RETRY_ATTEMPTS
+    backoff_seconds: float = _DEFAULT_RETRY_BACKOFF_SECONDS
+
+
+def _bounded_number(value: Any, fallback: float, *, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        # diagnostic-expected: an unset or unreadable tuning value keeps the default
+        return fallback
+    if number != number or number < 0:
+        return fallback
+    return min(number, maximum)
+
+
+def retry_policy(config: ProviderConfig) -> RetryPolicy:
+    """Resolve retry limits from provider options, then the environment.
+
+    One attempt disables retries; operators keep that escape hatch per provider
+    (``options.retry_attempts``) and per deployment.
+    """
+
+    attempts = _bounded_number(
+        config.options.get(
+            "retry_attempts", os.getenv("NEBULA_PROVIDER_RETRY_ATTEMPTS")
+        ),
+        _DEFAULT_RETRY_ATTEMPTS,
+        maximum=_MAX_RETRY_ATTEMPTS,
+    )
+    backoff = _bounded_number(
+        config.options.get(
+            "retry_backoff_seconds", os.getenv("NEBULA_PROVIDER_RETRY_BACKOFF_SECONDS")
+        ),
+        _DEFAULT_RETRY_BACKOFF_SECONDS,
+        maximum=_MAX_RETRY_DELAY_SECONDS,
+    )
+    return RetryPolicy(attempts=max(1, int(attempts)), backoff_seconds=backoff)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Read a Retry-After header in either seconds or HTTP-date form."""
+
+    raw = (response.headers.get("retry-after") or "").strip()
+    if not raw:
+        return None
+    try:
+        return max(0.0, min(float(raw), _MAX_RETRY_DELAY_SECONDS))
+    except ValueError:
+        # diagnostic-expected: Retry-After may carry an HTTP date instead of seconds
+        pass
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError):
+        # diagnostic-expected: an unreadable Retry-After falls back to backoff
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    delay = (when - datetime.now(timezone.utc)).total_seconds()
+    return max(0.0, min(delay, _MAX_RETRY_DELAY_SECONDS))
+
+
+def _retry_delay(policy: RetryPolicy, attempt: int, retry_after: float | None) -> float:
+    delay = min(policy.backoff_seconds * (2 ** (attempt - 1)), _MAX_RETRY_DELAY_SECONDS)
+    if retry_after is not None:
+        delay = min(max(delay, retry_after), _MAX_RETRY_DELAY_SECONDS)
+    # Jitter keeps concurrent turns from resending in lockstep.
+    return delay + random.uniform(0.0, delay * 0.25)
+
+
+def _record_retry(
+    config: ProviderConfig,
+    *,
+    operation: str,
+    attempt: int,
+    policy: RetryPolicy,
+    delay: float,
+    status_code: int | None,
+) -> None:
+    record_diagnostic(
+        "warning",
+        "providers",
+        "providers.request.retried",
+        "A transient provider failure was retried automatically.",
+        outcome="retrying",
+        stage="providers",
+        retryable=True,
+        safe_failure_cause="The provider was temporarily unavailable.",
+        metadata={
+            "provider_id": config.id,
+            "operation": operation,
+            "attempt": attempt,
+            "attempts_allowed": policy.attempts,
+            "retry_delay_seconds": round(delay, 3),
+            "http_status": status_code,
+        },
+    )
+
+
+def _exhausted(
+    error: ProviderOverloadedError, attempts: int
+) -> ProviderOverloadedError:
+    """Name the automatic attempts so the operator knows retrying is not new."""
+
+    return ProviderOverloadedError(
+        f"{error} after {attempts} attempts",
+        status_code=error.status_code,
+        retry_after=error.retry_after,
+    )
+
+
+async def _send_with_retry(
+    config: ProviderConfig,
+    send: Callable[[], Awaitable[httpx.Response]],
+    *,
+    operation: str,
+) -> httpx.Response:
+    """Send a provider request, retrying only transient upstream failures.
+
+    The caller still raises for the returned response; only an exhausted
+    transient failure is raised here, so its message can name the attempts.
+    """
+
+    policy = retry_policy(config)
+    attempt = 1
+    while True:
+        status_code: int | None = None
+        try:
+            response = await send()
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            # A connection that was never established cannot have reached the
+            # provider, so the same request is safe to send again.
+            if attempt >= policy.attempts:
+                raise
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_016",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
+            delay = _retry_delay(policy, attempt, None)
+        else:
+            if not response.is_error:
+                return response
+            error = _safe_error(response)
+            if not isinstance(error, ProviderOverloadedError):
+                return response
+            if attempt >= policy.attempts:
+                if attempt == 1:
+                    return response
+                raise _exhausted(error, attempt)
+            status_code = response.status_code
+            delay = _retry_delay(policy, attempt, error.retry_after)
+        _record_retry(
+            config,
+            operation=operation,
+            attempt=attempt,
+            policy=policy,
+            delay=delay,
+            status_code=status_code,
+        )
+        await asyncio.sleep(delay)
+        attempt += 1
+
+
+@asynccontextmanager
+async def _stream_with_retry(
+    config: ProviderConfig,
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    json: dict[str, Any],
+    operation: str,
+) -> AsyncIterator[httpx.Response]:
+    """Open a streaming provider response, retrying before the first token.
+
+    Once any token has been yielded the stream is never replayed: a partial
+    answer must not be silently restarted underneath the operator.
+    """
+
+    policy = retry_policy(config)
+    attempt = 1
+    while True:
+        started = False
+        status_code: int | None = None
+        error: ProviderError | None = None
+        try:
+            async with client.stream(method, url, json=json) as response:
+                if not response.is_error:
+                    started = True
+                    yield response
+                    return
+                await response.aread()
+                error = _safe_error(response)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if started or attempt >= policy.attempts:
+                raise
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_017",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
+            delay = _retry_delay(policy, attempt, None)
+        else:
+            # A consumed stream already returned, so only an error reaches here.
+            assert error is not None
+            if not isinstance(error, ProviderOverloadedError):
+                raise error
+            if attempt >= policy.attempts:
+                if attempt == 1:
+                    raise error
+                raise _exhausted(error, attempt)
+            status_code = error.status_code
+            delay = _retry_delay(policy, attempt, error.retry_after)
+        _record_retry(
+            config,
+            operation=operation,
+            attempt=attempt,
+            policy=policy,
+            delay=delay,
+            status_code=status_code,
+        )
+        await asyncio.sleep(delay)
+        attempt += 1
 
 
 def _safe_error(response: httpx.Response) -> ProviderError:
@@ -616,6 +897,12 @@ def _safe_error(response: httpx.Response) -> ProviderError:
         or any(marker in normalized_detail for marker in context_markers)
     ):
         return ProviderContextLengthError(message)
+    if response.status_code in _RETRYABLE_STATUS_CODES:
+        return ProviderOverloadedError(
+            message,
+            status_code=response.status_code,
+            retry_after=_retry_after_seconds(response),
+        )
     return ProviderError(message)
 
 
@@ -798,8 +1085,11 @@ class OpenAIResponsesProvider(ModelProvider):
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
         async with self._client(self._headers()) as client:
-            response = await client.post(
-                self._path("/v1/responses"), json=self._payload(request, model)
+            response = await self._post(
+                client,
+                self._path("/v1/responses"),
+                self._payload(request, model),
+                operation="responses",
             )
         if response.is_error:
             raise _safe_error(response)
@@ -1009,8 +1299,11 @@ class OpenAICompatibleProvider(ModelProvider):
         model = self.require(request)
         payload = self._payload(request, model)
         async with self._client(self._headers()) as client:
-            response = await client.post(
-                self._path("/v1/chat/completions"), json=payload
+            response = await self._post(
+                client,
+                self._path("/v1/chat/completions"),
+                payload,
+                operation="chat_completions",
             )
         if response.is_error:
             raise _safe_error(response)
@@ -1278,12 +1571,14 @@ async def _stream_openai_compatible(
     response_model = model
     try:
         async with provider._client(provider._headers()) as client:
-            async with client.stream(
-                "POST", provider._path("/v1/chat/completions"), json=payload
+            async with _stream_with_retry(
+                provider.config,
+                client,
+                "POST",
+                provider._path("/v1/chat/completions"),
+                json=payload,
+                operation="chat_completions_stream",
             ) as response:
-                if response.is_error:
-                    await response.aread()
-                    raise _safe_error(response)
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -1447,7 +1742,12 @@ class AnthropicProvider(ModelProvider):
                     "disable_parallel_tool_use": not request.parallel_tool_calls,
                 }
         async with self._client(self._headers()) as client:
-            response = await client.post(self._path("/v1/messages"), json=payload)
+            response = await self._post(
+                client,
+                self._path("/v1/messages"),
+                payload,
+                operation="messages",
+            )
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
@@ -1618,8 +1918,11 @@ class GeminiProvider(ModelProvider):
         if generation:
             payload["generationConfig"] = generation
         async with self._client(self._headers()) as client:
-            response = await client.post(
-                self._model_path(model, "generateContent"), json=payload
+            response = await self._post(
+                client,
+                self._model_path(model, "generateContent"),
+                payload,
+                operation="generate_content",
             )
         if response.is_error:
             raise _safe_error(response)
@@ -2314,14 +2617,17 @@ __all__ = [
     "ProviderConfig",
     "ProviderError",
     "ProviderContextLengthError",
+    "ProviderOverloadedError",
     "ProviderFlavor",
     "ProviderHealth",
     "ProviderKind",
     "ProviderRegistry",
     "ProviderRouteRequest",
+    "RetryPolicy",
     "ToolDefinition",
     "UnsupportedCapability",
     "build_provider",
     "config_from_catalog",
     "provider_from_profile",
+    "retry_policy",
 ]

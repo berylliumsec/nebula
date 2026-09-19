@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, chatRequestBody } from "./client";
+import type { ProviderHealth } from "./types";
 
 describe("ApiClient", () => {
   it("sends MCP imports as snake_case and maps the preview report", async () => {
@@ -1267,7 +1268,7 @@ describe("ApiClient", () => {
 
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(request.secret_ref).toBe("env:OPENAI_API_KEY");
-    expect(request.privacy).toEqual({ local_only: false, permits_sensitive_data: true });
+    expect(request.privacy).toEqual({ local_only: false, permits_sensitive_data: true, auto_share_tool_results: false });
     expect(JSON.stringify(request)).not.toContain("sk-");
     expect(created).toMatchObject({
       credentialEnv: "OPENAI_API_KEY",
@@ -1448,6 +1449,7 @@ describe("ApiClient", () => {
       modelAllowlist: ["claude-old"],
       credentialEnv: "ANTHROPIC_API_KEY",
       permitsSensitiveData: true,
+      autoShareToolResults: false,
       retention: "provider-policy",
       residency: ["us"],
       options: { anthropic_version: "2023-06-01", input_cost_per_million: 3 },
@@ -1461,7 +1463,7 @@ describe("ApiClient", () => {
         endpoint: "https://api.anthropic.com",
         secret_ref: "env:ANTHROPIC_API_KEY",
         model_allowlist: ["claude-new", "claude-old"],
-        privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true },
+        privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: false },
         metadata: { default_model: "claude-new", options: { anthropic_version: "2023-06-01", input_cost_per_million: 3 }, managed_note: "preserve" },
       },
       expected_revision: 3,
@@ -1473,6 +1475,67 @@ describe("ApiClient", () => {
     await client.deleteProvider(provider.id, 5);
     expect(fetchMock.mock.calls[2][1]?.method).toBe("DELETE");
     expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get("If-Match")).toBe("5");
+  });
+
+  it("records standing tool-result consent on the runtime profile", async () => {
+    const wire = {
+      id: "provider-openai",
+      name: "OpenAI",
+      provider_type: "openai",
+      enabled: true,
+      is_local: false,
+      model_allowlist: [],
+      capabilities: {},
+      privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: true },
+      metadata: {},
+      created_at: "2026-07-12T11:00:00Z",
+      updated_at: "2026-07-12T11:00:00Z",
+      revision: 4,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(wire), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const saved = await client.setProviderToolResultSharing({
+      id: "provider-openai",
+      revision: 3,
+      local: false,
+      permitsSensitiveData: true,
+      retention: "provider-policy",
+      residency: ["us"],
+    } as unknown as ProviderHealth, true);
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      changes: { privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: true } },
+      expected_revision: 3,
+    });
+    expect(saved.autoShareToolResults).toBe(true);
+  });
+
+  it("refuses standing tool-result consent for a text-only profile", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "provider-openai",
+      name: "OpenAI",
+      provider_type: "openai",
+      enabled: true,
+      is_local: false,
+      model_allowlist: [],
+      capabilities: {},
+      privacy: { local_only: false, residency: [], permits_sensitive_data: false },
+      metadata: {},
+      revision: 4,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.setProviderToolResultSharing({
+      id: "provider-openai",
+      revision: 3,
+      local: false,
+      permitsSensitiveData: false,
+      residency: [],
+    } as unknown as ProviderHealth, true);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.changes.privacy.auto_share_tool_results).toBe(false);
   });
 
   it("keeps explicit and fallback provider model semantics distinct", async () => {
@@ -1505,6 +1568,7 @@ describe("ApiClient", () => {
       defaultModel: undefined,
       modelAllowlist: provider.model_allowlist,
       permitsSensitiveData: false,
+      autoShareToolResults: false,
       residency: [],
       metadata: { default_model: "old-explicit" },
       expectedRevision: 2,

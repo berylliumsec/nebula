@@ -115,6 +115,7 @@ interface WorkspaceContextValue {
   previewMode: boolean;
   resolveApproval: (id: string, request: ApprovalDecisionRequest) => Promise<void>;
   refreshProvider: (id: string) => Promise<void>;
+  applyProviderToolSharing: (updated: ProviderHealth) => void;
   reverifyProvider: (id: string, model?: string) => Promise<void>;
   addProvider: (request: ProviderCreateRequest) => Promise<void>;
   updateProvider: (id: string, request: ProviderUpdateRequest) => Promise<ProviderHealth>;
@@ -682,6 +683,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     return updated;
   }, [api, coreState, refreshProvider]);
 
+  /** Fold a targeted privacy change into the cached provider, keeping its health state. */
+  const applyProviderToolSharing = useCallback((updated: ProviderHealth) => {
+    setProviders((current) => current.map((provider) => provider.id === updated.id
+      ? {
+          ...provider,
+          revision: updated.revision,
+          permitsSensitiveData: updated.permitsSensitiveData,
+          autoShareToolResults: updated.autoShareToolResults,
+        }
+      : provider));
+  }, []);
+
   const reverifyProvider = useCallback(async (id: string, requestedModel?: string) => {
     if (coreState !== "online" || !api) {
       throw new Error("Nebula Core must be online to verify a provider.");
@@ -1012,6 +1025,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       previewMode: false,
       resolveApproval,
       refreshProvider,
+      applyProviderToolSharing,
       reverifyProvider,
       addProvider,
       updateProvider,
@@ -1110,6 +1124,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       removeLibraryItem,
       refreshSetupRuntime,
       refreshProvider,
+      applyProviderToolSharing,
       reverifyProvider,
       resolveApproval,
       run,

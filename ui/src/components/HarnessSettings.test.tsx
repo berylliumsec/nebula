@@ -9,7 +9,7 @@ import {HarnessSettings} from "./HarnessSettings";
 const profile: HarnessProfile = {
   id: "saved", name: "Local fixture", kind: "grok_acp", connectionMode: "spawn", transport: "stdio",
   executable: "/disposable/inert-fixture", authMode: "existing_session", models: ["fixture-model"],
-  enabled: true, localOnly: true, permitsSensitiveData: false, revision: 1,
+  enabled: true, localOnly: true, permitsSensitiveData: false, autoShareToolResults: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
 const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn()};

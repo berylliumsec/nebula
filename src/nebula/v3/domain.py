@@ -2555,6 +2555,14 @@ class ProviderPrivacy(NebulaModel):
     retention: str | None = None
     residency: list[str] = Field(default_factory=list)
     permits_sensitive_data: bool = False
+    # Standing operator consent that replaces the per-turn tool-result prompt.
+    auto_share_tool_results: bool = False
+
+    @model_validator(mode="after")
+    def standing_consent_requires_sensitive_data(self) -> "ProviderPrivacy":
+        if self.auto_share_tool_results and not self.permits_sensitive_data:
+            raise ValueError("auto_share_tool_results requires permits_sensitive_data")
+        return self
 
 
 class OperatorProfile(Entity):

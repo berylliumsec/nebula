@@ -2028,6 +2028,11 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .confirmation-message { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .confirmation-icon { display: grid; width: 36px; height: 36px; place-items: center; border-radius: 10px; color: var(--blue); background: var(--blue-muted); }
 .confirmation-icon.danger { color: var(--red); background: var(--red-muted); }
+.confirmation-remember { display: flex; align-items: flex-start; gap: 9px; margin: 0 22px 4px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); cursor: pointer; }
+.confirmation-remember input { width: 16px; min-height: 16px; margin-top: 1px; padding: 0; }
+.confirmation-remember span { display: flex; flex-direction: column; gap: 3px; }
+.confirmation-remember strong { color: var(--text); font-size: 12px; }
+.confirmation-remember small { color: var(--muted); font-size: 11px; line-height: 1.45; }
 .confirmation-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 22px; border-top: 1px solid var(--border-soft); }
 
 .provider-dialog { max-height: calc(100dvh - 32px); overflow-y: auto; font-size: 13px; overscroll-behavior: contain; }

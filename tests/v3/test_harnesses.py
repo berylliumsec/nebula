@@ -3457,6 +3457,34 @@ def test_remote_harness_mcp_requires_profile_policy_and_turn_confirmation(tmp_pa
     assert chat.harness_session_id
 
 
+def test_standing_consent_replaces_per_turn_mcp_confirmation(tmp_path):
+    store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "privacy": {
+                "local_only": False,
+                "permits_sensitive_data": True,
+                "auto_share_tool_results": True,
+            }
+        },
+        expected_revision=profile.revision,
+    )
+
+    chat, _, _ = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+        prompt="Use MCP",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[mcp.id],
+    )
+
+    assert chat.harness_session_id
+
+
 def test_harness_images_validate_ownership_and_persist_references(tmp_path):
     store, engagement, profile, _mcp, adapter, runtime = _runtime(tmp_path)
     original = store.create(
