@@ -37,6 +37,7 @@ from pydantic import (
 from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
+from .application_model.tools import standalone_components
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
@@ -140,6 +141,15 @@ from .tool_suggestions import (
     public_suggestions,
     suggest_tools,
     suggestions_enabled,
+)
+from .skill_catalog import (
+    SkillSelection,
+    SkillSnapshot,
+    discover_skills,
+    native_skill_roots,
+    skill_instructions,
+    skill_resource_components,
+    snapshot_skill,
 )
 from .project_instructions import (
     ProjectInstructions,
@@ -1424,14 +1434,6 @@ class ChatService:
                 )
                 raise ChatConfigurationError(exhausted_reason.lower())
 
-        from .skill_catalog import (
-            SkillSelection,
-            SkillSnapshot,
-            discover_skills,
-            native_skill_roots,
-            skill_instructions,
-            snapshot_skill,
-        )
         from .native_hooks import (
             discover_native_hooks,
             snapshot_native_hook,
@@ -1911,15 +1913,11 @@ class ChatService:
                         browser_components,
                     )
                 if model_context and not browser_session_id:
-                    from .application_model.tools import standalone_components
-
                     tool_components = combine_tool_components(
                         tool_components,
                         standalone_components(self.store, engagement_id),
                     )
                 if skill_resources_selected:
-                    from .skill_catalog import skill_resource_components
-
                     skill_components = skill_resource_components(
                         skill_snapshots,
                         engagement_id=engagement_id,
@@ -4005,13 +4003,9 @@ class ChatService:
                 turn.request_snapshot.get("application_model_context")
                 and not browser_session_id
             ):
-                from .application_model.tools import standalone_components
-
                 components = combine_tool_components(
                     components, standalone_components(self.store, turn.engagement_id)
                 )
-            from .skill_catalog import SkillSnapshot, skill_resource_components
-
             skill_snapshots = [
                 SkillSnapshot.model_validate(item)
                 for item in turn.request_snapshot.get("skill_snapshots", [])
