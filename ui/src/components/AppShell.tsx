@@ -46,6 +46,11 @@ export function AppShell() {
     workspaceState,
   } = useWorkspace();
   const zero = resolvedTheme === "zero-dark" || resolvedTheme === "zero-light";
+  // Phones hide the shell top bar on the Workbench, which draws its own header.
+  // It stays for "Choose a project" and for a failed Core, where it carries recovery.
+  const workbenchRoute = (location.pathname === "/" || /^\/projects\/[^/]+\/workbench\/?$/.test(location.pathname))
+    && workspaceState !== "failed"
+    && (Boolean(engagement) || workspaceState === "starting" || workspaceState === "bootstrapping");
   const [activityOpen, setActivityOpen] = useState(false);
   const [activityView, setActivityView] = useState<ActivityCenterView>("activity");
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -178,7 +183,7 @@ export function AppShell() {
           <ChromeProvider value={chrome}>
             <GuideProvider>
             <BrowserAutomationWorker />
-            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+            <div className={`app-shell${zero ? " zero-layer-shell" : ""}${workbenchRoute ? " workbench-route" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
               <SideNav collapsed={sidebarCollapsed} open={projectPickerOpen} setOpen={setProjectPickerOpen} onNavigate={closeMobileSidebar} variant={zero ? "zero" : "standard"} />
               <button className="sidebar-scrim" type="button" aria-label="Close sidebar" onClick={toggleSidebar} />

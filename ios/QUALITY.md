@@ -106,3 +106,22 @@ His H launch verification: CoreDevice reports build 3 installed and the app
 launched successfully. David's iPhone remains installed but launch verification
 requires unlocking it. The Mac Xcode project build number was updated using
 `agvtool new-version -all 3`, preserving the selected signing team.
+
+## Elegant shell (build 4)
+
+Journey: launch → Connect (native) → paired web UI edge to edge → Chat, Terminal,
+Activity, More tabs → Settings → App connection (`nebula://settings`) → change server
+or reload → connection failure → Offline (native) → retry or other saved address.
+
+| Step | Invariant | Authority | Evidence planned |
+| --- | --- | --- | --- |
+| Connect | Only server addresses are stored; invalid input explains the format | UserDefaults (`nebula.servers`) | Swift policy checks, device |
+| Web shell | No native bar; content respects safe areas; status bar follows theme-color | WKWebView + page | device screenshots |
+| Terminal | Terminal is its own tab; Ask is a sheet; key row sends esc/tab/ctrl/arrows | Core terminal socket | Playwright mobile WebKit/Chromium, device |
+| Settings handoff | Only `nebula://settings` opens native UI; no data crosses | native navigation policy | Swift checks, device |
+| Failure/retry | Failed load shows Offline with retry and the other saved server | native transient state | device (Wi-Fi off / VPN off) |
+
+Pre-merge evidence (2026-09-19): research Mac, Xcode 27 beta 6. `swiftc` policy
+executable: 30 checks passed (16 address/navigation, 5 pairing, 9 saved-server and
+settings-link). Unsigned iPhone Release build with the new sources: BUILD SUCCEEDED.
+No iOS Simulator runtime is installed, so native screens are verified only on device.

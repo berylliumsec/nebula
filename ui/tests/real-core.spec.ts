@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
-import { expect, request as playwrightRequest, test } from "@playwright/test";
+import { expect, request as playwrightRequest, test, type Page } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
 
 interface RealCore {
@@ -15,6 +15,17 @@ interface RealCore {
   dataDir: string;
   origin: string;
   token: string;
+}
+
+/**
+ * Wider screens show the shell's Core status chip. Phones drop that chip from the
+ * Workbench (status lives in the conversation drawer), so the paired shell's
+ * phone navigation is the ready signal there.
+ */
+function coreReady(page: Page) {
+  return page.getByRole("button", { name: "Nebula Core ready", exact: true })
+    .or(page.getByRole("navigation", { name: "Mobile operator navigation" }))
+    .first();
 }
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string } = {}): Promise<RealCore> {
@@ -318,7 +329,7 @@ test("assistant upgrade real Core retains editable goal skills through source lo
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Goal skill LAN browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
 
     const url = `${core.origin}/?view=chat&session=${chat.session_id}`;
     await page.goto(url);
@@ -449,7 +460,7 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Hook LAN browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
 
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
@@ -540,7 +551,7 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(restoredPairing.secret)}&code=${encodeURIComponent(restoredPairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Hook LAN browser restart");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
     await expect(page.getByText("What happened to Persist workspace?")).toBeVisible({ timeout: 20_000 });
     await page.getByPlaceholder("Operator verification note").fill("Workspace write was verified after restart.");
@@ -590,7 +601,7 @@ test("assistant upgrade interactive guides create real hook files and resume fro
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Guide LAN browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
 
@@ -652,7 +663,7 @@ test("assistant upgrade interactive guides create real hook files and resume fro
     const progress = await (await api.get("guides/progress")).json() as Array<{ guide_id: string; step_index: number; status: string }>;
     expect(progress).toEqual([expect.objectContaining({ guide_id: "lifecycle-hooks", step_index: 3, status: "in_progress" })]);
     await page.reload();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Guides", exact: true }).click();
     await page.getByRole("dialog", { name: "Guides" }).getByRole("button", { name: /^Run your own script on every chat turn\. Resume at step 4 \/ 5/ }).click();
     await expect(page.getByRole("dialog", { name: "Send a turn and read the outcome" })).toBeVisible();
@@ -697,7 +708,7 @@ test("assistant upgrade interactive guides reach every assistant control on real
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Guide tour browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
     // A saved provider turn makes message actions, goals and operator context available.
@@ -868,12 +879,18 @@ test("assistant upgrade conversation switching restores durable Core history pro
     const pairing = await pairingResponse.json() as {secret: string; confirmation_code: string};
     await page.goto(`${core.origin}/?view=chat&session=${sourceId}#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: "Nebula Core ready", exact: true})).toBeVisible({timeout: 20_000});
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
-    await page.getByRole("button", {name: "Show conversations"}).click();
+    // Phones pick conversations from a drawer that closes after each choice.
+    const selectConversation = async (id: string) => {
+      const row = page.locator(`.session-select[data-session-id="${id}"]`);
+      if (!await row.isVisible()) await page.getByRole("button", {name: /^(Show|Open) conversations$/}).click();
+      await row.click();
+    };
+    await page.getByRole("button", {name: /^(Show|Open) conversations$/}).click();
     const startedAt = Date.now();
-    await page.locator(`.session-select[data-session-id="${targetId}"]`).click();
+    await selectConversation(targetId);
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetId);
     await expect(page.getByText("Durable target conversation", {exact: true})).toBeVisible();
     expect(Date.now() - startedAt).toBeLessThan(5_000);
@@ -888,15 +905,15 @@ test("assistant upgrade conversation switching restores durable Core history pro
       }
       await route.continue();
     });
-    await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
+    await selectConversation(sourceId);
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
     releaseHistory();
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
-    await page.locator(`.session-select[data-session-id="${targetId}"]`).click();
+    await selectConversation(targetId);
     await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
     failHistory = true;
-    await page.locator(`.session-select[data-session-id="${sourceId}"]`).click();
+    await selectConversation(sourceId);
     await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toBeVisible();
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     failHistory = false;
@@ -1304,7 +1321,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
       window.open = () => ({}) as Window;
     });
     await page.goto(`${core.origin}/?view=browser#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByLabel("Browser engine").selectOption("native");
     await expect(page.getByText("Browse from this device")).toBeVisible();
     await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
@@ -1329,7 +1346,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     await page.goto(`${core.origin}/?view=browser&browserTool=repeater#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByLabel("Browser engine").selectOption("native");
     await page.getByRole("button", { name: "Research workbench" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("tool")).toBe("repeater");
@@ -1505,7 +1522,7 @@ test("production LAN handoff survives reload without persisting unsent bytes", a
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Handoff recovery browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
 
     const route = `/projects/${encodeURIComponent(projectId)}/workbench?view=chat&handoff=${encodeURIComponent(envelope.id)}`;
     await page.goto(`${core.origin}${route}`);
@@ -1542,7 +1559,7 @@ test("a paired browser can revoke itself without a stale authentication error", 
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill(deviceName);
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
 
     await page.goto(`${core.origin}/settings#identity-security-settings`);
     await expect(page.getByRole("heading", { name: "Paired devices" })).toBeVisible({ timeout: 20_000 });
@@ -1695,7 +1712,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return False  # Terminal edit\n", "utf8");
     await page.getByRole("button", { name: "Chat", exact: true }).click();
     await page.getByRole("button", { name: "More workbench views" }).click();
-    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Code", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("return False  # Terminal edit");
     await expect(page.getByText("Workspace synchronized: 1 reloaded.")).toBeVisible();
 
@@ -1703,7 +1720,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await writeFile(path.join(workspaceRoot, "scanner.py"), "def scan_target():\n    return 'newer agent edit'\n\nscan_target()\n", "utf8");
     await page.getByRole("button", { name: "Chat", exact: true }).click();
     await page.getByRole("button", { name: "More workbench views" }).click();
-    await page.getByRole("dialog", { name: "More views" }).getByRole("button", { name: /Code/ }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Code", exact: true }).click();
     await expect(page.getByText("Newer workspace version detected")).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("unsaved operator draft");
     await page.getByRole("button", { name: "Reload", exact: true }).click();
@@ -2037,7 +2054,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
 
     await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("tab", { name: "Terminal", exact: true })).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Connected", { exact: true })).toBeVisible({ timeout: 30_000 });
 
     const projectName = "Real Core Project";
@@ -2208,7 +2225,7 @@ test("assistant upgrade project creation switches canonical project and isolates
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Project creation browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/projects/${projects[0].id}/workbench?view=chat&session=${oldChat.session_id}`);
     await expect(page.locator(".chat-message.operator")).toContainText("Old project conversation");
     const sidebar = page.getByRole("button", { name: "Show sidebar" });
@@ -2824,21 +2841,23 @@ test("project removal archives, retries, restores and clears the last selection 
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Project removal browser");
     await page.getByRole("button", { name: "Pair device" }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/projects/${linked.id}/workbench`);
     const switcher = page.getByRole("dialog", { name: "Project switcher" });
     const openSwitcher = async () => test.step("Open project switcher", async () => {
       const sidebar = page.getByRole("button", { name: "Show sidebar" });
       const switchProject = page.getByRole("button", { name: "Switch project" });
+      const more = page.getByRole("button", { name: "More workbench views" });
       // Reload returns before the responsive shell has necessarily mounted.
       // Wait for its visible entry point before deciding whether to open it.
-      await expect(sidebar.or(switchProject).filter({ visible: true }).first()).toBeVisible();
+      await expect(sidebar.or(switchProject).or(more).filter({ visible: true }).first()).toBeVisible();
       if (await sidebar.isVisible()) await sidebar.click();
+      else if (await more.isVisible() && !await switchProject.isVisible()) await more.click();
       console.info("project-removal switcher readiness", {
         elapsedMs: Date.now() - startedAt,
         sidebarCollapsed: await page.locator(".app-shell").evaluate(element => element.classList.contains("sidebar-collapsed")),
         switcherBounds: await switchProject.boundingBox(),
-        coreReady: await page.getByRole("button", { name: "Nebula Core ready" }).isVisible(),
+        coreReady: await coreReady(page).isVisible(),
       });
       if (!await switcher.isVisible()) await switchProject.click({ timeout: 10_000 });
     });
@@ -3858,7 +3877,7 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
     const pairing = await (await api.post(`http://127.0.0.1:${new URL(core.origin).port}/api/v1/auth/pairings`, { data: { name: "Popup acceptance" } })).json();
     await page.goto(`${core.origin}/?view=chat&session=${sourceId}#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByRole("button", { name: "Pair device", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Nebula Core ready", exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sourceId}`);
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant", exact: true });
     await expect(page.getByText("Main conversation stays here", { exact: true }).first()).toBeVisible();
@@ -4158,7 +4177,7 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
     expect(unlocked.ok(), await unlocked.text()).toBe(true);
 
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
     await page.locator("details.settings-group > summary", { hasText: "Integrations" }).click();
     const section = page.locator("#typesafe-integration-settings");
@@ -4178,7 +4197,7 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
 
     // The token lives only in memory, so a reload reopens the page with it.
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
     await page.locator("details.settings-group > summary", { hasText: "Integrations" }).click();
     await expect(section.getByText("Working")).toBeVisible();
@@ -4193,7 +4212,7 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
 
     // The token lives only in memory, so a reload reopens the page with it.
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
     await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
     await expect(page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ })).toBeChecked();

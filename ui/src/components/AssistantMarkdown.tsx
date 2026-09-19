@@ -4,6 +4,7 @@ import { Highlight, themes, type Language } from "prism-react-renderer";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ExecutionLanguage, ExecutionOrigin } from "../api/types";
+import { useOptionalResolvedTheme } from "../state/ThemeContext";
 import {
   parseExactFences,
   sha256,
@@ -85,6 +86,9 @@ function FencedCode({
   const codeRef = useRef<HTMLElement>(null);
   const selectionRef = useRef<{ start: number; end: number } | undefined>(undefined);
   const [feedback, setFeedback] = useState("");
+  // Token colors follow the app theme; the block's own surface supplies the background.
+  const resolvedTheme = useOptionalResolvedTheme();
+  const lightTheme = !resolvedTheme || resolvedTheme === "light" || resolvedTheme === "zero-light";
   const language = (block.canonicalLanguage === "sh" ? "bash" : block.canonicalLanguage ?? "text") as Language;
   const lineBreaks = block.source.match(/\r\n|\r|\n/g) ?? [];
   const lineCount = Math.max(1, lineBreaks.length + (/(?:\r\n|\r|\n)$/.test(block.source) ? 0 : 1));
@@ -153,9 +157,9 @@ function FencedCode({
           )}
         </div>
       </header>
-      <Highlight theme={themes.github} code={block.source} language={language}>
+      <Highlight theme={lightTheme ? themes.github : themes.vsDark} code={block.source} language={language}>
         {({ style, tokens, getLineProps, getTokenProps }) => (
-          <pre style={style}>
+          <pre style={{ ...style, backgroundColor: undefined }}>
             <code ref={codeRef} onMouseUp={captureSelection}>
               {tokens.slice(0, lineCount).map((line, lineIndex) => (
                 <span {...getLineProps({ line })} className="assistant-code-line" key={lineIndex}>

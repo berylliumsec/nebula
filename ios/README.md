@@ -17,10 +17,24 @@ Select the Nebula target, Signing & Capabilities, and your development team.
 Choose the attached iPhone and Run. Developer Mode must be enabled on the phone.
 A free Personal Team can require periodic rebuilding when its profile expires.
 
-The first launch asks for the server address; the suggested WireGuard address (`http://10.10.0.2:8000`) is editable.
-Allow local network access and complete Nebula's web pairing. HTTP is unencrypted;
-use it only on your trusted LAN or VPN. The app keeps normal TLS validation.
-External HTTP(S) links require confirmation and open in a Safari sheet.
+The first launch shows a native Connect screen; the suggested WireGuard address
+(`http://10.10.0.2:8000`) is editable, and every address that loads is remembered
+(most recent first, up to three) as one-tap chips. Allow local network access and
+complete Nebula's web pairing. HTTP is unencrypted; use it only on your trusted LAN
+or VPN. The app keeps normal TLS validation. External HTTP(S) links require
+confirmation and open in a Safari sheet.
+
+After connecting, the web view runs edge to edge with no native bar; the web UI's
+phone layout (Chat · Terminal · Activity · More) owns every screen and follows the
+page's `theme-color` for the status bar. Native UI appears only for:
+
+- **Connect** — first launch, or Settings → This iPhone → App connection, which
+  opens `nebula://settings` (server address, pairing link, reload).
+- **Offline** — a failed page load explains what failed and offers Try again,
+  the other saved address, or Change server; the web view stays underneath.
+
+The page is told it runs in the shell only through the user-agent token
+`NebulaShell/1.0`; there is still no script bridge.
 
 ## Verification
 

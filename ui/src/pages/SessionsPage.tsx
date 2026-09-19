@@ -29,6 +29,10 @@ import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
 import { AssistantSetupLinks } from "../components/AssistantSetupLinks";
+import { useCompactLayout } from "../hooks/useCompactLayout";
+import { MobileMorePanel } from "../components/MobileMorePanel";
+import { MobileDrawerFooter, MobileDrawerProject } from "../components/MobileDrawerChrome";
+import { MobileApprovals } from "../components/MobileApprovals";
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
@@ -39,6 +43,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
+  Activity,
   Archive,
   ArchiveRestore,
   Bot,
@@ -57,6 +62,7 @@ import {
   GitFork,
   History,
   LoaderCircle,
+  LayoutGrid,
   ListTodo,
   Maximize2,
   MessageSquare,
@@ -75,6 +81,7 @@ import {
   Sparkles,
   ShieldCheck,
   Square,
+  SquarePen,
   SquareTerminal,
   Trash2,
   X,
@@ -436,6 +443,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
 export function SessionsPage() {
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
+  const compact = useCompactLayout();
   const {
     assistantDraftNotice,
     assistantDrafts,
@@ -498,6 +506,8 @@ export function SessionsPage() {
   };
   const [mobileListOpen, setMobileListOpen] = useState(false);
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [mobileConversationMenuOpen, setMobileConversationMenuOpen] = useState(false);
+  const mobileConversationMenuRef = useRef<HTMLDivElement>(null);
   const [fullScreen, setFullScreen] = useState(false);
   const [conversationPanelOpen, setConversationPanelOpen] = useState(
     () => readConversationPanelOpen(localStorage),
@@ -512,6 +522,7 @@ export function SessionsPage() {
   const {
     api,
     activeOperator,
+    approvals,
     assets,
     coreState,
     createObservation,
@@ -1005,6 +1016,30 @@ export function SessionsPage() {
     window.addEventListener("keydown", exitFullScreen);
     return () => window.removeEventListener("keydown", exitFullScreen);
   }, [fullScreen, mobileMoreOpen]);
+
+  useEffect(() => {
+    if (!mobileConversationMenuOpen && !mobileListOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!mobileConversationMenuOpen || !(event.target instanceof Node) || mobileConversationMenuRef.current?.contains(event.target)) return;
+      setMobileConversationMenuOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (mobileConversationMenuOpen) {
+        setMobileConversationMenuOpen(false);
+        return;
+      }
+      // Rename fields, row menus and confirmations inside the drawer own their Escape.
+      if (event.target instanceof Element && event.target.closest("input, textarea, [role=menu], [role=dialog]")) return;
+      if (compact) setMobileListOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [compact, mobileConversationMenuOpen, mobileListOpen]);
 
   useLayoutEffect(() => {
     if (!window.matchMedia("(max-width: 760px)").matches) return;
@@ -2311,7 +2346,8 @@ export function SessionsPage() {
       if (!selectionIsCurrent()) return;
       previewOwnerRef.current = id;
       setSessionReadReady(true);
-      setMobileListOpen(false);
+      // Selection already closed the phone drawer; a late load must not close it
+      // again after the operator reopened it.
     } catch (error) {
       if (!selectionIsCurrent() || loadController.signal.aborted) return;
       setSessionReadReady(false);
@@ -3612,6 +3648,7 @@ export function SessionsPage() {
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target as Node;
       if (assistantSettingsPanelRef.current?.contains(target) || assistantSettingsButtonRef.current?.contains(target) || isGuideLayerTarget(event.target)) return;
+      if (event.target instanceof Element && event.target.closest("[data-assistant-settings-trigger]")) return;
       setAssistantSettingsOpen(false);
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -3725,15 +3762,17 @@ export function SessionsPage() {
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
   const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
-    if (view === "chat") {
+    if (view === "chat" && !compact) {
       // Keep the conversation in place and run beside it.
       setChatTerminalOpen(true);
       return;
     }
-    setTerminalAssistantOpen(true);
+    // Phones give the shell the whole screen; the command's output stays visible.
+    setTerminalAssistantOpen(!compact);
     setView("terminal");
-  }, [setChatTerminalOpen, setView, view]);
-  const chatTerminalVisible = view === "chat" && chatTerminalOpen && Boolean(api && engagement);
+  }, [compact, setChatTerminalOpen, setView, view]);
+  // A phone never splits the chat: the terminal is its own tab there.
+  const chatTerminalVisible = view === "chat" && chatTerminalOpen && !compact && Boolean(api && engagement);
   const chatTerminalSize = useResizableSidePanel({
     defaultWidth: 520,
     enabled: chatTerminalVisible && !chatTerminalStacked,
@@ -4050,7 +4089,9 @@ export function SessionsPage() {
       {fullScreen && workbenchToolbar}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
+        {compact && view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
+          {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
           <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
@@ -4109,9 +4150,28 @@ export function SessionsPage() {
             {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
+          {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}
         </aside>}
         <section className={`session-workspace${chatTerminalVisible ? ` chat-terminal-open${chatTerminalStacked ? " stacked" : ""}` : ""}`}>
-          {view === "chat" && <header className="conversation-toolbar">
+          {compact && (view === "activity" || view === "workspace" || view === "notes" || view === "missions") && <header className="mobile-view-header"><h2>{({ activity: "Activity", workspace: "Files", notes: "Notes", missions: "Missions" } as const)[view]}</h2></header>}
+          {view === "chat" && compact && <header className="conversation-toolbar mobile-conversation-header">
+            <button className="icon-button subtle mobile-drawer-toggle" type="button" aria-label="Open conversations" title="Open conversations" aria-expanded={mobileListOpen} aria-controls="workbench-conversations" onClick={() => { setMobileMoreOpen(false); setMobileListOpen(true); }}><PanelLeft size={20} aria-hidden="true" /></button>
+            <button className="mobile-conversation-title" type="button" data-assistant-settings-trigger aria-haspopup="dialog" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" onClick={() => setAssistantSettingsOpen((open) => !open)}>
+              <strong>{conversationTitle}</strong>
+              <small><span>{assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</span><ChevronDown size={13} aria-hidden="true" /></small>
+            </button>
+            {fullScreen ? focusAction : <div className="mobile-conversation-menu" ref={mobileConversationMenuRef}>
+              <button className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
+              {mobileConversationMenuOpen && <div className="mobile-conversation-menu-panel" id="mobile-conversation-actions" role="menu" aria-label="Conversation actions">
+                {conversationOpen && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setTranscriptSearchOpen(true); }}><Search size={17} aria-hidden="true" /><span><strong>Search messages</strong><small>Messages and bookmarks</small></span></button>}
+                <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>
+                {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
+                <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setFullScreen(true); }}><Maximize2 size={17} aria-hidden="true" /><span><strong>Focus mode</strong><small>Hide navigation</small></span></button>
+              </div>}
+            </div>}
+            <button className="icon-button subtle mobile-new-chat" type="button" aria-label="New chat" title="New chat" disabled={!engagement} onClick={newConversation}><SquarePen size={20} aria-hidden="true" /></button>
+          </header>}
+          {view === "chat" && !compact && <header className="conversation-toolbar">
           {!conversationPanelOpen && !mobileListOpen && <button
             className="icon-button subtle session-conversations-toggle"
             type="button"
@@ -4129,7 +4189,7 @@ export function SessionsPage() {
 
           {api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
             {chatTerminalVisible && chatTerminalSize.resizeHandle}
-            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label="Open Terminal tab" title="Open the full Terminal tab" onClick={() => setView("terminal")}><Maximize2 size={16} aria-hidden="true" /></button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => setChatTerminalOpen(false)}><X size={16} aria-hidden="true" /></button></> : <button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button>}</header>
+            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label="Open Terminal tab" title="Open the full Terminal tab" onClick={() => setView("terminal")}><Maximize2 size={16} aria-hidden="true" /></button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => setChatTerminalOpen(false)}><X size={16} aria-hidden="true" /></button></> : <button className={`button quiet managed-browser-icon${compact ? " mobile-ask-button" : ""}`} type="button" aria-label={compact ? "Ask Assistant" : "Assistant"} title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}>{compact ? <><Sparkles size={15} aria-hidden="true" /><span>Ask</span></> : <PanelRight size={18} aria-hidden="true" />}</button>}</header>
             <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal" || chatTerminalVisible} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
             {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
               {assistantPanel}
@@ -4172,6 +4232,7 @@ export function SessionsPage() {
             <AgentsPage embedded />
           ) : view === "activity" && api && engagement ? (
             <div className="workbench-activity-stack">
+              {compact && <MobileApprovals />}
               <ExecutionHistory api={api} engagementId={engagement.id} refreshKey={executionRefresh} onRerun={setRunCandidate} providers={providers} harnesses={harnesses} onChatAttached={openAttachedChat} />
               <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
             </div>
@@ -4225,31 +4286,12 @@ export function SessionsPage() {
         </ChatWorkspaceDrawer>}
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">
-        <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" && !mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(false); }}><MessageSquare size={19} aria-hidden="true" /><span>Chat</span></button>
-        <button type="button" aria-label="Open conversations" aria-current={!mobileMoreOpen && view === "chat" && mobileListOpen ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setView("chat"); setMobileListOpen(true); }}><PanelLeft size={19} aria-hidden="true" /><span>Conversations</span></button>
-        <button type="button" aria-label="Activity" aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><History size={19} aria-hidden="true" /><span>Activity</span></button>
-        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "terminal", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => setMobileMoreOpen((value) => !value)}><FolderOpen size={19} aria-hidden="true" /><span>More</span></button>
+        <button type="button" aria-label="Chat" aria-current={!mobileMoreOpen && view === "chat" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("chat"); }}><MessageSquare size={21} aria-hidden="true" /><span>Chat</span></button>
+        <button type="button" aria-label="Terminal" aria-current={!mobileMoreOpen && view === "terminal" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("terminal"); }}><SquareTerminal size={21} aria-hidden="true" /><span>Terminal</span></button>
+        <button type="button" aria-label="Activity" aria-describedby={approvals.length ? "mobile-activity-waiting" : undefined} aria-current={!mobileMoreOpen && view === "activity" ? "page" : undefined} onClick={() => { setMobileMoreOpen(false); setMobileListOpen(false); setView("activity"); }}><Activity size={21} aria-hidden="true" /><span>Activity</span>{approvals.length > 0 && <i className="mobile-nav-badge" id="mobile-activity-waiting"><span className="sr-only">{approvals.length} waiting for you</span></i>}</button>
+        <button type="button" aria-label="More workbench views" aria-expanded={mobileMoreOpen} aria-controls="mobile-workbench-more" aria-current={mobileMoreOpen || (["workspace", "notes", "missions", "code", "browser"] as SessionView[]).includes(view) ? "page" : undefined} onClick={() => { setMobileListOpen(false); setMobileMoreOpen((value) => !value); }}><LayoutGrid size={21} aria-hidden="true" /><span>More</span></button>
       </nav>
-      {mobileMoreOpen && <div className="mobile-more-backdrop">
-        <button className="mobile-more-scrim" type="button" aria-label="Close more workbench views" onClick={() => setMobileMoreOpen(false)} />
-        <section className="mobile-more-sheet" id="mobile-workbench-more" role="dialog" aria-modal="true" aria-labelledby="mobile-more-title">
-          <header><div><small>Workbench</small><strong id="mobile-more-title">More views</strong></div><button className="icon-button subtle" type="button" aria-label="Close more workbench views" autoFocus onClick={() => setMobileMoreOpen(false)}><X size={18} aria-hidden="true" /></button></header>
-          <div>
-            {([
-              ["workspace", "Files", FolderOpen, "Browse project files"],
-              ["notes", "Notes", NotebookPen, "Review operator notes"],
-              ["missions", "Missions", Bot, "Monitor autonomous work"],
-              ["terminal", "Terminal", SquareTerminal, "Use the project terminal"],
-              ["code", "Code", Braces, "Edit project files"],
-              ["browser", "Browser", Globe2, "Open the project browser"],
-            ] as const).map(([nextView, label, Icon, detail]) => <button type="button" aria-current={view === nextView ? "page" : undefined} key={nextView} onClick={() => { setView(nextView); setMobileMoreOpen(false); }}><span><Icon size={20} aria-hidden="true" /></span><span><strong>{label}</strong><small>{detail}</small></span></button>)}
-          </div>
-          <footer>
-            {view === "chat" && <button className="button quiet" type="button" onClick={() => { setSessionInspectorOpen(true); setMobileMoreOpen(false); }}><PanelRight size={16} aria-hidden="true" /> Show session details</button>}
-            <button className="button quiet mobile-focus-action" type="button" onClick={() => { setFullScreen(true); setMobileMoreOpen(false); }}><Maximize2 size={16} aria-hidden="true" /> Enter focus mode</button>
-          </footer>
-        </section>
-      </div>}
+      {mobileMoreOpen && <MobileMorePanel view={view} onSelectView={setView} onFocusMode={() => setFullScreen(true)} onClose={() => setMobileMoreOpen(false)} />}
       {artifactInspector && <ModalSurface as="section" className="provider-dialog resource-dialog" labelledBy="artifact-inspector-title" onClose={() => setArtifactInspector(undefined)}><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="runtime-resource-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="runtime-resource-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && <small>More matches are available with the continuation cursor.</small>}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactRead.continuationStartingLine && <button className="button quiet" type="button" onClick={() => void readArtifact(artifactRead.artifactId, artifactRead.continuationStartingLine)}>Read next lines</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></ModalSurface>}
       {runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}
     </div>

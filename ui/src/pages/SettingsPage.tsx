@@ -24,6 +24,9 @@ import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
 import { isTauriRuntime } from "../api/runtime";
+import { useLocation } from "react-router-dom";
+import { useCompactLayout } from "../hooks/useCompactLayout";
+import { CompactSettingsList } from "../components/CompactSettingsList";
 
 const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "Light", icon: Sun },
@@ -189,6 +192,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [operatorBusy, setOperatorBusy] = useState<string>();
   const [operatorError, setOperatorError] = useState<string>();
   const embedded = Boolean(embeddedTarget);
+  const compact = useCompactLayout();
+  const { hash: locationHash } = useLocation();
   const embeddedAdvancedGroup = advancedGroupFromHash(embeddedTarget);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => embedded ? sectionFromTarget(embeddedTarget) : sectionFromHash());
   const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(() => embedded ? embeddedAdvancedGroup : advancedGroupFromHash());
@@ -690,6 +695,14 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     const timer = window.setInterval(() => setPreparationClock(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, [imagePreparationActive]);
+  // Phones start from one grouped list; a deep link (#section) still opens the full page.
+  if (compact && !embedded && !locationHash) return (
+    <div className="page settings-page compact-settings-page">
+      <SettingsSaveFeedback />
+      <PageHeader title="Settings" description="Workspace preferences." />
+      <CompactSettingsList />
+    </div>
+  );
   return (
     <div className={`page settings-page${embedded ? " embedded-settings-page" : ""}`} data-embedded-target={embeddedTarget}>
       <SettingsSaveFeedback />

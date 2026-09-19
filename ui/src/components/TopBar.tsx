@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronLeft,
   Command,
   Compass,
   Copy,
@@ -12,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { navigationItems } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -21,6 +22,7 @@ import { copySelectionText } from "./selection";
 import { createPortal } from "react-dom";
 import { ModalSurface } from "./DialogSystem";
 import { useOptionalGuides } from "../guides/GuideProvider";
+import { projectSurface } from "../resourceRoutes";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -46,6 +48,7 @@ export function TopBar({
   variant = "standard",
 }: TopBarProps) {
   const location = useLocation();
+  const navigate = useNavigate();
   const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
   const { api, coreError, engagement, reconnect, workspaceState } = useWorkspace();
   const [publicIp, setPublicIp] = useState<ContainerTerminalPublicIpStatus>();
@@ -105,6 +108,10 @@ export function TopBar({
   return (
     <><header className={`top-bar${variant === "zero" ? " zero-status-band" : ""}`} data-shell="shared">
       <div className="top-bar-leading">
+        {/* Phones reach these pages from the Workbench More tab; this is the way back. */}
+        <button className="button quiet top-bar-back" type="button" onClick={() => navigate(engagement ? projectSurface(engagement.id, "workbench") : "/")}>
+          <ChevronLeft size={20} aria-hidden="true" /><span>Workbench</span>
+        </button>
         <button
           className="icon-button toolbar-button"
           type="button"

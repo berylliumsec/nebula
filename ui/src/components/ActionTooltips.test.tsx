@@ -55,4 +55,22 @@ describe("ActionTooltips", () => {
     expect(button).not.toHaveAttribute("aria-label");
   });
 
+  it("stays hidden after taps on touch-first devices but still explains keyboard focus", () => {
+    const matchMedia = vi.fn((query: string) => ({ matches: query === "(hover: none)", media: query, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    vi.stubGlobal("matchMedia", matchMedia);
+    try {
+      render(<><button aria-label="Close more views"><svg /></button><ActionTooltips /></>);
+      const button = screen.getByRole("button");
+      fireEvent.pointerDown(button, { pointerType: "touch" });
+      fireEvent.pointerOver(button, { pointerType: "mouse" });
+      fireEvent.focusIn(button);
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      fireEvent.focusOut(button);
+      fireEvent.keyDown(document.body, { key: "Tab" });
+      fireEvent.focusIn(button);
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Close more views");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
