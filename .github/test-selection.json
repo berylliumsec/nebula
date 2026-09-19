@@ -1,28 +1,24 @@
 {
-  "change_digest": "764102f5f2a3804544dc016c6941e435a35cbe200b014b926081337efde69402",
-  "reviewed_by": "Claude review of on-demand tool loading with a local semantic tool index",
-  "reason": "Tools from connected sources (MCP and other sourced tools) are now deferred by default behind a fixed tool_catalog.search/load/call trio, so the provider tools array never changes and prefix caches hold. tool_catalog.call is unwrapped in the chat loop into the real tool (its schema validation, approvals, risk and budgets apply) and the issued call is replayed to the provider. Search fuses a local MiniLM Chroma tool collection with keyword ranking; a local pre-turn ranking preloads strong matches, replaced by Jev when a project opts in. ScopePolicy gains on_demand_tools (default true, preserved when omitted). Selected tests cover the new module, the moved Jev tests, every chat test file whose turns run tools (loop, approvals, subagents, temporary chat, core chat), the Chroma index, scope API field preservation, operator help and the domain model.",
-  "exclusions": "No full suites. No frontend or Playwright: no UI file changed and no Playwright journey runs a chat with MCP tools; the scope field is optional and preserved when clients omit it. Native unchanged. Real-model behavior was checked locally with the downloaded MiniLM model (thresholds calibrated on nine realistic requests); CI uses a deterministic test embedder.",
+  "change_digest": "c73530f4040387398ccf9d385a37a128d38aca87a5c895653cd5902d588b09bc",
+  "reviewed_by": "Claude review of auto-unarchive on send",
+  "reason": "Core clears a chat's metadata.archived_at when /chat/completions continues that session or a follow-up is enqueued on it (unarchive_chat_session, retried on revision conflicts). The UI clears archivedAt optimistically on send and shows an archived notice with an Unarchive button while an archived chat is open. Selected tests cover the send-unarchives API flow in test_chat_api.py, the queue service in test_chat_queue.py, the archived notice in App.test.tsx, the client mapping in client.test.ts, and the conversations sidebar Playwright area.",
+  "exclusions": "No full suites. Scheduled turns, goals and subagents do not go through the operator send paths and intentionally leave archive state alone. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 153,
-    "frontend": 0,
+    "python": 25,
+    "frontend": 100,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_knowledge_index.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_domain.py",
-    "tests/v3/test_temporary_chat.py"
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_queue.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/App.test.tsx",
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:conversations-sidebar"
+  ]
 }
