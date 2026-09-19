@@ -1481,11 +1481,10 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
         class HostCommands:
             def __init__(self) -> None:
                 self.store = store
-                self.manager = SimpleNamespace(
-                    project_policy=lambda _engagement_id: SimpleNamespace(
-                        execution_mode="host"
-                    )
-                )
+
+            def project_execution_mode(self, engagement_id: str) -> str:
+                del engagement_id
+                return "host"
 
             def chat_components(self, *, engagement_id: str):
                 del engagement_id
@@ -1539,11 +1538,10 @@ def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path
         class HostCommands:
             def __init__(self) -> None:
                 self.store = store
-                self.manager = SimpleNamespace(
-                    project_policy=lambda _engagement_id: SimpleNamespace(
-                        execution_mode="host"
-                    )
-                )
+
+            def project_execution_mode(self, engagement_id: str) -> str:
+                del engagement_id
+                return "host"
 
             def chat_components(self, *, engagement_id: str):
                 del engagement_id
@@ -1582,11 +1580,9 @@ def test_harness_session_does_not_require_unprepared_optional_command_runtime(tm
     store, engagement, profile, _, _, runtime = _runtime(tmp_path)
 
     class UnpreparedCommands:
-        manager = SimpleNamespace(
-            project_policy=lambda _engagement_id: SimpleNamespace(
-                execution_mode="docker"
-            )
-        )
+        def project_execution_mode(self, engagement_id: str) -> str:
+            del engagement_id
+            return "docker"
 
         def chat_components(self, *, engagement_id: str):
             del engagement_id
@@ -1653,6 +1649,10 @@ def test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_sess
             def __init__(self, digest: str) -> None:
                 self.store = store
                 self.digest = digest
+
+            def project_execution_mode(self, engagement_id: str) -> str:
+                del engagement_id
+                return "docker"
 
             def chat_components(self, *, engagement_id: str):
                 return AutomationToolComponents(
@@ -3757,11 +3757,10 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
         class HostCommands:
             def __init__(self) -> None:
                 self.store = store
-                self.manager = SimpleNamespace(
-                    project_policy=lambda _engagement_id: SimpleNamespace(
-                        execution_mode="host"
-                    )
-                )
+
+            def project_execution_mode(self, engagement_id: str) -> str:
+                del engagement_id
+                return "host"
 
             def chat_components(self, *, engagement_id: str):
                 del engagement_id

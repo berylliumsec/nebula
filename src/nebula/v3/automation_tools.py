@@ -555,6 +555,9 @@ class AutomationToolPlatform:
         self.mcp_platform = mcp_platform
         self.browser_automation = browser_automation
 
+    def project_execution_mode(self, engagement_id: str) -> Literal["docker", "host"]:
+        return self.manager.project_policy(engagement_id).execution_mode
+
     def chat_components(
         self,
         *,
@@ -576,7 +579,7 @@ class AutomationToolPlatform:
             manager=self.manager,
             store=self.store,
             output_service=ToolOutputService(self.store, self.artifact_store),
-            execution_mode=self.manager.project_policy(engagement_id).execution_mode,
+            execution_mode=self.project_execution_mode(engagement_id),
         )
         specs = dict(broker.specs)
         selected: Any = broker
