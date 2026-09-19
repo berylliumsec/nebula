@@ -1,6 +1,7 @@
 import {
   Check,
   Command,
+  Compass,
   Copy,
   PanelLeftClose,
   PanelLeftOpen,
@@ -19,6 +20,7 @@ import type { ContainerTerminalPublicIpStatus } from "../api/types";
 import { copySelectionText } from "./selection";
 import { createPortal } from "react-dom";
 import { ModalSurface } from "./DialogSystem";
+import { useOptionalGuides } from "../guides/GuideProvider";
 
 interface TopBarProps {
   activityOpen: boolean;
@@ -51,6 +53,7 @@ export function TopBar({
   const [copyError, setCopyError] = useState("");
   const [addressOpen, setAddressOpen] = useState(false);
   const canRetry = workspaceState === "failed" || workspaceState === "degraded";
+  const guides = useOptionalGuides();
 
   useEffect(() => { setAddressOpen(false); setCopyError(""); setPublicIpCopied(false); }, [engagement?.id]);
 
@@ -140,7 +143,11 @@ export function TopBar({
         <button className={`top-bar-public-ip${publicIp?.stale ? " stale" : ""}`} type="button" disabled={!publicIp} onClick={() => { setCopyError(""); setPublicIpCopied(false); setAddressOpen(true); }} aria-haspopup="dialog" title={publicIp ? `Terminal container public IP ${publicIp.address} · observed ${new Date(publicIp.observedAt).toLocaleString()}` : "Start a terminal to observe its container public IP"} aria-label={publicIp ? `Terminal container public IP ${publicIp.address}. Show details` : "Terminal container public IP unavailable"}>
           <span>IP</span><code>{publicIp?.address ?? "—"}</code>{publicIp && (publicIpCopied ? <Check size={13} aria-hidden="true" /> : <Copy size={13} aria-hidden="true" />)}
         </button>
-        <button className="command-trigger" type="button" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
+        {guides && <button className="command-trigger guides-trigger" type="button" data-guide="guides-button" onClick={guides.openHub} aria-haspopup="dialog" aria-expanded={guides.hubOpen} aria-label="Guides" title="Interactive guides">
+          <Compass size={15} aria-hidden="true" />
+          <span>Guides</span>
+        </button>}
+        <button className="command-trigger" type="button" data-guide="command-palette" onClick={onOpenPalette} aria-label="Search pages, actions, and settings">
           <Command size={15} aria-hidden="true" />
           <span>Commands</span>
           <kbd>⌘K</kbd>

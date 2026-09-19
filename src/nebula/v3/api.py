@@ -513,6 +513,7 @@ CUSTOM_RESOURCES = {
     "browser_companion_actions",
     "chat_read_cursors",
     "chat_bookmarks",
+    "guide_progress",
     "chat_queues",
     "chat_decisions",
     "action_intents",
@@ -1512,6 +1513,7 @@ def create_app(
 
     from .chat_catchup import catchup_router
     from .chat_decisions import decisions_router
+    from .guides import guides_router
     from .chat_queue import ChatQueueService, queue_router
     from .chat_goals import goals_router
     from .skill_catalog import (
@@ -8953,6 +8955,11 @@ def create_app(
     )
     app.include_router(
         decisions_router(store), prefix=API_PREFIX, dependencies=[Depends(require_auth)]
+    )
+    app.include_router(
+        guides_router(store, operators, native_workspace),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
     )
     app.include_router(
         queue_router(chat_queue),

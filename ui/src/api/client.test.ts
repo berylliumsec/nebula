@@ -249,6 +249,45 @@ describe("ApiClient", () => {
     }, true)).not.toHaveProperty("hook_ids");
   });
 
+  it("reads and writes Core-owned guide progress and guide probes", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        id: "guide-progress:local:lifecycle-hooks",
+        operator_key: "local",
+        guide_id: "lifecycle-hooks",
+        status: "in_progress",
+        step_index: 2,
+        revision: 3,
+        completed_at: null,
+        created_at: "2026-09-19T10:00:00Z",
+        updated_at: "2026-09-19T10:05:00Z",
+      }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        guide_id: "lifecycle-hooks", status: "completed", step_index: 4, revision: 4,
+        completed_at: "2026-09-19T10:06:00Z", updated_at: "2026-09-19T10:06:00Z",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ kind: "hook", paths: [".agents/hooks/audit/hook.json"] }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        filename: "AGENTS.md", present: true, size_bytes: 15, truncated: false, limit_bytes: 65536, error: null,
+      }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.listGuideProgress()).resolves.toEqual([{
+      guideId: "lifecycle-hooks", status: "in_progress", stepIndex: 2, revision: 3,
+      completedAt: undefined, updatedAt: "2026-09-19T10:05:00Z",
+    }]);
+    await expect(client.saveGuideProgress("lifecycle-hooks", { status: "completed", stepIndex: 4, expectedRevision: 3 }))
+      .resolves.toMatchObject({ status: "completed", revision: 4, completedAt: "2026-09-19T10:06:00Z" });
+    expect(fetchMock.mock.calls[1][0]).toBe("http://127.0.0.1:8765/api/v1/guides/progress/lifecycle-hooks");
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ status: "completed", step_index: 4, expected_revision: 3 });
+    await client.createGuideStarterFiles("project/one", "hook", "audit");
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ engagement_id: "project/one", kind: "hook", name: "audit" });
+    await expect(client.getProjectInstructionsStatus("project/one")).resolves.toEqual({
+      filename: "AGENTS.md", present: true, sizeBytes: 15, truncated: false, limitBytes: 65536, error: undefined,
+    });
+    expect(fetchMock.mock.calls[3][0]).toBe("http://127.0.0.1:8765/api/v1/project-instructions?engagement_id=project%2Fone");
+  });
+
   it("maps restart recovery without hiding unknown tool outcomes", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       id: "turn-recovery",
