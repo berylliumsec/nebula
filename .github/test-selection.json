@@ -1,23 +1,21 @@
 {
-  "change_digest": "c84de5fd308b9e0e80d17179a44e0243e9493b85398cd29fd66b8febcffbd338",
-  "reviewed_by": "Claude review of published model context windows",
-  "reason": "resolve_context_limits now falls back to a generated table of published context/output limits (src/nebula/v3/known_model_limits.py, built by scripts/refresh_known_model_limits.py) when a non-local provider has no exact catalog descriptor, reporting capacity source known_model. Catalog descriptors, configured caps and the unverified-OpenRouter 8k ceiling take precedence as before. The UI maps the new source to a 'published model limits' label. Selected tests cover limit resolution and model-id folding in test_context.py, chat compaction that consumes these limits in test_chat.py, the context-status client mapping in client.test.ts, and the assistant Playwright area. The conversation actions Playwright test is updated to step through the Archive item (added in #347) between Delete and Rename; it runs in the selected assistant area.",
-  "exclusions": "No full suites. Orchestration uses the same resolve_context_limits path with local fixture profiles, which the table intentionally skips; test_orchestration.py has two compaction failures that already reproduce on main. No LAN-origin check: no origin, cookie or socket behavior changed.",
+  "change_digest": "c1d4faec1fcdcda898665c108f388be2f97b1f4a2aeabe86ce307d608f11c279",
+  "reviewed_by": "Claude review of chat import hoisting",
+  "reason": "test_nebula3_runtime_has_no_conditional_import_fallbacks failed on main because ChatService rebuilt tool components on resume with `from .skill_catalog import ...` inside a try block. chat.py now imports skill_catalog (SkillSelection, SkillSnapshot, discover_skills, native_skill_roots, skill_instructions, skill_resource_components, snapshot_skill) and application_model.tools.standalone_components at module level and drops every function-local copy; neither module imports chat, and the Core build already uses --collect-submodules nebula.v3, so build_nebula_core.py needs no hidden import. Selected tests cover the packaging guard in test_packaging.py, skill selection and snapshots in test_skill_catalog.py, chat preparation with skills and tools in test_chat.py, and the paused-turn tool-component rebuild in test_chat_tool_loop.py.",
+  "exclusions": "No frontend, native or Playwright tests: only Python import placement changed, with no API, UI, origin, cookie or socket behavior change. No full suites.",
   "expected_tests": {
-    "python": 72,
-    "frontend": 62,
+    "python": 87,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
+    "tests/v3/test_packaging.py",
     "tests/v3/test_chat.py",
-    "tests/v3/test_context.py"
+    "tests/v3/test_skill_catalog.py",
+    "tests/v3/test_chat_tool_loop.py"
   ],
-  "frontend": [
-    "ui/src/api/client.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:assistant"
-  ]
+  "playwright": []
 }
