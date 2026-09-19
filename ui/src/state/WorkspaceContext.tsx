@@ -626,8 +626,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
                 revision: result.providerRevision ?? provider.revision,
                 state: result.healthy ? "healthy" : "offline",
                 models: selectableModels,
-                availableModels: result.healthy ? result.models : provider.availableModels,
-                modelDescriptors: result.healthy ? result.modelDescriptors : provider.modelDescriptors,
+                // Core returns allowlisted models and unlisted discoveries separately.
+                availableModels: result.healthy ? [...new Set([...result.models, ...result.unlistedModels])] : provider.availableModels,
+                modelDescriptors: result.healthy
+                  ? result.modelDescriptors || result.unlistedModelDescriptors
+                    ? [...(result.modelDescriptors ?? []), ...(result.unlistedModelDescriptors ?? [])]
+                    : undefined
+                  : provider.modelDescriptors,
                 modelCount: selectableModels.length,
                 lastCheckedAt: new Date().toISOString(),
                 message: result.healthy

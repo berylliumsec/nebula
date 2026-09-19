@@ -1391,6 +1391,9 @@ export interface ProviderRuntimeHealth {
   healthy: boolean;
   models: string[];
   modelDescriptors?: ModelDescriptor[];
+  /** Discovered models outside the provider's model allowlist. */
+  unlistedModels: string[];
+  unlistedModelDescriptors?: ModelDescriptor[];
   detail?: string;
   credentialVerified?: boolean;
   catalogSource?: string;

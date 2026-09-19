@@ -378,13 +378,26 @@ describe("Nebula workspace", () => {
       privacy: { local_only: false, residency: [], permits_sensitive_data: true },
       metadata: { default_model: "model-1" },
     };
+    const discovered = ["model-1", "model-2", "model-3"];
+    const descriptors = [{ id: "model-3", name: "Model Three", context_window: 200_000 }];
+    let allowlist = ["model-1"];
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/providers/provider-1/health")) {
-        return new Response(JSON.stringify({ provider_id: "provider-1", healthy: true, models: ["model-1", "model-2", "model-3"], detail: null }), { status: 200 });
+        // Core reports allowlisted models and the rest of discovery separately.
+        return new Response(JSON.stringify({
+          provider_id: "provider-1",
+          healthy: true,
+          models: discovered.filter((item) => allowlist.includes(item)),
+          model_descriptors: descriptors.filter((item) => allowlist.includes(item.id)),
+          unlisted_models: discovered.filter((item) => !allowlist.includes(item)),
+          unlisted_model_descriptors: descriptors.filter((item) => !allowlist.includes(item.id)),
+          detail: null,
+        }), { status: 200 });
       }
       if (url.pathname.endsWith("/providers/provider-1") && init?.method === "PATCH") {
         const { changes } = JSON.parse(String(init.body));
+        allowlist = changes.model_allowlist;
         return new Response(JSON.stringify({ ...provider, ...changes, revision: 2 }), { status: 200 });
       }
       if (url.pathname.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
@@ -400,11 +413,13 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "New chat" }));
     await user.click(screen.getByRole("button", { name: "Assistant settings" }));
     const modelSelect = await screen.findByRole("combobox", { name: "Chat model" });
-    await waitFor(() => expect(screen.getByRole("option", { name: "model-3" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("option", { name: "Model Three (model-3) · 200,000 context" })).toBeInTheDocument());
     expect(screen.getByRole("group", { name: "More OpenRouter models · adds to allowed" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "model-2" })).toBeInTheDocument();
     await user.selectOptions(modelSelect, "model-3");
 
     await waitFor(() => expect(modelSelect).toHaveValue("model-3"));
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "Allowed models" })).getByRole("option", { name: "Model Three (model-3) · 200,000 context" })).toBeInTheDocument());
     const patch = fetchMock.mock.calls.find(([input, init]) => new URL(String(input)).pathname.endsWith("/providers/provider-1") && init?.method === "PATCH");
     expect(JSON.parse(String(patch?.[1]?.body))).toMatchObject({
       changes: { model_allowlist: ["model-1", "model-3"], secret_ref: "env:OPENROUTER_API_KEY", metadata: { default_model: "model-1" } },
