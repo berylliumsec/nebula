@@ -45,6 +45,7 @@ from .domain import (
     AgentRun,
     Artifact,
     Engagement,
+    McpApprovalMode,
     McpServerProfile,
     ProviderProfile,
     RunBudget,
@@ -52,6 +53,7 @@ from .domain import (
 from .missions import MissionService
 from .mcp_gateway import serve as serve_mcp_gateway
 from .mcp_import import (
+    McpImportDefaults,
     McpImportRequest,
     export_mcp_config,
     import_mcp_config,
@@ -200,7 +202,31 @@ def mcp_import(
         bool, typer.Option(help="Save the servers; without it, only preview.")
     ] = False,
     replace: Annotated[
-        bool, typer.Option(help="Overwrite existing servers with the same name.")
+        bool,
+        typer.Option(
+            help="Overwrite existing servers with the same name instead of "
+            "updating only what changed."
+        ),
+    ] = False,
+    skip_existing: Annotated[
+        bool, typer.Option(help="Leave servers that already exist untouched.")
+    ] = False,
+    enable: Annotated[
+        bool,
+        typer.Option(
+            help="Enable new servers. Local programs also need --trust-local-programs."
+        ),
+    ] = False,
+    approval: Annotated[
+        McpApprovalMode,
+        typer.Option(help="Tool approval for new servers whose file sets none."),
+    ] = McpApprovalMode.RISK_BASED,
+    trust_local_programs: Annotated[
+        bool,
+        typer.Option(
+            help="Trust local programs this import enables, or keeps enabled "
+            "after their launch settings change."
+        ),
     ] = False,
     reject_literal_secrets: Annotated[
         bool,
@@ -212,9 +238,13 @@ def mcp_import(
 ) -> None:
     """Import MCP servers from a Claude, Cursor, or VS Code style JSON file.
 
-    Imported servers start disabled and untrusted; enable them in Nebula after
-    reviewing and probing their tools.
+    Servers that already exist are updated with only what changed. New servers
+    start disabled unless --enable is given; enabled servers still need a probe
+    before agents can use their tools.
     """
+
+    if replace and skip_existing:
+        raise typer.BadParameter("choose either --replace or --skip-existing")
 
     try:
         document = json.loads(source.read_text(encoding="utf-8"))
@@ -234,9 +264,11 @@ def mcp_import(
         McpImportRequest(
             config=document,
             dry_run=not apply,
-            on_conflict="replace" if replace else "skip",
+            on_conflict="replace" if replace else "skip" if skip_existing else "update",
             literal_secrets="reject" if reject_literal_secrets else "vault",
             source_name=source.name,
+            defaults=McpImportDefaults(enabled=enable, default_approval=approval),
+            trust_local_programs=trust_local_programs,
         ),
         store=store,
         credential_store=CredentialStore(),
