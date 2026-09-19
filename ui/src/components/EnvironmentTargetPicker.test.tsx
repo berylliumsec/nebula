@@ -44,12 +44,30 @@ describe("environment target picker", () => {
 
     await user.click(await screen.findByRole("button", {name: "Where commands run: Auto"}));
     expect(screen.getByRole("button", {name: /^Auto/})).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", {name: /^Auto/})).toHaveFocus();
     expect(screen.getByText("macOS 27.0 · arm64 · 38 ms")).toBeVisible();
     expect(screen.getByRole("link", {name: "Manage environments…"})).toHaveAttribute("href", "/settings#ssh-environment-settings");
     await user.click(screen.getByRole("button", {name: /^Research Mac/}));
 
     expect(onChange).toHaveBeenCalledWith("ssh:research3");
     expect(screen.queryByRole("group", {name: "Where should commands run?"})).not.toBeInTheDocument();
+  });
+
+  it("floats the menu outside the clipped composer, inside the viewport", async () => {
+    discover.mockResolvedValue(hosts(researchMac));
+    const user = userEvent.setup();
+    const {container} = render(<MemoryRouter><div style={{overflow: "hidden"}}><EnvironmentTargetPicker api={api} value="auto" onChange={vi.fn()} /></div></MemoryRouter>);
+    const trigger = await screen.findByRole("button", {name: "Where commands run: Auto"});
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({left: window.innerWidth - 60, top: 600, right: window.innerWidth - 10, bottom: 632, width: 50, height: 32, x: window.innerWidth - 60, y: 600, toJSON: () => ({})});
+
+    await user.click(trigger);
+
+    const menu = screen.getByRole("group", {name: "Where should commands run?"});
+    expect(container).not.toContainElement(menu);
+    expect(menu.style.left).toBe(`${window.innerWidth - 320 - 16}px`);
+    expect(menu.style.bottom).toBe(`${window.innerHeight - 600 + 8}px`);
+    await user.click(screen.getByText("Where should commands run?"));
+    expect(menu).toBeInTheDocument();
   });
 
   it("falls back to Auto when the pinned host is no longer enabled", async () => {

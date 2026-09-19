@@ -26,9 +26,7 @@
 .trigger:focus-visible, .option:focus-visible, .manage:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 .menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
+  position: fixed;
   z-index: 40;
   display: grid;
   gap: 2px;

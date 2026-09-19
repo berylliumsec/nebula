@@ -1508,6 +1508,9 @@ class ChatService:
             raise ChatConfigurationError(
                 f"model {selected_model!r} is not allowed by provider {profile.id!r}"
             )
+        profile = await self._verify_openrouter_route_limits(
+            profile, provider, selected_model
+        )
         subagent_child = session is not None and is_subagent_session(session)
         subagents_enabled = bool(
             request.allow_subagents and not subagent_child and engagement_id
@@ -2309,7 +2312,9 @@ class ChatService:
                 "the provider rejected the request context and the durable conversation "
                 "could not be reassembled safely"
             )
-        refreshed = await self._refresh_context_metadata(prepared)
+        refreshed = await self._refresh_context_metadata(
+            prepared.provider_profile.id, prepared.provider, prepared.resolved_model
+        )
         canonical = self._session_messages(prepared.session)
         messages = [
             ChatRequestMessage(
@@ -2433,10 +2438,46 @@ class ChatService:
             )
         return retry
 
-    async def _refresh_context_metadata(
-        self, prepared: PreparedChat
+    async def _verify_openrouter_route_limits(
+        self, profile: ProviderProfile, provider: ModelProvider, model: str
     ) -> ProviderProfile:
-        profile = self.store.get(ProviderProfile, prepared.provider_profile.id)
+        """Load unverified OpenRouter endpoint limits before sizing the context.
+
+        Without them the model is held to the conservative 8K cap, which is far
+        below the window most OpenRouter models actually serve.
+        """
+
+        if profile.provider_type != "openrouter":
+            return profile
+        descriptor = next(
+            (
+                item
+                for item in profile.metadata.get("model_descriptors", [])
+                if isinstance(item, dict) and item.get("id") == model
+            ),
+            None,
+        )
+        if isinstance(descriptor, dict) and descriptor.get("route_limits_verified"):
+            return profile
+        if getattr(provider, "openrouter_route_limits", None) is None:
+            return profile
+        try:
+            return await self._refresh_context_metadata(profile.id, provider, model)
+        except (ChatConfigurationError, ConflictError) as exc:
+            record_caught_exception(
+                "chat",
+                "chat.chat.openrouter_route_limits_unverified",
+                "OpenRouter endpoint limits could not be verified; the conservative "
+                "context cap stays in place.",
+                exc,
+                stage="chat",
+            )
+            return self.store.get(ProviderProfile, profile.id)
+
+    async def _refresh_context_metadata(
+        self, profile_id: str, provider: ModelProvider, model: str
+    ) -> ProviderProfile:
+        profile = self.store.get(ProviderProfile, profile_id)
         metadata = dict(profile.metadata)
         descriptors = [
             dict(item)
@@ -2444,25 +2485,22 @@ class ChatService:
             if isinstance(item, dict)
         ]
         descriptor = next(
-            (item for item in descriptors if item.get("id") == prepared.resolved_model),
+            (item for item in descriptors if item.get("id") == model),
             None,
         )
         if descriptor is None:
-            descriptor = {
-                "id": prepared.resolved_model,
-                "name": prepared.resolved_model,
-            }
+            descriptor = {"id": model, "name": model}
             descriptors.append(descriptor)
         checked_at = utc_now().isoformat()
         if profile.provider_type == "openrouter":
-            loader = getattr(prepared.provider, "openrouter_route_limits", None)
+            loader = getattr(provider, "openrouter_route_limits", None)
             if loader is None:
                 raise ChatConfigurationError(
                     "the provider rejected the request context and exact endpoint "
                     "limits cannot be refreshed"
                 )
             try:
-                routes = await asyncio.wait_for(loader(prepared.resolved_model), 15)
+                routes = await asyncio.wait_for(loader(model), 15)
             except Exception as exc:
                 raise ChatConfigurationError(
                     "the provider rejected the request context and exact endpoint "
@@ -2479,18 +2517,14 @@ class ChatService:
             revision_payload: Any = descriptor["route_limits"]
         else:
             try:
-                health = await asyncio.wait_for(prepared.provider.health(), 15)
+                health = await asyncio.wait_for(provider.health(), 15)
             except Exception as exc:
                 raise ChatConfigurationError(
                     "the provider rejected the request context and model metadata "
                     "could not be refreshed; refresh the provider and retry"
                 ) from exc
             exact = next(
-                (
-                    item
-                    for item in health.model_descriptors
-                    if item.id == prepared.resolved_model
-                ),
+                (item for item in health.model_descriptors if item.id == model),
                 None,
             )
             if exact is None:
@@ -2504,7 +2538,7 @@ class ChatService:
         metadata["route_catalog_revision"] = hashlib.sha256(
             json.dumps(
                 {
-                    "model": prepared.resolved_model,
+                    "model": model,
                     "checked_at": checked_at,
                     "limits": revision_payload,
                 },

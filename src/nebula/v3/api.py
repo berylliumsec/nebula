@@ -407,6 +407,7 @@ from .mcp_import import (
 from .operators import OperatorProfileService
 from .model_catalog import (
     OPENROUTER_PROVIDER_DIRECTORY_URL,
+    ROUTE_LIMIT_FIELDS,
     UpstreamProvider,
     openrouter_upstream_providers,
 )
@@ -8046,6 +8047,20 @@ def create_app(
             descriptors, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         revision = hashlib.sha256(encoded).hexdigest()
+        # Endpoint limits come from capability verification or context recovery,
+        # never from the catalog. Dropping them re-imposes the unverified OpenRouter
+        # cap (8K) on a model whose routes were already checked.
+        previous = {
+            item.get("id"): item
+            for item in profile.metadata.get("model_descriptors", [])
+            if isinstance(item, dict) and item.get("route_limits_checked_at")
+        }
+        for descriptor in descriptors:
+            prior = previous.get(descriptor["id"])
+            if prior is not None and not descriptor.get("route_limits_checked_at"):
+                descriptor.update(
+                    {key: prior[key] for key in ROUTE_LIMIT_FIELDS if key in prior}
+                )
         upstream = [item.model_dump(mode="json") for item in health.upstream_providers]
         upstream_changed = bool(upstream) and (
             profile.metadata.get("openrouter_provider_catalog") != upstream
