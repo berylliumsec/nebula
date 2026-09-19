@@ -3385,6 +3385,17 @@ class ChatReadCursor(Entity):
     through_at: datetime
 
 
+class GuideProgress(Entity):
+    """One operator's progress through one in-app guide; follows them across devices."""
+
+    entity_kind: ClassVar[str] = "guide_progress"
+    operator_key: str = Field(min_length=1, max_length=200)
+    guide_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,79}$")
+    status: str = Field(pattern="^(in_progress|completed|dismissed)$")
+    step_index: int = Field(default=0, ge=0, le=64)
+    completed_at: datetime | None = None
+
+
 class ChatDecision(Entity):
     entity_kind: ClassVar[str] = "chat_decisions"
     engagement_id: str
@@ -4318,6 +4329,7 @@ class CompanionAction(Entity):
 
 ENTITY_MODELS: tuple[type[Entity], ...] = (
     CompanionAction,
+    GuideProgress,
     Engagement,
     ScopePolicy,
     AutomationProjectPolicy,

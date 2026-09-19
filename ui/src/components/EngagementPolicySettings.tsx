@@ -266,7 +266,7 @@ export function EngagementPolicySettings() {
     } finally { if (revision === loadRevision.current) setSaving(undefined); }
   };
 
-  return <section className="settings-section" id="engagement-policy-settings">
+  return <section className="settings-section" id="engagement-policy-settings" data-guide="project-policy">
     <div className="section-heading"><div><h2>Project execution policy</h2><p>Freeze the scope, approval behavior, and whole-project network boundary used by new agent sessions.</p></div><ShieldCheck size={20} /></div>
     {Boolean(error) && <DiagnosticErrorNotice error={error} fallback="The project policy could not be updated." compact />}
     {!policyReady && (error ? <button className="button secondary" type="button" onClick={() => void load()}>Retry loading project policy</button> : <p role="status">Loading project policy…</p>)}

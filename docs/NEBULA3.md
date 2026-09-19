@@ -274,6 +274,21 @@ verifiable, and never add host-execution, policy-bypass, destructive-data, mutab
 image, example-digest, or guessed-log-path advice. The frozen-Core package audit
 requires the corpus so installed agents cannot silently lose it.
 
+## Interactive guides
+
+Choose **Guides** in the top bar, search the command palette for “guide”, or use
+**Show me how** beside a feature to open a walkthrough that takes you to the real
+control and highlights it. Steps confirm themselves from Core state, for example that
+a new hook appears in the project’s hook catalog, instead of trusting a click on Next.
+Guides that need files (lifecycle hooks, project skills, `AGENTS.md`) offer
+**Create starter files**, which writes new files into the Project workspace, never
+overwrites existing ones, and opens them in Code.
+
+Progress belongs to the active operator profile and is stored in Core, so a guide
+started on the desktop resumes at the same step on a paired phone. The guide
+definitions live in `ui/src/guides/catalog.ts`; each step names the `data-guide`
+control it highlights.
+
 ## Workbench terminal, reviewed execution, and workspace limits
 
 ### Integrated Project browser
@@ -438,7 +453,9 @@ removes promoted evidence.
 
 ## Automation safety model
 
-Agent automation exposes only `run_command` and `process_io` backed by one prepared Kali container per agent session. Programs are ordinary binaries on `PATH`; there is no catalog, installation, publishing, assignment, or per-program adapter layer. The runtime is non-root, read-only-root, resource-limited, mounted only to the Project workspace, and never falls back to the host. See [Automation runtime](AUTOMATION-RUNTIME.md).
+Command execution uses two fixed tools, `run_command` and `process_io`, backed by one prepared Kali container per agent session. Programs are ordinary binaries on `PATH`; there is no installation, publishing, assignment, or per-program adapter layer. In Docker mode the container runs as a non-root user with a read-only root filesystem, dropped capabilities, and CPU, memory, and process limits, mounts only the Project workspace, and never falls back to the host. Host mode, which runs commands directly on the Nebula host, applies only after the operator explicitly acknowledges host filesystem and network access for that Project. See [Automation runtime](AUTOMATION-RUNTIME.md).
+
+A provider chat turn can receive further tools only from what the operator selects for that turn: `tool_output.*` and `workspace.*` retrieval alongside commands; `mcp.*` tools from the selected MCP servers; browser tools for an attached browser session; application-model tools when that context is attached; `skill.read_resource` for resources referenced by selected skills; and, when subagents are allowed, `start_subagent`, `wait_subagents`, `list_subagents`, and `stop_subagent` (subagents cannot start further subagents). Every tool turn requires an engagement-scoped session and a model verified for tool use, and cloud providers additionally require a privacy profile that permits tool-result transfer plus per-turn confirmation. Core executes every call, and commands and MCP tools pause for approval according to the Project approval setting and each MCP server's approval mode.
 
 The complete Project network boundary is installed at session creation but starts disabled. A `project_scope` request activates CIDR, domain, wildcard-domain, and TCP-port policy according to the Project approval setting. The policy DNS resolver blocks alternate DNS, direct bypasses, unauthorized private destinations, and rebinding responses. URL-path-only entries fail closed for arbitrary shell access.
 

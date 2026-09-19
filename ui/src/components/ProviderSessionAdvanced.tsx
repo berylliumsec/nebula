@@ -55,7 +55,7 @@ export function ProviderSessionAdvanced({
     finally { setBusy(false); }
   };
 
-  return <section className="chat-goal-panel" aria-label="Workspace controls">
+  return <section className="chat-goal-panel" aria-label="Workspace controls" data-guide="workspace-controls">
     <header><strong>Workspace controls</strong><small>Shared files · independent goals · no copied approvals</small></header>
     <label>Checkpoint files<textarea value={paths} placeholder="One relative path per line" onChange={event => setPaths(event.target.value)} /></label>
     <div className="chat-goal-actions">

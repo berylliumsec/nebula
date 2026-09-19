@@ -5,6 +5,7 @@ import type { ApiClient } from "../api/client";
 import type { PairedDevice } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface, useConfirmation } from "./DialogSystem";
+import { ShowMeHow } from "../guides/ShowMeHow";
 
 interface DevicePairingSettingsProps {
   api?: ApiClient;
@@ -101,9 +102,10 @@ export function DevicePairingSettings({ api, disabled, onCurrentDeviceRevoked }:
     }
   };
 
-  return <section className="panel device-pairing-panel" id="device-pairing-settings">
+  return <section className="panel device-pairing-panel" id="device-pairing-settings" data-guide="device-pairing">
     <header className="panel-header compact">
       <div><h2>Paired devices</h2><p>Companion browser access</p></div>
+      <ShowMeHow guide="lan-pairing" />
       {canCreatePairing
         ? <button className="button quiet device-pairing-action" type="button" onClick={() => setPairingOpen(true)}><Link2 size={14} /> Pair device</button>
         : <Smartphone size={19} />}

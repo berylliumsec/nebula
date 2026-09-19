@@ -360,7 +360,8 @@ full-desktop capture, multiple detached terminals, rich HTML notes, legacy Chrom
 command search, or always-on AI suggestions. PostgreSQL team authorization,
 OIDC/RBAC, remote workers, A2A, signed third-party plugins, and advanced
 specialist environments are separate projects. Engagement bundle restore is also
-not currently available.
+not currently available. MCP is included: operators add MCP servers in Settings >
+Automation > MCP servers and select them per Assistant turn.
 
 State that the requested capability is outside the current release boundary. Do not
 invent a hidden setting, endpoint, plugin, screen, compatibility flag, or roadmap

@@ -18,6 +18,7 @@ import { useTheme, type ThemePreference } from "../state/ThemeContext";
 import { UI_ZOOM_DEFAULT, UI_ZOOM_STEPS, useUiZoom } from "../state/uiZoom";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, DiagnosticsPanel, logCaughtDiagnostic } from "../diagnostics";
+import { ShowMeHow } from "../guides/ShowMeHow";
 import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
@@ -740,7 +741,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <DiagnosticsPanel hidden={settingsSection !== "diagnostics-settings"} />
       <SettingsGroup id="models-settings" title="Models" summary={providers.length ? `${providers.filter((provider) => provider.enabled).length} enabled provider${providers.filter((provider) => provider.enabled).length === 1 ? "" : "s"}` : "Optional · no provider configured"} open={openAdvancedGroup === "models-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "models-settings"}>
       <section className="settings-section" id="provider-settings">
-        <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><button className="button primary" type="button" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
+        <div className="section-heading"><div><h2>Model providers</h2><p>Models and capabilities</p></div><ShowMeHow guide="provider-env-key" label="Keys from environment" /><button className="button primary" type="button" data-guide="add-provider" disabled={previewMode || providerCatalog.length === 0} onClick={openProviderDialog}><Plus size={16} /> Add provider</button></div>
         {providerActionError && <DiagnosticErrorNotice error={providerActionError} fallback="The provider operation could not be completed." />}
         {providers.length > 0 ? (
           <div className="provider-grid">{providers.map((provider) => <ProviderHealthCard provider={provider} preview={previewMode} busy={providerBusy === provider.id} onRefresh={refreshProvider} onReverify={reverifyProvider} onEdit={openProviderEdit} onToggle={toggleProvider} onDelete={removeProvider} key={provider.id} />)}</div>
@@ -748,8 +749,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           <StandardEmptyState compact icon={<Server size={23} />} title="No provider profiles" explanation="Add a provider here, then choose its discovered model for chat or missions." />
         )}
       </section>
-      <section className="settings-section" id="native-skill-settings">
-        <div className="section-heading"><div><h2>Shared skills</h2><p>Provider-neutral `.agents/skills` catalogs</p></div></div>
+      <section className="settings-section" id="native-skill-settings" data-guide="shared-skills">
+        <div className="section-heading"><div><h2>Shared skills</h2><p>Provider-neutral `.agents/skills` catalogs</p></div><ShowMeHow guide="project-skills" /></div>
         {skillCatalogError && <DiagnosticErrorNotice error={skillCatalogError} fallback="Skill catalog could not be loaded." />}
         {skillCatalog && <div className="provider-dialog-note"><p>Project: <code>{skillCatalog.projectRoot}</code></p><p>Managed: <code>{skillCatalog.managedRoot}</code></p></div>}
         {nativeSkills.length ? <ul>{nativeSkills.map(skill => <li key={skill.path}><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}</small></li>)}</ul> : skillCatalog && <p className="setup-footnote">Add a folder containing <code>SKILL.md</code> to either catalog. Skills then appear in chat’s <code>$</code> picker.</p>}

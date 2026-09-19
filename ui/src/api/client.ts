@@ -99,6 +99,11 @@ import type {
   KnowledgeIngestRequest,
   KnowledgeIndexStatus,
   NativeHookDescriptor,
+  GuideProgress,
+  GuideProgressStatus,
+  GuideStarterFiles,
+  GuideStarterKind,
+  ProjectInstructionsStatus,
   NativeHookExecution,
   KnowledgeSource,
   KnowledgeUrlIngestRequest,
@@ -3567,6 +3572,26 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
   };
 }
 
+interface WireGuideProgress {
+  guide_id: string;
+  status: GuideProgressStatus;
+  step_index: number;
+  revision: number;
+  completed_at?: string | null;
+  updated_at: string;
+}
+
+function mapGuideProgress(value: WireGuideProgress): GuideProgress {
+  return {
+    guideId: value.guide_id,
+    status: value.status,
+    stepIndex: value.step_index,
+    revision: value.revision,
+    completedAt: value.completed_at ?? undefined,
+    updatedAt: value.updated_at,
+  };
+}
+
 function mapNativeHookExecutions(items: Array<{
   id: string;
   hook_id: string;
@@ -5476,6 +5501,45 @@ export class ApiClient {
         },
       })),
     );
+  }
+
+  listGuideProgress(signal?: AbortSignal): Promise<GuideProgress[]> {
+    return this.request<WireGuideProgress[]>("guides/progress", { signal }).then(items => items.map(mapGuideProgress));
+  }
+
+  saveGuideProgress(
+    guideId: string,
+    value: { status: GuideProgressStatus; stepIndex: number; expectedRevision: number },
+  ): Promise<GuideProgress> {
+    return this.request<WireGuideProgress>(`guides/progress/${encodeURIComponent(guideId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ status: value.status, step_index: value.stepIndex, expected_revision: value.expectedRevision }),
+    }).then(mapGuideProgress);
+  }
+
+  async resetGuideProgress(guideId: string): Promise<void> {
+    await this.request<void>(`guides/progress/${encodeURIComponent(guideId)}`, { method: "DELETE" });
+  }
+
+  createGuideStarterFiles(engagementId: string, kind: GuideStarterKind, name = ""): Promise<GuideStarterFiles> {
+    return this.request<GuideStarterFiles>("guides/starter-files", {
+      method: "POST",
+      body: JSON.stringify({ engagement_id: engagementId, kind, name }),
+    });
+  }
+
+  getProjectInstructionsStatus(engagementId: string, signal?: AbortSignal): Promise<ProjectInstructionsStatus> {
+    return this.request<{ filename: string; present: boolean; size_bytes: number; truncated: boolean; limit_bytes: number; error?: string | null }>(
+      `project-instructions?engagement_id=${encodeURIComponent(engagementId)}`,
+      { signal },
+    ).then(value => ({
+      filename: value.filename,
+      present: value.present,
+      sizeBytes: value.size_bytes,
+      truncated: value.truncated,
+      limitBytes: value.limit_bytes,
+      error: value.error ?? undefined,
+    }));
   }
 
   getSkillCatalog(

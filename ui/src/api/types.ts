@@ -2973,3 +2973,31 @@ export interface EventCursor {
   engagementId?: Identifier;
   runId?: Identifier;
 }
+
+export type GuideProgressStatus = "in_progress" | "completed" | "dismissed";
+
+/** One operator's progress through an in-app guide, owned by Core. */
+export interface GuideProgress {
+  guideId: string;
+  status: GuideProgressStatus;
+  stepIndex: number;
+  revision: number;
+  completedAt?: string;
+  updatedAt: string;
+}
+
+export interface ProjectInstructionsStatus {
+  filename: string;
+  present: boolean;
+  sizeBytes: number;
+  truncated: boolean;
+  limitBytes: number;
+  error?: string;
+}
+
+export type GuideStarterKind = "hook" | "skill" | "agents_md";
+
+export interface GuideStarterFiles {
+  kind: GuideStarterKind;
+  paths: string[];
+}
