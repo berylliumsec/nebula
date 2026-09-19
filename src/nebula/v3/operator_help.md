@@ -317,9 +317,9 @@ that Nebula 3 does not provide.
 
 ## mcp-servers | Add, import, or troubleshoot MCP servers
 
-Keywords: mcp, mcp server, mcpServers, mcp.json, claude_desktop_config.json, cursor, vscode, import mcp, export mcp, mcp json format, probe failed, trust local program, stdio, streamable http
+Keywords: mcp, mcp server, mcpServers, mcp.json, claude_desktop_config.json, cursor, vscode, import mcp, export mcp, mcp json format, probe failed, trust local program, stdio, streamable http, on-demand tools, tool search, tool_catalog
 
-Sources: docs/MCP-SERVERS.md, src/nebula/v3/mcp_import.py:import_mcp_config, src/nebula/v3/mcp.py:McpProbeService
+Sources: docs/MCP-SERVERS.md, src/nebula/v3/mcp_import.py:import_mcp_config, src/nebula/v3/mcp.py:McpProbeService, src/nebula/v3/tool_catalog.py:rank_for_request
 
 MCP servers are managed in Settings → Automation → MCP servers. Add one with
 Add MCP server, or import the JSON file another client already uses:
@@ -348,6 +348,15 @@ stdio command must exist on the Nebula host, `${NAME}` variables must be set in
 the Core environment, and HTTP endpoints must use HTTPS unless they are on
 loopback. Do not suggest enabling a server the operator has not reviewed, and do
 not ask the operator to paste secret values into chat.
+
+Tools from MCP servers load on demand. Instead of sending every schema with
+each request, the assistant searches them with `tool_catalog.search`, reads a
+schema with `tool_catalog.load`, and runs one through `tool_catalog.call`; the
+tool's own approval and scope rules still apply. Search runs locally on the
+Nebula host using the same embedding model as project documents, and uses
+keyword matching until that model is ready. Loading on demand is on for every
+project; a client can turn it off per project by setting `on_demand_tools` to
+false on the project scope, which sends every tool with every request again.
 
 ## release-boundary | Requested feature is not in the initial Nebula 3 release
 

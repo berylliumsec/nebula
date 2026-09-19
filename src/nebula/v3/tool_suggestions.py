@@ -1,11 +1,10 @@
 """Optional next-turn tool suggestions from Jev, TypeSafe's System One model.
 
-When an engagement opts in, tools from non-standard sources (any spec with a
-``source_id``, such as MCP servers) are deferred: the provider sees only their
-names through two catalog tools and loads a full schema on demand. Before the
-turn starts, Jev ranks the deferred catalog against the operator's recent
-messages. Its answer is a hint in the per-turn instructions and can preload a
-few schemas; it never hides a tool, grants a permission, or blocks the turn.
+Deferral and the catalog tools live in ``tool_catalog``. When an engagement
+opts in, Jev ranks the deferred catalog against the operator's recent messages
+before the turn starts, in place of the local ranking. Its answer is a hint in
+the per-turn instructions and can preload a few schemas; it never hides a tool,
+grants a permission, or blocks the turn.
 
 Jev receives only redacted operator messages and tool names/descriptions, never
 tool output, which may be controlled by an assessed target.
@@ -13,35 +12,25 @@ tool output, which may be controlled by an assessed target.
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
-from uuid import NAMESPACE_URL, uuid5
 
 import httpx
 from pydantic import Field
 
 from .domain import (
     NebulaModel,
-    RiskClass,
     ScopePolicy,
     ToolSuggestionSettings,
     ToolSuggestionTest,
     utc_now,
 )
 from .redaction import redact_text
-from .runtime_platform import RuntimeToolComponents
-from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
-
-CATALOG_SEARCH = "tool_catalog.search"
-CATALOG_LOAD = "tool_catalog.load"
-CATALOG_TOOL_NAMES = frozenset({CATALOG_SEARCH, CATALOG_LOAD})
-MAX_CATALOG_CALLS_PER_TURN = 8
-MAX_LOAD_NAMES = 5
+from .tool_catalog import CATALOG_TOOL_NAMES, loaded_tool_names, summary
+from .tools import ToolSpec
 
 SETTINGS_ID = "typesafe"
 ENV_KEY = "TYPESAFE_API_KEY"
@@ -52,7 +41,6 @@ DEFAULT_TIMEOUT_SECONDS = 4.0
 MAX_CHOICE_TOOLS = 254
 # Keeps state plus the longest question well inside Jev's 32k-token window.
 MAX_CHOICE_CRITERIA_CHARS = 60_000
-MAX_DESCRIPTION_CHARS = 240
 MAX_OPERATOR_MESSAGE_CHARS = 4_000
 MAX_PRIOR_OPERATOR_MESSAGES = 3
 
@@ -111,24 +99,9 @@ class ToolSuggestionReceipt(NebulaModel):
     error: str | None = Field(default=None, max_length=500)
 
 
-def is_deferrable(spec: ToolSpec) -> bool:
-    """Built-in Nebula tools have no source; every sourced tool is non-standard."""
-
-    return spec.source_id is not None and spec.name not in CATALOG_TOOL_NAMES
-
-
-def deferrable_specs(specs: Mapping[str, ToolSpec]) -> dict[str, ToolSpec]:
-    return {name: spec for name, spec in specs.items() if is_deferrable(spec)}
-
-
 def suggestions_enabled(scope: ScopePolicy) -> bool:
     # local_only forbids any remote model, including Jev.
     return scope.tool_suggestions and not scope.local_only
-
-
-def _summary(spec: ToolSpec) -> str:
-    text = " ".join(spec.description.split())
-    return text[:MAX_DESCRIPTION_CHARS]
 
 
 def _chunks(specs: Sequence[ToolSpec]) -> list[list[ToolSpec]]:
@@ -136,7 +109,7 @@ def _chunks(specs: Sequence[ToolSpec]) -> list[list[ToolSpec]]:
     current: list[ToolSpec] = []
     size = 0
     for spec in specs:
-        cost = len(spec.name) + len(_summary(spec))
+        cost = len(spec.name) + len(summary(spec))
         if current and (
             len(current) >= MAX_CHOICE_TOOLS or size + cost > MAX_CHOICE_CRITERIA_CHARS
         ):
@@ -168,7 +141,7 @@ def build_state(operator_messages: Sequence[str]) -> dict[str, Any]:
 def build_questions(specs: Sequence[ToolSpec]) -> dict[str, dict[str, Any]]:
     questions = dict(_GATE_QUESTIONS)
     for index, chunk in enumerate(_chunks(sorted(specs, key=lambda item: item.name))):
-        criteria = {spec.name: _summary(spec) or spec.name for spec in chunk}
+        criteria = {spec.name: summary(spec) or spec.name for spec in chunk}
         criteria[NONE_OPTION] = (
             "None of the listed tools is needed for operator_request."
         )
@@ -307,176 +280,6 @@ async def suggest_tools(
         model=str(body.get("model") or JEV_MODEL),
         latency_ms=int((time.monotonic() - started) * 1000),
         input_tokens=usage.get("input_tokens"),
-    )
-
-
-def loaded_tool_names(
-    receipt: Mapping[str, Any], tool_history: Iterable[Mapping[str, Any]]
-) -> set[str]:
-    """Preloaded schemas, completed catalog loads, and tools already called."""
-
-    deferred = set(receipt.get("deferred", []))
-    loaded = set(receipt.get("preloaded", [])) & deferred
-    for entry in tool_history:
-        if entry.get("name") in deferred:
-            loaded.add(str(entry["name"]))
-            continue
-        if entry.get("name") != CATALOG_LOAD or entry.get("status") != "complete":
-            continue
-        names = entry.get("arguments", {}).get("names", [])
-        if isinstance(names, list):
-            loaded.update(name for name in names if name in deferred)
-    return loaded
-
-
-def catalog_calls(tool_history: Iterable[Mapping[str, Any]]) -> int:
-    return sum(1 for entry in tool_history if entry.get("name") in CATALOG_TOOL_NAMES)
-
-
-def suggestion_instructions(receipt: Mapping[str, Any]) -> str:
-    deferred = receipt.get("deferred", [])
-    if not deferred:
-        return ""
-    text = (
-        f"\n\nOn-demand tools: {len(deferred)} tools from connected sources are not "
-        f"loaded. Use {CATALOG_SEARCH} to find one and {CATALOG_LOAD} to receive its "
-        "full schema; a loaded tool is callable from the next step."
-    )
-    preloaded = receipt.get("preloaded", [])
-    suggested = receipt.get("suggested", [])
-    if preloaded or suggested:
-        # JSON keeps tool names as data; MCP servers choose these names.
-        text += (
-            "\nLikely relevant to the current request: "
-            + json.dumps({"loaded": preloaded, "not_loaded": suggested})
-            + ". Ignore these if they do not fit what the operator actually asked."
-        )
-    return text
-
-
-def _terms(value: str) -> set[str]:
-    return {term for term in re.split(r"[^a-z0-9]+", value.lower()) if len(term) > 1}
-
-
-class ToolCatalogBroker:
-    def __init__(self, deferred: Mapping[str, ToolSpec]):
-        self.deferred = dict(deferred)
-
-    async def execute(
-        self,
-        invocation: ToolInvocation,
-        scope: ScopePolicy,
-        *,
-        approval: Any | None = None,
-    ) -> ToolExecutionResult:
-        del scope, approval
-        if invocation.tool_name == CATALOG_SEARCH:
-            return ToolExecutionResult(output=self._search(invocation.arguments))
-        if invocation.tool_name == CATALOG_LOAD:
-            return ToolExecutionResult(output=self._load(invocation.arguments))
-        raise InvalidToolArguments(f"unknown catalog tool {invocation.tool_name!r}")
-
-    def _search(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        query = _terms(str(arguments.get("query", "")))
-        if not query:
-            raise InvalidToolArguments("query must contain a searchable term")
-        limit = int(arguments.get("limit") or 10)
-        scored = []
-        for name, spec in self.deferred.items():
-            name_terms = _terms(name)
-            score = 2 * len(query & name_terms) + len(query & _terms(spec.description))
-            if score:
-                scored.append((score, name, spec))
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        return {
-            "matches": [
-                {"name": name, "summary": _summary(spec)}
-                for _, name, spec in scored[:limit]
-            ],
-            "total_on_demand_tools": len(self.deferred),
-        }
-
-    def _load(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
-        names = arguments.get("names")
-        if not isinstance(names, list) or not names:
-            raise InvalidToolArguments("names must list at least one tool")
-        unknown = [name for name in names if name not in self.deferred]
-        if unknown:
-            raise InvalidToolArguments(f"not on-demand tools: {sorted(unknown)}")
-        return {
-            "loaded": [
-                {
-                    "name": name,
-                    "description": self.deferred[name].description,
-                    "input_schema": self.deferred[name].input_schema,
-                }
-                for name in names
-            ],
-            "note": "These tools are callable from the next step.",
-        }
-
-
-def catalog_components(
-    components: RuntimeToolComponents | Any,
-    *,
-    deferred: Iterable[str],
-) -> RuntimeToolComponents | None:
-    names = sorted(set(deferred) & set(components.specs))
-    if not names:
-        return None
-    specs = {name: components.specs[name] for name in names}
-    search = ToolSpec(
-        name=CATALOG_SEARCH,
-        description=(
-            "Search on-demand tools from connected sources by keyword. Returns "
-            "names and short summaries only."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "minLength": 1, "maxLength": 256},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
-            },
-            "required": ["query"],
-            "additionalProperties": False,
-        },
-        output_schema={"type": "object", "additionalProperties": True},
-        risk_class=RiskClass.LOCAL_READ,
-        budget_class="artifact_query",
-    )
-    load = ToolSpec(
-        name=CATALOG_LOAD,
-        description=(
-            "Load full descriptions and input schemas for on-demand tools so they "
-            "can be called from the next step. Loading grants no permission."
-        ),
-        input_schema={
-            "type": "object",
-            "properties": {
-                "names": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": names},
-                    "minItems": 1,
-                    "maxItems": MAX_LOAD_NAMES,
-                    "uniqueItems": True,
-                },
-            },
-            "required": ["names"],
-            "additionalProperties": False,
-        },
-        output_schema={"type": "object", "additionalProperties": True},
-        risk_class=RiskClass.LOCAL_READ,
-        budget_class="artifact_query",
-    )
-    return RuntimeToolComponents(
-        broker=ToolCatalogBroker(specs),
-        scope=components.scope,
-        workspace=components.workspace,
-        specs={search.name: search, load.name: load},
-        # Deterministic, so a resumed turn rebuilds the same runtime digest.
-        runtime_digest=str(
-            uuid5(NAMESPACE_URL, "nebula:tool-catalog:" + ",".join(names))
-        ),
     )
 
 

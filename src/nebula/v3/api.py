@@ -1041,6 +1041,7 @@ class ScopePolicyUpdateRequest(NebulaModel):
     local_only: bool = False
     # None keeps the stored value, so clients unaware of the field never clear it.
     tool_suggestions: bool | None = None
+    on_demand_tools: bool | None = None
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
     expected_revision: int | None = Field(default=None, ge=1)
@@ -6701,8 +6702,9 @@ def create_app(
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
-        if payload["tool_suggestions"] is None:
-            del payload["tool_suggestions"]
+        for optional in ("tool_suggestions", "on_demand_tools"):
+            if payload[optional] is None:
+                del payload[optional]
         payload["grants"] = [
             grant.model_copy(update={"granted_by": operator_id})
             for grant in request.grants

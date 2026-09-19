@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -110,18 +111,32 @@ from .providers import (
 )
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .tools import ApprovalRequired, PolicyDenied, ToolInvocation
-from .tool_suggestions import (
-    CATALOG_TOOL_NAMES,
+from .tools import (
+    ApprovalRequired,
+    InvalidToolArguments,
+    PolicyDenied,
+    ToolInvocation,
+)
+from .tool_catalog import (
+    CATALOG_CALL,
+    CATALOG_DISCOVERY_NAMES,
     MAX_CATALOG_CALLS_PER_TURN,
-    JevClient,
-    catalog_calls,
+    CatalogReceipt,
+    ToolIndex,
     catalog_components,
+    catalog_instructions,
+    catalog_snapshot,
     deferrable_specs,
+    discovery_calls,
     loaded_tool_names,
+    on_demand_enabled,
+    rank_for_request,
+    unwrap_call,
+)
+from .tool_suggestions import (
+    JevClient,
     public_suggestions,
     suggest_tools,
-    suggestion_instructions,
     suggestions_enabled,
 )
 from .project_instructions import (
@@ -658,6 +673,7 @@ class ChatService:
         self.provider_factory = provider_factory or provider_from_profile
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
+        self._embedding_warmup: threading.Thread | None = None
         self.artifact_store = artifact_store
         self.workspace_resolver = workspace_resolver or self._workspace_unavailable
         self.managed_skill_root = managed_skill_root
@@ -1902,32 +1918,64 @@ class ChatService:
                     "no command, automation, MCP, or browser runtime capabilities were selected"
                 )
             tool_suggestions: dict[str, Any] | None = None
+            tool_catalog: dict[str, Any] | None = None
             deferred_specs = (
                 deferrable_specs(tool_components.specs)
-                if suggestions_enabled(tool_components.scope)
+                if on_demand_enabled(tool_components.scope)
                 else {}
             )
             if deferred_specs:
-                receipt = await suggest_tools(
-                    self.tool_suggestion_client(),
-                    deferred=deferred_specs,
-                    operator_messages=[
-                        *(
-                            item.content
-                            for item in stored_messages
-                            if item.role == ChatRole.USER
+                operator_messages = [
+                    *(
+                        item.content
+                        for item in stored_messages
+                        if item.role == ChatRole.USER
+                    ),
+                    *(
+                        item.content
+                        for item in durable_incoming
+                        if item.role == ChatRole.USER
+                    ),
+                ]
+                tool_index = self._tool_index()
+                catalog_receipt: CatalogReceipt | None = None
+                if suggestions_enabled(tool_components.scope):
+                    receipt = await suggest_tools(
+                        self.tool_suggestion_client(),
+                        deferred=deferred_specs,
+                        operator_messages=operator_messages,
+                    )
+                    tool_suggestions = receipt.model_dump(mode="json")
+                    if receipt.status != "unavailable":
+                        catalog_receipt = CatalogReceipt(
+                            deferred=receipt.deferred,
+                            preloaded=receipt.preloaded,
+                            suggested=receipt.suggested,
+                            ranker="jev",
+                        )
+                if catalog_receipt is None:
+                    # Local ranking; also the fallback when Jev is unavailable.
+                    catalog_receipt = await asyncio.to_thread(
+                        rank_for_request,
+                        tool_index,
+                        deferred_specs,
+                        next(
+                            (
+                                text
+                                for text in reversed(operator_messages)
+                                if text.strip()
+                            ),
+                            "",
                         ),
-                        *(
-                            item.content
-                            for item in durable_incoming
-                            if item.role == ChatRole.USER
-                        ),
-                    ],
+                    )
+                catalog = catalog_components(
+                    tool_components,
+                    deferred=catalog_receipt.deferred,
+                    index=tool_index,
                 )
-                catalog = catalog_components(tool_components, deferred=receipt.deferred)
                 if catalog is not None:
                     tool_components = combine_tool_components(tool_components, catalog)
-                tool_suggestions = receipt.model_dump(mode="json")
+                tool_catalog = catalog_receipt.model_dump(mode="json")
             session_id = (
                 session.id
                 if session is not None
@@ -1971,6 +2019,7 @@ class ChatService:
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
                     "tool_suggestions": tool_suggestions,
+                    "tool_catalog": tool_catalog,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -2535,40 +2584,33 @@ class ChatService:
                     self._release_execution(prepared)
                     return
 
-            suggestion_snapshot = turn.request_snapshot.get("tool_suggestions") or {}
-            deferred_names = set(suggestion_snapshot.get("deferred", []))
+            catalog_receipt = catalog_snapshot(turn.request_snapshot)
+            deferred_names = set(catalog_receipt.get("deferred", []))
             while turn.status != ChatTurnStatus.FINALIZING:
-                loaded_names = loaded_tool_names(suggestion_snapshot, turn.tool_history)
-                catalog_open = (
-                    catalog_calls(turn.tool_history) < MAX_CATALOG_CALLS_PER_TURN
-                )
                 budgeted_specs = [
                     spec
                     for spec in components.specs.values()
-                    if (spec.name not in CATALOG_TOOL_NAMES or catalog_open)
-                    and (
-                        (
-                            spec.budget_class == "artifact_query"
-                            and (
-                                turn.max_artifact_queries is None
-                                or turn.artifact_queries < turn.max_artifact_queries
-                            )
+                    if (
+                        spec.budget_class == "artifact_query"
+                        and (
+                            turn.max_artifact_queries is None
+                            or turn.artifact_queries < turn.max_artifact_queries
                         )
-                        or (
-                            spec.budget_class == "execution"
-                            and (
-                                turn.max_tool_calls is None
-                                or turn.execution_tool_calls < turn.max_tool_calls
-                            )
+                    )
+                    or (
+                        spec.budget_class == "execution"
+                        and (
+                            turn.max_tool_calls is None
+                            or turn.execution_tool_calls < turn.max_tool_calls
                         )
                     )
                 ]
-                # Deferred tools are advertised only once loaded, but a direct
-                # call to one still runs (and loads it) within the same budgets.
+                # Deferred tools never enter the function list, so it stays
+                # identical across steps and turns and provider prefix caches
+                # hold. They run through tool_catalog.call, or by a direct call
+                # to their name, within the same budgets.
                 available_specs = [
-                    spec
-                    for spec in budgeted_specs
-                    if spec.name not in deferred_names or spec.name in loaded_names
+                    spec for spec in budgeted_specs if spec.name not in deferred_names
                 ]
                 if not available_specs:
                     break
@@ -2585,13 +2627,15 @@ class ChatService:
                         )
                         + "\n\n"
                         + (prepared.model_request.instructions or "")
-                        + suggestion_instructions(suggestion_snapshot),
+                        + catalog_instructions(catalog_receipt, components.specs),
                         "tools": [
                             ToolDefinition(
                                 name=spec.name,
                                 description=spec.description,
                                 input_schema=_routing_input_schema(spec),
-                                strict=True,
+                                # The call envelope's arguments are free-form;
+                                # the real tool's schema is enforced by Core.
+                                strict=spec.name != CATALOG_CALL,
                             )
                             for spec in sorted(
                                 available_specs, key=lambda item: item.name
@@ -2648,6 +2692,19 @@ class ChatService:
                     if call.arguments:
                         raise ChatError("finish_response does not accept arguments")
                     break
+                provider_call: dict[str, Any] | None = None
+                if call.name == CATALOG_CALL:
+                    target = unwrap_call(call.arguments, deferred_names)
+                    # An unknown target stays a catalog call; its broker
+                    # answers with an error the model can correct.
+                    if target is not None:
+                        provider_call = {
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        }
+                        call = call.model_copy(
+                            update={"name": target[0], "arguments": target[1]}
+                        )
                 available_names = {spec.name for spec in budgeted_specs}
                 if call.name not in available_names:
                     raise ChatError(
@@ -2700,7 +2757,20 @@ class ChatService:
                     "arguments": call.arguments,
                     "budget_class": spec.budget_class,
                 }
+                if provider_call is not None:
+                    entry["provider_call"] = provider_call
                 try:
+                    if (
+                        call.name in CATALOG_DISCOVERY_NAMES
+                        and discovery_calls(turn.tool_history)
+                        >= MAX_CATALOG_CALLS_PER_TURN
+                    ):
+                        # Refused rather than removed from the function list,
+                        # which would change the cached request prefix.
+                        raise InvalidToolArguments(
+                            "the catalog search limit for this turn is reached; "
+                            "use a tool already loaded or finish_response"
+                        )
                     result = await components.broker.execute(
                         invocation, components.scope
                     )
@@ -2886,13 +2956,21 @@ class ChatService:
                 if (chunk.citation.source_id, chunk.citation.chunk_id)
                 not in known_citations
             )
+            # Unused on-demand tools stay out of the synthesis inventory too.
+            loaded_names = loaded_tool_names(catalog_receipt, turn.tool_history)
             final_request = prepared.model_request.model_copy(
                 update={
                     "instructions": (
                         _CHAT_TOOL_RESULT_INSTRUCTIONS
                         + "\n\n"
                         + (prepared.model_request.instructions or "")
-                        + _tool_inventory_instructions(components.specs)
+                        + _tool_inventory_instructions(
+                            {
+                                name: spec
+                                for name, spec in components.specs.items()
+                                if name not in deferred_names or name in loaded_names
+                            }
+                        )
                         + _reference_instructions(
                             operator_help_chunks, trusted_operator_help=True
                         )
@@ -3195,6 +3273,46 @@ class ChatService:
                 return messages
         return messages
 
+    def _tool_index(self) -> ToolIndex | None:
+        index = self.knowledge_index
+        if not all(hasattr(index, method) for method in ("index_tools", "rank_tools")):
+            return None
+        if (
+            index is not None
+            and index.status.state == "required"
+            and hasattr(index, "prepare_model")
+            and self._embedding_warmup is None
+        ):
+            # On-demand search is on by default, so fetch the local model once
+            # in the background instead of waiting for a document upload.
+            # Until it is ready, catalog search uses keyword ranking.
+            self._embedding_warmup = threading.Thread(
+                target=self._warm_embedding_model,
+                args=(index,),
+                name="nebula-embedding-warmup",
+                daemon=True,
+            )
+            self._embedding_warmup.start()
+        return index  # type: ignore[return-value]
+
+    @staticmethod
+    def _warm_embedding_model(index: Any) -> None:
+        try:
+            index.prepare_model()
+        except KnowledgeIndexError as exc:
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.tool_catalog.embedding_unavailable",
+                "The local embedding model could not be prepared; on-demand tool "
+                "search will use keyword ranking.",
+                outcome="fallback",
+                stage="tool-catalog",
+                retryable=True,
+                safe_failure_cause="The local embedding model download or load failed.",
+                exception=exc,
+            )
+
     @staticmethod
     def _provider_tool_history(turn: ChatTurn) -> list[ModelToolResult]:
         history: list[ModelToolResult] = []
@@ -3208,11 +3326,15 @@ class ChatService:
                 tool_name=str(entry["name"]),
                 trusted_result=entry.get("trusted_result") is True,
             )
+            # An on-demand tool runs under its own name, but the provider must
+            # see the tool_catalog.call it actually issued.
+            provider_call = entry.get("provider_call")
+            issued = provider_call if isinstance(provider_call, dict) else entry
             history.append(
                 ModelToolResult(
                     call_id=str(entry["model_call_id"]),
-                    name=str(entry["name"]),
-                    arguments=dict(entry.get("arguments") or {}),
+                    name=str(issued["name"]),
+                    arguments=dict(issued.get("arguments") or {}),
                     output=output,
                     is_error=entry.get("status") != "complete",
                 )
@@ -3875,11 +3997,11 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
-            suggestion_snapshot = turn.request_snapshot.get("tool_suggestions")
-            if suggestion_snapshot:
-                # Rebuilt from the snapshot; Jev is never asked again on resume.
+            deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
+            if deferred:
+                # Rebuilt from the snapshot; nothing is re-ranked on resume.
                 catalog = catalog_components(
-                    components, deferred=suggestion_snapshot.get("deferred", [])
+                    components, deferred=deferred, index=self._tool_index()
                 )
                 if catalog is not None:
                     components = combine_tool_components(components, catalog)

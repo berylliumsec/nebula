@@ -724,6 +724,9 @@ class ScopePolicy(Entity):
     # Opt-in: send redacted operator messages and tool names to Jev (TypeSafe)
     # for next-turn tool suggestions. Ignored while local_only is set.
     tool_suggestions: bool = False
+    # Tools from connected sources (MCP and other non-standard sources) are
+    # searched and loaded on demand instead of sent with every request.
+    on_demand_tools: bool = True
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
 
