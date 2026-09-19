@@ -3438,6 +3438,11 @@ interface WireMcpImportEntry {
   url?: string | null;
   profile_id?: string | null;
   secrets?: { target: string; source: McpImportSecret["source"]; reference?: string | null }[];
+  changes?: { field: string; before?: string | null; after?: string | null }[];
+  enabled?: boolean;
+  default_approval?: McpServerProfile["defaultApproval"] | null;
+  needs_trust?: boolean;
+  needs_probe?: boolean;
   warnings?: string[];
   error?: string | null;
 }
@@ -3446,6 +3451,8 @@ interface WireMcpImportReport {
   dry_run: boolean;
   entries: WireMcpImportEntry[];
   created: number;
+  updated?: number;
+  unchanged?: number;
   replaced: number;
   skipped: number;
   invalid: number;
@@ -3455,6 +3462,8 @@ function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
   return {
     dryRun: value.dry_run,
     created: value.created,
+    updated: value.updated ?? 0,
+    unchanged: value.unchanged ?? 0,
     replaced: value.replaced,
     skipped: value.skipped,
     invalid: value.invalid,
@@ -3472,6 +3481,15 @@ function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
         source: secret.source,
         reference: secret.reference ?? undefined,
       })),
+      changes: (entry.changes ?? []).map((change) => ({
+        field: change.field,
+        before: change.before ?? undefined,
+        after: change.after ?? undefined,
+      })),
+      enabled: entry.enabled === true,
+      defaultApproval: entry.default_approval ?? undefined,
+      needsTrust: entry.needs_trust === true,
+      needsProbe: entry.needs_probe === true,
       warnings: entry.warnings ?? [],
       error: entry.error ?? undefined,
     })),
@@ -6099,8 +6117,11 @@ export class ApiClient {
   importMcpServers(request: {
     config: Record<string, unknown>;
     dryRun: boolean;
-    onConflict: "skip" | "replace";
+    onConflict: "update" | "skip" | "replace";
     sourceName?: string;
+    /** Choices for the servers this import creates. */
+    defaults?: { enabled: boolean; defaultApproval: McpServerProfile["defaultApproval"] };
+    trustLocalPrograms?: boolean;
   }): Promise<McpImportReport> {
     return this.request<WireMcpImportReport>("mcp-servers/import", {
       method: "POST",
@@ -6109,6 +6130,11 @@ export class ApiClient {
         dry_run: request.dryRun,
         on_conflict: request.onConflict,
         source_name: request.sourceName,
+        defaults: request.defaults && {
+          enabled: request.defaults.enabled,
+          default_approval: request.defaults.defaultApproval,
+        },
+        trust_local_programs: request.trustLocalPrograms ?? false,
       }),
     }).then(mapMcpImportReport);
   }

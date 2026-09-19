@@ -184,7 +184,10 @@ class McpImportEntry(NebulaModel):
     default_approval: McpApprovalMode | None = None
     needs_trust: bool = Field(
         default=False,
-        description="A local program saved disabled until it is trusted.",
+        description=(
+            "A local program that is enabled only if this import trusts it "
+            "(trust_local_programs)."
+        ),
     )
     needs_probe: bool = Field(
         default=False,
@@ -738,7 +741,7 @@ def _plan_new(draft: _Draft, request: McpImportRequest) -> None:
     if enabled and fields["transport"] == McpTransport.STDIO:
         trusted = request.trust_local_programs
         enabled = trusted
-        draft.entry.needs_trust = not trusted
+        draft.entry.needs_trust = True
     fields["enabled"] = enabled
     fields["trusted_stdio"] = trusted
     draft.entry.enabled = enabled
@@ -785,7 +788,7 @@ def _plan_update(
     if enabled and stdio and not trusted:
         trusted = request.trust_local_programs
         enabled = trusted
-        entry.needs_trust = not trusted
+        entry.needs_trust = True
     merged["trusted_stdio"] = trusted
     merged["enabled"] = enabled
     if connection_changed:

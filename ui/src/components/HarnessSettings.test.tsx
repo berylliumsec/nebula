@@ -12,7 +12,7 @@ const profile: HarnessProfile = {
   enabled: true, localOnly: true, permitsSensitiveData: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
-const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn()};
+const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", previewMode: false})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
 
@@ -136,9 +136,9 @@ describe("MCP import entry points", () => {
     api.listMcpServers.mockImplementation(async () => imported ? [importedServer] : []);
     api.importMcpServers.mockImplementation(async ({dryRun}: {dryRun: boolean}) => {
       if (!dryRun) imported = true;
-      return {dryRun, created: 1, replaced: 0, skipped: 0, invalid: 1, entries: [
-        {sourceName: "burp", name: "burp", action: "create", transport: "stdio", command: "/usr/bin/npx", arguments: ["-y", "burp-mcp"], secrets: [], warnings: []},
-        {sourceName: "recon", name: "recon", action: "invalid", arguments: [], secrets: [], warnings: [], error: "not installed"},
+      return {dryRun, created: 1, updated: 0, unchanged: 0, replaced: 0, skipped: 0, invalid: 1, entries: [
+        {sourceName: "burp", name: "burp", action: "create", transport: "stdio", command: "/usr/bin/npx", arguments: ["-y", "burp-mcp"], secrets: [], changes: [], enabled: false, defaultApproval: "risk_based", needsTrust: false, needsProbe: false, warnings: []},
+        {sourceName: "recon", name: "recon", action: "invalid", arguments: [], secrets: [], changes: [], enabled: false, needsTrust: false, needsProbe: false, warnings: [], error: "not installed"},
       ]};
     });
     const user = userEvent.setup();
@@ -148,18 +148,42 @@ describe("MCP import entry points", () => {
     await user.click(within(dialog).getByRole("textbox", {name: "Configuration"}));
     await user.paste('{"mcpServers": {"burp": {"command": "npx"}, "recon": {"command": "recon-mcp"}}}');
     await user.click(within(dialog).getByRole("button", {name: "Preview"}));
-    await user.click(await within(dialog).findByRole("button", {name: "Import 1 server"}));
+    await user.click(await within(dialog).findByRole("button", {name: "Save 1 server"}));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(await screen.findByRole("heading", {name: "burp"})).toBeVisible();
-    const notice = screen.getByText(/Imported 1 server from Pasted configuration/).closest(".surface-notice")!;
-    expect(notice).toHaveTextContent("1 could not be imported: recon (not installed)");
+    const notice = screen.getByText(/Saved 1 server from Pasted configuration \(1 added\)\. Review and probe the new ones, then enable them\./).closest(".surface-notice")!;
+    expect(notice).toHaveTextContent("1 could not be imported: recon (not installed).");
+    expect(api.probeMcpServer).not.toHaveBeenCalled();
     expect(screen.getByText("Local program · not trusted")).toBeVisible();
     expect(screen.getByText("Trust this local program in Edit before probing.")).toBeVisible();
     expect(screen.getByRole("button", {name: "Probe"})).toBeDisabled();
     expect(screen.getByRole("button", {name: "Enable"})).toBeDisabled();
     await user.click(within(notice as HTMLElement).getByRole("button", {name: "Dismiss import notice"}));
-    expect(screen.queryByText(/Imported 1 server/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saved 1 server/)).not.toBeInTheDocument();
+  });
+
+  it("probes the servers an import enabled and reports any that fail", async () => {
+    api.listMcpServers.mockResolvedValue([]);
+    const entry = (name: string) => ({sourceName: name, name, action: "create", transport: "streamable_http", url: `https://${name}.example.test/mcp`, arguments: [], profileId: `mcp-${name}`, secrets: [], changes: [], enabled: true, defaultApproval: "ask", needsTrust: false, needsProbe: true, warnings: []});
+    api.importMcpServers.mockImplementation(async ({dryRun}: {dryRun: boolean}) => ({dryRun, created: 2, updated: 0, unchanged: 0, replaced: 0, skipped: 0, invalid: 0, entries: [entry("intel"), entry("recon")]}));
+    api.probeMcpServer.mockImplementation(async (id: string) => {
+      if (id === "mcp-recon") throw new Error("connection refused");
+      return importedServer;
+    });
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await user.click(await screen.findByRole("button", {name: "Import from file"}));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("textbox", {name: "Configuration"}));
+    await user.paste('{"mcpServers": {"intel": {"url": "https://intel.example.test/mcp"}, "recon": {"url": "https://recon.example.test/mcp"}}}');
+    await user.click(within(dialog).getByRole("button", {name: "Preview"}));
+    await user.click(await within(dialog).findByRole("button", {name: "Save 2 servers"}));
+
+    const notice = (await screen.findByText(/Probed 1 server\./)).closest(".surface-notice")!;
+    expect(notice).toHaveTextContent("Saved 2 servers from Pasted configuration (2 added). Probed 1 server.");
+    expect(notice).toHaveTextContent("recon could not be probed: connection refused. It stays enabled; probe it again from its card.");
+    expect(api.probeMcpServer.mock.calls.map(([id]) => id).sort()).toEqual(["mcp-intel", "mcp-recon"]);
   });
 
   it("asks trusted but unprobed servers to probe before enabling", async () => {

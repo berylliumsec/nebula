@@ -322,7 +322,8 @@ def test_new_servers_follow_the_import_choices_and_the_file_wins(tmp_path):
         trust_local_programs=True,
     )
     assert applied.created == 3
-    assert applied.entries[0].needs_trust is False
+    assert applied.entries[0].needs_trust is True
+    assert applied.entries[0].enabled is True
     assert applied.entries[0].needs_probe is True
     profiles = {item.name: item for item in store.list_entities(McpServerProfile)}
     assert profiles["local"].enabled and profiles["local"].trusted_stdio
@@ -433,7 +434,7 @@ def test_reimport_keeps_a_changed_program_enabled_only_when_trusted(tmp_path):
     assert [(c.field, c.before, c.after) for c in entry.changes] == [
         ("args", "local-mcp", "local-mcp@2")
     ]
-    assert (entry.enabled, entry.needs_trust, entry.needs_probe) == (True, False, True)
+    assert (entry.enabled, entry.needs_trust, entry.needs_probe) == (True, True, True)
     profile = store.get(McpServerProfile, entry.profile_id)
     assert profile.enabled and profile.trusted_stdio
     assert profile.arguments == ["local-mcp@2"]
