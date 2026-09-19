@@ -1,39 +1,23 @@
 {
-  "change_digest": "d063a7cd02b54474f13746a55e2d60034cdbbccccb860c6855756890a5f014cd",
-  "reviewed_by": "Claude review of the optional TypeSafe Jev tool-suggestion layer",
-  "reason": "Adds opt-in, per-project Jev tool suggestions: MCP-sourced tools are deferred behind tool_catalog.search/load, Jev ranks them before each provider turn, the TypeSafe key is stored through the credential store with GET/PUT/test/DELETE routes, and the chat shows a collapsed per-turn chip. Selected tests cover the new module and routes, the tool-loop and resume paths it modifies, scope API field preservation, the settings/opt-in/chip UI in unit and mocked Playwright on desktop, mobile Chromium and mobile WebKit, and one real-Core journey against a local Jev stub. After merging main with #344 (interactive guides), which edits the same Settings, policy and chat components, the selection adds the guides unit tests and the real-Core interactive-guides journeys so the spotlighted controls are verified alongside the new Integrations panel and project opt-in.",
-  "exclusions": "No full suites. Harness chats are unchanged. Real-Core coverage uses a local stub instead of api.typesafe.ai and session-only key storage because test hosts have no unlocked OS vault; vault storage is covered by the mocked UI and backend tests. No LAN-origin check: no origin, cookie or socket behavior changed.",
+  "change_digest": "c6e4736d4a85258e3dce07b99fb34c0872d4267110cb7c3b538a0d1d750c30ce",
+  "reviewed_by": "Claude review of the OpenRouter model picker upstream-provider filter",
+  "reason": "OpenRouter model discovery (_openrouter_health) now keeps only models served by the allowed upstream providers, failing closed on unknown slugs or a failed filter request; Assistant settings can pick models outside the provider's model allowlist (patching the allowlist) and run discovery for existing conversations when the panel opens. Selected tests cover discovery, filtering, pagination and fail-closed cases in test_providers.py, the Assistant settings allowlist-extension flow in App.test.tsx, and the mocked Assistant settings and provider model-switch journeys on desktop, mobile Chromium and mobile WebKit.",
+  "exclusions": "No full suites. The live OpenRouter real-Core clickthrough needs a real OpenRouter key and is excluded; the filter parameters were checked against OpenRouter's public /api/v1/models API. Harness runtimes, missions and writing AI only read the unchanged model allowlist. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 115,
-    "frontend": 128,
+    "python": 36,
+    "frontend": 38,
     "native": 0,
-    "playwright": 15
+    "playwright": 6
   },
   "python": [
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_project_instructions.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/test_playwright_impact.py",
-    "tests/v3/test_guides.py"
+    "tests/v3/test_providers.py"
   ],
   "frontend": [
-    "ui/src/components/ToolSuggestions.test.tsx",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/api/workbenchBrowser.test.ts",
-    "ui/src/components/ScopeImportDialog.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/guides/guides.test.tsx"
+    "ui/src/App.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:tool-suggestions/desktop",
-    "entry:tool-suggestions/mobile-chromium",
-    "entry:tool-suggestions/mobile-webkit",
-    "entry:tool-suggestions/real-core",
-    "area:interactive-guides"
+    "area:assistant-settings-navigation",
+    "area:provider-runtime-switch"
   ]
 }
