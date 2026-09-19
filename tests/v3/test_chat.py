@@ -1238,6 +1238,126 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
     assert persisted[-1].citations[0].source_id == "source-a"
 
 
+def test_in_place_edit_replaces_turns_inside_the_same_conversation(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-edit.db")
+    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    def send(content: str, session_id: str | None) -> str:
+        completion = asyncio.run(
+            service.complete(
+                service.prepare(
+                    ChatCompletionRequest(
+                        engagement_id=engagement.id,
+                        provider_id=profile.id,
+                        session_id=session_id,
+                        include_knowledge=False,
+                        messages=[{"role": "user", "content": content}],
+                    )
+                )
+            )
+        )
+        assert completion.session_id is not None
+        return completion.session_id
+
+    session_id = send("Summarize the open findings.", None)
+    assert send("Any update on the certificate?", session_id) == session_id
+    original = service.session_messages(session_id)
+    assert [item.sequence for item in original] == [1, 2, 3, 4]
+
+    session, retained, replaced = service.rewind_session(
+        session_id, before_message_id=original[2].id
+    )
+
+    assert session.id == session_id
+    assert session.parent_session_id is None
+    assert [item.id for item in retained] == [item.id for item in original[:2]]
+    assert [item.id for item in replaced] == [item.id for item in original[2:]]
+    assert [item.id for item in service.session_messages(session_id)] == [
+        item.id for item in original[:2]
+    ]
+    assert [
+        item.id for item in service.session_messages(session_id, include_replaced=True)
+    ] == [item.id for item in original]
+    retraction = session.metadata["message_retractions"][-1]
+    assert retraction["reason"] == "operator_edit"
+    assert retraction["from_message_id"] == original[2].id
+    assert retraction["message_ids"] == [item.id for item in original[2:]]
+
+    assert send("Any update on the certificate and IKEv1?", session_id) == session_id
+
+    active = service.session_messages(session_id)
+    assert [(item.sequence, item.role) for item in active] == [
+        (1, ChatRole.USER),
+        (2, ChatRole.ASSISTANT),
+        (5, ChatRole.USER),
+        (6, ChatRole.ASSISTANT),
+    ]
+    assert active[2].content == "Any update on the certificate and IKEv1?"
+    assert [item.content for item in provider.requests[-1].messages] == [
+        "Summarize the open findings.",
+        "Evidence-backed answer [source-a:chunk-a].",
+        "Any update on the certificate and IKEv1?",
+    ]
+    assert len(store.list_entities(ChatSession, engagement_id=engagement.id)) == 1
+
+
+def test_in_place_edit_rejects_assistant_messages_and_foreign_history(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-edit-guards.db")
+    engagement = store.create(Engagement(id="eng-a", name="Engagement A"))
+    profile = store.create(_profile(local=True))
+    monkeypatch.setattr(
+        chat_module,
+        "provider_from_profile",
+        lambda _: FakeProvider(profile.id, local=True),
+    )
+    service = ChatService(store)
+    completion = asyncio.run(
+        service.complete(
+            service.prepare(
+                ChatCompletionRequest(
+                    engagement_id=engagement.id,
+                    provider_id=profile.id,
+                    include_knowledge=False,
+                    messages=[{"role": "user", "content": "Summarize the findings."}],
+                )
+            )
+        )
+    )
+    session_id = completion.session_id
+    assert session_id is not None
+    messages = service.session_messages(session_id)
+
+    with pytest.raises(ChatHistoryConflict):
+        service.rewind_session(session_id, before_message_id=messages[1].id)
+    with pytest.raises(ChatHistoryConflict):
+        service.rewind_session(session_id, before_message_id="missing-message")
+
+    store.create(
+        ChatTurn(
+            id="turn-active",
+            engagement_id=engagement.id,
+            session_id=session_id,
+            model="model-a",
+            provider_profile_id=profile.id,
+            status=ChatTurnStatus.ROUTING,
+            request_snapshot={},
+        )
+    )
+    with pytest.raises(ChatHistoryConflict):
+        service.rewind_session(session_id, before_message_id=messages[0].id)
+    assert [item.id for item in service.session_messages(session_id)] == [
+        item.id for item in messages
+    ]
+
+
 def test_retrieval_agent_falls_back_to_original_query_on_invalid_plan(
     tmp_path, monkeypatch
 ):

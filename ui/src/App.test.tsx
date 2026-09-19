@@ -959,6 +959,86 @@ describe("Nebula workspace", () => {
     expect(new URLSearchParams(window.location.search).get("session")).toBeNull();
   }, 15_000);
 
+  it("edits a sent message in place instead of branching the conversation", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const message = (id: string, sequence: number, role: "user" | "assistant", content: string, metadata: Record<string, unknown> = {}) => ({
+      ...entity, id, engagement_id: "engagement-1", session_id: "session-1", sequence, role, content, citations: [], metadata,
+    });
+    const session = { ...entity, id: "session-1", engagement_id: "engagement-1", title: "Legacy VPN audit", provider_profile_id: "provider-1", model: "model-1", metadata: {} };
+    let transcript = [
+      message("message-1", 1, "user", "Summarize the open findings."),
+      message("message-2", 2, "assistant", "Two findings remain open."),
+      message("message-3", 3, "user", "Any update on the certificate?"),
+      message("message-4", 4, "assistant", "The certificate expired on 12 August."),
+    ];
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      const path = url.pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Live engagement", status: "active", metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Local analyst", provider_type: "vllm", endpoint: null, enabled: true, is_local: true, secret_ref: null, model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "model-1" } }]), { status: 200 });
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify([session]), { status: 200 });
+      if (path.endsWith("/chat/sessions/session-1/rewind")) {
+        const body = JSON.parse(String(init?.body)) as { before_message_id: string };
+        const boundary = transcript.find((item) => item.id === body.before_message_id)!;
+        const replaced = transcript.filter((item) => item.sequence >= boundary.sequence && !item.metadata.retracted_at)
+          .map((item) => ({ ...item, metadata: { retracted_at: "2026-07-12T12:00:00Z", retraction_id: "retraction-1", retracted_reason: "operator_edit" } }));
+        transcript = transcript.map((item) => replaced.find((entry) => entry.id === item.id) ?? item);
+        return new Response(JSON.stringify({ session, messages: transcript.filter((item) => !item.metadata.retracted_at), replaced }), { status: 200 });
+      }
+      if (path.endsWith("/chat/sessions/session-1/messages")) {
+        const visible = url.searchParams.get("include_replaced") === "true"
+          ? transcript
+          : transcript.filter((item) => !item.metadata.retracted_at);
+        return new Response(JSON.stringify(visible), { status: 200 });
+      }
+      if (path.endsWith("/chat/completions")) {
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('event: started\ndata: {"type":"started","provider_id":"provider-1","model":"model-1","session_id":"session-1"}\n\n'));
+            controller.enqueue(encoder.encode('event: done\ndata: {"type":"done","turn_id":"turn-2","session_id":"session-1","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"IKEv1 aggressive mode is still enabled."},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","provider_request_id":"request-2","citations":[]}\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions?view=chat&session=session-1");
+
+    const edited = await screen.findByText("Any update on the certificate?", {}, { timeout: 5_000 });
+    await user.click(within(edited.closest("article")!).getByRole("button", { name: "Edit message" }));
+    const editor = screen.getByRole("textbox", { name: "Edit message" });
+    expect(editor).toHaveValue("Any update on the certificate?");
+    await user.clear(editor);
+    await user.type(editor, "Any update on the certificate and IKEv1?");
+    await user.click(screen.getByRole("button", { name: "Resend" }));
+
+    expect(await screen.findByText("IKEv1 aggressive mode is still enabled.")).toBeVisible();
+    const rewindCall = fetchMock.mock.calls.find(([callInput]) => new URL(String(callInput)).pathname.endsWith("/chat/sessions/session-1/rewind"));
+    expect(JSON.parse(String(rewindCall?.[1]?.body))).toEqual({ before_message_id: "message-3" });
+    expect(fetchMock.mock.calls.some(([callInput]) => new URL(String(callInput)).pathname.endsWith("/fork"))).toBe(false);
+    const sendCall = fetchMock.mock.calls.find(([callInput]) => new URL(String(callInput)).pathname.endsWith("/chat/completions"));
+    expect(JSON.parse(String(sendCall?.[1]?.body))).toMatchObject({
+      session_id: "session-1",
+      messages: [{ role: "user", content: "Any update on the certificate and IKEv1?" }],
+    });
+    expect(screen.getByText("Any update on the certificate and IKEv1?").closest(".chat-message.operator")).not.toBeNull();
+    expect(document.querySelectorAll(".chat-message.operator")).toHaveLength(2);
+    // The replaced turns leave the conversation but stay readable behind the disclosure.
+    const replacedDisclosure = screen.getByText(/^2 replaced messages/);
+    const replacedGroup = replacedDisclosure.closest("details")!;
+    expect(replacedGroup).not.toHaveAttribute("open");
+    expect(screen.getByText("Any update on the certificate?").closest(".chat-replaced-group")).toBe(replacedGroup);
+    expect(screen.getByText("The certificate expired on 12 August.").closest(".chat-replaced-group")).toBe(replacedGroup);
+    await user.click(replacedDisclosure);
+    expect(replacedGroup).toHaveAttribute("open");
+    expect(within(replacedGroup).getByText("Replaced by your edit and kept for reference. They are not sent to the model.")).toBeVisible();
+  });
+
   it("deletes every saved Assistant conversation after one confirmation", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const chats = [

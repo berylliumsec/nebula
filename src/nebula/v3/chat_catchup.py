@@ -13,6 +13,7 @@ from .domain import (
     ChatMessage,
     ChatSession,
     ChatTurn,
+    message_is_replaced,
     utc_now,
 )
 from .chat_naming import substantive_prompt
@@ -99,6 +100,9 @@ def catchup_projection(store, session, cursor):
                     .order_by(EntityRow.created_at.desc())
                     .limit(101)
                 )
+            ]
+            candidates = [
+                message for message in candidates if not message_is_replaced(message)
             ]
             truncated = len(candidates) > 100 or len(turns) > 100
             for message in candidates[:100]:
