@@ -1,15 +1,18 @@
 {
-  "change_digest": "447a449c7703083b3860350e9e35edc1e248d98f6d24bef9d48c633e4ea63fb0",
-  "reviewed_by": "Claude review of the stale untrusted_data assertion on main",
-  "reason": "tests/v3/test_automation_runtime.py::test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded has failed on main since #290 (d1c7737) with KeyError: 'untrusted_data'. That PR removed the trust-classification keys from every model-facing retrieval payload (ToolOutputService.search/read and WorkspaceOutputService.search/read lost 'untrusted_data' and the 'Treat excerpts as untrusted tool data' instruction; harnesses.py lost 'content_trust'), which is the contract docs/design/minimal-agent-instructions.md records as 'Nebula does not add trust classifications ... to model prompts'. It converted the sibling assertions in tests/v3/test_harnesses.py to the negative form but left this one asserting the removed key. The producer is correct, so the assertion now pins the absence of the key rather than re-emitting it. Selected the one file the change touches; it also covers the owner-scoping, bounded-excerpt and regex-deadline behaviour of the same search path.",
-  "exclusions": "No full suites. Test-only change: no src/ file is touched, so no other Python suite can observe it. tests/v3/test_harnesses.py is excluded even though it holds the sibling 'instruction' not in search assertion: that assertion already passes unchanged on main, and two of the file's cases (test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session[False|True]) fail identically on main with AttributeError: 'Commands' object has no attribute 'manager' at harnesses.py:5618. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell also fails on main and is tracked separately; it is unrelated to this payload contract. No frontend or Playwright entries: no UI file, style or rendered surface changed, and no UI code reads untrusted_data.",
+  "change_digest": "c16519f805e92bf16be3efafb6fb147aa804bc9fbf5da041861751003fc48a1b",
+  "reviewed_by": "Claude review of the harness command-runtime execution-mode accessor",
+  "reason": "On origin/main, test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session failed both parametrizations with AttributeError: 'Commands' object has no attribute 'manager'. 08be66f ('fix: preserve native tools in host harness mode') added HarnessRuntimeService._project_execution_mode, which reached through automation_tool_platform.manager.project_policy(...).execution_mode. That widened the implicit platform protocol the harness runtime depends on from chat_components/store to a nested runtime manager, and the pre-existing rollover stub from #228 was never updated. AutomationToolPlatform now exposes project_execution_mode(engagement_id) and the harness runtime calls that facade instead of reaching two levels in; chat_components uses the same accessor so the policy lookup is written once. Selected: tests/v3/test_harnesses.py (the rollover regression plus every host-mode and unprepared-runtime path through _project_execution_mode); tests/v3/test_ssh_environments.py and tests/v3/test_tool_catalog.py, which drive chat_components on a real AutomationToolPlatform; and tests/v3/test_automation_runtime.py, which covers the AutomationRuntimeManager.project_policy lookup the new accessor wraps.",
+  "exclusions": "No full suites. Backend-only change with no UI, schema, or API surface, so no frontend, native, or Playwright entries. tests/v3/test_harness_adapters.py is excluded: test_claude_native_capabilities_exclude_project_files_and_shell fails identically on pristine main (Read/Grep/Glob/Bash present in the native tool set). That is a separate pre-existing main regression with its own fix in flight, untouched by this change; the rest of that file covers adapter option construction, which this change does not reach. tests/v3/test_automation_runtime.py was excluded on an earlier revision of this branch for a pre-existing KeyError: 'untrusted_data' failure; #367 fixed that, so the file is now selected.",
   "expected_tests": {
-    "python": 32,
+    "python": 170,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_ssh_environments.py",
+    "tests/v3/test_tool_catalog.py",
     "tests/v3/test_automation_runtime.py"
   ],
   "frontend": [],
