@@ -1,23 +1,23 @@
 {
-  "change_digest": "23f7895e1c8f3e05211304fbe53448731488610cf0c5a13bf75c38b25c3aa88b",
-  "reviewed_by": "Claude review of the OpenRouter model picker upstream-provider filter",
-  "reason": "OpenRouter model discovery (_openrouter_health) now keeps only models served by the allowed upstream providers, failing closed on unknown slugs or a failed filter request; Assistant settings can pick models outside the provider's model allowlist (patching the allowlist) and run discovery for existing conversations when the panel opens. Selected tests cover discovery, filtering, pagination and fail-closed cases in test_providers.py, the Assistant settings allowlist-extension flow in App.test.tsx, and the mocked Assistant settings and provider model-switch journeys on desktop, mobile Chromium and mobile WebKit.",
-  "exclusions": "No full suites. The live OpenRouter real-Core clickthrough needs a real OpenRouter key and is excluded; the filter parameters were checked against OpenRouter's public /api/v1/models API. Harness runtimes, missions and writing AI only read the unchanged model allowlist. No LAN-origin check: no origin, cookie or socket behavior changed.",
+  "change_digest": "935d010c2bed5420303575292b7edc315308adf8c34722ae840fd0831502382b",
+  "reviewed_by": "Claude review of chat conversation archiving",
+  "reason": "PATCH /chat-sessions/{id} accepts archived true/false (metadata.archived_at; title optional, empty patch rejected) and forks drop the archived state. The conversation menu gains Archive/Unarchive and archived chats move into a collapsed Archived group. Selected tests cover the API archive/unarchive/validation flow in test_chat_api.py, the client mapping in client.test.ts, the rename/archive/unarchive/delete journey in App.test.tsx, and the conversations sidebar Playwright area.",
+  "exclusions": "No full suites. Chat turns, harness runtimes and message storage are unchanged; other metadata writers already merge existing keys so archived_at is preserved. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 36,
-    "frontend": 38,
+    "python": 13,
+    "frontend": 100,
     "native": 0,
-    "playwright": 6
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_providers.py"
+    "tests/v3/test_chat_api.py"
   ],
   "frontend": [
-    "ui/src/App.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:assistant-settings-navigation",
-    "area:provider-runtime-switch"
+    "area:conversations-sidebar"
   ]
 }
