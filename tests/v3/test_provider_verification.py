@@ -72,7 +72,7 @@ def test_exact_model_probe_is_persisted_and_isolated(tmp_path, monkeypatch):
     assert stored.capabilities.tool_calling is True
 
 
-def test_health_discovered_model_is_persisted_when_verified(tmp_path, monkeypatch):
+def test_verifying_a_discovered_model_keeps_an_open_allowlist(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "discovered-verification.db")
     profile = store.create(
         ProviderProfile(
@@ -97,7 +97,9 @@ def test_health_discovered_model_is_persisted_when_verified(tmp_path, monkeypatc
 
     assert response.status_code == 200
     stored = store.get(ProviderProfile, profile.id)
-    assert stored.model_allowlist == ["discovered-model"]
+    # Verification is recorded per model; an empty allowlist keeps every
+    # discovered model selectable instead of narrowing to the verified one.
+    assert stored.model_allowlist == []
     assert stored.tools_verified_for("discovered-model") is True
     assert stored.capabilities.tool_calling is True
 
