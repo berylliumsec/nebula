@@ -163,6 +163,12 @@ def main() -> None:
     egress_helper = root / "src" / "nebula" / "v3" / "egress_helper.py"
     if not egress_helper.is_file():
         raise RuntimeError("the Kali policy egress helper is required")
+    public_ip_update = root / "src" / "nebula" / "v3" / "public_ip_update.py"
+    if not public_ip_update.is_file():
+        raise RuntimeError("the Kali public-IP update helper is required")
+    terminal_entrypoint = root / "src" / "nebula" / "v3" / "terminal_entrypoint.sh"
+    if not terminal_entrypoint.is_file():
+        raise RuntimeError("the Kali terminal entrypoint is required")
 
     target = target_triple()
     metadata_root = root / "build" / "nebula-core-metadata"
@@ -228,6 +234,10 @@ def main() -> None:
         f"{kali_tool_inventory}:nebula/v3",
         "--add-data",
         f"{egress_helper}:nebula/v3",
+        "--add-data",
+        f"{public_ip_update}:nebula/v3",
+        "--add-data",
+        f"{terminal_entrypoint}:nebula/v3",
     ]
     # Exclusions are defense in depth for developer/QA environments that may
     # contain unrelated global packages. The post-build audit is authoritative.
