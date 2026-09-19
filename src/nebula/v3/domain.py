@@ -721,6 +721,9 @@ class ScopePolicy(Entity):
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)
     local_only: bool = False
+    # Opt-in: send redacted operator messages and tool names to Jev (TypeSafe)
+    # for next-turn tool suggestions. Ignored while local_only is set.
+    tool_suggestions: bool = False
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
 
@@ -886,6 +889,34 @@ class AutomationProjectPolicy(Entity):
                 "Host mode requires acknowledgement of host filesystem and network access"
             )
         return self
+
+
+class ToolSuggestionTest(NebulaModel):
+    """Outcome of the fixed-sample connection test; never contains project data."""
+
+    tested_at: datetime
+    ok: bool
+    latency_ms: int | None = Field(default=None, ge=0)
+    model: str | None = Field(default=None, max_length=120)
+    error: str | None = Field(default=None, max_length=500)
+
+
+class ToolSuggestionSettings(Entity):
+    """Nebula-wide TypeSafe (Jev) key reference; projects opt in via ScopePolicy."""
+
+    entity_kind: ClassVar[str] = "tool_suggestion_settings"
+    secret_ref: str | None = None
+    last_test: ToolSuggestionTest | None = None
+
+    @field_validator("secret_ref")
+    @classmethod
+    def secret_is_core_managed(cls, value: str | None) -> str | None:
+        # env: is resolved by name at call time and is never stored here.
+        if value is not None and not re.fullmatch(
+            r"(?:vault|session):[0-9a-f]{32}", value
+        ):
+            raise ValueError("secret_ref must use vault:ID or session:ID")
+        return value
 
 
 class VpnProfile(Entity):
@@ -4291,6 +4322,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ScopePolicy,
     AutomationProjectPolicy,
     VpnProfile,
+    ToolSuggestionSettings,
     AutomationSession,
     CommandExecution,
     RunnerProfile,

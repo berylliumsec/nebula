@@ -327,6 +327,8 @@ export interface EngagementScopePolicy {
   notAfter?: string;
   prohibitedActions: string[];
   localOnly: boolean;
+  /** Opt-in: send redacted operator messages and tool names to TypeSafe Jev. */
+  toolSuggestions: boolean;
   maxConcurrency: number;
   grants: MissionGrant[];
   revision: number;
@@ -342,8 +344,40 @@ export interface MissionGrant {
 }
 
 export interface EngagementScopeUpdateRequest
-  extends Omit<EngagementScopePolicy, "engagementId" | "revision"> {
+  extends Omit<EngagementScopePolicy, "engagementId" | "revision" | "toolSuggestions"> {
   expectedRevision: number;
+  /** Omitted keeps the stored value. */
+  toolSuggestions?: boolean;
+}
+
+export interface TypeSafeKeyTest {
+  testedAt: string;
+  ok: boolean;
+  latencyMs?: number;
+  model?: string;
+  error?: string;
+}
+
+export interface TypeSafeIntegration {
+  source?: "vault" | "session" | "environment";
+  available: boolean;
+  vaultAvailable: boolean;
+  lastTest?: TypeSafeKeyTest;
+  projectsUsing: number;
+}
+
+/** Per-turn Jev summary; probabilities stay in Core's turn record. */
+export interface ToolSuggestionSummary {
+  status: "suggested" | "no_tool_needed" | "unavailable";
+  preloaded: string[];
+  suggested: string[];
+  used: string[];
+  loadedByModel: string[];
+  unloadedCount: number;
+  onDemandCount: number;
+  model?: string;
+  latencyMs?: number;
+  error?: string;
 }
 
 export type BrowserCaptureMode = "metadata" | "headers" | "bodies";
@@ -1714,6 +1748,7 @@ export interface ChatCompletionResponse {
   finishReason?: string;
   providerRequestId?: string;
   citations: ChatCitation[];
+  toolSuggestions?: ToolSuggestionSummary;
 }
 
 export interface ContextSourceReference {
@@ -2162,6 +2197,7 @@ export interface PersistedChatMessage extends ChatMessage {
   contextAttachments: ChatContextAttachment[];
   harnessTurnId?: Identifier;
   toolResults?: ChatToolResult[];
+  toolSuggestions?: ToolSuggestionSummary;
   createdAt: string;
   updatedAt: string;
 }

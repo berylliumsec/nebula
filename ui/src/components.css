@@ -460,3 +460,30 @@ body .dialog-backdrop > .modal-surface.modal-surface:is(.approval-review-dialog,
   .operator-profile-list article > .icon-button,
   .list-row-actions { opacity: 1; }
 }
+
+/* Per-turn TypeSafe Jev tool suggestions; collapsed, never requires action. */
+.tool-suggestion-chip { max-width: min(100%, 520px); margin: 6px 0 8px; color: var(--muted); font-size: var(--type-secondary); }
+.tool-suggestion-chip > summary { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 3px 9px; border: 1px solid var(--border); border-radius: 999px; list-style: none; cursor: pointer; }
+.tool-suggestion-chip > summary::-webkit-details-marker { display: none; }
+.tool-suggestion-chip > summary > svg:first-child { color: var(--blue); }
+.tool-suggestion-chip.unavailable > summary > svg:first-child { color: var(--muted); }
+.tool-suggestion-chip > summary:hover { border-color: var(--muted); color: var(--text); }
+.tool-suggestion-chip > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.tool-suggestion-chevron { transition: transform var(--motion-fast) var(--motion-ease); }
+.tool-suggestion-chip[open] .tool-suggestion-chevron { transform: rotate(90deg); }
+.tool-suggestion-body { display: grid; gap: 10px; margin-top: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.tool-suggestion-body > strong { color: var(--text); font-size: var(--type-control); font-weight: var(--weight-medium); }
+.tool-suggestion-body ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.tool-suggestion-body li { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.tool-suggestion-body li > span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.tool-suggestion-body li.good > span { background: var(--green); }
+.tool-suggestion-body li.info > span { background: var(--blue); }
+.tool-suggestion-body code { overflow: hidden; color: var(--text); font-family: var(--font-mono); font-size: var(--type-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.tool-suggestion-body p { margin: 0; font-size: var(--type-meta); }
+@media (max-width: 640px) {
+  .tool-suggestion-chip { max-width: 100%; }
+  .tool-suggestion-chip > summary { min-height: var(--touch-target); }
+  .tool-suggestion-body li { grid-template-columns: 6px minmax(0, 1fr); row-gap: 2px; }
+  .tool-suggestion-body li > small { grid-column: 2; }
+  .tool-suggestion-body code { white-space: normal; overflow-wrap: anywhere; }
+}

@@ -672,3 +672,37 @@
   .provider-dialog .upstream-list label { min-height: var(--touch-target); }
   .upstream-mode button, .upstream-chips button { min-width: var(--touch-target); min-height: var(--touch-target); }
 }
+
+/* TypeSafe (Jev) integration settings */
+.typesafe-panel { display: grid; gap: 16px; padding: 18px 20px; }
+.typesafe-header { align-items: flex-start; gap: 12px; }
+.typesafe-header p { max-width: 62ch; }
+.integration-status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 999px; font-size: var(--type-secondary); font-weight: var(--weight-medium); white-space: nowrap; }
+.integration-status > span { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.integration-status.muted { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+.integration-status.good { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.integration-status.bad { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.integration-facts { display: grid; margin: 0; border: 1px solid var(--border); border-radius: var(--radius-control); }
+.integration-facts > div { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 9px 12px; }
+.integration-facts > div + div { border-top: 1px solid var(--border); }
+.integration-facts dt { color: var(--muted); font-size: var(--type-secondary); }
+.integration-facts dd { margin: 0; overflow-wrap: anywhere; font-size: var(--type-control); }
+.typesafe-form { display: grid; gap: 14px; }
+.typesafe-form > label:not(.provider-consent) { display: grid; gap: 6px; font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+.typesafe-form .provider-consent { display: flex; align-items: flex-start; gap: 10px; }
+.typesafe-form .provider-consent input { width: 16px; min-height: 16px; margin-top: 2px; }
+.typesafe-form .provider-consent span { display: flex; flex-direction: column; gap: 2px; }
+.typesafe-form .provider-consent small { color: var(--muted); }
+.typesafe-form > footer, .typesafe-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: var(--type-secondary); }
+.typesafe-actions { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) {
+  .typesafe-panel { padding: 16px; }
+  .typesafe-header { flex-direction: column; }
+  .typesafe-actions, .typesafe-actions .button { width: 100%; }
+  .typesafe-actions .button { flex: 1 1 0; min-height: var(--touch-target); }
+}
+/* Kept outside the option's label so a tap on it always navigates. */
+.policy-form-body > .tool-suggestions-key-link { justify-self: start; margin: -6px 0 0 26px; color: var(--blue); font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+@media (max-width: 640px) {
+  .policy-form-body > .tool-suggestions-key-link { display: inline-flex; align-items: center; min-height: var(--touch-target); margin-top: -10px; }
+}

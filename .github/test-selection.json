@@ -1,27 +1,36 @@
 {
-  "change_digest": "690587359efea4f89ac07c0c62cad7edbd5368106dc49ef3135343e1f4b28c95",
-  "reviewed_by": "Claude review of the AGENTS.md symlink rule after a live project was refused",
-  "reason": "The live imessage project links AGENTS.md to its parent program's AGENTS.md (../../AGENTS.md), which the first rule refused, blocking provider chats there. A symlink may now resolve inside the workspace or to an AGENTS.md in the workspace or one of its ancestor folders; links to other files or to AGENTS.md files in unrelated trees are still refused. The new test covers the shared-parent link and both rejection cases; the existing AGENTS.md tests and turn-preparation selections are kept.",
-  "exclusions": "No full suites and no browser coverage: there is no UI change. Verified against the three real project workspaces on the Linux host (two with AGENTS.md, one via the shared parent link).",
+  "change_digest": "c55705f75ef23fcc86b6a00d893539e17b6cceafb1c301e81bd68dec153f50b1",
+  "reviewed_by": "Claude review of the optional TypeSafe Jev tool-suggestion layer",
+  "reason": "Adds opt-in, per-project Jev tool suggestions: MCP-sourced tools are deferred behind tool_catalog.search/load, Jev ranks them before each provider turn, the TypeSafe key is stored through the credential store with GET/PUT/test/DELETE routes, and the chat shows a collapsed per-turn chip. Selected tests cover the new module and routes, the tool-loop and resume paths it modifies, scope API field preservation, the settings/opt-in/chip UI in unit and mocked Playwright on desktop, mobile Chromium and mobile WebKit, and one real-Core journey against a local Jev stub.",
+  "exclusions": "No full suites. Harness chats are unchanged. Real-Core coverage uses a local stub instead of api.typesafe.ai and session-only key storage because test hosts have no unlocked OS vault; vault storage is covered by the mocked UI and backend tests. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 19,
-    "frontend": 0,
+    "python": 107,
+    "frontend": 116,
     "native": 0,
-    "playwright": 0
+    "playwright": 7
   },
   "python": [
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_api_crud_validation.py",
     "tests/v3/test_project_instructions.py",
-    "tests/v3/test_chat.py::test_provider_skill_is_snapshotted_on_turn_and_running_goal",
-    "tests/v3/test_chat.py::test_long_durable_chat_uses_a_bounded_user_led_model_context",
-    "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
-    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
-    "tests/v3/test_chat.py::test_chat_retrieves_bundled_operator_help_without_project_documents",
-    "tests/v3/test_chat_goals.py::test_running_goal_is_injected_linked_and_charged_by_provider_turn",
-    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
-    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
-    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches"
+    "tests/v3/test_approval_continuation.py",
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ToolSuggestions.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/api/workbenchBrowser.test.ts",
+    "ui/src/components/ScopeImportDialog.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:tool-suggestions/desktop",
+    "entry:tool-suggestions/mobile-chromium",
+    "entry:tool-suggestions/mobile-webkit",
+    "entry:tool-suggestions/real-core"
+  ]
 }

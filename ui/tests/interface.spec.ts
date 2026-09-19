@@ -7735,3 +7735,158 @@ test("assistant popup hides, restores and discards without changing the main con
   await expect(page).toHaveURL(urlBeforeClose);
   await expect(page.getByText("A private answer with a follow-up.")).toHaveCount(0);
 });
+
+test("tool suggestions key settings gate the project opt-in", async ({ page }, testInfo) => {
+  let integration: Record<string, unknown> = { source: null, available: false, vault_available: true, last_test: null, projects_using: 0 };
+  let savedKeyBody: Record<string, unknown> | undefined;
+  let durableScope = {
+    ...entity, id: "scope-scratch", engagement_id: "scratch-project", allowed_cidrs: [] as string[], allowed_domains: [] as string[],
+    allowed_urls: [] as string[], allowed_ports: [] as number[], allow_all_targets: false, not_before: null, not_after: null,
+    prohibited_actions: [] as string[], local_only: false, tool_suggestions: false, max_concurrency: 1, grants: [] as unknown[], revision: 1,
+  };
+  let scopePutBody: Record<string, unknown> | undefined;
+  await page.context().route("**/api/v1/integrations/typesafe**", async (route) => {
+    const method = route.request().method();
+    if (method === "PUT") {
+      savedKeyBody = route.request().postDataJSON();
+      integration = { source: "vault", available: true, vault_available: true, projects_using: 0, last_test: { tested_at: new Date().toISOString(), ok: true, latency_ms: 412, model: "jev-1.13.0" } };
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(integration) });
+  });
+  await page.context().route("**/api/v1/engagements/scratch-project/scope", async (route) => {
+    if (route.request().method() === "PUT") {
+      scopePutBody = route.request().postDataJSON();
+      durableScope = { ...durableScope, ...scopePutBody, revision: durableScope.revision + 1 } as typeof durableScope;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(durableScope) });
+  });
+
+  await openWorkspace(page, "/settings", "Settings");
+  await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  const option = page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ });
+  await expect(option).toBeDisabled();
+  await page.getByRole("link", { name: /Add a key in Settings › Integrations/ }).click();
+
+  const section = page.locator("#typesafe-integration-settings");
+  await expect(section).toBeInViewport();
+  await expect(section.getByText("Not configured")).toBeVisible();
+  const key = section.getByLabel("TypeSafe API key");
+  await expect(key).toHaveAttribute("type", "password");
+  await key.fill("ts-e2e-secret");
+  await section.getByRole("button", { name: "Save and test" }).click();
+  await expect(section.getByText("Working")).toBeVisible();
+  await expect(section.getByText("Saved in OS keychain")).toBeVisible();
+  await expect(section.getByText(/412 ms · jev-1\.13\.0/)).toBeVisible();
+  expect(savedKeyBody).toEqual({ secret: "ts-e2e-secret", persistence: "vault" });
+  await expect(page.locator("body")).not.toContainText("ts-e2e-secret");
+  const geometry = await section.evaluate((node) => ({ scroll: node.scrollWidth, client: node.clientWidth, viewport: window.innerWidth, right: node.getBoundingClientRect().right }));
+  expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewport + 1);
+  await section.screenshot({ path: testInfo.outputPath("typesafe-settings.png") });
+
+  await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+  await expect(option).toBeEnabled();
+  // The group expands and scrolls into place; act once the option has settled.
+  await option.scrollIntoViewIfNeeded();
+  await expect(option).toBeInViewport();
+  await option.check();
+  await page.getByRole("button", { name: "Save scope" }).click();
+  await expect.poll(() => scopePutBody?.tool_suggestions).toBe(true);
+  await page.locator("#tool-suggestions-option").screenshot({ path: testInfo.outputPath("tool-suggestions-option.png") });
+  await page.getByLabel("Local only").check();
+  await expect(option).toBeDisabled();
+  await expect(option).not.toBeChecked();
+  await expect(page.getByText("Unavailable while Local only is on.")).toBeVisible();
+});
+
+reloadTest("tool suggestions chip shows the live turn and survives reload", async ({ page }, testInfo) => {
+  const suggestions = {
+    status: "suggested", preloaded: ["mcp.tracker.search_issues"], suggested: ["mcp.tracker.get_issue", "mcp.tracker.link_issues"],
+    used: ["mcp.tracker.get_issue"], loaded_by_model: [], unloaded_count: 38, on_demand_count: 41, model: "jev-1.13.0", latency_ms: 412, error: null,
+  };
+  const provider = {
+    ...entity, id: "provider-jev", name: "Jev chip provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+    secret_ref: null, model_allowlist: ["jev-chip-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "jev-chip-model" },
+  };
+  let restored = false;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([provider]) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(restored ? [{
+        ...entity, id: "jev-session", engagement_id: "scratch-project", title: "Find the login ticket", backend: "provider",
+        provider_profile_id: provider.id, model: "jev-chip-model", metadata: {},
+      }] : []) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/jev-session/messages")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([
+        { ...entity, id: "jev-user", engagement_id: "scratch-project", session_id: "jev-session", sequence: 1, role: "user", content: "Is there a ticket for the login redirect bug?", citations: [], metadata: {} },
+        { ...entity, id: "jev-assistant", engagement_id: "scratch-project", session_id: "jev-session", sequence: 2, role: "assistant", content: "Yes, TRK-412 tracks it.", citations: [], metadata: { tool_results: [], tool_suggestions: suggestions } },
+      ]) });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/jev-session/pending-turn")) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/jev-session/state")) {
+      await route.fulfill({ json: { schema: "nebula.session-state/v1", session_id: "jev-session", revision: 1, turn_id: "jev-turn", execution: "completed", busy: false, detail: "Response completed.", connection: "connected", actions: ["check_status"], pending: [], decisions: [] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript((toolSuggestions) => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const frames = [
+        { type: "started", provider_id: "provider-jev", model: "jev-chip-model", session_id: "jev-session", turn_id: "jev-turn" },
+        { type: "done", provider_id: "provider-jev", model: "jev-chip-model", session_id: "jev-session", turn_id: "jev-turn", message: { id: "jev-assistant", role: "assistant", content: "Yes, TRK-412 tracks it." }, usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }, citations: [], tool_suggestions: toolSuggestions },
+      ];
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          frames.forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  }, suggestions);
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByPlaceholder("Ask about this project…").fill("Is there a ticket for the login redirect bug?");
+  await page.getByRole("button", { name: "Send message" }).click();
+  const chip = page.locator(".tool-suggestion-chip");
+  await expect(chip.locator("summary")).toHaveText("3 tools suggested · 1 preloaded");
+  await chip.locator("summary").click();
+  await expect(chip.getByRole("listitem")).toHaveText([/search_issues\s*Preloaded/, /get_issue\s*Suggested · used/, /link_issues\s*Suggested · not used/]);
+  await expect(chip.getByText("38 more on-demand tools stayed unloaded · Jev 1.13.0 · 412 ms")).toBeVisible();
+  await expect(page.getByText("Yes, TRK-412 tracks it.")).toBeVisible();
+  await expect(page.getByText("Response status could not sync")).toHaveCount(0);
+  await chip.locator("xpath=ancestor::article").screenshot({ path: testInfo.outputPath("tool-suggestion-chip.png") });
+  if (testInfo.project.name.startsWith("mobile-")) {
+    const box = await chip.locator("summary").boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    const fits = await chip.evaluate((node) => node.getBoundingClientRect().right <= window.innerWidth + 1);
+    expect(fits).toBe(true);
+  }
+
+  restored = true;
+  await page.goto("/?view=chat&session=jev-session");
+  const restoredChip = page.locator(".tool-suggestion-chip");
+  await expect(restoredChip.locator("summary")).toHaveText("3 tools suggested · 1 preloaded");
+  await restoredChip.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(restoredChip.getByText("mcp.tracker.get_issue")).toBeVisible();
+});

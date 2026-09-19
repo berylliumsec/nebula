@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { AutomationProjectPolicy, EngagementScopePolicy, VpnProfile } from "../api/types";
+import type { AutomationProjectPolicy, EngagementScopePolicy, TypeSafeIntegration, VpnProfile } from "../api/types";
 import { ApiError } from "../api/client";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
 import { InlineValidationNotice } from "./InlineValidationNotice";
 import { useConfirmation } from "./DialogSystem";
+import { TYPESAFE_CHANGED_EVENT } from "./TypeSafeIntegrationSettings";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
@@ -72,6 +73,11 @@ function wireDate(value: string): string | undefined {
   return Number.isNaN(date.valueOf()) ? undefined : date.toISOString();
 }
 
+/** An untested environment key counts as usable; a failed test does not. */
+export function typesafeUsable(status: TypeSafeIntegration | undefined): boolean {
+  return Boolean(status?.available && status.lastTest?.ok !== false);
+}
+
 export function EngagementPolicySettings() {
   const confirm = useConfirmation();
   const { api, coreState, engagement, previewMode } = useWorkspace();
@@ -86,6 +92,8 @@ export function EngagementPolicySettings() {
   const [notAfter, setNotAfter] = useState("");
   const [prohibitedActions, setProhibitedActions] = useState("");
   const [localOnly, setLocalOnly] = useState(true);
+  const [toolSuggestions, setToolSuggestions] = useState(false);
+  const [typesafe, setTypesafe] = useState<TypeSafeIntegration>();
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [approvalPolicy, setApprovalPolicy] = useState<AutomationProjectPolicy["approvalPolicy"]>("on_boundary");
   const [executionMode, setExecutionMode] = useState<"docker" | "host">("docker");
@@ -111,6 +119,7 @@ export function EngagementPolicySettings() {
     setNotAfter(inputDate(next.notAfter));
     setProhibitedActions(next.prohibitedActions.join("\n"));
     setLocalOnly(next.localOnly);
+    setToolSuggestions(next.toolSuggestions);
     setMaxConcurrency(next.maxConcurrency);
   };
 
@@ -145,6 +154,12 @@ export function EngagementPolicySettings() {
       applyScope(nextScope);
       applyPolicy(nextPolicy);
       setVpnProfiles(nextVpnProfiles);
+      // Key status only gates the opt-in; its failure never blocks the policy.
+      api.getTypeSafeIntegration().then((next) => {
+        if (revision === loadRevision.current) setTypesafe(next);
+      }).catch((typesafeError) => {
+        void logCaughtDiagnostic("interface.engagement_policy.typesafe_status_unavailable", "TypeSafe key status could not be loaded.", typesafeError, "engagement_policy");
+      });
     } catch (loadError) {
       if (revision !== loadRevision.current) return;
       void logCaughtDiagnostic("interface.execution_policy.caught_failure_01", "A handled interface operation failed.", loadError, "execution_policy");
@@ -153,6 +168,12 @@ export function EngagementPolicySettings() {
   }, [api, coreState, engagement?.id]);
 
   useEffect(() => { void load(); return () => { loadRevision.current += 1; }; }, [load]);
+
+  useEffect(() => {
+    const follow = (event: Event) => setTypesafe((event as CustomEvent<TypeSafeIntegration>).detail);
+    window.addEventListener(TYPESAFE_CHANGED_EVENT, follow);
+    return () => window.removeEventListener(TYPESAFE_CHANGED_EVENT, follow);
+  }, []);
 
   const saveScope = async (event: FormEvent) => {
     event.preventDefault();
@@ -199,6 +220,7 @@ export function EngagementPolicySettings() {
         notAfter: end,
         prohibitedActions: lines(prohibitedActions),
         localOnly,
+        toolSuggestions,
         maxConcurrency,
         grants: scope.grants,
         expectedRevision: scope.revision,
@@ -276,6 +298,9 @@ export function EngagementPolicySettings() {
           <div className="resource-form-grid"><label>Active from<input type="datetime-local" value={notBefore} onChange={(event) => setNotBefore(event.target.value)} /></label><label>Expires<input type="datetime-local" value={notAfter} onChange={(event) => setNotAfter(event.target.value)} /></label></div>
           <label>Prohibited actions<textarea rows={3} value={prohibitedActions} onChange={(event) => setProhibitedActions(event.target.value)} /></label>
           <div className="resource-form-grid"><label>Maximum concurrency<input type="number" min={1} max={256} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label><label className="provider-consent"><input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} /><span><strong>Local only</strong><small>Do not send project data to remote models.</small></span></label></div>
+          <label className="provider-consent" id="tool-suggestions-option"><input type="checkbox" aria-describedby="tool-suggestions-detail" checked={toolSuggestions && !localOnly} disabled={localOnly || (!toolSuggestions && !typesafeUsable(typesafe))} onChange={(event) => setToolSuggestions(event.target.checked)} /><span><strong>Suggest tools with TypeSafe Jev</strong><small id="tool-suggestions-detail">{localOnly ? "Unavailable while Local only is on." : "Before each turn, send redacted operator messages and MCP tool names to TypeSafe. The model then loads only the tools it needs. Tool output is never sent."}</small></span></label>
+          {!localOnly && !typesafeUsable(typesafe) && <a className="tool-suggestions-key-link" href="#typesafe-integration-settings">Add a key in Settings › Integrations →</a>}
+          {toolSuggestions && !localOnly && typesafe && !typesafeUsable(typesafe) && <InlineValidationNotice message="Tool suggestions are on, but no working TypeSafe key is available. Turns run without suggestions until a key works." />}
           <footer><span>Private and link-local destinations require an explicit CIDR.</span><button className="button primary" type="submit" disabled={previewMode || !scope || saving === "scope"}><Save size={14} /> {saving === "scope" ? "Saving…" : "Save scope"}</button></footer>
         </fieldset>
       </form>

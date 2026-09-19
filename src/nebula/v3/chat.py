@@ -111,6 +111,19 @@ from .providers import (
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tools import ApprovalRequired, PolicyDenied, ToolInvocation
+from .tool_suggestions import (
+    CATALOG_TOOL_NAMES,
+    MAX_CATALOG_CALLS_PER_TURN,
+    JevClient,
+    catalog_calls,
+    catalog_components,
+    deferrable_specs,
+    loaded_tool_names,
+    public_suggestions,
+    suggest_tools,
+    suggestion_instructions,
+    suggestions_enabled,
+)
 from .project_instructions import (
     ProjectInstructions,
     ProjectInstructionsError,
@@ -363,6 +376,7 @@ class ChatCompletionResponse(NebulaModel):
     finish_reason: str | None = None
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
+    tool_suggestions: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -632,8 +646,12 @@ class ChatService:
         workspace_resolver: Callable[[str], Path] | None = None,
         managed_skill_root: Path | None = None,
         worker_id: str | None = None,
+        tool_suggestion_client: Callable[[], JevClient | None] | None = None,
     ) -> None:
         self.store = store
+        self.tool_suggestion_client = (
+            tool_suggestion_client or JevClient.from_environment
+        )
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
         self.browser_tool_platform = BrowserToolPlatform(store)
@@ -1883,6 +1901,33 @@ class ChatService:
                 raise ChatConfigurationError(
                     "no command, automation, MCP, or browser runtime capabilities were selected"
                 )
+            tool_suggestions: dict[str, Any] | None = None
+            deferred_specs = (
+                deferrable_specs(tool_components.specs)
+                if suggestions_enabled(tool_components.scope)
+                else {}
+            )
+            if deferred_specs:
+                receipt = await suggest_tools(
+                    self.tool_suggestion_client(),
+                    deferred=deferred_specs,
+                    operator_messages=[
+                        *(
+                            item.content
+                            for item in stored_messages
+                            if item.role == ChatRole.USER
+                        ),
+                        *(
+                            item.content
+                            for item in durable_incoming
+                            if item.role == ChatRole.USER
+                        ),
+                    ],
+                )
+                catalog = catalog_components(tool_components, deferred=receipt.deferred)
+                if catalog is not None:
+                    tool_components = combine_tool_components(tool_components, catalog)
+                tool_suggestions = receipt.model_dump(mode="json")
             session_id = (
                 session.id
                 if session is not None
@@ -1925,6 +1970,7 @@ class ChatService:
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
+                    "tool_suggestions": tool_suggestions,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -2489,11 +2535,18 @@ class ChatService:
                     self._release_execution(prepared)
                     return
 
+            suggestion_snapshot = turn.request_snapshot.get("tool_suggestions") or {}
+            deferred_names = set(suggestion_snapshot.get("deferred", []))
             while turn.status != ChatTurnStatus.FINALIZING:
-                available_specs = [
+                loaded_names = loaded_tool_names(suggestion_snapshot, turn.tool_history)
+                catalog_open = (
+                    catalog_calls(turn.tool_history) < MAX_CATALOG_CALLS_PER_TURN
+                )
+                budgeted_specs = [
                     spec
                     for spec in components.specs.values()
-                    if (
+                    if (spec.name not in CATALOG_TOOL_NAMES or catalog_open)
+                    and (
                         (
                             spec.budget_class == "artifact_query"
                             and (
@@ -2510,6 +2563,13 @@ class ChatService:
                         )
                     )
                 ]
+                # Deferred tools are advertised only once loaded, but a direct
+                # call to one still runs (and loads it) within the same budgets.
+                available_specs = [
+                    spec
+                    for spec in budgeted_specs
+                    if spec.name not in deferred_names or spec.name in loaded_names
+                ]
                 if not available_specs:
                     break
                 routing = prepared.model_request.model_copy(
@@ -2524,7 +2584,8 @@ class ChatService:
                             else ""
                         )
                         + "\n\n"
-                        + (prepared.model_request.instructions or ""),
+                        + (prepared.model_request.instructions or "")
+                        + suggestion_instructions(suggestion_snapshot),
                         "tools": [
                             ToolDefinition(
                                 name=spec.name,
@@ -2587,7 +2648,7 @@ class ChatService:
                     if call.arguments:
                         raise ChatError("finish_response does not accept arguments")
                     break
-                available_names = {spec.name for spec in available_specs}
+                available_names = {spec.name for spec in budgeted_specs}
                 if call.name not in available_names:
                     raise ChatError(
                         f"provider requested unavailable tool {call.name!r}"
@@ -3814,6 +3875,14 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
+            suggestion_snapshot = turn.request_snapshot.get("tool_suggestions")
+            if suggestion_snapshot:
+                # Rebuilt from the snapshot; Jev is never asked again on resume.
+                catalog = catalog_components(
+                    components, deferred=suggestion_snapshot.get("deferred", [])
+                )
+                if catalog is not None:
+                    components = combine_tool_components(components, catalog)
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -5447,6 +5516,14 @@ class ChatService:
             finish_reason=response.finish_reason,
             provider_request_id=response.provider_request_id,
             citations=prepared.citations,
+            tool_suggestions=(
+                public_suggestions(
+                    prepared.turn.request_snapshot.get("tool_suggestions"),
+                    prepared.turn.tool_history,
+                )
+                if prepared.turn is not None
+                else None
+            ),
         )
 
     def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
@@ -5635,6 +5712,11 @@ class ChatService:
                             }
                             for item in prepared.turn.tool_history
                         ],
+                        **(
+                            {"tool_suggestions": completion.tool_suggestions}
+                            if completion.tool_suggestions
+                            else {}
+                        ),
                     }
                     if prepared.turn is not None
                     else {}

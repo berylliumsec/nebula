@@ -106,6 +106,7 @@ import type {
   ToolOutputSearchResult,
 } from "../api/types";
 import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
+import { ToolSuggestionChip } from "../components/ToolSuggestionChip";
 import { ActivityLedger } from "../components/ActivityLedger";
 import {
   activityLedgerFromHarness,
@@ -422,6 +423,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     durable: true,
     sequence: message.sequence,
     harnessTurnId: message.harnessTurnId,
+    toolSuggestions: message.toolSuggestions,
   };
 }
 
@@ -2602,6 +2604,7 @@ export function SessionsPage() {
         citations: streamEvent.citations,
         usage: streamEvent.usage,
         harnessTurnId: streamEvent.harnessTurnId,
+        toolSuggestions: streamEvent.toolSuggestions,
         createdAt: new Date().toISOString(),
       }));
     }
@@ -3791,6 +3794,7 @@ export function SessionsPage() {
                   >
                     <div className="chat-message-body">
                       <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
+                      {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
                       {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
                         {commentaryItems.map((item) => <HarnessMarkdown content={item.text} key={item.key} />)}
                       </div>}
