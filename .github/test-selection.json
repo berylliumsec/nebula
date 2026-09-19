@@ -1,21 +1,20 @@
 {
-  "change_digest": "c16519f805e92bf16be3efafb6fb147aa804bc9fbf5da041861751003fc48a1b",
-  "reviewed_by": "Claude review of the harness command-runtime execution-mode accessor",
-  "reason": "On origin/main, test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session failed both parametrizations with AttributeError: 'Commands' object has no attribute 'manager'. 08be66f ('fix: preserve native tools in host harness mode') added HarnessRuntimeService._project_execution_mode, which reached through automation_tool_platform.manager.project_policy(...).execution_mode. That widened the implicit platform protocol the harness runtime depends on from chat_components/store to a nested runtime manager, and the pre-existing rollover stub from #228 was never updated. AutomationToolPlatform now exposes project_execution_mode(engagement_id) and the harness runtime calls that facade instead of reaching two levels in; chat_components uses the same accessor so the policy lookup is written once. Selected: tests/v3/test_harnesses.py (the rollover regression plus every host-mode and unprepared-runtime path through _project_execution_mode); tests/v3/test_ssh_environments.py and tests/v3/test_tool_catalog.py, which drive chat_components on a real AutomationToolPlatform; and tests/v3/test_automation_runtime.py, which covers the AutomationRuntimeManager.project_policy lookup the new accessor wraps.",
-  "exclusions": "No full suites. Backend-only change with no UI, schema, or API surface, so no frontend, native, or Playwright entries. tests/v3/test_harness_adapters.py is excluded: test_claude_native_capabilities_exclude_project_files_and_shell fails identically on pristine main (Read/Grep/Glob/Bash present in the native tool set). That is a separate pre-existing main regression with its own fix in flight, untouched by this change; the rest of that file covers adapter option construction, which this change does not reach. tests/v3/test_automation_runtime.py was excluded on an earlier revision of this branch for a pre-existing KeyError: 'untrusted_data' failure; #367 fixed that, so the file is now selected.",
+  "change_digest": "8e893bc775e06d0477307d86b2fe992a22479fa9fc958f9820df65639340160a",
+  "reviewed_by": "Claude review of the Zero Dark appearance baseline refresh",
+  "reason": "'Zero Dark preserves the appearance selector' failed on main with 'Expected an image 421px by 245px, received 421px by 246px'. Bisecting b9ba56e..c992aab (main at the time) with only this test puts the first failure at e40f47e (#349), which added the collapsed Settings > Environments group above the Appearance panel. Measured in the test at 02e831a and e40f47e: the panel is 244.516px tall in both, and its top moves from 464.078px to 463.859px. Playwright floors the top and ceils the bottom of an element screenshot clip, so the 0.22px upward shift captures 246 rows instead of 245. The panel did not grow and no appearance CSS changed, so there is nothing to fix; the baseline is regenerated for the new sub-pixel phase. The old and new images show the same heading, focus ring, four theme options, Zero Dark active state, help text and zoom note. No catalog area selected this test, so it had never run in CI since #334. New area appearance-settings selects exactly this test on desktop, its only project, and tests/test_playwright_impact.py validates the manifest. Rebased onto #365: the test still passes against this baseline on the rebased branch.",
+  "exclusions": "No frontend unit tests: no ui/src change. No native tests: no Rust or Tauri change. Other Playwright projects are excluded because the test skips every project except desktop. Other screenshot tests are out of scope: only this baseline changed. No real-Core or LAN-origin runs: only a test baseline and the test catalog changed. No full suites.",
   "expected_tests": {
-    "python": 170,
+    "python": 33,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 1
   },
   "python": [
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_ssh_environments.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_automation_runtime.py"
+    "tests/test_playwright_impact.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:appearance-settings"
+  ]
 }
