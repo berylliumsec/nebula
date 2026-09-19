@@ -1,21 +1,34 @@
 {
-  "change_digest": "c1d4faec1fcdcda898665c108f388be2f97b1f4a2aeabe86ce307d608f11c279",
-  "reviewed_by": "Claude review of chat import hoisting",
-  "reason": "test_nebula3_runtime_has_no_conditional_import_fallbacks failed on main because ChatService rebuilt tool components on resume with `from .skill_catalog import ...` inside a try block. chat.py now imports skill_catalog (SkillSelection, SkillSnapshot, discover_skills, native_skill_roots, skill_instructions, skill_resource_components, snapshot_skill) and application_model.tools.standalone_components at module level and drops every function-local copy; neither module imports chat, and the Core build already uses --collect-submodules nebula.v3, so build_nebula_core.py needs no hidden import. Selected tests cover the packaging guard in test_packaging.py, skill selection and snapshots in test_skill_catalog.py, chat preparation with skills and tools in test_chat.py, and the paused-turn tool-component rebuild in test_chat_tool_loop.py.",
-  "exclusions": "No frontend, native or Playwright tests: only Python import placement changed, with no API, UI, origin, cookie or socket behavior change. No full suites.",
+  "change_digest": "2b25582023498ddb9dc6c2a96f30eb3f6543a98f5e78113bf1a1fac666c12cfc",
+  "reviewed_by": "Claude review of the phone shell redesign",
+  "reason": "Phone-width (<=760px) redesign of the Workbench plus the private iOS WKWebView shell. UI: one chat header with a conversations drawer, a Chat/Terminal/Activity/More tab bar, the terminal as its own tab with a key row and an Ask sheet (no split on phones), approvals first on Activity, a More panel replacing the sidebar, a grouped Settings list, touch-safe tooltips, theme-aware code blocks, a theme-color meta for the shell, and a follow-bottom fix for viewport resizes. Tests that encoded the old phone layout were updated. Selected: unit tests for the new and touched components and the scroll heuristic; the Playwright impact manifest test (new phone-shell areas); the new phone-shell journey and panoramic shell baselines on every phone project, the 320px desktop boundary, and the existing workbench navigation, terminal assistant, compact terminal, transcript search and conversation switching areas across desktop, compact and phone projects; plus real-Core project removal and conversation switching on LAN origin at WebKit 390, Chromium 320 and desktop.",
+  "exclusions": "No full suites. mobile-layout (250 tests on four phone projects) and themes ran locally but are not selected: on origin/main they already fail in 'product typography and touch contracts' (NetworkError) and 'stabilization completed harness output' (skills listbox), and desktop/compact screenshot baselines are stale on main; both are tracked separately. Native: the iOS shell is not built in CI; its 30 Swift policy checks and an unsigned iPhone Release build ran on the research Mac. Desktop layout is unchanged apart from code-block token colors and the theme-color meta.",
   "expected_tests": {
-    "python": 87,
-    "frontend": 0,
+    "python": 33,
+    "frontend": 42,
     "native": 0,
-    "playwright": 0
+    "playwright": 115
   },
   "python": [
-    "tests/v3/test_packaging.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_skill_catalog.py",
-    "tests/v3/test_chat_tool_loop.py"
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ActionTooltips.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/terminalKeys.test.ts",
+    "ui/src/components/assistantMarkdown.test.tsx",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/components/ContainerTerminalPanel.test.tsx",
+    "ui/src/pages/chatScrollPosition.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:phone-shell",
+    "area:phone-shell-core",
+    "area:workbench-navigation",
+    "area:terminal-assistant",
+    "area:compact-terminal",
+    "area:transcript-search-layout",
+    "area:conversation-switch-performance"
+  ]
 }
