@@ -1,19 +1,20 @@
 {
-  "change_digest": "8f8820c84df935c7cc9a95a3c9cd2f6447fffc861cbfb47d003261f777999894",
-  "reviewed_by": "Claude review of the OpenRouter reasoning-channel deduplication",
-  "reason": "A DeepSeek chat through OpenRouter rendered its thinking as overlapping lines ('The' / 'The user' / 'user just'). _openai_message_reasoning concatenated reasoning_content, reasoning and reasoning_details[].text with newlines, but OpenRouter mirrors the same fragment in reasoning and reasoning_details, so every streamed token was emitted twice and stored twice. The reader now takes the first channel that carries text. Selected the provider suite (the reader, the streaming loop and the non-streaming path) and the chat suite (reasoning deltas are persisted and replayed through chat turns).",
-  "exclusions": "No full suites. tests/v3/test_harnesses.py is excluded: it does not exercise reasoning extraction, and two of its cases (test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session[False|True]) fail identically on main (5bb5f8a) with AttributeError: 'Commands' object has no attribute 'manager' at harnesses.py:5618. No frontend or Playwright entries: the change is confined to the provider reader, no UI file or style changed, and the thinking panel renders whatever deltas the stream carries.",
+  "change_digest": "fab4bc76ee77b6dd39d2ac8574c39dc0ad29bd6da208bc807c26e11f0ea6130b",
+  "reviewed_by": "Claude review of the phone path in the assistant settings e2e",
+  "reason": "Test-only change to 'assistant settings expose provider metadata and harness model options' in ui/tests/interface.spec.ts. Since the #355 phone shell, /settings at <=760px renders the searchable CompactSettingsList instead of the tabbed page, so the 'Advanced settings' link does not exist and the click timed out on mobile-chromium, mobile-webkit and narrow (reproduced on origin/main, verified at 30f4ceb and after rebasing onto f9e1387). At phone widths the test now taps the Models group's 'Model providers' row in the compact list and asserts Shared skills inside the resulting settings lens, which embeds the same models-settings group; the desktop branch and every assertion are unchanged. Selected the assistant entries on desktop, mobile-chromium and mobile-webkit: they are the projects that run this test through the catalog, and they cover both branches of the new viewport condition.",
+  "exclusions": "No full suites. No Python, native or frontend unit changes: nothing outside ui/tests/interface.spec.ts changed, so no product code, unit test or screenshot baseline is affected. Other Playwright areas are excluded because no shared helper or fixture changed. Locally against the preview bundle the whole selection passed (desktop 42 passed/1 skipped, mobile-chromium 35 passed/4 skipped, mobile-webkit 39 passed), and this test also passed on the compact and narrow projects and repeated three times on each phone project.",
   "expected_tests": {
-    "python": 79,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 121
   },
-  "python": [
-    "tests/v3/test_providers.py",
-    "tests/v3/test_chat.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
+  ]
 }
