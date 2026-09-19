@@ -1,22 +1,21 @@
 {
-  "change_digest": "6e698aba9b63e3efab19c1e86355784922ff25461736bc3a08a6824b35e998b2",
-  "reviewed_by": "Claude review of Workbench view URL ownership",
-  "reason": "The mobile Workbench navigation test flaked because BrowserRouter commits locations in a transition: setView updated view state urgently, so the Browser pane rendered while useSearchParams() still said view=code, and the engine selector rebuilt the query from that snapshot (view=code&browserEngine=native); the requestedView effect then restored Code. SessionsPage now derives the view from the URL (view-less links keep the last URL-named view) and routes every search-param write through one updater that composes from the address bar. workbench-view-authority covers each changed writer: mobile nav plus engine selection (the deterministic regression check), the phone shell's Chat/Terminal/Activity/More tabs from #355, New chat (openUnattachedChatView), conversation URL identity (openSessionChatView), handoff recovery (clearSubmittedContext), drawer push/reload navigation, transcript search hits, chat inside the Browser view, and switching every primary view. workbench-navigation-core and real-core-browser-handoff exercise session identity and the Browser engine against real Core with the production bundle. tests/test_playwright_impact.py guards the new catalog area.",
-  "exclusions": "No frontend unit tests: the defect is an ordering race between React's urgent render and the router's transition, only observable with the real router in a browser, and SessionsPage has no component harness; Playwright is the layer where it escaped. No native tests: no Tauri/Rust change. Other mobile widths (small/wide/ledger/landscape) are excluded because the change is width-independent URL state already covered at 390px on Chromium and WebKit plus desktop. No full suites.",
+  "change_digest": "153b382d91a5c0bc87b32ee36d28a17e1906ad620926f764824e87a00c004f90",
+  "reviewed_by": "Claude review of the skill autocomplete and phone typography fixes",
+  "reason": "Two tests that fail on main. (1) The harness skill autocomplete never opened: opening or closing Assistant settings bumps the project catalog key and the skills effect then cleared the typed skill token (regressed with #344); operator skill state now resets only when the runtime, harness, modes or project change. (2) The phone typography contract caught 10.5px tab labels from #355; they return to the 13px control size. Also: the Vite dev server serves the real path of a linked ui/node_modules so fonts load in worktrees (local 403s were masking the typography check). Selected: the skill autocomplete component test, the stabilization area on all eight desktop/compact/phone projects (includes the completed-harness-output journey that exercises the autocomplete), and the phone-shell area, which now includes the typography contract.",
+  "exclusions": "No full suites. No Python changes. The phone panoramic baselines change with the tab label size and are captured from CI renders. The mobile Browser-engine switch flake in 'mobile Workbench navigation' predates this change and is being fixed separately.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 2,
     "native": 0,
-    "playwright": 20
+    "playwright": 191
   },
-  "python": [
-    "tests/test_playwright_impact.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessSkillAutocomplete.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "area:workbench-view-authority",
-    "area:workbench-navigation-core",
-    "area:real-core-browser-handoff"
+    "area:stabilization",
+    "area:phone-shell"
   ]
 }
