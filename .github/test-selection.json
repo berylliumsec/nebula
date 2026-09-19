@@ -1,42 +1,27 @@
 {
-  "change_digest": "5fd1dbbf6ab303441adc7f106cc71d57287a348917f71179302a566394052143",
-  "reviewed_by": "Claude review of the OpenRouter upstream-provider picker rework: on-demand public directory, search, locations, JSON allowlist editor and provider dialog section spacing",
-  "reason": "Core adds an authenticated GET /providers/openrouter/upstream-providers that fetches OpenRouter's public provider directory without a credential, caches it for an hour, reports failures as 502, and now carries each provider's headquarters and datacenter country codes. Python tests cover the route (auth, no Authorization header upstream, caching, location parsing, malformed rows, failure) plus the existing OpenRouter directory parsing, allowlist routing and catalog persistence tests. Frontend tests cover the client mapping, the picker (location display, exact country-code search, chips, retry, JSON editing that applies only valid input in slug-array or {\"only\": [...]} form) and the Settings/App journeys. The catalogued assistant-settings journey exercises Settings provider metadata on desktop and both mobile engines.",
-  "exclusions": "No full suites. The shared dialog-contract stabilization test also passed locally on desktop and both mobile engines but its area includes pre-existing failures on main, so it is not selected. Visual review was done against a real branch Core with a live OpenRouter directory in Zero Dark and Light at 1440px and Zero Dark at 390px with no horizontal overflow. Physical devices and the desktop Tauri window were not exercised.",
+  "change_digest": "pending",
+  "reviewed_by": "Claude review of per-turn project-root AGENTS.md injection for provider-backed chats",
+  "reason": "Provider chats now re-read <project>/AGENTS.md on every turn and add it to the per-turn system instructions, which are rebuilt each turn and never part of the transcript that context compaction summarizes. The new tests cover: missing file, exact read and hash, symlinks allowed only inside the workspace, directory rejection, the 64 KiB cap cut on a character boundary, re-reading edits on the next turn with a changed receipt, verbatim survival across a 1,000-message compaction while compaction inputs never contain it, the context-usage estimate counting it, chats without a workspace, and an explicit refusal for an escaping symlink. Existing selections guard skill snapshots, compaction and context-limit retries, restart reconciliation, operator help, running goals, subagent resume, the tool loop and the chat API around the modified turn preparation.",
+  "exclusions": "No full suites and no browser coverage: there is no UI change. Harness sessions are unchanged; they start in the project workspace and read AGENTS.md natively. Live-provider behaviour was not exercised.",
   "expected_tests": {
-    "python": 17,
-    "frontend": 104,
+    "python": 18,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_providers.py::test_openrouter_discovers_account_models_with_bounded_metadata",
-    "tests/v3/test_providers.py::test_openrouter_discovery_does_not_fall_back_to_public_catalog",
-    "tests/v3/test_providers.py::test_openrouter_verified_key_does_not_hide_catalog_failure_or_use_public_models",
-    "tests/v3/test_providers.py::test_openrouter_tool_payload_requires_compatible_route",
-    "tests/v3/test_providers.py::test_openrouter_tool_payload_sends_only_parameters_the_model_advertises",
-    "tests/v3/test_providers.py::test_provider_from_openrouter_profile_carries_model_parameters",
-    "tests/v3/test_providers.py::test_openrouter_loads_exact_endpoint_limits_for_automatic_routing",
-    "tests/v3/test_providers.py::test_openrouter_rejects_incomplete_endpoint_limits",
-    "tests/v3/test_providers.py::test_openrouter_allowlist_restricts_every_request_to_selected_providers",
-    "tests/v3/test_providers.py::test_openrouter_route_limits_follow_the_provider_allowlist",
-    "tests/v3/test_providers.py::test_openrouter_route_limits_explain_when_no_allowed_provider_serves_the_model",
-    "tests/v3/test_providers.py::test_openrouter_upstream_directory_is_parsed_and_sorted",
-    "tests/v3/test_providers.py::test_openrouter_null_prompt_limit_uses_the_context_window",
-    "tests/v3/test_api.py::test_provider_health_persists_exact_model_context_catalog",
-    "tests/v3/test_api.py::test_capability_probe_never_narrows_an_empty_model_allowlist",
-    "tests/v3/test_api.py::test_openrouter_upstream_directory_is_public_cached_and_located",
-    "tests/v3/test_api.py::test_openrouter_upstream_directory_failure_is_reported"
+    "tests/v3/test_project_instructions.py",
+    "tests/v3/test_chat.py::test_provider_skill_is_snapshotted_on_turn_and_running_goal",
+    "tests/v3/test_chat.py::test_long_durable_chat_uses_a_bounded_user_led_model_context",
+    "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
+    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
+    "tests/v3/test_chat.py::test_chat_retrieves_bundled_operator_help_without_project_documents",
+    "tests/v3/test_chat_goals.py::test_running_goal_is_injected_linked_and_charged_by_provider_turn",
+    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
+    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
+    "tests/v3/test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches"
   ],
-  "frontend": [
-    "ui/src/components/UpstreamProviderPicker.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit"
-  ]
+  "playwright": []
 }

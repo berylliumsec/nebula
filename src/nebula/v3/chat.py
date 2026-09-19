@@ -111,6 +111,12 @@ from .providers import (
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tools import ApprovalRequired, PolicyDenied, ToolInvocation
+from .project_instructions import (
+    ProjectInstructions,
+    ProjectInstructionsError,
+    load_project_instructions,
+    project_instructions_text,
+)
 from .chat_subagents import (
     SUBAGENT_CHILD_INSTRUCTIONS,
     SUBAGENT_ROUTING_INSTRUCTIONS,
@@ -1518,6 +1524,8 @@ class ChatService:
                 },
                 ensure_ascii=False,
             )
+        project_instructions = self._project_instructions(engagement_id)
+        instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
         knowledge_budget = max(
             1,
@@ -1898,6 +1906,11 @@ class ChatService:
                     "skill_snapshots": [
                         item.model_dump(mode="json") for item in skill_snapshots
                     ],
+                    "project_instructions": (
+                        project_instructions.receipt()
+                        if project_instructions is not None
+                        else None
+                    ),
                     "hook_snapshots": [
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
@@ -1940,6 +1953,11 @@ class ChatService:
                     "skill_snapshots": [
                         item.model_dump(mode="json") for item in skill_snapshots
                     ],
+                    "project_instructions": (
+                        project_instructions.receipt()
+                        if project_instructions is not None
+                        else None
+                    ),
                     "hook_snapshots": [
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
@@ -4462,12 +4480,20 @@ class ChatService:
         profile = self.store.get(ProviderProfile, session.provider_profile_id)
         messages = self._session_messages(session)
         limits = resolve_context_limits(profile, model=session.model)
+        try:
+            project_text = project_instructions_text(
+                self._project_instructions(session.engagement_id)
+            )
+        except ChatConfigurationError:
+            # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
+            project_text = ""
+        base_instructions = _CHAT_INSTRUCTIONS + project_text
         estimated = estimate_messages(
             [
                 ModelMessage(role=message.role.value, content=message.content)
                 for message in messages
             ],
-            _CHAT_INSTRUCTIONS,
+            base_instructions,
         )
         active_estimated = estimated
         latest = ContextCompactor(self.store).latest(
@@ -4500,7 +4526,7 @@ class ChatService:
             if latest.memory is not None:
                 active_estimated = (
                     estimate_tokens(
-                        _CHAT_INSTRUCTIONS + "\n\n" + memory_text(latest.memory)
+                        base_instructions + "\n\n" + memory_text(latest.memory)
                     )
                     + uncompacted_tokens
                 )
@@ -5224,6 +5250,23 @@ class ChatService:
                     )
                     ordinal += 1
         return candidates
+
+    def _project_instructions(
+        self, engagement_id: str | None
+    ) -> ProjectInstructions | None:
+        """Re-read the project-root AGENTS.md for this turn; it is never compacted."""
+
+        if engagement_id is None:
+            return None
+        try:
+            workspace = self.workspace_resolver(engagement_id)
+        except (ChatConfigurationError, OSError, ValueError):
+            # diagnostic-expected: without a project workspace there is no AGENTS.md to apply
+            return None
+        try:
+            return load_project_instructions(workspace)
+        except (ProjectInstructionsError, OSError) as exc:
+            raise ChatConfigurationError(f"AGENTS.md could not be used: {exc}") from exc
 
     @staticmethod
     def _retrieve_operator_help(
