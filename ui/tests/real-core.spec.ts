@@ -4128,3 +4128,80 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     await stopRealCore(core);
   }
 });
+
+test("tool suggestions real Core stores a TypeSafe key and the project opt-in", async ({ page }) => {
+  test.setTimeout(90_000);
+  const seenAuthorization: string[] = [];
+  // Stands in for api.typesafe.ai so the test never leaves the machine.
+  const jev: Server = createServer((request, response) => {
+    seenAuthorization.push(String(request.headers.authorization ?? ""));
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ model: "jev-1.13.0", answers: { connection_test: { type: "noul", noul: 0.93 } }, usage: { input_tokens: 20, output_tokens: 0 } }));
+    });
+  });
+  await new Promise<void>((resolve) => jev.listen(0, "127.0.0.1", resolve));
+  const previous = { base: process.env.TYPESAFE_BASE_URL, key: process.env.TYPESAFE_API_KEY };
+  process.env.TYPESAFE_BASE_URL = `http://127.0.0.1:${(jev.address() as AddressInfo).port}`;
+  delete process.env.TYPESAFE_API_KEY;
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projectId = ((await (await api.get("engagements")).json()) as Array<{ id: string }>)[0]?.id;
+    expect(projectId).toBeTruthy();
+    const scope = await (await api.get(`engagements/${projectId}/scope`)).json() as { revision: number };
+    const unlocked = await api.put(`engagements/${projectId}/scope`, { data: { local_only: false, expected_revision: scope.revision } });
+    expect(unlocked.ok(), await unlocked.text()).toBe(true);
+
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Integrations" }).click();
+    const section = page.locator("#typesafe-integration-settings");
+    await expect(section.getByText("Not configured")).toBeVisible();
+    await section.getByLabel("TypeSafe API key").fill("rc-typesafe-secret");
+    // Test hosts have no unlocked OS vault; session storage is the same Core path.
+    const sessionOnly = section.getByRole("checkbox", { name: /Use for this Nebula session only/ });
+    if (await sessionOnly.count()) await sessionOnly.check();
+    await section.getByRole("button", { name: "Save and test" }).click();
+    await expect(section.getByText("Working")).toBeVisible();
+    await expect(section.getByText("Saved for this Nebula session only")).toBeVisible();
+    await expect(section.getByText(/ms · jev-1\.13\.0/)).toBeVisible();
+    expect(seenAuthorization).toEqual(["Bearer rc-typesafe-secret"]);
+    const status = await (await api.get("integrations/typesafe")).json() as Record<string, unknown>;
+    expect(JSON.stringify(status)).not.toContain("rc-typesafe-secret");
+    expect(status.available).toBe(true);
+
+    // The token lives only in memory, so a reload reopens the page with it.
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Integrations" }).click();
+    await expect(section.getByText("Working")).toBeVisible();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    const option = page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ });
+    await expect(option).toBeEnabled();
+    await option.scrollIntoViewIfNeeded();
+    await option.check();
+    await page.getByRole("button", { name: "Save scope" }).click();
+    await expect.poll(async () => ((await (await api.get(`engagements/${projectId}/scope`)).json()) as { tool_suggestions: boolean }).tool_suggestions).toBe(true);
+    await expect.poll(async () => ((await (await api.get("integrations/typesafe")).json()) as { projects_using: number }).projects_using).toBe(1);
+
+    // The token lives only in memory, so a reload reopens the page with it.
+    await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
+    await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
+    await expect(page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ })).toBeChecked();
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+    await new Promise<void>((resolve) => jev.close(() => resolve()));
+    if (previous.base === undefined) delete process.env.TYPESAFE_BASE_URL; else process.env.TYPESAFE_BASE_URL = previous.base;
+    if (previous.key !== undefined) process.env.TYPESAFE_API_KEY = previous.key;
+  }
+});

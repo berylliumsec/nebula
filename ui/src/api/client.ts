@@ -1224,6 +1224,7 @@ interface WireChatCompletion extends JsonObject {
   finish_reason?: string | null;
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
+  tool_suggestions?: JsonObject | null;
 }
 
 interface WireContextSourceReference extends JsonObject {
@@ -1918,6 +1919,7 @@ interface WireEngagementScope extends JsonObject {
   not_after?: string | null;
   prohibited_actions?: string[];
   local_only?: boolean;
+  tool_suggestions?: boolean;
   max_concurrency?: number;
   grants?: Array<{
     risk_classes?: string[];
@@ -2746,6 +2748,50 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
+    toolSuggestions: mapToolSuggestions(value.tool_suggestions),
+  };
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+export function mapToolSuggestions(value: unknown): import("./types").ToolSuggestionSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const row = value as JsonObject;
+  const status = row.status === "suggested" || row.status === "no_tool_needed" || row.status === "unavailable" ? row.status : undefined;
+  if (!status) return undefined;
+  return {
+    status,
+    preloaded: stringList(row.preloaded),
+    suggested: stringList(row.suggested),
+    used: stringList(row.used),
+    loadedByModel: stringList(row.loaded_by_model),
+    unloadedCount: numberField(row.unloaded_count),
+    onDemandCount: numberField(row.on_demand_count),
+    model: stringField(row.model),
+    latencyMs: typeof row.latency_ms === "number" ? row.latency_ms : undefined,
+    error: stringField(row.error),
+  };
+}
+
+function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types").TypeSafeIntegration {
+  const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
+  const source = value.source === "vault" || value.source === "session" || value.source === "environment" ? value.source : undefined;
+  return {
+    source,
+    available: value.available === true,
+    vaultAvailable: value.vault_available === true,
+    projectsUsing: numberField(value.projects_using),
+    lastTest: test && typeof test.tested_at === "string"
+      ? {
+          testedAt: test.tested_at,
+          ok: test.ok === true,
+          latencyMs: typeof test.latency_ms === "number" ? test.latency_ms : undefined,
+          model: stringField(test.model),
+          error: stringField(test.error),
+        }
+      : undefined,
   };
 }
 
@@ -3732,6 +3778,7 @@ function mapPersistedChatMessage(
       typeof value.metadata?.harness_turn_id === "string"
         ? value.metadata.harness_turn_id
         : undefined,
+    toolSuggestions: mapToolSuggestions(value.metadata?.tool_suggestions),
     toolResults: Array.isArray(value.metadata?.tool_results)
       ? value.metadata.tool_results.flatMap((item) => {
           if (!item || typeof item !== "object" || Array.isArray(item)) return [];
@@ -3798,6 +3845,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     notAfter: value.not_after ?? undefined,
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
+    toolSuggestions: value.tool_suggestions === true,
     maxConcurrency: numberField(value.max_concurrency) || 1,
     grants: (value.grants ?? []).map((grant) => ({
       riskClasses: grant.risk_classes ?? [],
@@ -5784,6 +5832,25 @@ export class ApiClient {
       .then(() => this.getAutomationRuntime());
   }
 
+  getTypeSafeIntegration(): Promise<import("./types").TypeSafeIntegration> {
+    return this.request<Record<string, unknown>>("integrations/typesafe").then(mapTypeSafeIntegration);
+  }
+
+  saveTypeSafeKey(secret: string, persistence: "vault" | "session"): Promise<import("./types").TypeSafeIntegration> {
+    return this.request<Record<string, unknown>>("integrations/typesafe", {
+      method: "PUT",
+      body: JSON.stringify({ secret, persistence }),
+    }).then(mapTypeSafeIntegration);
+  }
+
+  testTypeSafeKey(): Promise<import("./types").TypeSafeIntegration> {
+    return this.request<Record<string, unknown>>("integrations/typesafe/test", { method: "POST" }).then(mapTypeSafeIntegration);
+  }
+
+  removeTypeSafeKey(): Promise<import("./types").TypeSafeIntegration> {
+    return this.request<Record<string, unknown>>("integrations/typesafe", { method: "DELETE" }).then(mapTypeSafeIntegration);
+  }
+
   getAutomationPolicy(engagementId: string): Promise<import("./types").AutomationProjectPolicy> {
     return this.request<Record<string, unknown>>(`engagements/${encodeURIComponent(engagementId)}/automation-policy`).then((value) => ({
       id: String(value.id),
@@ -6183,6 +6250,7 @@ export class ApiClient {
           not_after: body.notAfter || null,
           prohibited_actions: body.prohibitedActions,
           local_only: body.localOnly,
+          tool_suggestions: body.toolSuggestions,
           max_concurrency: body.maxConcurrency,
           grants: body.grants.map((grant) => ({
             risk_classes: grant.riskClasses,

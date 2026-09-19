@@ -8,6 +8,7 @@ import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } 
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
+import { TypeSafeIntegrationSettings } from "../components/TypeSafeIntegrationSettings";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { HarnessSettings } from "../components/HarnessSettings";
@@ -40,6 +41,7 @@ type SettingsSection = typeof settingsSections[number][0];
 const advancedSettingsGroups = [
   "models-settings",
   "automation-settings",
+  "integrations-settings",
   "project-policy-settings",
   "identity-security-settings",
   "release-settings-group",
@@ -60,6 +62,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["automation-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
+  if (["integrations-settings", "typesafe-integration-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
   if (["identity-security-settings", "operator-settings", "device-pairing-settings", "general-settings", "appearance-settings", "security-settings"].includes(hash)) return "identity-security-settings";
   if (["release-settings-group", "release-settings"].includes(hash)) return "release-settings-group";
@@ -758,6 +761,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <HarnessSettings />
       <AutomationRuntimeSettings />
       <RunnerSettings />
+      </SettingsGroup>
+      <SettingsGroup id="integrations-settings" title="Integrations" summary="TypeSafe Jev tool suggestions" open={openAdvancedGroup === "integrations-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "integrations-settings"}>
+      <TypeSafeIntegrationSettings />
       </SettingsGroup>
       <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "project-policy-settings"}>
       <EngagementPolicySettings />

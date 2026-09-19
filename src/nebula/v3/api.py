@@ -255,6 +255,8 @@ from .domain import (
     AutomationSession,
     AutomationSessionStatus,
     VpnProfile,
+    ToolSuggestionSettings,
+    ToolSuggestionTest,
     CommandExecution,
     ChatBackend,
     ChatMessage,
@@ -524,6 +526,7 @@ CUSTOM_RESOURCES = {
     "operator_profiles",
     "runner_profiles",
     "vpn_profiles",
+    "tool_suggestion_settings",
     "browser_actions",
     "browser_handoffs",
     "browser_identities",
@@ -864,6 +867,21 @@ class AutomationPolicyUpdateRequest(NebulaModel):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class TypeSafeKeyRequest(NebulaModel):
+    secret: SecretStr
+    persistence: Literal["vault", "session"] = "vault"
+
+
+class TypeSafeIntegrationStatus(NebulaModel):
+    """Public view of the Jev key: never the key or its reference."""
+
+    source: Literal["vault", "session", "environment"] | None = None
+    available: bool = False
+    vault_available: bool = False
+    last_test: ToolSuggestionTest | None = None
+    projects_using: int = Field(default=0, ge=0)
+
+
 class VpnProfileCreateRequest(NebulaModel):
     name: str = Field(min_length=1, max_length=120)
     filename: str = Field(min_length=1, max_length=255, pattern=r"^[^/\\]+\.ovpn$")
@@ -1014,6 +1032,8 @@ class ScopePolicyUpdateRequest(NebulaModel):
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)
     local_only: bool = False
+    # None keeps the stored value, so clients unaware of the field never clear it.
+    tool_suggestions: bool | None = None
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
     expected_revision: int | None = Field(default=None, ge=1)
@@ -1499,8 +1519,17 @@ def create_app(
         # technical activity to the system rather than inventing a human actor.
         return active.id if active is not None else "system"
 
+    from .tool_suggestions import (
+        SETTINGS_ID as TYPESAFE_SETTINGS_ID,
+        check_connection,
+        key_source,
+        load_settings,
+        resolve_jev_client,
+    )
+
     provider_chat = ChatService(
         store,
+        tool_suggestion_client=lambda: resolve_jev_client(store, credentials),
         tool_platform=tool_platform,
         automation_tool_platform=automation_tool_platform,
         provider_factory=chat_provider_factory,
@@ -6665,6 +6694,8 @@ def create_app(
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
+        if payload["tool_suggestions"] is None:
+            del payload["tool_suggestions"]
         payload["grants"] = [
             grant.model_copy(update={"granted_by": operator_id})
             for grant in request.grants
@@ -6746,6 +6777,114 @@ def create_app(
                 status_code=501, detail="automation runtime is not configured"
             )
         return await automation_runtime.prepare()
+
+    def typesafe_status() -> TypeSafeIntegrationStatus:
+        projects_using = 0
+        offset = 0
+        while page := store.list_entities(ScopePolicy, offset=offset, limit=1_000):
+            projects_using += sum(
+                1 for scope in page if scope.tool_suggestions and not scope.local_only
+            )
+            offset += len(page)
+        source, available = key_source(store, credentials)
+        settings = load_settings(store)
+        return TypeSafeIntegrationStatus(
+            source=source,
+            available=available,
+            vault_available=credentials.vault_available,
+            last_test=settings.last_test if settings is not None else None,
+            projects_using=projects_using,
+        )
+
+    async def save_typesafe_settings(**changes: Any) -> None:
+        settings = load_settings(store)
+        if settings is None:
+            store.create(ToolSuggestionSettings(id=TYPESAFE_SETTINGS_ID, **changes))
+        else:
+            store.update(
+                ToolSuggestionSettings,
+                settings.id,
+                changes,
+                expected_revision=settings.revision,
+            )
+
+    @app.get(
+        f"{API_PREFIX}/integrations/typesafe",
+        response_model=TypeSafeIntegrationStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_typesafe_integration() -> TypeSafeIntegrationStatus:
+        return await asyncio.to_thread(typesafe_status)
+
+    @app.put(
+        f"{API_PREFIX}/integrations/typesafe",
+        response_model=TypeSafeIntegrationStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_typesafe_key(
+        request: TypeSafeKeyRequest,
+    ) -> TypeSafeIntegrationStatus:
+        """Store the key in the vault or session, then run the fixed-sample test."""
+
+        try:
+            secret = await asyncio.to_thread(
+                credentials.create,
+                CredentialCreateRequest(
+                    secret=request.secret, persistence=request.persistence
+                ),
+            )
+        except CredentialError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        previous = load_settings(store)
+        try:
+            await save_typesafe_settings(secret_ref=secret.reference, last_test=None)
+        except Exception:
+            await asyncio.to_thread(credentials.delete, secret.reference)
+            raise
+        if previous is not None and previous.secret_ref:
+            try:
+                await asyncio.to_thread(credentials.delete, previous.secret_ref)
+            except CredentialError as exc:
+                record_caught_exception(
+                    "api",
+                    "api.api.typesafe_previous_key_delete_failed",
+                    "The replaced TypeSafe key could not be removed from the vault.",
+                    exc,
+                    stage="integrations",
+                )
+        result = await check_connection(resolve_jev_client(store, credentials))
+        await save_typesafe_settings(last_test=result)
+        return await asyncio.to_thread(typesafe_status)
+
+    @app.post(
+        f"{API_PREFIX}/integrations/typesafe/test",
+        response_model=TypeSafeIntegrationStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def test_typesafe_key() -> TypeSafeIntegrationStatus:
+        result = await check_connection(resolve_jev_client(store, credentials))
+        await save_typesafe_settings(last_test=result)
+        return await asyncio.to_thread(typesafe_status)
+
+    @app.delete(
+        f"{API_PREFIX}/integrations/typesafe",
+        response_model=TypeSafeIntegrationStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_typesafe_key() -> TypeSafeIntegrationStatus:
+        settings = load_settings(store)
+        if settings is not None and settings.secret_ref:
+            try:
+                await asyncio.to_thread(credentials.delete, settings.secret_ref)
+            except CredentialError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if settings is not None:
+            await save_typesafe_settings(secret_ref=None, last_test=None)
+        return await asyncio.to_thread(typesafe_status)
 
     def public_vpn_profile(profile: VpnProfile) -> dict[str, Any]:
         value = profile.model_dump(exclude={"secret_ref"})

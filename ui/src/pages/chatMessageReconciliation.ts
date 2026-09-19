@@ -1,4 +1,4 @@
-import type { ChatCitation, ChatMessage, ChatUsage } from "../api/types";
+import type { ChatCitation, ChatMessage, ChatUsage, ToolSuggestionSummary } from "../api/types";
 import { finalAssistantContent } from "./harnessActivity";
 
 export type ConversationMessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
@@ -16,6 +16,7 @@ export interface ReconciledConversationMessage extends ChatMessage {
   detail?: string;
   sequence?: number;
   harnessTurnId?: string;
+  toolSuggestions?: ToolSuggestionSummary;
 }
 
 interface CompletedAssistantMessage {
@@ -27,6 +28,7 @@ interface CompletedAssistantMessage {
   citations: ChatCitation[];
   usage?: ChatUsage;
   harnessTurnId?: string;
+  toolSuggestions?: ToolSuggestionSummary;
   createdAt: string;
 }
 
@@ -61,6 +63,7 @@ export function reconcileCompletedAssistantMessage(
     state: "complete",
     durable: Boolean(completed.durableAssistantId),
     harnessTurnId: completed.harnessTurnId ?? existing?.harnessTurnId,
+    toolSuggestions: completed.toolSuggestions ?? existing?.toolSuggestions,
   };
 
   const reconciled = messages

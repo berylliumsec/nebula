@@ -1,41 +1,39 @@
 {
-  "change_digest": "478f3a7fdd1e8fe84f88c99247f71e0fc1d42353c1b4cbde1767953df82f6c93",
-  "reviewed_by": "Claude review of the interactive guides change (operator-approved Figma page \"Guides\")",
-  "reason": "Adds in-app interactive guides: a Guides hub, a step card that spotlights the real control, Core-owned per-operator progress (guides.py, GuideProgress entity), a starter-files endpoint and an AGENTS.md probe. Anchors were added to Workbench, Settings and chat components, and hook/skill catalogs now refresh when the chat or Assistant settings come back into view. The selection covers the new Core module and entity registry, operator identity, hooks, operator help, every frontend component that gained an anchor or behavior, App integration, and the real-Core guide journeys (hook files, resume from Core, all assistant guides reaching their controls) on all eight assistant-real profiles plus the existing lifecycle-hooks real-Core journey.",
-  "exclusions": "No full suites. Native: only the SIDECAR_ENV_ALLOWLIST constant gained three names; no sidecar test asserts the list and behavior is unchanged otherwise (verified locally with cargo test --locked sidecar: 8 passed). README/NEBULA3.md edits are documentation. The calm-CSS audit's pre-existing failures are in untouched files; guides.css passes it.",
+  "change_digest": "d063a7cd02b54474f13746a55e2d60034cdbbccccb860c6855756890a5f014cd",
+  "reviewed_by": "Claude review of the optional TypeSafe Jev tool-suggestion layer",
+  "reason": "Adds opt-in, per-project Jev tool suggestions: MCP-sourced tools are deferred behind tool_catalog.search/load, Jev ranks them before each provider turn, the TypeSafe key is stored through the credential store with GET/PUT/test/DELETE routes, and the chat shows a collapsed per-turn chip. Selected tests cover the new module and routes, the tool-loop and resume paths it modifies, scope API field preservation, the settings/opt-in/chip UI in unit and mocked Playwright on desktop, mobile Chromium and mobile WebKit, and one real-Core journey against a local Jev stub. After merging main with #344 (interactive guides), which edits the same Settings, policy and chat components, the selection adds the guides unit tests and the real-Core interactive-guides journeys so the spotlighted controls are verified alongside the new Integrations panel and project opt-in.",
+  "exclusions": "No full suites. Harness chats are unchanged. Real-Core coverage uses a local stub instead of api.typesafe.ai and session-only key storage because test hosts have no unlocked OS vault; vault storage is covered by the mocked UI and backend tests. No LAN-origin check: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 26,
-    "frontend": 172,
+    "python": 115,
+    "frontend": 128,
     "native": 0,
-    "playwright": 19
+    "playwright": 15
   },
   "python": [
-    "tests/v3/test_guides.py",
-    "tests/v3/test_domain.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_operators.py"
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_project_instructions.py",
+    "tests/v3/test_approval_continuation.py",
+    "tests/test_playwright_impact.py",
+    "tests/v3/test_guides.py"
   ],
   "frontend": [
-    "ui/src/guides/guides.test.tsx",
-    "ui/src/state/useNavigationChords.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/components/CommandPalette.test.tsx",
-    "ui/src/components/DevicePairingSettings.test.tsx",
-    "ui/src/components/ProviderSessionAdvanced.test.tsx",
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/App.test.tsx",
-    "ui/src/components/ChatDecisions.test.tsx",
+    "ui/src/components/ToolSuggestions.test.tsx",
     "ui/src/components/EngagementPolicySettings.loading.test.tsx",
-    "ui/src/components/EngagementPolicySettings.test.ts",
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/components/PostToolAssistant.test.tsx"
+    "ui/src/api/client.test.ts",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/api/workbenchBrowser.test.ts",
+    "ui/src/components/ScopeImportDialog.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:interactive-guides",
-    "area:provider-native-hooks-core"
+    "entry:tool-suggestions/desktop",
+    "entry:tool-suggestions/mobile-chromium",
+    "entry:tool-suggestions/mobile-webkit",
+    "entry:tool-suggestions/real-core",
+    "area:interactive-guides"
   ]
 }
