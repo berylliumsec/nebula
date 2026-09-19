@@ -106,8 +106,8 @@ from .providers import (
     ModelResponse,
     ModelToolResult,
     ProviderContextLengthError,
-    ProviderFlavor,
     StreamEventType,
+    ToolCall as ModelToolCall,
     ToolChoice,
     ToolDefinition,
     provider_from_profile,
@@ -586,9 +586,12 @@ _CHAT_INSTRUCTIONS = (
 )
 
 _CHAT_TOOL_INSTRUCTIONS = (
-    """Call exactly one supplied function and return no prose. Use finish_response
-when no tool is needed. Tool results can be inspected with tool_output.search and
-tool_output.read."""
+    """Call one or more supplied functions and return no prose. Request several
+functions in the same response when they do not depend on each other; keep a
+call that needs an earlier result for a later response. Nebula runs a batch one
+call at a time, in the order you asked for, and replays every result. Use
+finish_response when no tool is needed. Tool results can be inspected with
+tool_output.search and tool_output.read."""
     + BROWSER_MODEL_WORKFLOW
 )
 
@@ -2664,6 +2667,11 @@ class ChatService:
 
             catalog_receipt = catalog_snapshot(turn.request_snapshot)
             deferred_names = set(catalog_receipt.get("deferred", []))
+            # Calls a routing response batched and Core has not run yet. The
+            # queue is deliberately not durable: a pause abandons it, and the
+            # model re-issues the calls it still wants, because an abandoned
+            # call never executed and never enters the replayed history.
+            batched_calls: list[tuple[ModelToolCall, dict[str, Any] | None]] = []
             while turn.status != ChatTurnStatus.FINALIZING:
                 budgeted_specs = [
                     spec
@@ -2692,102 +2700,105 @@ class ChatService:
                 ]
                 if not available_specs:
                     break
-                routing = prepared.model_request.model_copy(
-                    update={
-                        "instructions": _CHAT_TOOL_INSTRUCTIONS
-                        + (
-                            SUBAGENT_ROUTING_INSTRUCTIONS
-                            if any(
-                                spec.name == "start_subagent"
-                                for spec in available_specs
+                budgeted_names = {spec.name for spec in budgeted_specs}
+                if not batched_calls:
+                    routing = prepared.model_request.model_copy(
+                        update={
+                            "instructions": _CHAT_TOOL_INSTRUCTIONS
+                            + (
+                                SUBAGENT_ROUTING_INSTRUCTIONS
+                                if any(
+                                    spec.name == "start_subagent"
+                                    for spec in available_specs
+                                )
+                                else ""
                             )
-                            else ""
-                        )
-                        + "\n\n"
-                        + (prepared.model_request.instructions or "")
-                        + catalog_instructions(catalog_receipt, components.specs),
-                        "tools": [
-                            ToolDefinition(
-                                name=spec.name,
-                                description=spec.description,
-                                input_schema=_routing_input_schema(spec),
-                                # The call envelope's arguments are free-form;
-                                # the real tool's schema is enforced by Core.
-                                strict=spec.name != CATALOG_CALL,
-                            )
-                            for spec in sorted(
-                                available_specs, key=lambda item: item.name
-                            )
-                        ]
-                        + [self._finish_tool()],
-                        "tool_choice": ToolChoice.REQUIRED,
-                        "parallel_tool_calls": False,
-                        "tool_results": self._provider_tool_history(turn),
-                        "messages": self._browser_screenshot_messages(prepared, turn),
-                    }
-                )
-                routing = self._fit_turn_goal_request(prepared, routing)
-                self._ensure_request_capacity(prepared.provider_profile, routing)
-                response = await self._complete_with_context_recovery(prepared, routing)
-                self._assert_execution_owner(prepared)
-                turn = self._refresh_turn(turn)
-                turn = self._add_usage(turn, response)
-                if (
-                    turn.goal_id is not None
-                    and self.store.get(ChatGoal, turn.goal_id).status
-                    != ChatGoalStatus.RUNNING
-                ):
-                    raise ChatError(
-                        "goal token budget was exhausted before tool execution"
-                    )
-                if response.text.strip():
-                    raise ChatError(
-                        "provider returned routing prose instead of a tool call"
-                    )
-                if (
-                    len(response.tool_calls) > 1
-                    and prepared.provider.config.flavor == ProviderFlavor.OPENROUTER
-                ):
-                    # OpenRouter cannot route parallel_tool_calls=false, so a
-                    # model may batch calls. Run only the first; the rest never
-                    # execute and are absent from replayed history, so the
-                    # model re-issues them one per step.
-                    response = response.model_copy(
-                        update={"tool_calls": response.tool_calls[:1]}
-                    )
-                if len(response.tool_calls) != 1:
-                    raise ChatError(
-                        "provider must return exactly one sequential tool call"
-                    )
-                call = response.tool_calls[0]
-                if any(
-                    item.get("model_call_id") == call.id for item in turn.tool_history
-                ):
-                    raise ChatError(
-                        "provider repeated a completed tool call id; refusing duplicate execution"
-                    )
-                if call.name == "finish_response":
-                    if call.arguments:
-                        raise ChatError("finish_response does not accept arguments")
-                    break
-                provider_call: dict[str, Any] | None = None
-                if call.name == CATALOG_CALL:
-                    target = unwrap_call(call.arguments, deferred_names)
-                    # An unknown target stays a catalog call; its broker
-                    # answers with an error the model can correct.
-                    if target is not None:
-                        provider_call = {
-                            "name": call.name,
-                            "arguments": call.arguments,
+                            + "\n\n"
+                            + (prepared.model_request.instructions or "")
+                            + catalog_instructions(catalog_receipt, components.specs),
+                            "tools": [
+                                ToolDefinition(
+                                    name=spec.name,
+                                    description=spec.description,
+                                    input_schema=_routing_input_schema(spec),
+                                    # The call envelope's arguments are
+                                    # free-form; the real tool's schema is
+                                    # enforced by Core.
+                                    strict=spec.name != CATALOG_CALL,
+                                )
+                                for spec in sorted(
+                                    available_specs, key=lambda item: item.name
+                                )
+                            ]
+                            + [self._finish_tool()],
+                            "tool_choice": ToolChoice.REQUIRED,
+                            # A model may batch independent calls into one
+                            # routing response. Core still executes them one
+                            # at a time, in the requested order, so every
+                            # call keeps its own step, budget, and approval.
+                            "parallel_tool_calls": True,
+                            "tool_results": self._provider_tool_history(turn),
+                            "messages": self._browser_screenshot_messages(
+                                prepared, turn
+                            ),
                         }
-                        call = call.model_copy(
-                            update={"name": target[0], "arguments": target[1]}
-                        )
-                available_names = {spec.name for spec in budgeted_specs}
-                if call.name not in available_names:
-                    raise ChatError(
-                        f"provider requested unavailable tool {call.name!r}"
                     )
+                    routing = self._fit_turn_goal_request(prepared, routing)
+                    self._ensure_request_capacity(prepared.provider_profile, routing)
+                    response = await self._complete_with_context_recovery(
+                        prepared, routing
+                    )
+                    self._assert_execution_owner(prepared)
+                    turn = self._refresh_turn(turn)
+                    turn = self._add_usage(turn, response)
+                    if (
+                        turn.goal_id is not None
+                        and self.store.get(ChatGoal, turn.goal_id).status
+                        != ChatGoalStatus.RUNNING
+                    ):
+                        raise ChatError(
+                            "goal token budget was exhausted before tool execution"
+                        )
+                    if response.text.strip():
+                        raise ChatError(
+                            "provider returned routing prose instead of a tool call"
+                        )
+                    if not response.tool_calls:
+                        # A required tool choice the provider ignored. The
+                        # results already gathered are a better answer than a
+                        # failed turn, so finish on what the turn has.
+                        record_diagnostic(
+                            "warning",
+                            "chat",
+                            "chat.routing.empty_tool_batch",
+                            "The provider returned no tool call for a required "
+                            "routing step; the turn answered from the results "
+                            "it already had.",
+                            outcome="fallback",
+                            stage="chat",
+                            retryable=True,
+                            safe_failure_cause=(
+                                "The provider returned neither a tool call nor "
+                                "prose for a required tool choice."
+                            ),
+                        )
+                        break
+                    # Every call is validated before any of them executes, so
+                    # a malformed batch never reaches the broker.
+                    batched_calls = self._routing_batch(
+                        response, turn, budgeted_names, deferred_names
+                    )
+                call, provider_call = batched_calls.pop(0)
+                if call.name == "finish_response":
+                    break
+                if call.name not in budgeted_names:
+                    # An earlier call in the batch consumed this budget class.
+                    # Drop the queued remainder and route again with the tools
+                    # the turn can still afford; the model re-issues what it
+                    # still needs.
+                    batched_calls = []
+                    continue
+                self._assert_execution_owner(prepared)
                 spec = components.specs[call.name]
                 if "cwd" in spec.path_arguments:
                     call = call.model_copy(
@@ -3390,6 +3401,54 @@ class ChatService:
                 safe_failure_cause="The local embedding model download or load failed.",
                 exception=exc,
             )
+
+    @staticmethod
+    def _routing_batch(
+        response: ModelResponse,
+        turn: ChatTurn,
+        budgeted_names: set[str],
+        deferred_names: set[str],
+    ) -> list[tuple[ModelToolCall, dict[str, Any] | None]]:
+        """Validate a whole routing response before any of it reaches a broker.
+
+        A response may carry several independent calls. Rejecting a malformed
+        batch as a unit keeps the old guarantee that a bad routing step never
+        produces a partial effect.
+        """
+
+        seen = {
+            str(entry["model_call_id"])
+            for entry in turn.tool_history
+            if entry.get("model_call_id")
+        }
+        batch: list[tuple[ModelToolCall, dict[str, Any] | None]] = []
+        for call in response.tool_calls:
+            if call.id in seen:
+                raise ChatError(
+                    "provider repeated a completed tool call id; "
+                    "refusing duplicate execution"
+                )
+            seen.add(call.id)
+            if call.name == "finish_response":
+                if call.arguments:
+                    raise ChatError("finish_response does not accept arguments")
+                # Finishing ends the turn, so calls queued behind it never run.
+                batch.append((call, None))
+                break
+            provider_call: dict[str, Any] | None = None
+            if call.name == CATALOG_CALL:
+                target = unwrap_call(call.arguments, deferred_names)
+                # An unknown target stays a catalog call; its broker
+                # answers with an error the model can correct.
+                if target is not None:
+                    provider_call = {"name": call.name, "arguments": call.arguments}
+                    call = call.model_copy(
+                        update={"name": target[0], "arguments": target[1]}
+                    )
+            if call.name not in budgeted_names:
+                raise ChatError(f"provider requested unavailable tool {call.name!r}")
+            batch.append((call, provider_call))
+        return batch
 
     @staticmethod
     def _provider_tool_history(turn: ChatTurn) -> list[ModelToolResult]:

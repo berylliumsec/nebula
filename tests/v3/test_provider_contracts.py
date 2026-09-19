@@ -298,6 +298,52 @@ def test_anthropic_and_gemini_required_tool_wire_contracts(monkeypatch):
     assert observed[1]["contents"][-2]["parts"][0]["functionCall"]["id"] == "call-1"
 
 
+def test_batched_tool_calls_reach_each_adapter_wire_contract(monkeypatch):
+    """A routing step that accepts a batch must not disable parallel calls."""
+
+    monkeypatch.setenv("TEST_PROVIDER_KEY", "secret")
+    batched = _required_request().model_copy(update={"parallel_tool_calls": True})
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"model": "model-a", "content": [], "stop_reason": "tool_use"},
+        )
+
+    compatible = OpenAICompatibleProvider(
+        ProviderConfig(
+            id="compatible",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="https://provider.invalid/v1",
+            default_model="model-a",
+            capabilities={"tools": True, "strict_tools": True},
+        )
+    )
+    assert compatible._payload(batched, "model-a")["parallel_tool_calls"] is True
+
+    asyncio.run(
+        AnthropicProvider(
+            ProviderConfig(
+                id="anthropic",
+                kind=ProviderKind.ANTHROPIC,
+                flavor=ProviderFlavor.ANTHROPIC,
+                base_url="https://provider.invalid/v1",
+                default_model="model-a",
+                api_key_env="TEST_PROVIDER_KEY",
+                capabilities={"tools": True, "strict_tools": True},
+            ),
+            transport=httpx.MockTransport(handler),
+        ).complete(batched)
+    )
+
+    assert observed["tool_choice"] == {
+        "type": "any",
+        "disable_parallel_tool_use": False,
+    }
+
+
 def test_bedrock_required_tool_wire_contract(monkeypatch):
     observed = {}
 

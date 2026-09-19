@@ -1,22 +1,21 @@
 {
-  "change_digest": "5b62294804c2d031af89c3dcb1f67d6f9eb2fbe0e3da597c3ec291117db374d7",
-  "reviewed_by": "Claude review of real-Core phone readiness waits",
-  "reason": "Six real-Core journeys waited for the shell's Core chip as a visible button, which phones never satisfy: AppShell has hidden the top bar on the Workbench since #355, so these journeys failed at the gate on every phone project (measured on main at 390px). The spec already had coreReady(), which accepts the chip or the phone operator navigation, but these waits bypassed it. coreReady is now coreShell(page, chip) with two callers: coreReady (exact \"Nebula Core ready\", unchanged semantics for its ~20 existing call sites) and coreConnected (ready or degraded, for fixture Cores that report limited availability). The eight bypassing waits now call coreConnected. Verified locally: the six journeys pass on chromium-390, and on desktop, compact, chromium-320 and webkit-390 (23 of 24), plus the pending-approval journey on desktop and chromium-390. The selected areas cover every journey whose wait changed and that CI selects: assistant-reliability, harness-accounts, harness-commands-real, advanced-session-binding and ssh-environments.",
-  "exclusions": "Test-only change: no Python, frontend unit or native tests, and no product code. area:branch-review is not selected although it shares one changed wait: its real-Core phone jobs also run journeys that fail on main for unrelated, pre-existing reasons (the stabilization replay matrix, project creation), so selecting it would report failures this change neither causes nor fixes; that journey was verified locally on desktop and chromium-390 instead. The durable-knowledge journey belongs to no area, so CI never selects it; it was verified locally too. The popup journey still fails later on webkit-390 for an unrelated phone reason (its Ask Nebula status text); CI runs that journey only on the desktop-sized real-core project, where it passes. The wider phone rot (35 of 48 real-Core tests fail at 390px on main) is out of scope here.",
+  "change_digest": "e8e110032c50c071f168040c170c4f00af69a4d94a7d3e3b05de19df98a411c5",
+  "reviewed_by": "Claude review of batched chat tool calls",
+  "reason": "The chat routing loop accepted exactly one tool call per provider response: OpenRouter batches were truncated to the first call and every other shape failed the turn with \"provider must return exactly one sequential tool call\" (live failure err_6c33d2be, 2026-09-19). A routing response may now carry several calls; Core validates the whole batch first, then executes it one call at a time, in order, so each call keeps its own durable step, budget, approval and event pair. The routing request stops disabling provider parallelism, and a required routing step that comes back with no call now answers from the results already gathered instead of failing. tests/v3/test_chat_tool_loop.py covers the batch contract end to end (order, steps, replay, finish_response inside a batch, mid-batch approval pause, mid-batch budget exhaustion, duplicate ids, empty response); tests/v3/test_provider_contracts.py pins the wire contract for a batched request on the Chat Completions and Anthropic adapters; tests/v3/test_tool_catalog.py and tests/v3/test_chat_subagents.py are the other suites that drive this loop, including the tool_catalog.call unwrapping that moved into the new batch validator.",
+  "exclusions": "No frontend or native change: the loop still emits one tool_started/tool_completed pair per call, in order, so the transcript is unchanged and no ui/src file is touched. No Playwright area is selected. The only catalogued journey that drives a real model through this loop is provider-live-openrouter-gui, which skips in CI because no workflow provides OPENROUTER_API_KEY; selecting it would spend a real-Core job on a skip. That coverage was taken locally instead: a Core built from this branch, with a live OpenRouter profile on deepseek/deepseek-v4-flash-vision-exp, answered a three-file read with one batched routing response and three durable steps 35 ms apart, where the same prompt on origin/main took three routing round trips. The mission/specialist loop in agent_tooling.py keeps its own one-call-per-step contract and is not changed here.",
   "expected_tests": {
-    "python": 0,
+    "python": 57,
     "frontend": 0,
     "native": 0,
-    "playwright": 36
+    "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_chat_subagents.py"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:assistant-reliability",
-    "area:harness-accounts",
-    "area:harness-commands-real",
-    "area:advanced-session-binding",
-    "area:ssh-environments"
-  ]
+  "playwright": []
 }

@@ -953,8 +953,9 @@ class OpenAICompatibleProvider(ModelProvider):
                 # Prevent OpenRouter from selecting an endpoint that drops a
                 # parameter Nebula relies on for its verified tool contract.
                 # No OpenRouter route advertises parallel_tool_calls, so
-                # sending it with require_parameters matches no endpoint; Core
-                # enforces one call per routing step instead.
+                # sending it with require_parameters matches no endpoint. A
+                # route is free to batch calls; callers accept a batch and
+                # execute it one call at a time.
                 payload["provider"] = {"require_parameters": True}
             else:
                 payload["parallel_tool_calls"] = request.parallel_tool_calls
