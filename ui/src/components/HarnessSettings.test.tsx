@@ -2,7 +2,7 @@ import {render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {MemoryRouter} from "react-router-dom";
 import {beforeEach, describe, expect, it, vi} from "vitest";
-import type {HarnessProfile} from "../api/types";
+import type {HarnessProfile, McpServerProfile} from "../api/types";
 import {DialogProvider} from "./DialogSystem";
 import {HarnessSettings} from "./HarnessSettings";
 
@@ -12,7 +12,7 @@ const profile: HarnessProfile = {
   enabled: true, localOnly: true, permitsSensitiveData: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
-const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn()};
+const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", previewMode: false})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
 
@@ -112,3 +112,77 @@ for (const vendor of ["Grok", "Codex"] as const) {
     await waitFor(() => expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({home_directory: "/accounts/work account", name: `${vendor} Work`})));
   });
 }
+
+const importedServer: McpServerProfile = {
+  id: "mcp-burp", name: "burp", transport: "stdio", command: "/usr/bin/npx", arguments: ["-y", "burp-mcp"], authMode: "none",
+  enabled: false, required: false, trustedStdio: false, defaultApproval: "risk_based", toolOverrides: {}, tools: [], revision: 1,
+};
+
+describe("MCP import entry points", () => {
+  beforeEach(() => {vi.resetAllMocks(); api.listHarnesses.mockResolvedValue([]);});
+
+  it("offers import from the empty state and the section heading", async () => {
+    api.listMcpServers.mockResolvedValue([]);
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await userEvent.click(await screen.findByRole("button", {name: "Import from file"}));
+    expect(screen.getByRole("dialog", {name: "Import MCP servers"})).toBeVisible();
+    await userEvent.click(screen.getByRole("button", {name: "Close import dialog"}));
+    await userEvent.click(screen.getByRole("button", {name: "Import"}));
+    expect(screen.getByRole("dialog", {name: "Import MCP servers"})).toBeVisible();
+  });
+
+  it("reloads the list from Core after import and names the next step", async () => {
+    let imported = false;
+    api.listMcpServers.mockImplementation(async () => imported ? [importedServer] : []);
+    api.importMcpServers.mockImplementation(async ({dryRun}: {dryRun: boolean}) => {
+      if (!dryRun) imported = true;
+      return {dryRun, created: 1, replaced: 0, skipped: 0, invalid: 1, entries: [
+        {sourceName: "burp", name: "burp", action: "create", transport: "stdio", command: "/usr/bin/npx", arguments: ["-y", "burp-mcp"], secrets: [], warnings: []},
+        {sourceName: "recon", name: "recon", action: "invalid", arguments: [], secrets: [], warnings: [], error: "not installed"},
+      ]};
+    });
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await user.click(await screen.findByRole("button", {name: "Import from file"}));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("textbox", {name: "Configuration"}));
+    await user.paste('{"mcpServers": {"burp": {"command": "npx"}, "recon": {"command": "recon-mcp"}}}');
+    await user.click(within(dialog).getByRole("button", {name: "Preview"}));
+    await user.click(await within(dialog).findByRole("button", {name: "Import 1 server"}));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByRole("heading", {name: "burp"})).toBeVisible();
+    const notice = screen.getByText(/Imported 1 server from Pasted configuration/).closest(".surface-notice")!;
+    expect(notice).toHaveTextContent("1 could not be imported: recon (not installed)");
+    expect(screen.getByText("Local program · not trusted")).toBeVisible();
+    expect(screen.getByText("Trust this local program in Edit before probing.")).toBeVisible();
+    expect(screen.getByRole("button", {name: "Probe"})).toBeDisabled();
+    expect(screen.getByRole("button", {name: "Enable"})).toBeDisabled();
+    await user.click(within(notice as HTMLElement).getByRole("button", {name: "Dismiss import notice"}));
+    expect(screen.queryByText(/Imported 1 server/)).not.toBeInTheDocument();
+  });
+
+  it("asks trusted but unprobed servers to probe before enabling", async () => {
+    api.listMcpServers.mockResolvedValue([{...importedServer, trustedStdio: true}]);
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    expect(await screen.findByText("Probe to list its tools, then enable.")).toBeVisible();
+    expect(screen.getByRole("button", {name: "Probe"})).toBeEnabled();
+  });
+});
+
+it("edits an MCP server without resetting its saved working directory", async () => {
+  vi.resetAllMocks();
+  api.listHarnesses.mockResolvedValue([]);
+  api.listMcpServers.mockResolvedValue([importedServer]);
+  api.updateMcpServer.mockResolvedValue({...importedServer, trustedStdio: true});
+  const user = userEvent.setup();
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", {name: "Edit burp"}));
+  const dialog = screen.getByRole("dialog", {name: "Edit MCP server"});
+  await user.click(within(dialog).getByRole("checkbox", {name: /I trust this local program/}));
+  await user.click(within(dialog).getByRole("button", {name: "Save MCP server"}));
+  await waitFor(() => expect(api.updateMcpServer).toHaveBeenCalledTimes(1));
+  const [, changes] = api.updateMcpServer.mock.calls[0];
+  expect(changes).toMatchObject({trusted_stdio: true});
+  expect(changes).not.toHaveProperty("cwd_policy");
+});

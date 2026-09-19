@@ -3447,6 +3447,117 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
   } finally {await core.stop();}
 });
 
+reliabilityTest("mcp import previews, saves, trusts, probes, and replaces servers from a JSON file", async ({page}, info) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const fixtureServer = path.join(repository, "tests/v3/fixtures/fake_mcp_server.py");
+  const file = {
+    name: "claude_desktop_config.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({mcpServers: {
+      // A fixed cwd: this fixture Core has no automation runtime to resolve a project workspace.
+      fixture: {command: "python3", args: [fixtureServer], env: {LOG_LEVEL: "info"}, cwd: core.dataDir, alwaysAllow: ["read_file"]},
+      intel: {type: "http", url: "https://mcp.example.test/mcp", headers: {Authorization: "Bearer ${INTEL_TOKEN}"}},
+      recon: {command: "nebula-missing-mcp-binary"},
+    }}, null, 2)),
+  };
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 430;
+  const auditDialog = async (dialog: ReturnType<typeof page.getByRole>, label: string) => {
+    const a11y = await new AxeBuilder({page}).include(".mcp-import-dialog").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(a11y.violations).toEqual([]);
+    expect(await dialog.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await page.locator("body").evaluate(body => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+    if (mobile) {
+      for (const control of await dialog.locator("footer .button, .mcp-import-field-label .button, .mcp-import-links :is(a, button), header .icon-button").all()) {
+        const box = await control.boundingBox();
+        expect(box?.height ?? 0, `${label}: ${await control.innerText() || await control.getAttribute("aria-label")}`).toBeGreaterThanOrEqual(44);
+      }
+    }
+    await page.screenshot({path: info.outputPath(`mcp-import-${label}.png`)});
+  };
+  try {
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "MCP import"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("MCP import acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/settings#harness-settings`);
+    const section = page.locator("#mcp-settings");
+
+    // Empty state entry point, source step, example, schema download.
+    await section.getByRole("button", {name: "Import from file", exact: true}).click();
+    const dialog = page.getByRole("dialog", {name: "Import MCP servers"});
+    await expect(dialog.locator(".mcp-import-example")).toHaveAttribute("open", "");
+    await expect(dialog.getByRole("link", {name: "Format guide"})).toHaveAttribute("href", /docs\/MCP-SERVERS\.md$/);
+    await auditDialog(dialog, "source");
+    const downloadEvent = page.waitForEvent("download");
+    await dialog.getByRole("button", {name: "Download schema", exact: true}).click();
+    const download = await downloadEvent;
+    expect(download.suggestedFilename()).toBe("mcp-servers.schema.json");
+    expect(JSON.parse(await readFile(await download.path(), "utf8")).$defs.NebulaOptions).toBeTruthy();
+
+    await dialog.getByRole("textbox", {name: "Configuration"}).fill('{"mcpServers": {"a": {}\n "b": {}}}');
+    await dialog.getByRole("button", {name: "Preview", exact: true}).click();
+    await expect(dialog.getByRole("alert")).toContainText("Not valid JSON");
+    await expect(dialog.getByRole("button", {name: "Preview", exact: true})).toBeDisabled();
+
+    // Preview is Core's dry run: nothing is saved yet.
+    await dialog.getByLabel("Choose MCP configuration file").setInputFiles(file);
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
+    await dialog.getByRole("button", {name: "Preview", exact: true}).click();
+    const rows = dialog.getByRole("list", {name: "Servers in this file"});
+    await expect(dialog).toContainText("claude_desktop_config.json · 3 servers");
+    const row = (name: string) => rows.locator(".mcp-import-row").filter({has: page.getByText(name, {exact: true})});
+    await expect(row("fixture")).toContainText("New");
+    await expect(row("fixture")).toContainText(fixtureServer);
+    await expect(row("intel")).toContainText("Bearer token from INTEL_TOKEN");
+    await expect(row("recon")).toContainText("Can't import");
+    await expect(row("recon")).toContainText("not installed on the Nebula host PATH");
+    expect(await (await core.api.get("mcp-servers")).json()).toEqual([]);
+    await auditDialog(dialog, "preview");
+
+    await dialog.getByRole("button", {name: "Import 2 servers", exact: true}).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(section.locator(".surface-notice")).toContainText("Imported 2 servers from claude_desktop_config.json");
+    await expect(section.locator(".surface-notice")).toContainText("1 could not be imported: recon");
+    const card = (name: string) => section.locator(".integration-card").filter({has: page.getByRole("heading", {name, exact: true})});
+    await expect(card("fixture")).toContainText("Local program · not trusted");
+    await expect(card("fixture").getByRole("button", {name: "Probe"})).toBeDisabled();
+    await expect(card("intel")).toContainText("Probe to list its tools, then enable.");
+    await page.reload();
+    await expect(card("fixture")).toContainText("Trust this local program in Edit before probing.");
+
+    // Trust, probe for real, and enable the imported stdio server.
+    await card("fixture").getByRole("button", {name: "Edit fixture"}).click();
+    const edit = page.getByRole("dialog", {name: "Edit MCP server"});
+    await edit.getByRole("checkbox", {name: /I trust this local program/}).check();
+    await edit.getByRole("button", {name: "Save MCP server"}).click();
+    await expect(edit).toHaveCount(0);
+    await card("fixture").getByRole("button", {name: "Probe"}).click();
+    await expect(card("fixture")).toContainText("read_file", {timeout: 20_000});
+    await card("fixture").getByRole("button", {name: "Enable"}).click();
+    await expect(card("fixture").getByRole("button", {name: "Disable"})).toBeVisible();
+
+    // Re-importing skips existing names unless Replace is ticked; replace resets trust.
+    await section.getByRole("button", {name: "Import", exact: true}).click();
+    await dialog.getByLabel("Choose MCP configuration file").setInputFiles(file);
+    await dialog.getByRole("button", {name: "Preview", exact: true}).click();
+    await expect(row("fixture")).toContainText("Exists · skipped");
+    await expect(dialog.getByRole("button", {name: /^Import/})).toBeDisabled();
+    await dialog.getByRole("checkbox", {name: /Replace 2 existing servers/}).check();
+    await expect(row("fixture")).toContainText("Replaces existing");
+    await dialog.getByRole("button", {name: "Import 2 servers", exact: true}).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(card("fixture")).toContainText("Local program · not trusted");
+    await expect(card("fixture").getByRole("button", {name: "Enable"})).toBeDisabled();
+    const saved = (await (await core.api.get("mcp-servers")).json()).find((item: {name: string}) => item.name === "fixture");
+    expect(saved).toMatchObject({enabled: false, trusted_stdio: false, command: expect.stringMatching(/^\/.*python3/)});
+    await page.screenshot({path: info.outputPath("mcp-import-after-replace.png")});
+    await info.attach("mcp-import", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), runtime: "real Core, LAN origin, production assets, stdio fixture probe"}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
+
 reliabilityTest("assistant upgrade native commands retain thinking and replies across Core restart", async ({page}, info) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "commands");
