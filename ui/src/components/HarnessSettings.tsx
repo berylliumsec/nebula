@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { Bot, Network, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
-import type { HarnessNativeCapabilities, HarnessProfile, McpServerProfile } from "../api/types";
+import { Bot, FileUp, Network, Pencil, Plus, RefreshCw, ShieldAlert, Trash2, X } from "lucide-react";
+import type { HarnessNativeCapabilities, HarnessProfile, McpImportReport, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
 import { HostFolderPicker } from "./HostFolderPicker";
 import { ModalSurface } from "./DialogSystem";
+import { McpImportDialog } from "./McpImportDialog";
+import { SurfaceNotice } from "./SurfacePrimitives";
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 
 const approvalOptions = ["risk_based", "ask", "allow", "deny"] as const;
+
+function mcpNextStep(server: McpServerProfile): string | undefined {
+  if (server.transport === "stdio" && !server.trustedStdio) return "Trust this local program in Edit before probing.";
+  if (!server.enabled && !server.checkedAt) return "Probe to list its tools, then enable.";
+  return undefined;
+}
 
 function harnessRecovery(profile: HarnessProfile): string | undefined {
   if (profile.authenticationState === "failed") return `Sign in with ${profile.kind === "grok_acp" ? "grok" : "codex"} on the Nebula host, then use Check.`;
@@ -31,6 +39,8 @@ export function HarnessSettings() {
   const [servers, setServers] = useState<McpServerProfile[]>([]);
   const [harnessDialog, setHarnessDialog] = useState(false);
   const [mcpDialog, setMcpDialog] = useState(false);
+  const [importDialog, setImportDialog] = useState(false);
+  const [importNotice, setImportNotice] = useState<{ title: string; detail?: string }>();
   const [editingHarness, setEditingHarness] = useState<HarnessProfile>();
   const [editingServer, setEditingServer] = useState<McpServerProfile>();
   const [name, setName] = useState("");
@@ -259,7 +269,8 @@ export function HarnessSettings() {
       ...(credentialRef && mcpAuthMode === "bearer" ? { bearer_secret_ref: credentialRef } : {}),
       ...(credentialRef && mcpAuthMode === "bearer" ? { header_secret_refs: {} } : {}),
       ...(credentialRef && mcpAuthMode === "headers" ? { bearer_secret_ref: null, header_secret_refs: { [mcpHeaderName.trim()]: credentialRef } } : {}),
-      cwd_policy: "workspace",
+      // Edits keep the saved working directory, such as a fixed cwd from an imported file.
+      ...(editingServer ? {} : { cwd_policy: "workspace" }),
       enabled: editingServer?.enabled ?? false,
       required,
       trusted_stdio: isStdio && trusted,
@@ -276,6 +287,17 @@ export function HarnessSettings() {
     } finally {
       setBusy(undefined);
     }
+  };
+
+  const finishImport = async (report: McpImportReport, sourceName: string) => {
+    setImportDialog(false);
+    const saved = report.created + report.replaced;
+    const failed = report.entries.filter((entry) => entry.action === "invalid");
+    setImportNotice({
+      title: `Imported ${saved} server${saved === 1 ? "" : "s"} from ${sourceName}. Review and probe each one, then enable it.`,
+      detail: failed.length ? `${failed.length} could not be imported: ${failed.map((entry) => `${entry.name ?? entry.sourceName} (${entry.error ?? "invalid"})`).join("; ")}` : undefined,
+    });
+    await reload();
   };
 
   const updateHarness = async (profile: HarnessProfile, changes: Record<string, unknown>) => {
@@ -351,14 +373,16 @@ export function HarnessSettings() {
       </article>)}</div> : <div className="empty-state compact"><Bot size={23} /><strong>No agent harnesses</strong><p>Add Codex App Server when you want vendor-managed sessions.</p></div>}
     </section>
     <section className="settings-section" id="mcp-settings">
-      <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools for agents and missions</p></div><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div>
+      <div className="section-heading"><div><h2>MCP servers</h2><p>Shared tools for agents and missions</p></div><div className="integration-card-actions"><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import</button><button className="button primary" type="button" disabled={previewMode} onClick={() => openMcp()}><Plus size={16} /> Add MCP server</button></div></div>
+      {importNotice && <SurfaceNotice title={importNotice.title} detail={importNotice.detail} severity={importNotice.detail ? "warning" : "informational"} dismissLabel="Dismiss import notice" onDismiss={() => setImportNotice(undefined)} />}
       {servers.length ? <div className="provider-grid">{servers.map((server) => <article className="panel provider-card integration-card" key={server.id}>
-        <header className="integration-card-heading"><span className={`status-dot ${server.enabled ? server.checkedAt ? "healthy" : "warning" : "unavailable"}`} /><div><small>{server.transport === "stdio" ? "Trusted local program" : "Streamable HTTP"}</small><h3>{server.name}</h3></div></header>
+        <header className="integration-card-heading"><span className={`status-dot ${server.enabled ? server.checkedAt ? "healthy" : "warning" : "unavailable"}`} /><div><small>{server.transport === "stdio" ? server.trustedStdio ? "Trusted local program" : "Local program · not trusted" : "Streamable HTTP"}</small><h3>{server.name}</h3></div></header>
         {server.transport === "stdio" && <p className="provider-dialog-note"><ShieldAlert size={14} /> Runs outside the automation-container boundary. Enable only after trusting this executable.</p>}
         <p className="integration-card-summary">{server.detail ?? `${server.tools.length} discovered tool${server.tools.length === 1 ? "" : "s"} · ${server.defaultApproval.replace("_", " ")}`}</p>
+        {mcpNextStep(server) && <p className="integration-card-summary mcp-next-step">{mcpNextStep(server)}</p>}
         {server.tools.length > 0 && <div className="mcp-tool-policies">{server.tools.map((tool) => <label key={tool.name}><span><strong>{tool.name}</strong><small>{tool.readOnly ? "read-only" : "write/unknown"}{tool.destructive ? " · destructive" : ""}{tool.openWorld ? " · open-world" : ""}</small></span><select aria-label={`${tool.name} approval policy`} value={tool.approval} onChange={(event) => void updateServer(server, { tool_overrides: { ...server.toolOverrides, [tool.name]: event.target.value } })}>{approvalOptions.map((option) => <option value={option} key={option}>{option.replace("_", " ")}</option>)}</select></label>)}</div>}
-        <footer><button className="button quiet" type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.probeMcpServer(server.id, engagement?.id).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_08", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Probe failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === server.id ? "spin" : undefined} size={14} /> Probe</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${server.name}`} type="button" onClick={() => openMcp(server)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === server.id || (server.transport === "stdio" && !server.trustedStdio)} onClick={() => void updateServer(server, { enabled: !server.enabled })}>{server.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${server.name}`} type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.deleteMcpServer(server.id, server.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_09", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
-      </article>)}</div> : <div className="empty-state compact"><Network size={23} /><strong>No MCP server profiles</strong><p>Profiles are never launched until an explicit probe or selected agent runtime uses them.</p></div>}
+        <footer><button className="button quiet" type="button" disabled={busy === server.id || (server.transport === "stdio" && !server.trustedStdio)} title={server.transport === "stdio" && !server.trustedStdio ? "Trust this local program in Edit first" : undefined} onClick={() => { setBusy(server.id); void api?.probeMcpServer(server.id, engagement?.id).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_08", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Probe failed."); }).finally(() => setBusy(undefined)); }}><RefreshCw className={busy === server.id ? "spin" : undefined} size={14} /> Probe</button><div className="integration-card-actions"><button className="icon-button subtle" aria-label={`Edit ${server.name}`} type="button" onClick={() => openMcp(server)}><Pencil size={14} /></button><button className="button quiet" type="button" disabled={busy === server.id || (server.transport === "stdio" && !server.trustedStdio)} onClick={() => void updateServer(server, { enabled: !server.enabled })}>{server.enabled ? "Disable" : "Enable"}</button><button className="icon-button subtle" aria-label={`Delete ${server.name}`} type="button" disabled={busy === server.id} onClick={() => { setBusy(server.id); void api?.deleteMcpServer(server.id, server.revision).then(() => reload()).catch((actionError) => { void logCaughtDiagnostic("interface.harness_settings.caught_failure_09", "A handled interface operation failed.", actionError, "harness_settings"); return setError(actionError instanceof Error ? actionError.message : "Delete failed."); }).finally(() => setBusy(undefined)); }}><Trash2 size={14} /></button></div></footer>
+      </article>)}</div> : <div className="empty-state compact"><Network size={23} /><strong>No MCP server profiles</strong><p>Add one, or import the mcp.json you already use with Claude Desktop, Cursor, or VS Code. Profiles are never launched until an explicit probe or selected agent runtime uses them.</p><button className="button secondary" type="button" disabled={previewMode} onClick={() => setImportDialog(true)}><FileUp size={16} /> Import from file</button></div>}
     </section>
     {harnessDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="harness-dialog-title" onClose={() => { if (!busy) setHarnessDialog(false); }} onSubmit={(event) => void submitHarness(event)}>
         <header><div><small>Agent harness</small><h2 id="harness-dialog-title">{editingHarness ? "Edit harness" : kind === "grok_acp" ? "Add Grok ACP" : "Add Codex"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close harness dialog" onClick={() => setHarnessDialog(false)}><X size={17} /></button></header>
@@ -390,6 +414,7 @@ export function HarnessSettings() {
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer><button className="button secondary" type="button" onClick={() => setHarnessDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(busy) || !name.trim()}>{busy ? "Saving and checking…" : "Save harness"}</button></footer>
     </ModalSurface>}
+    {importDialog && api && <McpImportDialog api={api} onClose={() => setImportDialog(false)} onImported={(report, sourceName) => void finishImport(report, sourceName)} />}
     {mcpDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="mcp-dialog-title" onClose={() => setMcpDialog(false)} onSubmit={(event) => void submitMcp(event)}><header><div><small>MCP registry</small><h2 id="mcp-dialog-title">{editingServer ? "Edit MCP server" : "Add MCP server"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close MCP dialog" onClick={() => setMcpDialog(false)}><X size={17} /></button></header><label>Name<input required pattern="[A-Za-z0-9._-]+" value={mcpName} onChange={(event) => setMcpName(event.target.value)} /></label><label>Transport<select value={mcpTransport} onChange={(event) => setMcpTransport(event.target.value as McpServerProfile["transport"])}><option value="stdio">stdio</option><option value="streamable_http">Streamable HTTP</option></select></label>{mcpTransport === "stdio" ? <><label>Absolute command<input required value={command} placeholder="/usr/local/bin/my-mcp-server" onChange={(event) => setCommand(event.target.value)} /></label><label>Arguments<textarea rows={3} value={argumentsText} placeholder="One literal argument per line" onChange={(event) => setArgumentsText(event.target.value)} /></label><label className="provider-consent"><input type="checkbox" checked={trusted} onChange={(event) => setTrusted(event.target.checked)} /><span><strong>I trust this local program</strong><small>Probing or using it executes outside Nebula's automation-container boundary.</small></span></label></> : <><label>HTTPS endpoint<input required type="url" value={url} placeholder="https://mcp.example.com/mcp" onChange={(event) => setUrl(event.target.value)} /></label><label>Authentication<select value={mcpAuthMode} onChange={(event) => setMcpAuthMode(event.target.value as McpServerProfile["authMode"])}><option value="none">Unauthenticated</option><option value="bearer">Bearer token</option><option value="headers">Secret header</option></select></label>{mcpAuthMode !== "none" && <><label>{editingServer ? "Replacement credential" : "Credential"}<input type="password" autoComplete="new-password" value={mcpSecret} placeholder={editingServer ? "Leave blank to keep current authentication" : "Write-only secret"} onChange={(event) => setMcpSecret(event.target.value)} /></label>{mcpAuthMode === "headers" && <label>Header name<input required value={mcpHeaderName} onChange={(event) => setMcpHeaderName(event.target.value)} /></label>}<label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this session only</strong><small>Otherwise Core stores it in the operating-system credential vault.</small></span></label></>}</>}<label>Default approval<select value={defaultApproval} onChange={(event) => setDefaultApproval(event.target.value as McpServerProfile["defaultApproval"])}>{approvalOptions.map((option) => <option value={option} key={option}>{option.replace("_", " ")}</option>)}</select></label><label className="provider-consent"><input type="checkbox" checked={required} onChange={(event) => setRequired(event.target.checked)} /><span><strong>Required server</strong><small>Fail new sessions when this server cannot initialize.</small></span></label><p className="provider-dialog-note">OAuth and interactive elicitation are not supported in this release. Secret values are never returned after submission.</p>{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button secondary" type="button" onClick={() => setMcpDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(busy) || !mcpName.trim()}>{busy ? "Saving…" : "Save MCP server"}</button></footer></ModalSurface>}
   </>;
 }
