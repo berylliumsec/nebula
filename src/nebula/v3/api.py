@@ -11250,7 +11250,10 @@ async def _provider_health(
     profile: ProviderProfile,
     provider_factory: Callable[[ProviderProfile], Any] | None = None,
 ) -> ProviderHealth:
-    """Return bounded, allowlisted health without reviving disabled profiles."""
+    """Return bounded, allowlisted health without reviving disabled profiles.
+
+    Discovered models outside the allowlist are reported as unlisted, not usable.
+    """
 
     if not profile.enabled:
         return ProviderHealth(
@@ -11286,18 +11289,28 @@ async def _provider_health(
             healthy=False,
             detail=f"provider health check failed ({type(exc).__name__})",
         )
-    models = health.models
+    models = list(dict.fromkeys(health.models))
+    unlisted: list[str] = []
     if profile.model_allowlist:
         allowed = set(profile.model_allowlist)
+        # Offered separately so the operator can add them; never routed to as-is.
+        unlisted = [model for model in models if model not in allowed]
         models = [model for model in models if model in allowed]
     allowed_models = set(models)
+    unlisted_models = set(unlisted)
     return health.model_copy(
         update={
-            "models": list(dict.fromkeys(models)),
+            "models": models,
             "model_descriptors": [
                 model
                 for model in health.model_descriptors
                 if model.id in allowed_models
+            ],
+            "unlisted_models": unlisted,
+            "unlisted_model_descriptors": [
+                model
+                for model in health.model_descriptors
+                if model.id in unlisted_models
             ],
         }
     )

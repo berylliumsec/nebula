@@ -130,6 +130,7 @@ import type {
   Page,
   PersistedChatMessage,
   LocalProviderDetection,
+  ModelDescriptor,
   ProviderCatalogEntry,
   ProviderCreateRequest,
   ProviderHealth,
@@ -1113,6 +1114,8 @@ interface WireProviderRuntimeHealth extends JsonObject {
   healthy: boolean;
   models?: string[];
   model_descriptors?: WireModelDescriptor[];
+  unlisted_models?: string[];
+  unlisted_model_descriptors?: WireModelDescriptor[];
   detail?: string | null;
   credential_verified?: boolean | null;
   catalog_source?: string | null;
@@ -2585,6 +2588,22 @@ function mapProvider(value: WireProvider): ProviderHealth {
   };
 }
 
+function mapModelDescriptor(model: WireModelDescriptor): ModelDescriptor {
+  return {
+    id: model.id,
+    name: model.name,
+    description: model.description ?? null,
+    canonicalSlug: model.canonical_slug ?? null,
+    contextWindow: model.context_window ?? null,
+    maxOutputTokens: model.max_output_tokens ?? null,
+    inputModalities: model.input_modalities ?? [],
+    outputModalities: model.output_modalities ?? [],
+    supportedParameters: model.supported_parameters ?? [],
+    pricing: model.pricing ?? {},
+    ...(model.expiration_date ? { expirationDate: model.expiration_date } : {}),
+  };
+}
+
 function mapProviderRuntimeHealth(
   value: WireProviderRuntimeHealth,
 ): ProviderRuntimeHealth {
@@ -2592,19 +2611,9 @@ function mapProviderRuntimeHealth(
     providerId: value.provider_id,
     healthy: value.healthy,
     models: value.models ?? [],
-    ...(value.model_descriptors ? { modelDescriptors: value.model_descriptors.map((model) => ({
-      id: model.id,
-      name: model.name,
-      description: model.description ?? null,
-      canonicalSlug: model.canonical_slug ?? null,
-      contextWindow: model.context_window ?? null,
-      maxOutputTokens: model.max_output_tokens ?? null,
-      inputModalities: model.input_modalities ?? [],
-      outputModalities: model.output_modalities ?? [],
-      supportedParameters: model.supported_parameters ?? [],
-      pricing: model.pricing ?? {},
-      ...(model.expiration_date ? { expirationDate: model.expiration_date } : {}),
-    })) } : {}),
+    ...(value.model_descriptors ? { modelDescriptors: value.model_descriptors.map(mapModelDescriptor) } : {}),
+    unlistedModels: value.unlisted_models ?? [],
+    ...(value.unlisted_model_descriptors ? { unlistedModelDescriptors: value.unlisted_model_descriptors.map(mapModelDescriptor) } : {}),
     detail: value.detail ?? undefined,
     ...(value.credential_verified != null ? { credentialVerified: value.credential_verified } : {}),
     ...(value.catalog_source ? { catalogSource: value.catalog_source } : {}),

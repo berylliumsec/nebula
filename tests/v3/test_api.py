@@ -724,6 +724,8 @@ def test_vllm_profile_health_discovers_models_through_the_api(api, monkeypatch):
         "healthy": True,
         "models": ["security-model"],
         "model_descriptors": [],
+        "unlisted_models": ["vision-model"],
+        "unlisted_model_descriptors": [],
         "upstream_providers": [],
         "detail": None,
         "credential_verified": None,
@@ -772,6 +774,49 @@ def test_provider_health_persists_exact_model_context_catalog(api, monkeypatch):
     assert stored.metadata["model_descriptors"][0]["context_window"] == 200_000
     assert stored.metadata["model_descriptors"][0]["max_output_tokens"] == 32_000
     assert len(stored.metadata["model_catalog_revision"]) == 64
+
+
+def test_provider_health_reports_discovered_models_outside_the_allowlist(
+    api, monkeypatch
+):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-unlisted",
+            name="OpenRouter",
+            provider_type="openrouter",
+            model_allowlist=["model-a"],
+        )
+    )
+
+    async def healthy(runtime):
+        return ProviderHealth(
+            provider_id=runtime.config.id,
+            healthy=True,
+            models=["model-a", "model-b", "model-c"],
+            model_descriptors=[
+                ModelDescriptor(id="model-a", name="Model A"),
+                ModelDescriptor(id="model-b", name="Model B", context_window=400_000),
+            ],
+            catalog_source="openrouter:/models/user",
+        )
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "health", healthy)
+
+    response = client.post(f"/api/v1/providers/{profile.id}/health", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["models"] == ["model-a"]
+    assert [item["id"] for item in body["model_descriptors"]] == ["model-a"]
+    assert body["unlisted_models"] == ["model-b", "model-c"]
+    assert [
+        (item["id"], item["context_window"])
+        for item in body["unlisted_model_descriptors"]
+    ] == [("model-b", 400_000)]
+    stored = store.get(ProviderProfile, profile.id)
+    assert stored.model_allowlist == ["model-a"]
+    assert [item["id"] for item in stored.metadata["model_descriptors"]] == ["model-a"]
 
 
 def test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification(
@@ -1045,6 +1090,8 @@ def test_disabled_provider_health_fails_closed_without_network(tmp_path, monkeyp
         "healthy": False,
         "models": [],
         "model_descriptors": [],
+        "unlisted_models": [],
+        "unlisted_model_descriptors": [],
         "upstream_providers": [],
         "detail": "provider profile is disabled",
         "credential_verified": None,

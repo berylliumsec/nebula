@@ -406,6 +406,9 @@ class ProviderHealth(BaseModel):
     healthy: bool
     models: list[str] = Field(default_factory=list)
     model_descriptors: list[ModelDescriptor] = Field(default_factory=list)
+    # Discovered models outside the profile's model allowlist, offered for adding.
+    unlisted_models: list[str] = Field(default_factory=list)
+    unlisted_model_descriptors: list[ModelDescriptor] = Field(default_factory=list)
     # OpenRouter's upstream provider directory, for the routing allowlist.
     upstream_providers: list[UpstreamProvider] = Field(default_factory=list)
     detail: str | None = None
