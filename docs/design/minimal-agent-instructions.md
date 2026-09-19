@@ -40,3 +40,18 @@ wiring. Existing component coverage checks neutral browser attachment labels. A
 production UI build verifies the changed TypeScript paths. Live provider and
 harness calls remain a release gate because unit adapters cannot prove vendor-side
 instruction precedence.
+
+## Project conventions
+
+- `AGENTS.md` at the project root is the project instruction file. `.agents/` holds
+  the rest (`.agents/skills`, `.agents/hooks`, and future `.agents/rules`).
+- Provider-backed chats re-read the root `AGENTS.md` on every turn and place it in
+  the per-turn system instructions. Those instructions are rebuilt each turn and are
+  never part of the transcript that context compaction summarizes, so the file
+  survives compaction verbatim and edits apply from the next turn.
+- The first 64 KiB is included; a larger file is cut at a character boundary and the
+  instructions say so. A symlinked `AGENTS.md` must resolve inside the workspace;
+  otherwise the turn is refused with an explicit error. Each turn records the file's
+  path, SHA-256, size and truncation in its request snapshot.
+- Harness sessions keep their runtime-native handling: the harness starts in the
+  project workspace and reads `AGENTS.md` itself.
