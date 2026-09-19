@@ -1,10 +1,10 @@
 import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Check, Contrast, KeyRound, Minus, Moon, Pencil, Plus, RefreshCw, RotateCcw, Server, Sun, Trash2, UserRound, X } from "lucide-react";
 import type { HarnessSkillSummary, LocalProviderDetection, OperatorProfile, ProviderCatalogEntry, ProviderHealth, SkillCatalogInfo } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
-import { UpstreamProviderPicker, upstreamCatalog } from "../components/UpstreamProviderPicker";
+import { UpstreamProviderPicker, upstreamCatalog, type UpstreamProviderOption } from "../components/UpstreamProviderPicker";
 import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
@@ -124,6 +124,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [upstreamProviderIds, setUpstreamProviderIds] = useState<string[]>([]);
   const [upstreamQuery, setUpstreamQuery] = useState("");
+  const [upstreamDirectory, setUpstreamDirectory] = useState<UpstreamProviderOption[]>([]);
+  const [upstreamDirectoryState, setUpstreamDirectoryState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
+  const [upstreamDirectoryReload, setUpstreamDirectoryReload] = useState(0);
+  const upstreamDirectoryLoaded = useRef(false);
   const [credentialEnv, setCredentialEnv] = useState("");
   const [credentialSecret, setCredentialSecret] = useState("");
   const [sessionCredential, setSessionCredential] = useState(false);
@@ -624,6 +628,23 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   };
   const dialogProviderType = editingProvider?.providerType ?? selected?.flavor ?? "";
   const dialogLocal = editingProvider?.local ?? selected?.local ?? false;
+  const wantsUpstreamDirectory = adding && dialogProviderType === "openrouter";
+  useEffect(() => {
+    if (!api || !wantsUpstreamDirectory || upstreamDirectoryLoaded.current) return;
+    const controller = new AbortController();
+    setUpstreamDirectoryState("loading");
+    void api.listOpenRouterUpstreamProviders(controller.signal)
+      .then((rows) => {
+        upstreamDirectoryLoaded.current = true;
+        setUpstreamDirectory(rows);
+        setUpstreamDirectoryState("ready");
+      })
+      .catch((caughtError) => {
+        void logCaughtDiagnostic("interface.settings_page.upstream_directory_failed", "OpenRouter's provider directory could not be loaded.", caughtError, "settings_page");
+        if (!controller.signal.aborted) setUpstreamDirectoryState("failed");
+      });
+    return () => controller.abort();
+  }, [api, wantsUpstreamDirectory, upstreamDirectoryReload]);
   const dialogModels = [...new Set([
     ...availableModels,
     ...selectedModelIds,
@@ -780,13 +801,16 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             <label>Credential<input type="password" autoComplete="new-password" value={credentialSecret} placeholder={editingProvider?.credentialRef || editingProvider?.credentialEnv ? "Leave blank to keep the current credential" : dialogLocal ? "Optional for local services" : "API key or token"} onChange={(event) => setCredentialSecret(event.target.value)} /></label>
             {credentialSecret && <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>}
             {dialogProviderType === "openrouter" && <UpstreamProviderPicker
-              catalog={upstreamCatalog(editingProvider?.metadata)}
+              catalog={upstreamDirectory.length ? upstreamDirectory : upstreamCatalog(editingProvider?.metadata)}
+              directoryState={upstreamDirectoryState}
+              onReloadDirectory={() => setUpstreamDirectoryReload((value) => value + 1)}
               selected={upstreamProviderIds}
               query={upstreamQuery}
               onQuery={setUpstreamQuery}
               onChange={setUpstreamProviderIds}
             />}
-            <details className="provider-advanced"><summary>Advanced provider options</summary>
+            <details className="provider-advanced"><summary><span>Advanced provider options</span></summary>
+              <div className="provider-section-body">
               <fieldset className="resource-checklist"><legend>Allowed models</legend>{dialogModels.length ? dialogModels.map((item) => <label key={item}><input type="checkbox" checked={selectedModelIds.includes(item)} onChange={(event) => setSelectedModelIds((current) => event.target.checked ? [...new Set([...current, item])] : current.filter((value) => value !== item))} /><span>{item}</span></label>) : <p>Models will appear after the provider health check.</p>}</fieldset>
               <p className="provider-dialog-note">Leave every model unchecked to allow all models reported by the provider. With restrictions enabled, the default is included automatically.</p>
               <div className="resource-form-grid"><label>Context window (tokens)<input type="number" min="1" inputMode="numeric" value={contextWindow} placeholder="8192 safe fallback" onChange={(event) => setContextWindow(event.target.value)} /></label><label>Maximum output tokens<input type="number" min="1" inputMode="numeric" value={maxOutputTokens} placeholder="2048 default" onChange={(event) => setMaxOutputTokens(event.target.value)} /></label></div>
@@ -794,6 +818,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
               {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
               <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
               {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow project and document data</strong><small>Automatically permit bounded excerpts for knowledge-enabled requests. Local-only items remain blocked.</small></span></label>}
+            </div>
             </details>
             <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}

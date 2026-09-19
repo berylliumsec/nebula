@@ -1,6 +1,8 @@
 from datetime import timedelta
 import json
 
+import httpx
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -1387,3 +1389,86 @@ def test_chat_approval_exact_request_is_readable_by_id_and_tracks_decision(api):
     )
     assert decision.status_code == 200
     assert client.get(endpoint, headers=_auth()).json()["status"] == "rejected"
+
+
+def test_openrouter_upstream_directory_is_public_cached_and_located(tmp_path):
+    seen: list[httpx.Request] = []
+
+    def directory(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "slug": "gmicloud",
+                        "name": "GMICloud",
+                        "headquarters": "US",
+                        "datacenters": ["US"],
+                    },
+                    {
+                        "slug": "siliconflow",
+                        "name": "SiliconFlow",
+                        "headquarters": "SG",
+                        "datacenters": ["us"],
+                    },
+                    {
+                        "slug": "baidu",
+                        "name": "Baidu",
+                        "headquarters": "CN",
+                        "datacenters": None,
+                    },
+                    {"slug": "", "name": "Broken"},
+                ]
+            },
+        )
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            openrouter_directory_transport=httpx.MockTransport(directory),
+        )
+    )
+    path = "/api/v1/providers/openrouter/upstream-providers"
+    assert client.get(path).status_code == 401
+    first = client.get(path, headers=_auth())
+    assert first.status_code == 200
+    assert first.json() == [
+        {"slug": "baidu", "name": "Baidu", "headquarters": "CN", "datacenters": []},
+        {
+            "slug": "gmicloud",
+            "name": "GMICloud",
+            "headquarters": "US",
+            "datacenters": ["US"],
+        },
+        {
+            "slug": "siliconflow",
+            "name": "SiliconFlow",
+            "headquarters": "SG",
+            "datacenters": ["US"],
+        },
+    ]
+    assert client.get(path, headers=_auth()).json() == first.json()
+    assert len(seen) == 1
+    assert "authorization" not in seen[0].headers
+    assert str(seen[0].url) == "https://openrouter.ai/api/v1/providers"
+
+
+def test_openrouter_upstream_directory_failure_is_reported(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            openrouter_directory_transport=httpx.MockTransport(
+                lambda _request: httpx.Response(503)
+            ),
+        )
+    )
+    response = client.get(
+        "/api/v1/providers/openrouter/upstream-providers", headers=_auth()
+    )
+    assert response.status_code == 502
+    assert "provider directory is unavailable" in response.text

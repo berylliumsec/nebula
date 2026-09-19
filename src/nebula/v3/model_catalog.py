@@ -110,9 +110,23 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
     return list(models.values())
 
 
+OPENROUTER_PROVIDER_DIRECTORY_URL = "https://openrouter.ai/api/v1/providers"
+
+
 class UpstreamProvider(BaseModel):
     slug: str = Field(min_length=1, max_length=200)
     name: str = Field(min_length=1, max_length=200)
+    # ISO country codes as OpenRouter publishes them; display-only.
+    headquarters: str | None = None
+    datacenters: list[str] = Field(default_factory=list)
+
+
+def _country(value: Any) -> str | None:
+    return (
+        value.strip().upper()
+        if isinstance(value, str) and 2 <= len(value.strip()) <= 3
+        else None
+    )
 
 
 def openrouter_upstream_providers(payload: Any) -> list[UpstreamProvider]:
@@ -133,7 +147,21 @@ def openrouter_upstream_providers(payload: Any) -> list[UpstreamProvider]:
             and name.strip()
         ):
             key = slug.strip().lower()[:200]
-            providers[key] = UpstreamProvider(slug=key, name=name.strip()[:200])
+            raw_centers = item.get("datacenters")
+            centers = [
+                code
+                for code in (
+                    _country(value)
+                    for value in (raw_centers if isinstance(raw_centers, list) else [])
+                )
+                if code
+            ]
+            providers[key] = UpstreamProvider(
+                slug=key,
+                name=name.strip()[:200],
+                headquarters=_country(item.get("headquarters")),
+                datacenters=list(dict.fromkeys(centers))[:50],
+            )
     return sorted(providers.values(), key=lambda item: item.name.lower())
 
 
