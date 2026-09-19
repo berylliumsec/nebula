@@ -114,6 +114,10 @@ import type {
   McpImportReport,
   McpImportSecret,
   McpServerProfile,
+  SshEnvironment,
+  SshEnvironmentDiscovery,
+  SshEnvironmentHost,
+  SshEnvironmentSettingsChange,
   OperatorExecution,
   ObservationSummary,
   ObservationCreateRequest,
@@ -3201,6 +3205,7 @@ export function chatRequestBody(
     // Omit optional newer fields when unused so a desktop app stays compatible
     // with a slightly older remote Core, whose request models forbid extras.
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
+    ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
     goal_id: body.goalId,
@@ -3460,6 +3465,109 @@ function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
       })),
       warnings: entry.warnings ?? [],
       error: entry.error ?? undefined,
+    })),
+  };
+}
+
+interface WireSshEnvironment {
+  id: string;
+  revision: number;
+  alias: string;
+  display_name?: string;
+  enabled: boolean;
+  notes?: string;
+  working_directory?: string | null;
+  command_approval: SshEnvironment["commandApproval"];
+  last_probe?: {
+    status: NonNullable<SshEnvironment["lastProbe"]>["status"];
+    latency_ms?: number | null;
+    system?: string;
+    os_version?: string;
+    arch?: string;
+    model?: string;
+    tools?: string[];
+    passwordless_sudo?: boolean | null;
+    detail?: string;
+    checked_at: string;
+  } | null;
+}
+
+interface WireSshEnvironmentDiscovery {
+  config_path: string;
+  config_exists: boolean;
+  ssh_available: boolean;
+  files_read?: string[];
+  skipped_patterns?: string[];
+  skipped_match_blocks?: number;
+  errors?: string[];
+  read_at: string;
+  hosts: Array<{
+    alias: string;
+    aliases?: string[];
+    comment?: string;
+    source?: string | null;
+    line?: number | null;
+    in_config: boolean;
+    resolved?: { hostname: string; user: string; port: number; identity_files?: string[]; options?: Record<string, string> } | null;
+    resolve_error?: string | null;
+    environment?: WireSshEnvironment | null;
+  }>;
+}
+
+export function mapSshEnvironment(value: WireSshEnvironment): SshEnvironment {
+  const probe = value.last_probe;
+  const displayName = value.display_name ?? "";
+  return {
+    id: value.id,
+    revision: value.revision,
+    alias: value.alias,
+    displayName,
+    label: displayName.trim() || value.alias,
+    enabled: value.enabled,
+    notes: value.notes ?? "",
+    workingDirectory: value.working_directory ?? undefined,
+    commandApproval: value.command_approval,
+    lastProbe: probe ? {
+      status: probe.status,
+      latencyMs: probe.latency_ms ?? undefined,
+      system: probe.system ?? "",
+      osVersion: probe.os_version ?? "",
+      arch: probe.arch ?? "",
+      model: probe.model ?? "",
+      tools: probe.tools ?? [],
+      passwordlessSudo: probe.passwordless_sudo ?? undefined,
+      detail: probe.detail ?? "",
+      checkedAt: probe.checked_at,
+    } : undefined,
+  };
+}
+
+function mapSshEnvironmentDiscovery(value: WireSshEnvironmentDiscovery): SshEnvironmentDiscovery {
+  return {
+    configPath: value.config_path,
+    configExists: value.config_exists,
+    sshAvailable: value.ssh_available,
+    filesRead: value.files_read ?? [],
+    skippedPatterns: value.skipped_patterns ?? [],
+    skippedMatchBlocks: value.skipped_match_blocks ?? 0,
+    errors: value.errors ?? [],
+    readAt: value.read_at,
+    hosts: value.hosts.map((host): SshEnvironmentHost => ({
+      alias: host.alias,
+      aliases: host.aliases ?? [host.alias],
+      comment: host.comment ?? "",
+      source: host.source ?? undefined,
+      line: host.line ?? undefined,
+      inConfig: host.in_config,
+      resolved: host.resolved ? {
+        hostname: host.resolved.hostname,
+        user: host.resolved.user,
+        port: host.resolved.port,
+        identityFiles: host.resolved.identity_files ?? [],
+        options: host.resolved.options ?? {},
+      } : undefined,
+      resolveError: host.resolve_error ?? undefined,
+      environment: host.environment ? mapSshEnvironment(host.environment) : undefined,
     })),
   };
 }
@@ -5906,6 +6014,34 @@ export class ApiClient {
 
   deleteVpnProfile(id: string, revision: number): Promise<void> {
     return this.request<void>(`vpn-profiles/${encodeURIComponent(id)}`, { method: "DELETE", body: JSON.stringify({ expected_revision: revision }) });
+  }
+
+  /** ``resolve: false`` skips per-host ``ssh -G`` lookups when only names and status are needed. */
+  discoverSshEnvironments(signal?: AbortSignal, options: { resolve?: boolean } = {}): Promise<SshEnvironmentDiscovery> {
+    const query = options.resolve === false ? "?resolve=false" : "";
+    return this.request<WireSshEnvironmentDiscovery>(`ssh-environments${query}`, { signal }).then(mapSshEnvironmentDiscovery);
+  }
+
+  saveSshEnvironment(alias: string, change: SshEnvironmentSettingsChange, expectedRevision?: number): Promise<SshEnvironment> {
+    const body: Record<string, unknown> = {};
+    if (change.displayName !== undefined) body.display_name = change.displayName;
+    if (change.enabled !== undefined) body.enabled = change.enabled;
+    if (change.notes !== undefined) body.notes = change.notes;
+    if (change.workingDirectory !== undefined) body.working_directory = change.workingDirectory;
+    if (change.commandApproval !== undefined) body.command_approval = change.commandApproval;
+    if (expectedRevision !== undefined) body.expected_revision = expectedRevision;
+    return this.request<WireSshEnvironment>(`ssh-environments/${encodeURIComponent(alias)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }).then(mapSshEnvironment);
+  }
+
+  probeSshEnvironment(alias: string): Promise<SshEnvironment> {
+    return this.request<WireSshEnvironment>(`ssh-environments/${encodeURIComponent(alias)}/probe`, { method: "POST" }).then(mapSshEnvironment);
+  }
+
+  async forgetSshEnvironment(alias: string): Promise<void> {
+    await this.request<void>(`ssh-environments/${encodeURIComponent(alias)}`, { method: "DELETE" });
   }
 
   listMcpServers(signal?: AbortSignal): Promise<McpServerProfile[]> {

@@ -72,6 +72,7 @@ from .domain import (
     NebulaModel,
     ProviderProfile,
     RunBackend,
+    SshEnvironment,
     ToolCallOrigin,
     ToolCall,
     ToolCallStatus,
@@ -92,6 +93,7 @@ from .context import (
     resolve_context_limits,
 )
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
+from .environments import resolve_ssh_environments
 from .mcp import McpProbeError, resolve_mcp_profiles
 from .native_hooks import NativeHookError, NativeHookRunner, NativeHookSnapshot
 from .operator_help import CORPUS_ID, search_operator_help
@@ -287,6 +289,9 @@ class ChatCompletionRequest(NebulaModel):
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    # None: every enabled SSH environment when command tools are on; a list
+    # narrows the turn to those hosts (empty means Core only).
+    ssh_environment_ids: list[str] | None = Field(default=None, max_length=64)
     hook_ids: list[str] = Field(default_factory=list, max_length=32)
     model: str | None = Field(default=None, max_length=500)
     engagement_id: str | None = Field(default=None, max_length=200)
@@ -1483,6 +1488,7 @@ class ChatService:
             request.tools_enabled
             or subagents_enabled
             or request.mcp_server_ids
+            or request.ssh_environment_ids
             or any(item.resources for item in skill_snapshots)
             or any(
                 item.source_kind
@@ -1740,6 +1746,14 @@ class ChatService:
                 mcp_profiles = resolve_mcp_profiles(self.store, request.mcp_server_ids)
             except (McpProbeError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
+        ssh_environments: tuple[SshEnvironment, ...] = ()
+        if request.tools_enabled or request.ssh_environment_ids:
+            try:
+                ssh_environments = resolve_ssh_environments(
+                    self.store, request.ssh_environment_ids
+                )
+            except (NotFoundError, ValueError) as exc:
+                raise ChatConfigurationError(str(exc)) from exc
         browser_session_ids = {
             item.source_id
             for item in request.context_attachments
@@ -1779,6 +1793,7 @@ class ChatService:
         tools_enabled = (
             request.tools_enabled
             or bool(mcp_profiles)
+            or bool(ssh_environments)
             or bool(browser_session_id)
             or model_context
             or skill_resources_selected
@@ -1800,7 +1815,7 @@ class ChatService:
                 )
             if (
                 not request.tools_enabled
-                and mcp_profiles
+                and (mcp_profiles or ssh_environments)
                 and self.tool_platform is None
             ):
                 raise ChatConfigurationError("MCP runtime is unavailable")
@@ -1823,10 +1838,12 @@ class ChatService:
                         provider=provider,
                         model=selected_model,
                         mcp_profiles=mcp_profiles,
+                        ssh_environments=ssh_environments,
                         include_oci=False,
                         allow_empty=True,
                     )
-                    if mcp_profiles and self.tool_platform is not None
+                    if (mcp_profiles or ssh_environments)
+                    and self.tool_platform is not None
                     else None
                 )
                 if request.tools_enabled:
@@ -2013,6 +2030,9 @@ class ChatService:
                     "mcp_server_ids": [item.id for item in mcp_profiles],
                     "mcp_snapshot": [
                         item.model_dump(mode="json") for item in mcp_profiles
+                    ],
+                    "ssh_environment_snapshot": [
+                        item.model_dump(mode="json") for item in ssh_environments
                     ],
                     "include_oci_tools": request.tools_enabled,
                     "browser_session_id": browser_session_id,
@@ -3907,6 +3927,10 @@ class ChatService:
                 McpServerProfile.model_validate(item)
                 for item in turn.request_snapshot.get("mcp_snapshot", [])
             )
+            ssh_environments = tuple(
+                SshEnvironment.model_validate(item)
+                for item in turn.request_snapshot.get("ssh_environment_snapshot", [])
+            )
             include_commands = bool(
                 turn.request_snapshot.get("include_oci_tools", True)
             )
@@ -3917,10 +3941,11 @@ class ChatService:
                     provider=provider,
                     model=turn.model,
                     mcp_profiles=mcp_profiles,
+                    ssh_environments=ssh_environments,
                     include_oci=False,
                     allow_empty=True,
                 )
-                if mcp_profiles and self.tool_platform is not None
+                if (mcp_profiles or ssh_environments) and self.tool_platform is not None
                 else None
             )
             components: RuntimeToolComponents | AutomationToolComponents | None

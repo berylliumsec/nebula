@@ -1,5 +1,6 @@
 import type { AgentRunSummary, RunEvent, ToolArtifactReference } from "../api/types";
 import type { HarnessActivityItem } from "../pages/harnessActivity";
+import { sshToolHost } from "../sshTools";
 
 export type ActivityLedgerStatus =
   | "queued"
@@ -195,6 +196,8 @@ function firstSentence(value: string | undefined): string | undefined {
 }
 
 function meaningfulLabel(title: string | undefined, summary: string | undefined, phase: ActivityLedgerPhaseKey): string {
+  const sshHost = sshToolHost(title);
+  if (sshHost) return `Command on ${sshHost}`;
   const cleanTitle = title?.replaceAll("_", " ").trim();
   if (cleanTitle && !INTERNAL_LABELS.has(cleanTitle.toLowerCase())) return cleanTitle;
   return firstSentence(summary) ?? PHASE_LABELS[phase];

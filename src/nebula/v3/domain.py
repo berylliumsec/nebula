@@ -2946,6 +2946,48 @@ class McpCapabilitySnapshot(NebulaModel):
     detail: str | None = Field(default=None, max_length=1_000)
 
 
+class SshEnvironmentApproval(StringEnum):
+    ASK = "ask"
+    ALLOW = "allow"
+
+
+class SshEnvironmentProbe(NebulaModel):
+    """Result of the last connection test, used to describe the host to agents."""
+
+    status: Literal[
+        "reachable", "unreachable", "auth_failed", "host_key_untrusted", "error"
+    ]
+    latency_ms: int | None = Field(default=None, ge=0)
+    system: str = Field(default="", max_length=100)
+    os_version: str = Field(default="", max_length=200)
+    arch: str = Field(default="", max_length=50)
+    model: str = Field(default="", max_length=200)
+    tools: list[str] = Field(default_factory=list, max_length=64)
+    passwordless_sudo: bool | None = None
+    detail: str = Field(default="", max_length=1_000)
+    checked_at: datetime = Field(default_factory=utc_now)
+
+
+class SshEnvironment(Entity):
+    """Nebula's settings for one ``Host`` alias from the Core's ``~/.ssh/config``.
+
+    Connection facts stay in the ssh config; only operator choices live here.
+    """
+
+    entity_kind: ClassVar[str] = "ssh_environments"
+    alias: str = Field(min_length=1, max_length=253, pattern=r"^[^\s*?!-][^\s*?!]*$")
+    display_name: str = Field(default="", max_length=200)
+    enabled: bool = False
+    notes: str = Field(default="", max_length=4_000)
+    working_directory: str | None = Field(default=None, max_length=1_024)
+    command_approval: SshEnvironmentApproval = SshEnvironmentApproval.ASK
+    last_probe: SshEnvironmentProbe | None = None
+
+    @property
+    def label(self) -> str:
+        return self.display_name.strip() or self.alias
+
+
 class McpServerProfile(Entity):
     entity_kind: ClassVar[str] = "mcp_servers"
     name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._-]+$")
@@ -4385,6 +4427,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ProviderProfile,
     HarnessProfile,
     McpServerProfile,
+    SshEnvironment,
     HarnessSession,
     SourceSnapshot,
     KnowledgeSource,

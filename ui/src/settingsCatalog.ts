@@ -57,6 +57,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["mcp", "server", "tool", "integration", "stdio", "streamable http"],
   },
   {
+    id: "settings.ssh-environments",
+    label: "Environments",
+    description: "Let agents run commands on machines from ~/.ssh/config",
+    category: "Environments",
+    scope: "Security",
+    target: "ssh-environment-settings",
+    keywords: ["environment", "ssh", "remote", "host", "mac", "linux", "machine", "ssh config", "server"],
+  },
+  {
     id: "settings.automation-runtime",
     label: "Automation runtime",
     description: "Select the command runtime used by automated operations",

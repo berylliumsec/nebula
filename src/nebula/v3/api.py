@@ -298,6 +298,7 @@ from .domain import (
     RelationPredicate,
     ResourceKind,
     ResourceRef,
+    SshEnvironment,
     ResourceRelation,
     ResourceRelationCreate,
     ResourceRelationSet,
@@ -387,6 +388,11 @@ from .harnesses import (
     HarnessStateError,
     HarnessUnavailableError,
     harness_catalog,
+)
+from .environments import (
+    SshEnvironmentDiscovery,
+    SshEnvironmentService,
+    SshEnvironmentSettings,
 )
 from .mcp import McpProbeError, McpProbeReport, McpProbeService
 from .mcp_import import (
@@ -527,6 +533,7 @@ CUSTOM_RESOURCES = {
     "runner_profiles",
     "vpn_profiles",
     "tool_suggestion_settings",
+    "ssh_environments",
     "browser_actions",
     "browser_handoffs",
     "browser_identities",
@@ -1234,6 +1241,7 @@ def create_app(
     knowledge_url_fetcher: Callable[[str], FetchedUrlDocument] | None = None,
     allow_insecure_device_pairing: bool = False,
     openrouter_directory_transport: httpx.AsyncBaseTransport | None = None,
+    ssh_environment_service: SshEnvironmentService | None = None,
 ) -> FastAPI:
     """Build an app without importing or initializing any Qt component.
 
@@ -1475,6 +1483,7 @@ def create_app(
     )
     if tool_platform is not None:
         tool_platform.bind_mcp_service(mcp_probes)
+    ssh_environments = ssh_environment_service or SshEnvironmentService(store)
 
     def provider_factory(profile: ProviderProfile):
         try:
@@ -3846,6 +3855,47 @@ def create_app(
         profile_id: str, request: McpProbeRequest
     ) -> McpProbeReport:
         return await mcp_probes.probe(profile_id, engagement_id=request.engagement_id)
+
+    @app.get(
+        f"{API_PREFIX}/ssh-environments",
+        response_model=SshEnvironmentDiscovery,
+        tags=["environments"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def discover_ssh_environments(
+        resolve: bool = Query(default=True),
+    ) -> SshEnvironmentDiscovery:
+        return await asyncio.to_thread(ssh_environments.discover, resolve=resolve)
+
+    @app.put(
+        f"{API_PREFIX}/ssh-environments/{{alias}}",
+        response_model=SshEnvironment,
+        tags=["environments"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def save_ssh_environment(
+        alias: str, request: SshEnvironmentSettings
+    ) -> SshEnvironment:
+        return await asyncio.to_thread(ssh_environments.save, alias, request)
+
+    @app.post(
+        f"{API_PREFIX}/ssh-environments/{{alias}}/probe",
+        response_model=SshEnvironment,
+        tags=["environments"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def probe_ssh_environment(alias: str) -> SshEnvironment:
+        return await ssh_environments.probe(alias)
+
+    @app.delete(
+        f"{API_PREFIX}/ssh-environments/{{alias}}",
+        status_code=204,
+        tags=["environments"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def forget_ssh_environment(alias: str) -> Response:
+        await asyncio.to_thread(ssh_environments.forget, alias)
+        return Response(status_code=204)
 
     @app.get(
         f"{API_PREFIX}/setup/status",

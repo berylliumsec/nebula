@@ -1667,6 +1667,8 @@ export interface ChatCompletionRequest {
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
   mcpServerIds?: Identifier[];
+  /** Omitted: every enabled SSH environment; [] limits commands to Core. */
+  sshEnvironmentIds?: Identifier[];
   hookIds?: Identifier[];
   engagementId?: Identifier;
   sessionId?: Identifier;
@@ -2094,6 +2096,68 @@ export interface McpToolProfile {
   openWorld: boolean;
   credentialed?: boolean;
   approval: "risk_based" | "allow" | "ask" | "deny";
+}
+
+export type SshEnvironmentApproval = "ask" | "allow";
+export type SshProbeStatus = "reachable" | "unreachable" | "auth_failed" | "host_key_untrusted" | "error";
+
+export interface SshEnvironmentProbe {
+  status: SshProbeStatus;
+  latencyMs?: number;
+  system: string;
+  osVersion: string;
+  arch: string;
+  model: string;
+  tools: string[];
+  passwordlessSudo?: boolean;
+  detail: string;
+  checkedAt: string;
+}
+
+/** Nebula's saved settings for one Host alias in the Core's ~/.ssh/config. */
+export interface SshEnvironment {
+  id: string;
+  revision: number;
+  alias: string;
+  displayName: string;
+  label: string;
+  enabled: boolean;
+  notes: string;
+  workingDirectory?: string;
+  commandApproval: SshEnvironmentApproval;
+  lastProbe?: SshEnvironmentProbe;
+}
+
+export interface SshEnvironmentHost {
+  alias: string;
+  aliases: string[];
+  comment: string;
+  source?: string;
+  line?: number;
+  inConfig: boolean;
+  resolved?: { hostname: string; user: string; port: number; identityFiles: string[]; options: Record<string, string> };
+  resolveError?: string;
+  environment?: SshEnvironment;
+}
+
+export interface SshEnvironmentDiscovery {
+  configPath: string;
+  configExists: boolean;
+  sshAvailable: boolean;
+  filesRead: string[];
+  skippedPatterns: string[];
+  skippedMatchBlocks: number;
+  errors: string[];
+  hosts: SshEnvironmentHost[];
+  readAt: string;
+}
+
+export interface SshEnvironmentSettingsChange {
+  displayName?: string;
+  enabled?: boolean;
+  notes?: string;
+  workingDirectory?: string;
+  commandApproval?: SshEnvironmentApproval;
 }
 
 export interface McpServerProfile {

@@ -2565,6 +2565,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.chat-approval-host code { color: var(--muted); font-size: var(--type-meta); }
+.chat-approval-command { max-height: 180px; margin: 6px 0; padding: 10px 12px; overflow: auto; border-radius: var(--radius-control); background: var(--canvas); font-family: var(--font-mono); font-size: var(--type-meta); white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .chat-resolved-approval { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; width: min(var(--chat-reading-track), calc(100% - 24px)); margin: 6px auto 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface); font-size: 13px; }
 .chat-resolved-approval > svg { flex: 0 0 auto; color: var(--muted); }

@@ -24,6 +24,7 @@ from nebula.v3.domain import (
     HarnessRuntimeOption,
     ToolCall,
 )
+from nebula.v3.environments import SshEnvironmentService
 from nebula.v3.harnesses import (
     CodexAppServerConnection,
     GrokAcpConnection,
@@ -34,6 +35,7 @@ from nebula.v3.harnesses import (
     HarnessHealth,
     HarnessTransportError,
 )
+from nebula.v3.ssh_environments import SshProbeResult
 from nebula.v3.storage import NebulaStore
 from nebula.v3.setup import bootstrap_scratch_project
 
@@ -217,6 +219,50 @@ class FailureInjectionRuntime(HarnessRuntimeService):
             os._exit(82)
 
 
+ENVIRONMENTS_SSH_CONFIG = """
+Host *
+    ServerAliveInterval 30
+
+Host lab-mac lab-mac.local
+    # Build and test machine for the lab.
+    HostName 127.0.0.1
+    User research
+
+Host pi-one
+    HostName 127.0.0.2
+    User kali
+"""
+
+
+def environments_fixture(store: NebulaStore, root: Path) -> SshEnvironmentService:
+    """Real settings storage and ssh -G over a fixture config; connection tests are scripted."""
+
+    config = root / "ssh_config"
+    config.write_text(ENVIRONMENTS_SSH_CONFIG)
+
+    def probe(alias: str) -> SshProbeResult:
+        if alias == "pi-one":
+            return SshProbeResult(
+                alias=alias,
+                status="host_key_untrusted",
+                latency_ms=None,
+                detail="Host key verification failed.",
+            )
+        return SshProbeResult(
+            alias=alias,
+            status="reachable",
+            latency_ms=12,
+            system="Darwin",
+            os_version="macOS 27.0",
+            arch="arm64",
+            model="Mac17,5",
+            tools=("python3", "git", "xcrun"),
+            passwordless_sudo=False,
+        )
+
+    return SshEnvironmentService(store, config_path=config, probe=probe)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
@@ -234,6 +280,7 @@ if __name__ == "__main__":
             "crash_after_delivery",
             "crash_after_receipt",
             "crash_after_progress",
+            "environments",
         ],
         default="single",
     )
@@ -265,9 +312,13 @@ if __name__ == "__main__":
                 privacy={"local_only": True, "permits_sensitive_data": True},
             )
         )
+    ssh_service = None
+    if args.scenario == "environments":
+        ssh_service = environments_fixture(store, args.root)
     app = create_app(
         store,
         auth_token="stabilization-fixture",
+        ssh_environment_service=ssh_service,
         artifact_store=artifacts,
         harness_runtime_service=runtime,
         static_dir=args.static_dir,
