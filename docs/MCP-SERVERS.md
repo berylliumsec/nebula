@@ -137,6 +137,38 @@ An optional `nebula` object on a server sets options other clients don't have:
 `enabled` and `trusted_stdio` cannot be set from a file; that decision is
 always made in Nebula.
 
+## How the assistant uses MCP tools
+
+MCP tools are not sent to the model with every request. The assistant sees
+three fixed tools instead:
+
+- `tool_catalog.search` finds MCP tools by what they do.
+- `tool_catalog.load` returns the full description and input schema for up to
+  five tools.
+- `tool_catalog.call` runs a tool by name with arguments that match its schema.
+
+Core runs the real tool behind `tool_catalog.call`, so its arguments are
+validated against the tool's own schema and its approval, risk, and scope rules
+apply unchanged. Transcripts, approvals, and tool cards show the real tool name.
+
+Because the list of tools sent to the model never changes during a
+conversation, the provider's prompt cache stays valid across steps and turns,
+with any provider.
+
+Search runs on the Nebula host with the same local embedding model used for
+project documents (all-MiniLM-L6-v2 in the local Chroma index), combined with
+keyword matching. Nothing about the tools or the request leaves the machine for
+search. Until the model has been downloaded and loaded, search uses keyword
+matching only. Before each turn, the same search ranks the tools against the
+operator's latest message: a strong match has its schema included for that
+turn, and weaker matches are named as hints.
+
+Loading on demand is on for every project. Set `on_demand_tools` to `false` on
+a project's scope (`PUT /api/v1/engagements/{id}/scope`) to send every tool
+with every request again. A project that opts into Jev suggestions from
+TypeSafe uses Jev's picks instead of the local ranking, and falls back to the
+local ranking when Jev is unavailable.
+
 ## Fields that are not imported
 
 These are recognised and skipped with a warning in the preview:

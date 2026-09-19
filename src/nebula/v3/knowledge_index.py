@@ -6,7 +6,7 @@ remains the immutable Nebula artifact referenced by ``KnowledgeSource``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -23,6 +23,9 @@ from .domain import KnowledgeSource, LibraryItem, NebulaModel
 
 COLLECTION_NAME = "nebula-knowledge-v1"
 LIBRARY_COLLECTION_NAME = "nebula-library-v1"
+# Tool documents are keyed by a content fingerprint, so an MCP server that
+# reconnects with unchanged tools re-embeds nothing.
+TOOL_COLLECTION_NAME = "nebula-tools-v1"
 INDEX_BACKEND = "chromadb"
 INDEX_VERSION = "nebula.chroma.v1"
 UPSERT_BATCH_SIZE = 500
@@ -237,6 +240,7 @@ class ChromaKnowledgeIndex:
         else:
             name = getattr(embedding_function, "name", lambda: "custom")()
             self._model_status = _ModelStatusTracker(ready=True, model=str(name))
+        self._embedding_function = embedding_function
         try:
             self._client = chromadb.PersistentClient(
                 path=self.path,
@@ -255,6 +259,14 @@ class ChromaKnowledgeIndex:
             }
             self._library_collection = self._client.get_or_create_collection(
                 **library_options
+            )
+            tool_options: dict[str, Any] = {
+                "name": TOOL_COLLECTION_NAME,
+                "metadata": {"hnsw:space": "cosine", "index_version": INDEX_VERSION},
+                "embedding_function": embedding_function,
+            }
+            self._tool_collection = self._client.get_or_create_collection(
+                **tool_options
             )
         except Exception as exc:
             raise KnowledgeIndexError("could not initialize the Chroma index") from exc
@@ -370,6 +382,61 @@ class ChromaKnowledgeIndex:
             raise KnowledgeIndexError(
                 f"could not remove Library item {item_id} from the index"
             ) from exc
+
+    def prepare_model(self) -> None:
+        """Download and load the embedding model outside any request path."""
+
+        try:
+            self._embedding_function(["nebula embedding model warm-up"])
+        except Exception as exc:
+            raise KnowledgeIndexError(
+                "the local embedding model is unavailable"
+            ) from exc
+
+    def index_tools(self, documents: Mapping[str, str]) -> None:
+        """Embed tool documents keyed by fingerprint, skipping known ones."""
+
+        if not documents:
+            return
+        try:
+            known = set(
+                self._tool_collection.get(ids=list(documents), include=[])["ids"]
+            )
+            missing = [key for key in documents if key not in known]
+            for start in range(0, len(missing), UPSERT_BATCH_SIZE):
+                batch = missing[start : start + UPSERT_BATCH_SIZE]
+                self._tool_collection.upsert(
+                    ids=batch,
+                    documents=[documents[key] for key in batch],
+                    metadatas=cast(Any, [{"fingerprint": key} for key in batch]),
+                )
+        except Exception as exc:
+            raise KnowledgeIndexError("could not index tool descriptions") from exc
+
+    def rank_tools(
+        self, query: str, fingerprints: Sequence[str], *, limit: int
+    ) -> list[tuple[str, float]]:
+        """Return ``(fingerprint, cosine similarity)`` pairs, best first."""
+
+        cleaned = " ".join(query.split())
+        candidates = sorted(set(fingerprints))
+        if not cleaned or not candidates or limit <= 0:
+            return []
+        try:
+            result = self._tool_collection.query(
+                query_texts=[cleaned],
+                n_results=min(limit, len(candidates)),
+                where=cast(Any, {"fingerprint": {"$in": candidates}}),
+                include=["distances"],
+            )
+        except Exception as exc:
+            raise KnowledgeIndexError("Chroma tool retrieval failed") from exc
+        ids = (result.get("ids") or [[]])[0]
+        distances = (result.get("distances") or [[]])[0]
+        return [
+            (str(key), round(1.0 - float(distance), 4))
+            for key, distance in zip(ids, distances)
+        ]
 
     def query_library(
         self,

@@ -11,36 +11,31 @@ from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.domain import (
-    ChatMessage,
-    ChatRole,
-    ChatTurn,
-    ChatTurnStatus,
     Engagement,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
 )
-from nebula.v3.providers import ToolCall
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tool_suggestions import (
+from nebula.v3.tool_catalog import (
+    CATALOG_CALL,
     CATALOG_LOAD,
     CATALOG_SEARCH,
+    catalog_instructions,
+)
+from nebula.v3.tool_suggestions import (
     MAX_CHOICE_TOOLS,
     NONE_OPTION,
     JevClient,
-    ToolCatalogBroker,
     build_questions,
     build_state,
-    catalog_components,
-    loaded_tool_names,
     suggest_tools,
-    suggestion_instructions,
     suggestions_enabled,
 )
-from nebula.v3.tools import InvalidToolArguments, ToolInvocation, ToolSpec
+from nebula.v3.tools import ToolSpec
 from tests.v3.test_chat import FakeProvider, _profile
-from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+from tests.v3.test_chat_tool_loop import RecordingBroker
 
 MCP_TOOL = "mcp.tracker.search_issues"
 
@@ -219,161 +214,6 @@ def test_local_only_scope_never_enables_suggestions():
     assert not suggestions_enabled(ScopePolicy(engagement_id="e"))
 
 
-def test_catalog_search_and_load_are_bounded_to_deferred_tools(tmp_path):
-    broker = ToolCatalogBroker(
-        {
-            MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues by keyword."),
-            "mcp.tracker.close_issue": _spec("mcp.tracker.close_issue", "Close one."),
-        }
-    )
-
-    def invoke(name, arguments):
-        return asyncio.run(
-            broker.execute(
-                ToolInvocation(
-                    engagement_id="e",
-                    run_id="turn",
-                    tool_name=name,
-                    arguments=arguments,
-                    workspace=tmp_path,
-                ),
-                ScopePolicy(engagement_id="e"),
-            )
-        ).output
-
-    found = invoke(CATALOG_SEARCH, {"query": "search issues"})
-    assert found["matches"][0]["name"] == MCP_TOOL
-    loaded = invoke(CATALOG_LOAD, {"names": [MCP_TOOL]})
-    assert loaded["loaded"][0]["input_schema"]["required"] == ["value"]
-    with pytest.raises(InvalidToolArguments, match="not on-demand"):
-        invoke(CATALOG_LOAD, {"names": ["run_command"]})
-
-
-def test_loaded_names_come_from_preloads_loads_and_direct_calls():
-    receipt = {"deferred": ["a", "b", "c", "d"], "preloaded": ["a"]}
-    history = [
-        {"name": CATALOG_LOAD, "status": "complete", "arguments": {"names": ["b"]}},
-        {"name": CATALOG_LOAD, "status": "failed", "arguments": {"names": ["c"]}},
-        {"name": "d", "status": "complete", "arguments": {}},
-    ]
-    assert loaded_tool_names(receipt, history) == {"a", "b", "d"}
-
-
-def test_catalog_digest_is_stable_for_resume(tmp_path):
-    components = RuntimeToolComponents(
-        broker=RecordingBroker(),
-        scope=ScopePolicy(engagement_id="e"),
-        workspace=tmp_path,
-        specs={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
-    )
-    first = catalog_components(components, deferred=[MCP_TOOL])
-    second = catalog_components(components, deferred=[MCP_TOOL])
-    assert first is not None and second is not None
-    assert first.runtime_digest == second.runtime_digest
-    assert catalog_components(components, deferred=[]) is None
-
-
-def _deferred_loop(tmp_path, responses, *, preloaded=()):
-    broker = RecordingBroker()
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
-    components = prepared.tool_components
-    mcp = _spec(MCP_TOOL, "Search tracker issues.")
-    # RecordingBroker serves both the built-in and the MCP-sourced spec.
-    components = RuntimeToolComponents(
-        broker=broker,
-        scope=components.scope,
-        workspace=components.workspace,
-        specs={**components.specs, MCP_TOOL: mcp},
-        runtime_digest=components.runtime_digest,
-    )
-    receipt = {
-        "status": "suggested",
-        "deferred": [MCP_TOOL],
-        "preloaded": list(preloaded),
-        "suggested": [] if preloaded else [MCP_TOOL],
-    }
-    catalog = catalog_components(components, deferred=[MCP_TOOL])
-    prepared.tool_components = chat_module.combine_tool_components(components, catalog)
-    turn = store.update(
-        ChatTurn,
-        prepared.turn.id,
-        {"request_snapshot": {"tool_suggestions": receipt}},
-        expected_revision=prepared.turn.revision,
-    )
-    prepared.turn = turn
-    return store, service, prepared, provider, broker
-
-
-def _tool_names(request):
-    return {tool.name for tool in request.tools}
-
-
-def test_deferred_tool_is_advertised_only_after_it_is_loaded(tmp_path):
-    responses = [
-        _response(
-            calls=[
-                ToolCall(id="c1", name=CATALOG_LOAD, arguments={"names": [MCP_TOOL]})
-            ]
-        ),
-        _response(calls=[ToolCall(id="c2", name=MCP_TOOL, arguments={"value": "x"})]),
-        _response(calls=[ToolCall(id="c3", name="finish_response", arguments={})]),
-        _response(text="Found it."),
-    ]
-    store, service, prepared, provider, broker = _deferred_loop(tmp_path, responses)
-
-    completion = asyncio.run(service.complete(prepared))
-
-    chip = completion.tool_suggestions
-    assert chip["suggested"] == [MCP_TOOL] and chip["used"] == [MCP_TOOL]
-    assert chip["unloaded_count"] == 0 and chip["on_demand_count"] == 1
-    assert "probabilities" not in chip
-    saved = [
-        item
-        for item in store.list_entities(ChatMessage, limit=100)
-        if item.role == ChatRole.ASSISTANT
-    ]
-    assert saved[-1].metadata["tool_suggestions"] == chip
-    first, second = provider.requests[0], provider.requests[1]
-    assert MCP_TOOL not in _tool_names(first)
-    assert {CATALOG_SEARCH, CATALOG_LOAD, "safe_read"} <= _tool_names(first)
-    assert "On-demand tools: 1 tools" in first.instructions
-    assert json.dumps({"loaded": [], "not_loaded": [MCP_TOOL]}) in first.instructions
-    assert MCP_TOOL in _tool_names(second)
-    assert [call.tool_name for call in broker.calls] == [MCP_TOOL]
-    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
-
-
-def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):
-    responses = [
-        _response(calls=[ToolCall(id="c1", name=MCP_TOOL, arguments={"value": "x"})]),
-        _response(calls=[ToolCall(id="c2", name="finish_response", arguments={})]),
-        _response(text="Done."),
-    ]
-    _, service, prepared, provider, broker = _deferred_loop(
-        tmp_path, responses, preloaded=[MCP_TOOL]
-    )
-
-    asyncio.run(service.complete(prepared))
-
-    assert MCP_TOOL in _tool_names(provider.requests[0])
-    assert len(broker.calls) == 1
-
-
-def test_direct_call_to_an_unloaded_deferred_tool_still_runs(tmp_path):
-    responses = [
-        _response(calls=[ToolCall(id="c1", name=MCP_TOOL, arguments={"value": "x"})]),
-        _response(calls=[ToolCall(id="c2", name="finish_response", arguments={})]),
-        _response(text="Done."),
-    ]
-    _, service, prepared, provider, broker = _deferred_loop(tmp_path, responses)
-
-    asyncio.run(service.complete(prepared))
-
-    assert MCP_TOOL not in _tool_names(provider.requests[0])
-    assert MCP_TOOL in _tool_names(provider.requests[1])
-    assert [call.tool_name for call in broker.calls] == [MCP_TOOL]
-
-
 class _McpPlatform:
     def __init__(self, workspace):
         self.workspace = workspace
@@ -444,10 +284,28 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     receipt = prepared.turn.request_snapshot["tool_suggestions"]
     assert receipt["status"] == "suggested"
     assert receipt["preloaded"] == [MCP_TOOL]
-    assert {CATALOG_SEARCH, CATALOG_LOAD, MCP_TOOL} == set(
+    catalog = prepared.turn.request_snapshot["tool_catalog"]
+    assert catalog["ranker"] == "jev" and catalog["preloaded"] == [MCP_TOOL]
+    assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL, MCP_TOOL} == set(
         prepared.tool_components.specs
     )
-    assert "Likely relevant" in suggestion_instructions(receipt)
+    assert "Already loaded" in catalog_instructions(
+        catalog, prepared.tool_components.specs
+    )
+
+
+def test_unavailable_jev_falls_back_to_local_ranking(tmp_path, monkeypatch):
+    def handler(_):
+        return httpx.Response(529, json={"error": "overloaded"})
+
+    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
+
+    prepared = service.prepare(request)
+
+    snapshot = prepared.turn.request_snapshot
+    assert snapshot["tool_suggestions"]["status"] == "unavailable"
+    assert snapshot["tool_catalog"]["ranker"] == "keyword"
+    assert snapshot["tool_catalog"]["deferred"] == [MCP_TOOL]
 
 
 def test_prepare_skips_jev_when_the_engagement_has_not_opted_in(tmp_path, monkeypatch):
@@ -471,8 +329,9 @@ def test_prepare_skips_jev_when_the_engagement_has_not_opted_in(tmp_path, monkey
 
     prepared = service.prepare(request)
 
+    # Deferral is on by default; only the Jev call is skipped.
     assert prepared.turn.request_snapshot["tool_suggestions"] is None
-    assert set(prepared.tool_components.specs) == {MCP_TOOL}
+    assert prepared.turn.request_snapshot["tool_catalog"]["ranker"] == "keyword"
 
 
 def test_scope_update_without_the_field_keeps_the_opt_in(tmp_path):

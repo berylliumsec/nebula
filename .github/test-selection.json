@@ -1,39 +1,28 @@
 {
-  "change_digest": "d063a7cd02b54474f13746a55e2d60034cdbbccccb860c6855756890a5f014cd",
-  "reviewed_by": "Claude review of the optional TypeSafe Jev tool-suggestion layer",
-  "reason": "Adds opt-in, per-project Jev tool suggestions: MCP-sourced tools are deferred behind tool_catalog.search/load, Jev ranks them before each provider turn, the TypeSafe key is stored through the credential store with GET/PUT/test/DELETE routes, and the chat shows a collapsed per-turn chip. Selected tests cover the new module and routes, the tool-loop and resume paths it modifies, scope API field preservation, the settings/opt-in/chip UI in unit and mocked Playwright on desktop, mobile Chromium and mobile WebKit, and one real-Core journey against a local Jev stub. After merging main with #344 (interactive guides), which edits the same Settings, policy and chat components, the selection adds the guides unit tests and the real-Core interactive-guides journeys so the spotlighted controls are verified alongside the new Integrations panel and project opt-in.",
-  "exclusions": "No full suites. Harness chats are unchanged. Real-Core coverage uses a local stub instead of api.typesafe.ai and session-only key storage because test hosts have no unlocked OS vault; vault storage is covered by the mocked UI and backend tests. No LAN-origin check: no origin, cookie or socket behavior changed.",
+  "change_digest": "3cff7f034fc925c8d2b0f70dabbccfc5701e8e8f42590f6340018ac352ea4e47",
+  "reviewed_by": "Claude review of on-demand tool loading with a local semantic tool index",
+  "reason": "Tools from connected sources (MCP and other sourced tools) are now deferred by default behind a fixed tool_catalog.search/load/call trio, so the provider tools array never changes and prefix caches hold. tool_catalog.call is unwrapped in the chat loop into the real tool (its schema validation, approvals, risk and budgets apply) and the issued call is replayed to the provider. Search fuses a local MiniLM Chroma tool collection with keyword ranking; a local pre-turn ranking preloads strong matches, replaced by Jev when a project opts in. ScopePolicy gains on_demand_tools (default true, preserved when omitted). Selected tests cover the new module, the moved Jev tests, every chat test file whose turns run tools (loop, approvals, subagents, temporary chat, core chat), the Chroma index, scope API field preservation, operator help and the domain model.",
+  "exclusions": "No full suites. No frontend or Playwright: no UI file changed and no Playwright journey runs a chat with MCP tools; the scope field is optional and preserved when clients omit it. Native unchanged. Real-model behavior was checked locally with the downloaded MiniLM model (thresholds calibrated on nine realistic requests); CI uses a deterministic test embedder.",
   "expected_tests": {
-    "python": 115,
-    "frontend": 128,
+    "python": 153,
+    "frontend": 0,
     "native": 0,
-    "playwright": 15
+    "playwright": 0
   },
   "python": [
+    "tests/v3/test_tool_catalog.py",
     "tests/v3/test_tool_suggestions.py",
     "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_project_instructions.py",
     "tests/v3/test_approval_continuation.py",
-    "tests/test_playwright_impact.py",
-    "tests/v3/test_guides.py"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_knowledge_index.py",
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_operator_help.py",
+    "tests/v3/test_domain.py",
+    "tests/v3/test_temporary_chat.py"
   ],
-  "frontend": [
-    "ui/src/components/ToolSuggestions.test.tsx",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/api/workbenchBrowser.test.ts",
-    "ui/src/components/ScopeImportDialog.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/guides/guides.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:tool-suggestions/desktop",
-    "entry:tool-suggestions/mobile-chromium",
-    "entry:tool-suggestions/mobile-webkit",
-    "entry:tool-suggestions/real-core",
-    "area:interactive-guides"
-  ]
+  "playwright": []
 }
