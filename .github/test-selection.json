@@ -1,16 +1,21 @@
 {
-  "change_digest": "fffa62d82ca799200c031ac0234bd51843706b3a32497c832409762b07e05796",
-  "reviewed_by": "Claude review of the stale provider verification allowlist test",
-  "reason": "Test-only change. tests/v3/test_provider_verification.py::test_health_discovered_model_is_persisted_when_verified asserted the pre-#333 behavior where verifying a model on a provider with no model allowlist wrote it into the allowlist; #333 intentionally stopped that and the test has failed on main since. Renamed to test_verifying_a_discovered_model_keeps_an_open_allowlist and it now asserts the allowlist stays empty while the verification is recorded. Selected: the whole test_provider_verification.py file (the capability verification route tests).",
-  "exclusions": "No full suites. No source, UI, native or browser changes, so frontend, native and Playwright layers are empty.",
+  "change_digest": "29515ec48c10360e65b0272777953c56a6ddf7b0ad755dbb3a7c4476ec15fdc6",
+  "reviewed_by": "Claude review of the frozen Core Kali build helper bundling",
+  "reason": "Packaging-only change. sandbox.py copies public_ip_update.py and terminal_entrypoint.sh (added in a27a8f5) into the Kali image build context via Path(__file__).with_name(), but scripts/build_nebula_core.py never bundled them, so a PyInstaller Core raised FileNotFoundError before docker build and could never prepare the workstation image. The build script now bundles both, package_audit.REQUIRED_MEMBERS requires every Kali build helper (egress_helper.py was also unaudited), and a new test fails when any file read beside its module is not bundled and audited. Selected: the new bundling test, the artifact member audit tests (their required-member list changed) and the build script import check.",
+  "exclusions": "No runtime source, UI, native or browser changes, so frontend, native and Playwright layers are empty. The rest of test_packaging.py is not selected because it does not exercise the changed lists; test_nebula3_runtime_has_no_conditional_import_fallbacks already fails on main (chat.py) independently of this change.",
   "expected_tests": {
-    "python": 4,
+    "python": 9,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_provider_verification.py"
+    "tests/v3/test_packaging.py::test_core_bundles_and_audits_every_source_file_read_beside_its_module",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_rejects_gui_or_heavy_payload",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_fails_when_legal_payload_is_absent",
+    "tests/v3/test_packaging.py::test_artifact_member_audit_rejects_build_residue",
+    "tests/v3/test_packaging.py::test_core_build_script_supports_direct_path_imports"
   ],
   "frontend": [],
   "native": [],
