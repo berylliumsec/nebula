@@ -1,10 +1,10 @@
 {
-  "change_digest": "20468a9133917d065c3a50d222bb79829ae47c6ae88158d233f5a8d174ea7200",
-  "reviewed_by": "Claude review of the MCP JSON import/export backend",
-  "reason": "Adds mcp_import.py plus POST /mcp-servers/import, GET /mcp-servers/export and `nebula-core mcp import|export`. Imported mcpServers/VS Code servers become disabled, untrusted McpServerProfile records; ${VAR} values become env: references, literal credentials go to the vault/session store or are rejected, and replace resets trust and capabilities. test_mcp_import.py covers preview, apply, secret handling and rollback, invalid-entry messages, conflicts, export round trip, the API routes and the CLI. test_cli.py covers the CLI module the new commands were added to; the credential API test and OpenAPI contract test cover the shared credential store and the new routes' registration.",
+  "change_digest": "4ca1af90636b7e84e2a61a27eb282d86bef0d1cc1f255f037e1d3ef28a42995b",
+  "reviewed_by": "Claude review of the MCP JSON import/export backend and MCP probe error handling",
+  "reason": "Adds mcp_import.py plus POST /mcp-servers/import, GET /mcp-servers/export and `nebula-core mcp import|export`. Imported mcpServers/VS Code servers become disabled, untrusted McpServerProfile records; ${VAR} values become env: references, literal credentials go to the vault/session store or are rejected, and replace resets trust and capabilities. test_mcp_import.py covers preview, apply, secret handling and rollback, invalid-entry messages, conflicts, export round trip, the API routes and the CLI. test_cli.py covers the CLI module the new commands were added to; the credential API test and OpenAPI contract test cover the shared credential store and the new routes' registration. The MCP probe now treats only JSON-RPC -32601 (method not found) as an optional-list miss instead of matching message text, and requests resources/prompts only when the server advertises them; test_mcp_probe.py covers both directions (non-standard messages no longer fail the probe, real errors mentioning 'not found' are no longer swallowed), and the two existing stdio/HTTP probe tests in test_harnesses.py cover unchanged discovery.",
   "exclusions": "No full suites. No frontend, native or Playwright coverage: there is no UI change yet (the import dialog waits on an approved Figma mockup). The existing MCP probe/harness suites are not affected because McpServerProfile and the probe service are unchanged. A real-Core run was done by hand: import through the API, probe refused until trusted, probe returned tools with an env: reference resolved from the host, replace reset trust, and the CLI previewed and exported.",
   "expected_tests": {
-    "python": 38,
+    "python": 47,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -13,7 +13,10 @@
     "tests/v3/test_mcp_import.py",
     "tests/v3/test_cli.py",
     "tests/v3/test_credentials.py::test_credential_api_is_write_only_and_persists_only_opaque_reference",
-    "tests/v3/test_api.py::test_artifact_content_and_openapi_contract"
+    "tests/v3/test_api.py::test_artifact_content_and_openapi_contract",
+    "tests/v3/test_mcp_probe.py",
+    "tests/v3/test_harnesses.py::test_explicit_stdio_mcp_probe_validates_schema_and_closes_process",
+    "tests/v3/test_harnesses.py::test_streamable_http_mcp_probe_injects_bearer_and_closes_session"
   ],
   "frontend": [],
   "native": [],
