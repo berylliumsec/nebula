@@ -1,5 +1,5 @@
 {
-  "change_digest": "c73530f4040387398ccf9d385a37a128d38aca87a5c895653cd5902d588b09bc",
+  "change_digest": "1acca1b848db0a95b0e488040e9cd4164f4537f1f114367ed8cbe461d6a58e86",
   "reviewed_by": "Claude review of auto-unarchive on send",
   "reason": "Core clears a chat's metadata.archived_at when /chat/completions continues that session or a follow-up is enqueued on it (unarchive_chat_session, retried on revision conflicts). The UI clears archivedAt optimistically on send and shows an archived notice with an Unarchive button while an archived chat is open. Selected tests cover the send-unarchives API flow in test_chat_api.py, the queue service in test_chat_queue.py, the archived notice in App.test.tsx, the client mapping in client.test.ts, and the conversations sidebar Playwright area.",
   "exclusions": "No full suites. Scheduled turns, goals and subagents do not go through the operator send paths and intentionally leave archive state alone. No LAN-origin check: no origin, cookie or socket behavior changed.",
