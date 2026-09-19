@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from nebula.v3 import providers
 from nebula.v3.providers import (
     AnthropicProvider,
     GeminiProvider,
@@ -15,14 +16,17 @@ from nebula.v3.providers import (
     OpenAIResponsesProvider,
     ProviderError,
     ProviderContextLengthError,
+    ProviderOverloadedError,
     ProviderConfig,
     ProviderFlavor,
     ProviderKind,
     ProviderRegistry,
+    RetryPolicy,
     StreamEventType,
     ToolDefinition,
     UnsupportedCapability,
     config_from_catalog,
+    retry_policy,
 )
 
 
@@ -1512,3 +1516,218 @@ def test_openrouter_discovery_fails_closed_when_the_provider_filter_fails():
 
     assert health.healthy is False
     assert health.models == []
+
+
+OVERLOADED_BODY = {
+    "error": {
+        "message": "Provider returned error",
+        "code": 503,
+        "metadata": {
+            "raw": '{"error":{"message":"service overloaded, please try again later"}}'
+        },
+    }
+}
+
+
+def _retrying_config(provider_id: str, **options):
+    return ProviderConfig(
+        id=provider_id,
+        kind=ProviderKind.OPENAI_COMPATIBLE,
+        base_url="https://provider.invalid",
+        default_model="test-model",
+        # Zero backoff keeps the retry contract under test without real waiting.
+        options={"retry_backoff_seconds": 0, **options},
+    )
+
+
+def _chat_request():
+    return ModelRequest(messages=[ModelMessage(role="user", content="hello")])
+
+
+def _completion_body():
+    return {
+        "model": "test-model",
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+
+
+def test_overloaded_upstream_is_retried_until_the_provider_answers():
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.path)
+        if len(attempts) < 3:
+            return httpx.Response(503, json=OVERLOADED_BODY)
+        return httpx.Response(200, json=_completion_body())
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("retry-success"), transport=httpx.MockTransport(handler)
+    )
+
+    result = asyncio.run(provider.complete(_chat_request()))
+
+    assert result.text == "ok"
+    assert len(attempts) == 3
+
+
+def test_retries_stop_at_the_attempt_limit_and_name_the_attempts():
+    attempts: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts.append(503)
+        return httpx.Response(503, json=OVERLOADED_BODY)
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("retry-exhausted"), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ProviderOverloadedError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+
+    assert len(attempts) == 3
+    assert failure.value.status_code == 503
+    # The operator sees that Nebula already retried before they retry by hand.
+    assert str(failure.value) == (
+        "provider returned HTTP 503: Provider returned error "
+        "(upstream: service overloaded, please try again later) after 3 attempts"
+    )
+
+
+def test_request_defects_are_never_retried():
+    attempts: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts.append(401)
+        return httpx.Response(401, json={"error": {"message": "denied"}})
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("retry-denied"), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+
+    assert attempts == [401]
+    assert not isinstance(failure.value, ProviderOverloadedError)
+
+
+def test_retries_can_be_disabled_for_one_provider():
+    attempts: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts.append(503)
+        return httpx.Response(503, json=OVERLOADED_BODY)
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("retry-disabled", retry_attempts=1),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderOverloadedError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+
+    assert attempts == [503]
+    assert "attempts" not in str(failure.value)
+
+
+def test_streaming_retries_before_the_first_token_and_not_after():
+    calls: list[int] = []
+    body = "\n\n".join(
+        [
+            'data: {"id":"chat-1","model":"test-model","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}',
+            "data: [DONE]",
+        ]
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(len(calls))
+        if len(calls) == 1:
+            return httpx.Response(503, json=OVERLOADED_BODY)
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("retry-stream"), transport=httpx.MockTransport(handler)
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(_chat_request())]
+
+    events = asyncio.run(collect())
+
+    assert len(calls) == 2
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.COMPLETED,
+    ]
+    assert events[-1].response.text == "hi"
+
+
+def test_a_stream_that_fails_after_output_is_not_replayed():
+    calls: list[int] = []
+    body = "\n\n".join(
+        [
+            'data: {"id":"chat-1","model":"test-model","choices":[{"delta":{"content":"hi"}}]}',
+            "data: {not json}",
+        ]
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(len(calls))
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("stream-midflight"), transport=httpx.MockTransport(handler)
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(_chat_request())]
+
+    events = asyncio.run(collect())
+
+    assert len(calls) == 1
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+
+
+def test_retry_limits_come_from_provider_options_then_the_environment(monkeypatch):
+    monkeypatch.setenv("NEBULA_PROVIDER_RETRY_ATTEMPTS", "5")
+    monkeypatch.setenv("NEBULA_PROVIDER_RETRY_BACKOFF_SECONDS", "2")
+
+    inherited = retry_policy(_config(ProviderKind.OPENAI_COMPATIBLE))
+    overridden = retry_policy(_retrying_config("tuned", retry_attempts=2))
+
+    assert inherited == RetryPolicy(attempts=5, backoff_seconds=2.0)
+    assert overridden == RetryPolicy(attempts=2, backoff_seconds=0.0)
+
+    monkeypatch.setenv("NEBULA_PROVIDER_RETRY_ATTEMPTS", "not-a-number")
+    assert retry_policy(_config(ProviderKind.OPENAI_COMPATIBLE)).attempts == 3
+
+
+def test_retry_after_is_honored_within_the_bounded_wait():
+    policy = RetryPolicy(attempts=3, backoff_seconds=0.5)
+
+    def _header(value: str) -> float | None:
+        return providers._retry_after_seconds(
+            httpx.Response(503, headers={"retry-after": value})
+        )
+
+    assert _header("7") == 7.0
+    assert _header("600") == providers._MAX_RETRY_DELAY_SECONDS
+    assert _header("Mon, 01 Jan 1990 00:00:00 GMT") == 0.0
+    assert _header("soon") is None
+    assert _header("") is None
+    # Retry-After raises the floor; jitter never pushes past the hard ceiling.
+    waited = providers._retry_delay(policy, 1, 7.0)
+    assert 7.0 <= waited <= 7.0 * 1.25
+    assert providers._retry_delay(policy, 8, None) <= (
+        providers._MAX_RETRY_DELAY_SECONDS * 1.25
+    )

@@ -1,24 +1,23 @@
 {
-  "change_digest": "850290ca4d917bacf6fd83ce601ed3705bfb987b7dcb9dff0fb70c6232f45459",
-  "reviewed_by": "Claude review of side navigation current-page authority",
-  "reason": "SideNav NavLinks matched their canonical base path with `end`, so no primary navigation item was current on finding/report detail URLs (ReportsPage auto-opens its first report, so Reports was rarely highlighted), Library detail URLs, or the Project page's assets/evidence/sources tabs. SideNav now derives the current item from navigationItemForPath, the same authority TopBar uses, and sets aria-current=\"page\" and the active class from one boolean; navigationItemForPath also maps the legacy /assets, /evidence and /knowledge routes (which render the Project page in place when no project is loaded) to Project. SideNav.test.tsx covers every canonical detail and tab route in the standard and Zero variants, section-root hrefs from a detail page, and the legacy routes; TopBar.test.tsx covers the helper change. The new Playwright journey opens a finding, follows the side navigation to Reports (auto-selected detail) and Project, and switches Project tabs in Zero Dark and Dark: critical-workspaces runs it on desktop and compact beside the unchanged side-nav baselines, and the phone-shell entries run it through the sidebar drawer on mobile Chromium and WebKit beside the existing phone shell, navigation, typography and drawer-layering contracts. Merging main brought #361, which keeps the phone drawer above resource inspectors, so the phone path now reads the section from the drawer on the finding detail route itself instead of closing the inspector first. App.test.tsx renders the full shell with the side navigation.",
-  "exclusions": "No Python or native tests: no backend, catalog or Tauri change. No screenshot baselines change: every baseline captures a base route where `end` already matched, and Link renders the same anchor markup as NavLink, so critical-workspaces re-runs them unchanged. Other mobile widths (small/wide/narrow) are excluded because the fix is width-independent URL state covered on phone viewports in mobile Chromium (Pixel 5) and mobile WebKit (iPhone 13). The calm-structure single-active-navigation check is not catalogued narrowly; the new journey asserts exactly one current item on each route, and it passed locally on desktop and compact. No full suites.",
+  "change_digest": "35dd2bc5d469514e7e529d43f65488fe539cd85496a0d46d76bccbd3a2ca64ab",
+  "reviewed_by": "Claude review of automatic retries for transient provider failures",
+  "reason": "A chat turn died on OpenRouter's 'provider returned HTTP 503: Provider returned error (upstream: service overloaded, please try again later)', which is a temporary upstream refusal carrying no model output. providers.py now classifies 408/425/429/500/502/504/503 as ProviderOverloadedError and resends the identical request: ModelProvider._post wraps every complete() POST (OpenAI Responses, OpenAI-compatible/OpenRouter/vLLM, Anthropic, Gemini) and _stream_with_retry wraps the Chat Completions SSE open, so a stream is only replayed before its first token. Attempts are bounded (3 by default, 1 disables), waits are exponential with jitter and honour Retry-After up to a 20s ceiling, connect-phase transport failures retry because they never reached the provider, and an exhausted retry appends 'after N attempts' so the operator knows a manual retry adds nothing. tests/v3/test_providers.py adds the retry contract: recovery after transient 503s, the bounded stop with the attempts suffix, no retry for a 401 request defect, the per-provider disable, a stream retried before its first token, a stream that fails after output and is not replayed, option/environment precedence for the limits, and Retry-After parsing and clamping. tests/v3/test_provider_contracts.py and test_provider_verification.py hold the adapter contracts and health paths that _post now routes through; tests/v3/test_chat.py, test_chat_tool_loop.py and test_api_stream_context.py exercise the chat completion, tool-loop and SSE consumers of those same adapters.",
+  "exclusions": "No frontend, native or Playwright entries: no UI file, route, style or rendered surface changed, and the operator-visible failure card renders the same normalized provider message with the attempts suffix appended by Core. No full suites. Bedrock is excluded because it calls boto3, which applies its own retry configuration rather than httpx. Provider health probes and the OpenRouter catalog/route discovery calls are excluded deliberately: they stay single-shot so a degraded provider still reports unhealthy promptly instead of stalling Settings. Other Python suites are excluded because no shared model, schema, route or storage contract changed; the new types are additive and ProviderOverloadedError subclasses the ProviderError every caller already handles. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell fails on main for unrelated reasons and is tracked separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 72,
+    "python": 111,
+    "frontend": 0,
     "native": 0,
-    "playwright": 26
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/App.test.tsx"
+  "python": [
+    "tests/v3/test_providers.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_provider_verification.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_api_stream_context.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:critical-workspaces",
-    "entry:phone-shell/mobile-chromium",
-    "entry:phone-shell/mobile-webkit"
-  ]
+  "playwright": []
 }
