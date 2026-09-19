@@ -1,34 +1,22 @@
 {
-  "change_digest": "088d68ca935185f374f5790678b20bb563fceb3c5897c1a1a1c053b10a32618a",
-  "reviewed_by": "Claude review of the phone shell redesign",
-  "reason": "Phone-width (<=760px) redesign of the Workbench plus the private iOS WKWebView shell. UI: one chat header with a conversations drawer, a Chat/Terminal/Activity/More tab bar, the terminal as its own tab with a key row and an Ask sheet (no split on phones), approvals first on Activity, a More panel replacing the sidebar, a grouped Settings list, touch-safe tooltips, theme-aware code blocks, a theme-color meta for the shell, and a follow-bottom fix for viewport resizes. Tests that encoded the old phone layout were updated. Selected: unit tests for the new and touched components and the scroll heuristic; the Playwright impact manifest test (new phone-shell areas); the new phone-shell journey and panoramic shell baselines on every phone project, the 320px desktop boundary, and the existing workbench navigation, terminal assistant, compact terminal, transcript search and conversation switching areas across desktop, compact and phone projects; plus real-Core project removal and conversation switching on LAN origin at WebKit 390, Chromium 320 and desktop.",
-  "exclusions": "No full suites. mobile-layout (250 tests on four phone projects) and themes ran locally but are not selected: on origin/main they already fail in 'product typography and touch contracts' (NetworkError) and 'stabilization completed harness output' (skills listbox), and desktop/compact screenshot baselines are stale on main; both are tracked separately. Native: the iOS shell is not built in CI; its 30 Swift policy checks and an unsigned iPhone Release build ran on the research Mac. Desktop layout is unchanged apart from code-block token colors and the theme-color meta.",
+  "change_digest": "4214069b2d7cae24df431dbfe6f113eb419740b177c4f2f4904b70b8d645c55a",
+  "reviewed_by": "Claude review of the top bar page label fix and critical workspace baseline refresh",
+  "reason": "TopBar matched navigationItems by exact pathname, so after canonical /projects/<id>/<surface> routes (#218) every project page (Findings, Reports, Project, Assets, Evidence, Sources, /library/<id>) was titled 'Workbench' and its toolbar groups were named 'Workbench actions'/'Workbench primary action'. navigation.ts now exports navigationItemForPath, which maps canonical and legacy routes (including resource subpaths) to their item, and TopBar uses it. TopBar.test.tsx renders each route and asserts the visible title and both group names (8 of the 11 cases fail on main). The desktop/compact baselines of 'critical workspaces remain visually stable', 'Light preserves each critical workspace hierarchy' and 'Zero keeps one navigable panoramic shell at every breakpoint' predated the Guides (#344), Commands and Workbench icon (#302), terminal public IP (a27a8f5), compact Workbench header and Findings empty state/flat buttons (#334); every old/new pair was reviewed and all 25 were regenerated with only those tests/projects. New catalog area critical-workspaces selects exactly those three tests plus 'critical workspaces meet automated accessibility checks' (light/dark/zero-dark), which cover the renamed toolbar groups, on desktop and compact. tests/test_playwright_impact.py covers the manifest addition. Rebased onto #355 (phone shell): TopBar keeps its phone back button, all 25 regenerated desktop/compact baselines re-render pixel-identically, and the selection passes against the production preview.",
+  "exclusions": "No native tests: no Rust or Tauri change. Narrow and mobile baselines are unchanged because .top-bar-title is hidden at or below 1000px; the group-name change there is covered by TopBar.test.tsx, and the Zero shell test passed locally on mobile-chromium and mobile-webkit against the production preview. Other interface.spec.ts screenshot tests are excluded: the Zero Dark desktop hierarchy, overlay and dialog tests pass with this change, while 'Zero Dark preserves the appearance selector' already fails identically on main (panel 245px -> 246px) and is out of scope. No real-Core or LAN-origin runs: only client-side route labelling changed, with no server state, origin, cookie or socket behavior. No full suites.",
   "expected_tests": {
     "python": 33,
-    "frontend": 42,
+    "frontend": 14,
     "native": 0,
-    "playwright": 115
+    "playwright": 12
   },
   "python": [
     "tests/test_playwright_impact.py"
   ],
   "frontend": [
-    "ui/src/components/ActionTooltips.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/components/terminalKeys.test.ts",
-    "ui/src/components/assistantMarkdown.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/components/ContainerTerminalPanel.test.tsx",
-    "ui/src/pages/chatScrollPosition.test.ts"
+    "ui/src/components/TopBar.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:phone-shell",
-    "area:phone-shell-core",
-    "area:workbench-navigation",
-    "area:terminal-assistant",
-    "area:compact-terminal",
-    "area:transcript-search-layout",
-    "area:conversation-switch-performance"
+    "area:critical-workspaces"
   ]
 }

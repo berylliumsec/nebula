@@ -15,7 +15,7 @@ import {
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { logCaughtDiagnostic } from "../diagnostics";
-import { navigationItems } from "../navigation";
+import { navigationItemForPath } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
 import type { ContainerTerminalPublicIpStatus } from "../api/types";
 import { copySelectionText } from "./selection";
@@ -49,7 +49,7 @@ export function TopBar({
 }: TopBarProps) {
   const location = useLocation();
   const navigate = useNavigate();
-  const page = navigationItems.find((item) => item.path === location.pathname) ?? navigationItems[0];
+  const page = navigationItemForPath(location.pathname);
   const { api, coreError, engagement, reconnect, workspaceState } = useWorkspace();
   const [publicIp, setPublicIp] = useState<ContainerTerminalPublicIpStatus>();
   const [publicIpCopied, setPublicIpCopied] = useState(false);
