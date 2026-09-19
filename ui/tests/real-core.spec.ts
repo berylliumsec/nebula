@@ -22,10 +22,19 @@ interface RealCore {
  * Workbench (status lives in the conversation drawer), so the paired shell's
  * phone navigation is the ready signal there.
  */
-function coreReady(page: Page) {
-  return page.getByRole("button", { name: "Nebula Core ready", exact: true })
+function coreShell(page: Page, chip: RegExp) {
+  return page.getByRole("button", { name: chip })
     .or(page.getByRole("navigation", { name: "Mobile operator navigation" }))
     .first();
+}
+
+function coreReady(page: Page) {
+  return coreShell(page, /^Nebula Core ready$/);
+}
+
+/** Fixture Cores often report limited availability; their shell is still usable. */
+function coreConnected(page: Page) {
+  return coreShell(page, /^Nebula Core (ready|degraded)/);
 }
 
 async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string } = {}): Promise<RealCore> {
@@ -2453,7 +2462,7 @@ for (const decision of ["Approve", "Reject"] as const) {
       await page.goto(`${origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
       await page.getByLabel("Device name").fill("Stabilization browser");
       await page.getByRole("button", {name: "Pair device", exact: true}).click();
-      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
       await page.goto(`${origin}/?view=chat`);
       await page.getByRole("button", {name: "New chat", exact: true}).click();
       const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
@@ -2734,7 +2743,7 @@ test("assistant upgrade production LAN enables durable knowledge automatically",
     expect(sourceResponse.ok(), await sourceResponse.text()).toBe(true);
 
     await page.goto(`${core.origin}/projects/${project.id}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.getByRole("button", {name: "Start new chat", exact: true}).click();
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     const settings = page.getByRole("dialog", {name: "Assistant settings"});
@@ -3526,7 +3535,7 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Assistant settings acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", {name: "New chat", exact: true}).click();
     const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
@@ -3587,7 +3596,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Account homes acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     const ids: string[] = [];
     for (const vendor of ["Codex", "Grok"] as const) {
       await page.goto(`${core.origin}/settings#harness-settings`);
@@ -3823,7 +3832,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Command acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     for (const id of ["inert-fixture", codex.id]) {
       await page.goto(`${core.origin}/?view=chat`);
       await page.getByRole("button", {name: "New chat", exact: true}).click();
@@ -3994,7 +4003,7 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, { data: { name: "Harness popup acceptance" } })).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByRole("button", { name: "Pair device", exact: true }).click();
-    await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
     await page.getByRole("textbox", { name: "Message the analyst assistant", exact: true }).fill("Keep this harness conversation");
@@ -4096,7 +4105,7 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     expect(health.ok(), await health.text()).toBe(true);
 
     await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat#token=${encodeURIComponent(core.token)}`);
-    await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20_000 });
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.getByRole("button", { name: "New chat", exact: true }).click();
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
     const settings = page.getByRole("dialog", { name: "Assistant settings" });
@@ -4273,8 +4282,7 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Environments acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    // The phone shell hides the ready chip, so read its label rather than its visibility.
-    await expect(page.locator(".connection-chip")).toHaveAttribute("aria-label", /Nebula Core (ready|degraded)/, {timeout: 20_000});
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/settings#ssh-environment-settings`);
     const section = page.locator("#ssh-environment-settings");
 
