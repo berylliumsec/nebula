@@ -85,6 +85,25 @@ export const navigationItems: NavigationItem[] = [
   },
 ];
 
+// Canonical project surfaces and the navigation item that owns each one.
+const projectSurfaceItemPaths: Record<string, string> = {
+  workbench: "/",
+  findings: "/findings",
+  reports: "/reports",
+  assets: "/project",
+  evidence: "/project",
+  sources: "/project",
+};
+
+/** Resolves legacy and canonical `/projects/<id>/<surface>/<resource>` routes to their navigation item. */
+export function navigationItemForPath(pathname: string): NavigationItem {
+  const project = /^\/projects\/[^/]+(?:\/([^/]+))?/.exec(pathname);
+  const path = project
+    ? project[1] ? projectSurfaceItemPaths[project[1]] : "/project"
+    : `/${pathname.split("/")[1] ?? ""}`;
+  return navigationItems.find((item) => item.path === path) ?? navigationItems[0];
+}
+
 export const navigationGroups = [
   { id: "workspace" as const, label: "Workspace" },
 ];

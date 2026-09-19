@@ -17,6 +17,29 @@ const copy = vi.hoisted(() => vi.fn());
 vi.mock("./selection", () => ({copySelectionText: copy}));
 afterEach(cleanup);
 
+describe("TopBar page title", () => {
+  beforeEach(() => workspace.api.engagementContainerTerminalPublicIp.mockResolvedValue(undefined));
+
+  it.each([
+    ["/projects/project-1/workbench", "Workbench"],
+    ["/projects/project-1/findings", "Findings"],
+    ["/projects/project-1/findings/finding-7", "Findings"],
+    ["/projects/project-1/reports/report-2", "Reports"],
+    ["/projects/project-1", "Project"],
+    ["/projects/project-1/assets/asset-3", "Project"],
+    ["/projects/project-1/evidence", "Project"],
+    ["/projects/project-1/sources", "Project"],
+    ["/library/doc-1", "Library"],
+    ["/settings", "Settings"],
+    ["/", "Workbench"],
+  ])("names the page that owns %s", (route, label) => {
+    const { container } = render(<MemoryRouter initialEntries={[route]}><TopBar activityOpen={false} approvalsCount={0} onToggleActivity={vi.fn()} onToggleSidebar={vi.fn()} onOpenPalette={vi.fn()} setToolbarHost={vi.fn()} setTrailingToolbarHost={vi.fn()} sidebarCollapsed={false} /></MemoryRouter>);
+    expect(container.querySelector(".top-bar-title strong")).toHaveTextContent(label);
+    expect(screen.getByRole("group", { name: `${label} actions` })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: `${label} primary action` })).toBeInTheDocument();
+  });
+});
+
 describe("TopBar public IP", () => {
   beforeEach(() => {
     copy.mockReset();
