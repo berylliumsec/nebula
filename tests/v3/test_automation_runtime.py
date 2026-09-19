@@ -1147,7 +1147,7 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
             query="unique-needle",
         )
         assert search["matches"]
-        assert search["untrusted_data"] is True
+        assert "untrusted_data" not in search
         read = service.read(
             engagement_id=engagement.id,
             owner_id="mission-owner",
