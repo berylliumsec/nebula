@@ -484,7 +484,7 @@ def load_settings(store: Any) -> ToolSuggestionSettings | None:
 
     try:
         return store.get(ToolSuggestionSettings, SETTINGS_ID)
-    except NotFoundError:
+    except NotFoundError:  # diagnostic-expected: no key has been saved yet
         return None
 
 
