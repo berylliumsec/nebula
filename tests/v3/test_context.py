@@ -10,6 +10,7 @@ from nebula.v3.context import (
     ContextSource,
     estimate_messages,
     estimate_tokens,
+    known_model_limits,
     lexical_score,
     resolve_context_limits,
 )
@@ -216,6 +217,85 @@ def test_context_limits_use_each_exact_model_instead_of_provider_maximum():
     assert small.context_window == 8_000
     assert small.max_output_tokens == 1_000
     assert small.target_input_tokens == 5_250
+
+
+@pytest.mark.parametrize(
+    ("model", "window"),
+    [
+        ("claude-opus-5", 1_000_000),
+        ("claude-haiku-4-5-20251001", 200_000),
+        ("claude-haiku-4-5@20251001", 200_000),
+        ("us.anthropic.claude-3-haiku-20240307-v1:0", 200_000),
+        ("claude-sonnet-4-5-20250929", 200_000),
+        ("deepseek-flash", 1_048_576),
+        ("deepseek-chat", 131_072),
+        ("deepseek/deepseek-v3.2", 163_840),
+        ("deepseek-ai/DeepSeek-V3.1-Terminus", 131_072),
+        ("glm-4.6", 202_752),
+        ("glm-5.3", 1_048_576),
+        ("models/gemini-2.5-pro", 1_048_576),
+        ("gpt-4o-mini-2024-07-18", 128_000),
+        ("gpt-5.4-mini", 400_000),
+        ("kimi-k2-0905-preview", 262_144),
+    ],
+)
+def test_known_model_limits_fold_provider_spellings(model: str, window: int):
+    known = known_model_limits(model)
+    assert known is not None
+    assert known[0] == window
+
+
+def test_known_model_limits_ignore_unknown_models():
+    assert known_model_limits("model-a") is None
+    assert known_model_limits("glm") is None
+    assert known_model_limits(None) is None
+
+
+def test_hosted_provider_uses_published_limits_without_a_catalog():
+    profile = _profile()
+    profile.provider_type = "openai_compatible"
+    profile.is_local = False
+
+    limits = resolve_context_limits(profile, model="glm-4.6")
+
+    assert limits.context_window == 202_752
+    assert limits.max_output_tokens == 2_048
+    assert limits.source == "known_model"
+    assert limits.estimated is False
+    assert limits.metadata_revision.startswith("known-models:")
+
+
+def test_published_limits_respect_configured_caps_and_catalogs():
+    profile = _profile(context_window=64_000)
+    profile.provider_type = "anthropic"
+    profile.is_local = False
+    assert resolve_context_limits(profile, model="claude-opus-5").context_window == (
+        64_000
+    )
+
+    profile.metadata["model_descriptors"] = [
+        {"id": "claude-opus-5", "context_window": 32_000}
+    ]
+    catalog = resolve_context_limits(profile, model="claude-opus-5")
+    assert catalog.context_window == 32_000
+    assert catalog.source == "model_catalog"
+
+
+def test_local_runtimes_do_not_use_published_limits():
+    limits = resolve_context_limits(_profile(), model="deepseek-r1")
+    assert limits.context_window == 8_192
+    assert limits.source == "fallback"
+
+
+def test_unverified_openrouter_keeps_safe_ceiling_for_known_models():
+    profile = _profile()
+    profile.provider_type = "openrouter"
+    profile.is_local = False
+
+    limits = resolve_context_limits(profile, model="deepseek/deepseek-v4-pro")
+
+    assert limits.context_window == 8_192
+    assert limits.estimated is True
 
 
 def test_openrouter_context_limits_use_minimum_compatible_route_capacity():

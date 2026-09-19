@@ -1805,7 +1805,7 @@ export interface ContextStatus {
   maxOutputTokens: number;
   targetInputTokens: number;
   compactedInputTarget?: number;
-  capacitySource?: "model_catalog" | "configured" | "fallback" | "runtime";
+  capacitySource?: "model_catalog" | "known_model" | "configured" | "fallback" | "runtime";
   capacityEstimated?: boolean;
   metadataRevision?: string;
   routeLimitsRequired: boolean;
