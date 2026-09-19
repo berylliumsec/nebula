@@ -25,6 +25,9 @@ and redacted support bundles are documented in the
   explicit blocked outcomes, and hard budgets.
 - Typed tool plugins, strict JSON schemas, engagement-owned workspaces,
   broker-owned DNS resolution, scope enforcement, and rootless OCI execution.
+- MCP server profiles (stdio and streamable HTTP) with explicit trust, probing,
+  and per-tool approvals, importable from Claude Desktop, Cursor, and VS Code
+  JSON files. See [MCP server configuration files](MCP-SERVERS.md).
 - React/TypeScript workspace and Tauri shell with a loopback-only sidecar token
   handshake.
 - A human-operated Kali terminal plus reviewed assistant code execution. The
@@ -259,7 +262,7 @@ cloud-knowledge transfer confirmation. Product-help citations use stable
 
 The corpus covers startup and diagnostics, runner and workstation setup, Terminal,
 automation runtime, policy/approval states, providers, reviewed execution, workspace limits,
-context compaction, migration/import/export, and the current release boundary. If no
+context compaction, migration/import/export, MCP servers, and the current release boundary. If no
 article matches an observed Nebula failure, the assistant is instructed to report
 the exact error and say that no verified recovery procedure is available instead of
 inventing a step. Command final synthesis also searches the observed failed result,

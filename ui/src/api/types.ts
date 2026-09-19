@@ -2079,6 +2079,35 @@ export interface McpServerProfile {
   revision: number;
 }
 
+export interface McpImportSecret {
+  target: string;
+  source: "environment" | "vault" | "session";
+  reference?: string;
+}
+
+export interface McpImportEntry {
+  sourceName: string;
+  name?: string;
+  action: "create" | "replace" | "skip" | "invalid";
+  transport?: McpServerProfile["transport"];
+  command?: string;
+  arguments: string[];
+  url?: string;
+  profileId?: string;
+  secrets: McpImportSecret[];
+  warnings: string[];
+  error?: string;
+}
+
+export interface McpImportReport {
+  dryRun: boolean;
+  entries: McpImportEntry[];
+  created: number;
+  replaced: number;
+  skipped: number;
+  invalid: number;
+}
+
 export interface HarnessSessionSummary {
   id: Identifier;
   engagementId: Identifier;

@@ -2,6 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, chatRequestBody } from "./client";
 
 describe("ApiClient", () => {
+  it("sends MCP imports as snake_case and maps the preview report", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      dry_run: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+      entries: [{
+        source_name: "remote", name: "remote", action: "create", transport: "streamable_http",
+        command: null, arguments: [], url: "https://mcp.example.test/mcp", profile_id: null,
+        secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        warnings: [], error: null,
+      }],
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const config = { mcpServers: { remote: { url: "https://mcp.example.test/mcp" } } };
+
+    await expect(client.importMcpServers({ config, dryRun: true, onConflict: "skip", sourceName: "mcp.json" })).resolves.toEqual({
+      dryRun: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+      entries: [{
+        sourceName: "remote", name: "remote", action: "create", transport: "streamable_http",
+        command: undefined, arguments: [], url: "https://mcp.example.test/mcp", profileId: undefined,
+        secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        warnings: [], error: undefined,
+      }],
+    });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/mcp-servers/import");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ config, dry_run: true, on_conflict: "skip", source_name: "mcp.json" });
+  });
+
   it("loads OpenRouter's upstream provider directory with locations", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([
       { slug: "gmicloud", name: "GMICloud", headquarters: "US", datacenters: ["US"] },

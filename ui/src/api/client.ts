@@ -105,6 +105,9 @@ import type {
   LibraryIngestRequest,
   LibraryItem,
   MissionCreateRequest,
+  McpImportEntry,
+  McpImportReport,
+  McpImportSecret,
   McpServerProfile,
   OperatorExecution,
   ObservationSummary,
@@ -3359,6 +3362,56 @@ function mapHarnessInteraction(
   };
 }
 
+interface WireMcpImportEntry {
+  source_name: string;
+  name?: string | null;
+  action: McpImportEntry["action"];
+  transport?: McpServerProfile["transport"] | null;
+  command?: string | null;
+  arguments?: string[];
+  url?: string | null;
+  profile_id?: string | null;
+  secrets?: { target: string; source: McpImportSecret["source"]; reference?: string | null }[];
+  warnings?: string[];
+  error?: string | null;
+}
+
+interface WireMcpImportReport {
+  dry_run: boolean;
+  entries: WireMcpImportEntry[];
+  created: number;
+  replaced: number;
+  skipped: number;
+  invalid: number;
+}
+
+function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
+  return {
+    dryRun: value.dry_run,
+    created: value.created,
+    replaced: value.replaced,
+    skipped: value.skipped,
+    invalid: value.invalid,
+    entries: value.entries.map((entry) => ({
+      sourceName: entry.source_name,
+      name: entry.name ?? undefined,
+      action: entry.action,
+      transport: entry.transport ?? undefined,
+      command: entry.command ?? undefined,
+      arguments: entry.arguments ?? [],
+      url: entry.url ?? undefined,
+      profileId: entry.profile_id ?? undefined,
+      secrets: (entry.secrets ?? []).map((secret) => ({
+        target: secret.target,
+        source: secret.source,
+        reference: secret.reference ?? undefined,
+      })),
+      warnings: entry.warnings ?? [],
+      error: entry.error ?? undefined,
+    })),
+  };
+}
+
 function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
   return {
     id: value.id,
@@ -5764,6 +5817,27 @@ export class ApiClient {
         ),
       )
       .then(mapMcpServer);
+  }
+
+  importMcpServers(request: {
+    config: Record<string, unknown>;
+    dryRun: boolean;
+    onConflict: "skip" | "replace";
+    sourceName?: string;
+  }): Promise<McpImportReport> {
+    return this.request<WireMcpImportReport>("mcp-servers/import", {
+      method: "POST",
+      body: JSON.stringify({
+        config: request.config,
+        dry_run: request.dryRun,
+        on_conflict: request.onConflict,
+        source_name: request.sourceName,
+      }),
+    }).then(mapMcpImportReport);
+  }
+
+  mcpServerSchema(): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>("mcp-servers/schema");
   }
 
   async deleteMcpServer(id: string, expectedRevision: number): Promise<void> {

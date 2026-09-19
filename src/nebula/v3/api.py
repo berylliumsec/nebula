@@ -278,6 +278,7 @@ from .domain import (
     HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
+    McpServerProfile,
     MissionGrant,
     NebulaModel,
     OperationEvent,
@@ -386,6 +387,14 @@ from .harnesses import (
     harness_catalog,
 )
 from .mcp import McpProbeError, McpProbeReport, McpProbeService
+from .mcp_import import (
+    McpExportReport,
+    McpImportReport,
+    McpImportRequest,
+    export_mcp_config,
+    import_mcp_config,
+    mcp_config_json_schema,
+)
 from .operators import OperatorProfileService
 from .model_catalog import (
     OPENROUTER_PROVIDER_DIRECTORY_URL,
@@ -3754,6 +3763,39 @@ def create_app(
     )
     async def close_harness_session(session_id: str) -> HarnessSession:
         return await harness_runtime.close_session(session_id)
+
+    @app.post(
+        f"{API_PREFIX}/mcp-servers/import",
+        response_model=McpImportReport,
+        tags=["mcp"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_mcp_servers(request: McpImportRequest) -> McpImportReport:
+        return import_mcp_config(request, store=store, credential_store=credentials)
+
+    @app.get(
+        f"{API_PREFIX}/mcp-servers/schema",
+        tags=["mcp"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def mcp_servers_schema() -> dict[str, Any]:
+        return mcp_config_json_schema()
+
+    @app.get(
+        f"{API_PREFIX}/mcp-servers/export",
+        response_model=McpExportReport,
+        tags=["mcp"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def export_mcp_servers(
+        profile_id: list[str] | None = Query(default=None, max_length=200),
+    ) -> McpExportReport:
+        profiles = (
+            [store.get(McpServerProfile, item) for item in dict.fromkeys(profile_id)]
+            if profile_id
+            else store.list_entities(McpServerProfile, limit=1000)
+        )
+        return export_mcp_config(profiles)
 
     @app.post(
         f"{API_PREFIX}/mcp-servers/{{profile_id}}/probe",

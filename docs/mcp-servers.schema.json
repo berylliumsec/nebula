@@ -1,0 +1,302 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Nebula MCP server configuration",
+  "description": "MCP servers in the Claude Desktop, Cursor, or VS Code format, as imported by nebula-core mcp import.",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "mcpServers": {
+      "$ref": "#/$defs/Servers"
+    },
+    "servers": {
+      "$ref": "#/$defs/Servers"
+    },
+    "mcp": {
+      "type": "object",
+      "properties": {
+        "servers": {
+          "$ref": "#/$defs/Servers"
+        }
+      },
+      "required": [
+        "servers"
+      ]
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "mcpServers"
+      ]
+    },
+    {
+      "required": [
+        "servers"
+      ]
+    },
+    {
+      "required": [
+        "mcp"
+      ]
+    }
+  ],
+  "$defs": {
+    "McpApprovalMode": {
+      "enum": [
+        "risk_based",
+        "allow",
+        "ask",
+        "deny"
+      ],
+      "title": "McpApprovalMode",
+      "type": "string"
+    },
+    "Servers": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 200,
+      "additionalProperties": {
+        "$ref": "#/$defs/Server"
+      }
+    },
+    "Server": {
+      "type": "object",
+      "description": "One MCP server: a local program (command) or an HTTP url.",
+      "properties": {
+        "type": {
+          "enum": [
+            "stdio",
+            "http",
+            "streamable-http",
+            "streamable_http",
+            "streamableHttp"
+          ],
+          "description": "Inferred from command or url when omitted."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Program on the Nebula host: a name on PATH such as npx, or an absolute path.",
+          "pattern": "^(/.*|[^/~][^/]*)$"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "number"
+            ]
+          },
+          "description": "Passed literally; ${...} is not expanded here."
+        },
+        "env": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "description": "Environment for the program. Use ${NAME} or ${env:NAME} for a variable of the Nebula Core process."
+        },
+        "cwd": {
+          "type": "string",
+          "pattern": "^/",
+          "description": "Absolute directory; omit to use the Project workspace."
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https?://",
+          "description": "Streamable HTTP endpoint; https unless on localhost."
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Request headers, all treated as secrets. Authorization: Bearer ... becomes bearer auth. Use ${NAME} or ${env:NAME} for a variable of the Nebula Core process."
+        },
+        "nebula": {
+          "$ref": "#/$defs/NebulaOptions"
+        },
+        "disabled": {
+          "description": "Not imported: imported servers always start disabled."
+        },
+        "alwaysAllow": {
+          "description": "Not imported: tool approvals were not imported; review them in Nebula."
+        },
+        "autoApprove": {
+          "description": "Not imported: tool approvals were not imported; review them in Nebula."
+        },
+        "timeout": {
+          "description": "Not imported: use nebula.tool_timeout_seconds for tool timeouts."
+        },
+        "envFile": {
+          "description": "Not imported: env files are not read; reference variables with ${NAME}."
+        },
+        "description": {
+          "description": "Not imported: ignored."
+        }
+      },
+      "anyOf": [
+        {
+          "title": "Local (stdio) server",
+          "required": [
+            "command"
+          ],
+          "properties": {
+            "type": {
+              "const": "stdio"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "url"
+                ]
+              },
+              {
+                "required": [
+                  "headers"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "title": "Remote (HTTP) server",
+          "required": [
+            "url"
+          ],
+          "properties": {
+            "type": {
+              "not": {
+                "const": "stdio"
+              }
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "command"
+                ]
+              },
+              {
+                "required": [
+                  "args"
+                ]
+              },
+              {
+                "required": [
+                  "env"
+                ]
+              },
+              {
+                "required": [
+                  "cwd"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "NebulaOptions": {
+      "additionalProperties": false,
+      "description": "Nebula-specific settings that may accompany one imported server.",
+      "properties": {
+        "default_approval": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/McpApprovalMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Approval for this server's tools; risk_based when omitted."
+        },
+        "tool_overrides": {
+          "additionalProperties": {
+            "$ref": "#/$defs/McpApprovalMode"
+          },
+          "description": "Approval for individual tools, keyed by tool name.",
+          "title": "Tool Overrides",
+          "type": "object"
+        },
+        "enabled_tools": {
+          "description": "Offer only these tools. Empty offers every tool.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Enabled Tools",
+          "type": "array"
+        },
+        "disabled_tools": {
+          "description": "Never offer these tools.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2000,
+          "title": "Disabled Tools",
+          "type": "array"
+        },
+        "required": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Fail new sessions when this server cannot start.",
+          "title": "Required"
+        },
+        "startup_timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 120,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Startup timeout; 10 when omitted.",
+          "title": "Startup Timeout Seconds"
+        },
+        "tool_timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 900,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-call timeout; 60 when omitted.",
+          "title": "Tool Timeout Seconds"
+        }
+      },
+      "title": "Nebula settings",
+      "type": "object"
+    }
+  }
+}
