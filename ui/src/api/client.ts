@@ -49,6 +49,7 @@ import type {
   ScopeImport,
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
+  ScopeToolCandidate,
   SecurityBrowserAction,
   SecurityBrowserAssessment,
   SecurityBrowserAssessmentProfile,
@@ -1932,6 +1933,7 @@ interface WireEngagementScope extends JsonObject {
   prohibited_actions?: string[];
   local_only?: boolean;
   tool_suggestions?: boolean;
+  always_loaded_tools?: string[];
   max_concurrency?: number;
   grants?: Array<{
     risk_classes?: string[];
@@ -1942,6 +1944,14 @@ interface WireEngagementScope extends JsonObject {
     granted_by?: string;
   }>;
   revision?: number;
+}
+
+interface WireScopeToolCandidate extends JsonObject {
+  name: string;
+  server_id: string;
+  server_name: string;
+  tool_name: string;
+  description?: string;
 }
 
 interface WireScopeImport extends WireEntity {
@@ -3989,6 +3999,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
     toolSuggestions: value.tool_suggestions === true,
+    alwaysLoadedTools: value.always_loaded_tools ?? [],
     maxConcurrency: numberField(value.max_concurrency) || 1,
     grants: (value.grants ?? []).map((grant) => ({
       riskClasses: grant.risk_classes ?? [],
@@ -6361,6 +6372,25 @@ export class ApiClient {
     ).then(mapEngagementScope);
   }
 
+  /** Connected-source tools this project can keep loaded; [] on older Core. */
+  listScopeToolCandidates(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ScopeToolCandidate[]> {
+    return this.request<WireScopeToolCandidate[]>(
+      `engagements/${encodeURIComponent(engagementId)}/scope/tool-candidates`,
+      { signal },
+    ).then((items) =>
+      (items ?? []).map((item) => ({
+        name: item.name,
+        serverId: item.server_id,
+        serverName: item.server_name,
+        toolName: item.tool_name,
+        description: item.description ?? "",
+      })),
+    );
+  }
+
   createScopeImport(
     body: ScopeImportCreateRequest,
     signal?: AbortSignal,
@@ -6448,6 +6478,7 @@ export class ApiClient {
           prohibited_actions: body.prohibitedActions,
           local_only: body.localOnly,
           tool_suggestions: body.toolSuggestions,
+          always_loaded_tools: body.alwaysLoadedTools,
           max_concurrency: body.maxConcurrency,
           grants: body.grants.map((grant) => ({
             risk_classes: grant.riskClasses,
