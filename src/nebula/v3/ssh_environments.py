@@ -125,7 +125,7 @@ def config_path(path: Path | str | None = None) -> Path:
 def _split_args(value: str) -> list[str]:
     try:
         return shlex.split(value, comments=False, posix=True)
-    except ValueError:
+    except ValueError:  # diagnostic-expected: unbalanced quotes
         return value.split()
 
 
@@ -163,11 +163,12 @@ def discover_hosts(path: Path | str | None = None) -> SshConfigScan:
                 )
                 return
             text = file.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+        except OSError as exc:  # diagnostic-expected: shown as a scan error
             scan.errors.append(f"{file}: {exc.strerror or exc}")
             return
         scan.files_read.append(str(file))
-        current: dict[str, object] | None = None
+        # (concrete names, line number) of the Host block being read.
+        current: tuple[list[str], int] | None = None
         # Only comments between a Host line and its first directive describe
         # that host; later ones usually introduce the next block.
         comments: list[str] = []
@@ -176,8 +177,7 @@ def discover_hosts(path: Path | str | None = None) -> SshConfigScan:
         def flush() -> None:
             nonlocal current
             if current is not None:
-                names = current["names"]
-                assert isinstance(names, list)
+                names, line = current
                 fresh = [name for name in names if name not in seen_aliases]
                 if fresh:
                     seen_aliases.update(fresh)
@@ -187,7 +187,7 @@ def discover_hosts(path: Path | str | None = None) -> SshConfigScan:
                             aliases=tuple(fresh),
                             comment=" ".join(comments).strip(),
                             source=str(file),
-                            line=int(current["line"]),  # type: ignore[arg-type]
+                            line=line,
                         )
                     )
             current = None
@@ -215,7 +215,7 @@ def discover_hosts(path: Path | str | None = None) -> SshConfigScan:
                             scan.skipped_patterns.append(name)
                     else:
                         names.append(name)
-                current = {"names": names, "line": number} if names else None
+                current = (names, number) if names else None
             elif keyword == "match":
                 flush()
                 scan.skipped_match_blocks += 1
@@ -272,7 +272,7 @@ def parse_resolved_config(alias: str, output: str) -> ResolvedSshHost:
     }
     try:
         port = int(first("port", "22"))
-    except ValueError:
+    except ValueError:  # diagnostic-expected: default port
         port = 22
     return ResolvedSshHost(
         alias=alias,
@@ -421,7 +421,7 @@ def probe_host(alias: str, path: Path | str | None = None) -> SshProbeResult:
             stdin=subprocess.DEVNULL,
             env={**os.environ, "LC_ALL": "C"},
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired:  # diagnostic-expected: unreachable
         return SshProbeResult(
             alias=alias,
             status="unreachable",

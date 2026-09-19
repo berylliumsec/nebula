@@ -98,7 +98,7 @@ class SshEnvironmentService:
     def get(self, alias: str) -> SshEnvironment | None:
         try:
             return self.store.get(SshEnvironment, environment_id(alias))
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: a host without saved settings
             return None
 
     def saved(self) -> list[SshEnvironment]:
@@ -322,11 +322,11 @@ async def run_remote_command(
     timed_out = False
     try:
         await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError:  # diagnostic-expected: timed-out result
         timed_out = True
         try:
             os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except ProcessLookupError:  # diagnostic-expected: the command already exited
             pass
         await process.wait()
     stdout, stderr = await readers
@@ -399,9 +399,7 @@ def build_ssh_tool_plugins(
                     timeout_seconds=timeout,
                     config_path=config_path,
                 )
-            except (
-                Exception
-            ) as exc:  # diagnostic-expected: converted to a failed tool receipt
+            except Exception as exc:  # diagnostic-expected: failed receipt
                 failure = str(exc) or type(exc).__name__
             completed = utc_now()
             error_text = stderr.decode("utf-8", errors="replace")
