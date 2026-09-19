@@ -2,8 +2,9 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { searchForWorkspaceRoot } from "vite";
 
 const uiBuild = {
   commit: process.env.NEBULA_BUILD_COMMIT ?? execFileSync("git", ["rev-parse", "HEAD"], {encoding: "utf8"}).trim(),
@@ -40,6 +41,9 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1420,
     strictPort: true,
+    // Worktrees link ui/node_modules to the main checkout; serve its real path
+    // (fonts load through /@fs) instead of answering 403.
+    fs: {allow: [searchForWorkspaceRoot(process.cwd()), realpathSync(path.resolve(import.meta.dirname, "node_modules"))]},
     proxy: {
       "/api": {
         target: backendHost,

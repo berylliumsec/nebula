@@ -74,7 +74,7 @@
     padding: 4px 8px env(safe-area-inset-bottom, 0px); border-top: 1px solid var(--border-soft);
     background: linear-gradient(var(--surface), var(--surface)), var(--canvas);
   }
-  :root[data-theme] .mobile-companion-nav button { min-height: 50px; gap: 2px; font-size: 10.5px; font-weight: var(--weight-medium); }
+  :root[data-theme] .mobile-companion-nav button { min-height: 50px; gap: 2px; font-weight: var(--weight-medium); }
   :root[data-theme] .mobile-companion-nav button[aria-current="page"] svg { color: var(--text-strong); }
   :root[data-theme] .mobile-companion-nav button[aria-current="page"]::before { content: none; }
   :root[data-theme] .mobile-nav-badge { position: absolute; top: 5px; left: calc(50% + 7px); width: 8px; height: 8px; border: 2px solid var(--surface); border-radius: 50%; background: var(--orange); box-sizing: content-box; }
