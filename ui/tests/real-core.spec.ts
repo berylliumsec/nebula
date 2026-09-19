@@ -4246,7 +4246,8 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Environments acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    // The phone shell hides the ready chip, so read its label rather than its visibility.
+    await expect(page.locator(".connection-chip")).toHaveAttribute("aria-label", /Nebula Core (ready|degraded)/, {timeout: 20_000});
     await page.goto(`${core.origin}/settings#ssh-environment-settings`);
     const section = page.locator("#ssh-environment-settings");
 

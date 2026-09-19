@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 // Service-worker-owned requests bypass Playwright routes after reload. These
 // tests exercise mocked Core state, so preserve that authority on navigation.
@@ -6517,6 +6517,95 @@ test("phone shell keeps the terminal in its own tab and the chat edge to edge", 
   await expect(page).toHaveURL(/view=workspace/);
   await expect(page.getByRole("heading", { name: "Files", level: 2 })).toBeVisible();
   expect(await noOverflow()).toBe(true);
+});
+
+test("phone shell opens the sidebar drawer above resource inspectors", async ({ page }, testInfo) => {
+  test.skip((page.viewportSize()?.width ?? 1440) > 760, "Phone shell contract");
+  test.setTimeout(120_000);
+  const project = "scratch-project";
+  const finding = {
+    ...entity, id: "finding-phone", engagement_id: project, title: "Reflected script injection",
+    description: "Untrusted search input is reflected into an executable response context.", severity: "high",
+    severity_rationale: "An unauthenticated remote user can execute script in another user's session.", status: "validated",
+    asset_ids: [], evidence_ids: [], cve_ids: [], cwe_ids: [], verifier_id: null, verified_at: null,
+  };
+  const asset = { ...entity, id: "asset-phone", engagement_id: project, asset_type: "host", name: "edge-gateway", address: "10.20.0.5", hostname: "edge.internal", criticality: "high", exposed: true, tags: [], metadata: {} };
+  const evidence = { ...entity, id: "evidence-phone", engagement_id: project, evidence_type: "screenshot", title: "Login bypass capture", description: "", asset_ids: [], captured_at: entity.created_at, metadata: {} };
+  const source = { ...entity, id: "source-phone", engagement_id: project, name: "Rules of engagement", source_type: "document", status: "indexed", document_count: 3, metadata: {} };
+  const libraryItem = { ...entity, id: "library-phone", name: "Web testing playbook", source_type: "document", status: "indexed", document_count: 2, metadata: {} };
+  const lists: Record<string, unknown[]> = { "/findings": [finding], "/assets": [asset], "/evidence": [evidence], "/knowledge": [source], "/library/items": [libraryItem] };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    const list = Object.keys(lists).find((suffix) => path.endsWith(suffix));
+    if (request.method() === "GET" && list) return route.fulfill({ json: lists[list] });
+    return route.fallback();
+  });
+  const inspectors = [
+    { surface: `/projects/${project}/findings`, open: `Edit ${finding.title}`, title: finding.title, id: finding.id },
+    { surface: `/projects/${project}/assets`, open: "Inspect", title: asset.name, id: asset.id },
+    { surface: `/projects/${project}/evidence`, open: "Inspect", title: evidence.title, id: evidence.id },
+    { surface: `/projects/${project}/sources`, open: "Inspect", title: source.name, id: source.id },
+    { surface: "/library", open: "Inspect", title: libraryItem.name, id: libraryItem.id },
+  ];
+  const visit = (pathname: string) => page.evaluate((next) => {
+    history.pushState({}, "", next);
+    dispatchEvent(new PopStateEvent("popstate"));
+  }, pathname);
+  const layerAt = (point: { x: number; y: number }) => page.evaluate(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y);
+    if (hit?.closest(".side-nav")) return "drawer";
+    if (hit?.closest(".sidebar-scrim")) return "scrim";
+    if (hit?.closest(".resource-inspector")) return "inspector";
+    return hit ? `${hit.tagName.toLowerCase()}.${hit.getAttribute("class")}` : "nothing";
+  }, point);
+  // Phone projects tap; the narrow desktop project has no touch input.
+  const press = (target: Locator, position?: { x: number; y: number }) => testInfo.project.use.hasTouch ? target.tap({ position }) : target.click({ position });
+  const viewport = page.viewportSize()!;
+  const drawer = page.getByRole("complementary", { name: "Primary navigation" });
+  const scrim = page.getByRole("button", { name: "Close sidebar" });
+
+  await openWorkspace(page, "/findings", "Findings");
+  for (const theme of ["zero-dark", "dark"] as const) {
+    if (theme === "dark") await setTheme(page, theme);
+    await expect(page.locator(".zero-anchor-dock")).toHaveCount(theme === "dark" ? 0 : 1);
+    for (const [index, inspector] of inspectors.entries()) {
+      await visit(inspector.surface);
+      await page.getByRole("button", { name: inspector.open, exact: true }).click();
+      const detail = `${inspector.surface}/${inspector.id}`;
+      await expect.poll(() => page.evaluate(() => location.pathname)).toBe(detail);
+      const panel = page.getByRole("complementary", { name: inspector.title });
+      await expect(panel).toBeVisible();
+
+      await press(page.getByRole("button", { name: "Show sidebar" }));
+      await expect(page.getByRole("button", { name: "Hide sidebar" })).toHaveAttribute("aria-expanded", "true");
+      const findingsLink = drawer.getByRole("link", { name: "Findings", exact: true });
+      await expect(findingsLink).toBeInViewport({ ratio: 1 });
+      // The drawer and its scrim, not the full-width inspector, receive taps.
+      const link = (await findingsLink.boundingBox())!;
+      await expect.poll(() => layerAt({ x: link.x + link.width / 2, y: link.y + link.height / 2 })).toBe("drawer");
+      const edge = (await drawer.boundingBox())!;
+      const outside = { x: (edge.x + edge.width + viewport.width) / 2, y: viewport.height / 2 };
+      expect(outside.x).toBeGreaterThan(edge.x + edge.width);
+      await expect.poll(() => layerAt(outside)).toBe("scrim");
+      if (index === 0) await page.screenshot({ path: testInfo.outputPath(`${theme}-drawer-over-inspector.png`) });
+
+      if (index === inspectors.length - 1) {
+        // Navigation from the drawer still works over an open inspector.
+        await press(findingsLink);
+        await expect.poll(() => page.evaluate(() => location.pathname)).toBe(`/projects/${project}/findings`);
+        await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
+        continue;
+      }
+      const scrimBox = (await scrim.boundingBox())!;
+      await press(scrim, { x: outside.x - scrimBox.x, y: outside.y - scrimBox.y });
+      await expect(page.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
+      await expect(findingsLink).not.toBeInViewport();
+      // Dismissing the drawer leaves the inspector and its route untouched.
+      await expect(panel).toBeVisible();
+      expect(await page.evaluate(() => location.pathname)).toBe(detail);
+    }
+  }
 });
 
 test("stabilization manual request workspace preserves drafts and keeps responses visible", async ({ page }, testInfo) => {
