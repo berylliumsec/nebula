@@ -253,11 +253,12 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
                         "finish_reason": "stop",
                         "message": {
                             "content": "FLASH_OK",
+                            # OpenRouter mirrors one thought across both channels.
                             "reasoning": "Private chain of thought.",
                             "reasoning_details": [
                                 {
                                     "type": "reasoning.text",
-                                    "text": "Consider the token.",
+                                    "text": "Private chain of thought.",
                                 }
                             ],
                         },
@@ -288,8 +289,54 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
     )
     assert observed["payload"]["reasoning"] == {"exclude": False}
     assert result.text == "FLASH_OK"
-    assert "Private chain of thought." in result.reasoning
-    assert "Consider the token." in result.reasoning
+    assert result.reasoning == "Private chain of thought."
+
+
+def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "id": "chat_details",
+                "model": "deepseek/deepseek-v4-flash",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": "FLASH_OK",
+                            "reasoning_details": [
+                                {"type": "reasoning.encrypted", "data": "opaque"},
+                                {"type": "reasoning.text", "text": "Consider it."},
+                            ],
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 4,
+                    "completion_tokens": 2,
+                    "total_tokens": 6,
+                },
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            id="openrouter",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            flavor=ProviderFlavor.OPENROUTER,
+            base_url="https://openrouter.ai/api/v1",
+            default_model="deepseek/deepseek-v4-flash",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    result = asyncio.run(
+        provider.complete(
+            ModelRequest(messages=[ModelMessage(role="user", content="continue")])
+        )
+    )
+    assert result.text == "FLASH_OK"
+    assert result.reasoning == "Consider it."
 
 
 @pytest.mark.parametrize(
@@ -1053,6 +1100,75 @@ def test_openai_compatible_streams_reasoning_apart_from_content():
     assert events[2].delta == "FLASH_OK"
     assert events[-1].response.text == "FLASH_OK"
     assert events[-1].response.reasoning == "think"
+
+
+def test_openai_compatible_stream_does_not_repeat_mirrored_reasoning():
+    """OpenRouter repeats each thought fragment in `reasoning_details`."""
+
+    chunks = [
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning": "The",
+                        "reasoning_details": [
+                            {"type": "reasoning.text", "text": "The", "index": 0}
+                        ],
+                    }
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning": " user",
+                        "reasoning_details": [
+                            {"type": "reasoning.text", "text": " user", "index": 0}
+                        ],
+                    }
+                }
+            ]
+        },
+        {"choices": [{"delta": {"content": "Hi."}, "finish_reason": "stop"}]},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        body = (
+            "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+            + "data: [DONE]\n\n"
+        )
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            id="openrouter",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            flavor=ProviderFlavor.OPENROUTER,
+            base_url="https://openrouter.ai/api/v1",
+            default_model="deepseek/deepseek-v4-flash",
+            capabilities=ModelCapabilities(streaming=True),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect():
+        return [
+            event
+            async for event in provider.stream(
+                ModelRequest(messages=[ModelMessage(role="user", content="hello")])
+            )
+        ]
+
+    events = asyncio.run(collect())
+    reasoning = [
+        event.delta for event in events if event.type == StreamEventType.REASONING_DELTA
+    ]
+    assert reasoning == ["The", " user"]
+    assert events[-1].response.reasoning == "The user"
 
 
 def test_openai_compatible_stream_keeps_whitespace_between_deltas():
