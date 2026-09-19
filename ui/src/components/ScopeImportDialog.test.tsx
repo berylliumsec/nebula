@@ -36,6 +36,7 @@ const provider: ProviderHealth = {
   models: ["model-1"],
   modelAllowlist: ["model-1"],
   permitsSensitiveData: true,
+  autoShareToolResults: false,
   residency: [],
   options: {},
   metadata: {},
@@ -146,6 +147,7 @@ describe("ScopeImportDialog", () => {
       enabled: true,
       localOnly: true,
       permitsSensitiveData: false,
+      autoShareToolResults: false,
       models: ["codex-model"],
       defaultModel: "codex-model",
     } as HarnessProfile;

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { createPortal } from "react-dom";
 import { ListTodo, Play, Plus, RotateCcw, ShieldCheck, Square, Trash2, Wrench, X } from "lucide-react";
 import { providerModelVerification } from "../api/providerCapabilities";
+import { rememberToolSharing, sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { defaultModelRuntime } from "../api/runtimeDefaults";
 import type { HarnessProfile, HarnessSessionSummary, McpServerProfile } from "../api/types";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -18,7 +19,7 @@ interface NewMissionButtonProps {
 
 export function NewMissionButton({ className = "button primary", children, showSetupGuidance = true }: NewMissionButtonProps) {
   const confirm = useConfirmation();
-  const { api, coreState, engagement, previewMode, providers, reverifyProvider, startMission } = useWorkspace();
+  const { api, applyProviderToolSharing, coreState, engagement, previewMode, providers, reverifyProvider, startMission } = useWorkspace();
   const availableProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const [runtimeKind, setRuntimeKind] = useState<"native" | "harness">("native");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
@@ -56,6 +57,15 @@ export function NewMissionButton({ className = "button primary", children, showS
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultAppliedRef = useRef(false);
   const selectedHarness = harnesses.find((item) => item.id === harnessId);
+  // Standing tool-sharing consent lives on the runtime profile; mirror the saved
+  // answer locally so the next mission stops asking too.
+  const rememberToolSharingRuntime = (saved: ToolSharingRuntime) => {
+    if (saved.kind === "harness") {
+      setHarnesses((current) => current.map((item) => item.id === saved.profile.id ? saved.profile : item));
+      return;
+    }
+    applyProviderToolSharing(saved.profile);
+  };
   const attachedHarnessSession = harnessSessions.find((item) => item.id === harnessSessionId);
   const selectedModelOptions = selectedHarness?.modelOptions?.find((item) => item.model === model);
   const modelOptions = [...new Set([
@@ -289,15 +299,21 @@ export function NewMissionButton({ className = "button primary", children, showS
     const runtimePermitsSensitive = runtimeKind === "harness"
       ? selectedHarness?.permitsSensitiveData
       : provider?.permitsSensitiveData;
+    const toolSharingRuntime: ToolSharingRuntime | undefined = runtimeKind === "harness"
+      ? selectedHarness && { kind: "harness", profile: selectedHarness }
+      : provider && { kind: "provider", profile: provider };
     if (runtimeUsesMcp && selectedRuntime && !runtimeIsLocal) {
       if (!runtimePermitsSensitive) {
         setValidationError("This runtime profile is text-only. Permit project/document data in Settings or remove MCP servers.");
         return;
       }
-      allowCloudToolResults = await confirm({
+      allowCloudToolResults = sharesToolResultsAlways(toolSharingRuntime) || await confirm({
         title: "Allow MCP results in this mission?",
         message: `Allow bounded MCP tool inputs and result excerpts to reach ${selectedRuntime.name} for this mission? Raw artifacts remain local and every risky call follows its approval policy.`,
         confirmLabel: "Allow this mission",
+        ...(api && toolSharingRuntime
+          ? { remember: rememberToolSharing(api, toolSharingRuntime, rememberToolSharingRuntime) }
+          : {}),
       });
       if (!allowCloudToolResults) return;
     }

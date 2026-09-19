@@ -26,6 +26,7 @@ function provider(
     modelAllowlist: ["model-1"],
     defaultModel: "model-1",
     permitsSensitiveData: true,
+    autoShareToolResults: false,
     residency: [],
     options: {},
     metadata: {},
@@ -139,6 +140,7 @@ describe("ExecutionInsightDialog", () => {
       enabled: true,
       localOnly: true,
       permitsSensitiveData: false,
+      autoShareToolResults: false,
       models: ["codex-model"],
       defaultModel: "codex-model",
     } as HarnessProfile;

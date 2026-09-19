@@ -1,23 +1,29 @@
 {
-  "change_digest": "ed202ba18c7a38844fa974d7e469e6b67dd9c6d352061379e20e2a46372d7df6",
-  "reviewed_by": "Claude review of automatic retries for transient provider failures",
-  "reason": "A chat turn died on OpenRouter's 'provider returned HTTP 503: Provider returned error (upstream: service overloaded, please try again later)', which is a temporary upstream refusal carrying no model output. providers.py now classifies 408/425/429/500/502/504/503 as ProviderOverloadedError and resends the identical request: ModelProvider._post wraps every complete() POST (OpenAI Responses, OpenAI-compatible/OpenRouter/vLLM, Anthropic, Gemini) and _stream_with_retry wraps the Chat Completions SSE open, so a stream is only replayed before its first token. Attempts are bounded (3 by default, 1 disables), waits are exponential with jitter and honour Retry-After up to a 20s ceiling, connect-phase transport failures retry because they never reached the provider, and an exhausted retry appends 'after N attempts' so the operator knows a manual retry adds nothing. tests/v3/test_providers.py adds the retry contract: recovery after transient 503s, the bounded stop with the attempts suffix, no retry for a 401 request defect, the per-provider disable, a stream retried before its first token, a stream that fails after output and is not replayed, option/environment precedence for the limits, and Retry-After parsing and clamping. tests/v3/test_provider_contracts.py and test_provider_verification.py hold the adapter contracts and health paths that _post now routes through; tests/v3/test_chat.py, test_chat_tool_loop.py and test_api_stream_context.py exercise the chat completion, tool-loop and SSE consumers of those same adapters.",
-  "exclusions": "No frontend, native or Playwright entries: no UI file, route, style or rendered surface changed, and the operator-visible failure card renders the same normalized provider message with the attempts suffix appended by Core. No full suites. Bedrock is excluded because it calls boto3, which applies its own retry configuration rather than httpx. Provider health probes and the OpenRouter catalog/route discovery calls are excluded deliberately: they stay single-shot so a degraded provider still reports unhealthy promptly instead of stalling Settings. Other Python suites are excluded because no shared model, schema, route or storage contract changed; the new types are additive and ProviderOverloadedError subclasses the ProviderError every caller already handles. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell fails on main for unrelated reasons and is tracked separately.",
+  "change_digest": "6570043bae3837046b32aa260d64562bd949f00588433454d0bf113db905a7ac",
+  "reviewed_by": "Claude review of the standing tool-result sharing consent",
+  "reason": "Chat and missions asked for tool-result sharing on every turn because consent lived only in the request. Provider and harness profiles now carry privacy.auto_share_tool_results (valid only alongside permits_sensitive_data), the confirmation dialog offers an 'Always allow' checkbox that stores it, and chat, missions and the harness runtime treat the stored consent as the per-turn confirmation. Selected: the chat, harness, mission and domain Python suites for the privacy gates and the new model validator; the API client, consent helper, confirmation dialog, mission and harness settings frontend tests for the wire shape, checkbox and persistence; the mocked desktop assistant Playwright entry for the composer and dialog it renders.",
+  "exclusions": "No full suites. Provider, API and knowledge suites are unchanged: the new field is additive, defaults to false, and rides the existing provider/harness PATCH path already covered by test_api_crud_validation and the API client tests. Playwright runs desktop only: the mocked assistant entry covers the confirmation dialog markup, and mobile projects add nothing for a dialog with no phone-specific layout. The real-Core journeys are not rerun because no runtime wiring outside the privacy gates changed. The rollover-stub failure this selection first surfaced in test_harnesses.py was fixed upstream by #365 and is merged in here, so the harness suite passes. The Vertex provider case in ui/src/App.test.tsx times out under full-suite parallel load on main (3d80234) as well and is unrelated.",
   "expected_tests": {
-    "python": 111,
-    "frontend": 0,
+    "python": 155,
+    "frontend": 87,
     "native": 0,
-    "playwright": 0
+    "playwright": 43
   },
   "python": [
-    "tests/v3/test_providers.py",
-    "tests/v3/test_provider_contracts.py",
-    "tests/v3/test_provider_verification.py",
     "tests/v3/test_chat.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_api_stream_context.py"
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_missions.py",
+    "tests/v3/test_domain.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/toolSharingConsent.test.ts",
+    "ui/src/api/client.test.ts",
+    "ui/src/components/DialogSystem.test.tsx",
+    "ui/src/components/MissionControls.test.tsx",
+    "ui/src/components/HarnessSettings.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop"
+  ]
 }
