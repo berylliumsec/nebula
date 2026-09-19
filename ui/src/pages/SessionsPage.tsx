@@ -3,6 +3,7 @@ import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
 import { IconAction } from "../components/IconAction";
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
 import { BrowserAssistantPanel, BROWSER_ASSISTANT_SHEET_QUERY } from "../components/BrowserAssistantPanel";
+import { useResizableSidePanel } from "../components/useResizableSidePanel";
 import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
@@ -164,6 +165,7 @@ import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptEx
 
 import { followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
 
+const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
 const readableContextStatuses = new Set<ContextStatus["status"]>(["not_needed", "ready", "stale", "failed", "runtime_managed"]);
@@ -527,6 +529,30 @@ export function SessionsPage() {
   const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
   const [terminalCommandRequest, setTerminalCommandRequest] = useState<{ id: string; source: string }>();
   const [terminalAssistantOpen, setTerminalAssistantOpen] = useState(false);
+  // The live shell can also sit beside the chat; the preference is per device.
+  const [chatTerminalOpen, setChatTerminalOpenState] = useState(() => {
+    try {
+      return localStorage.getItem(CHAT_TERMINAL_OPEN_KEY) === "true";
+    } catch {
+      // diagnostic-expected: storage can be unavailable; the side terminal then starts closed
+      return false;
+    }
+  });
+  const setChatTerminalOpen = useCallback((open: boolean) => {
+    setChatTerminalOpenState(open);
+    try {
+      localStorage.setItem(CHAT_TERMINAL_OPEN_KEY, String(open));
+    } catch {
+      // diagnostic-expected: storage can be unavailable; the choice then lasts for this page only
+    }
+  }, []);
+  const [chatTerminalStacked, setChatTerminalStacked] = useState(() => window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY);
+    const update = () => setChatTerminalStacked(query.matches);
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionActivity, setSessionActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
@@ -3602,9 +3628,24 @@ export function SessionsPage() {
   const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
   const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
+    if (view === "chat") {
+      // Keep the conversation in place and run beside it.
+      setChatTerminalOpen(true);
+      return;
+    }
     setTerminalAssistantOpen(true);
     setView("terminal");
-  }, [setView]);
+  }, [setChatTerminalOpen, setView, view]);
+  const chatTerminalVisible = view === "chat" && chatTerminalOpen && Boolean(api && engagement);
+  const chatTerminalSize = useResizableSidePanel({
+    defaultWidth: 520,
+    enabled: chatTerminalVisible && !chatTerminalStacked,
+    label: "Resize terminal",
+    maxWidth: 960,
+    minPrimaryWidth: 420,
+    minWidth: 360,
+    storageKey: "nebula.chat-side-terminal.width",
+  });
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
@@ -3632,6 +3673,12 @@ export function SessionsPage() {
         <div className="session-toolbar-actions" role="toolbar" aria-label="Conversation actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
           {toolAssistanceAction}
+          {view === "chat" && api && engagement && <button className="icon-button subtle" type="button"
+            aria-label={chatTerminalOpen ? "Hide terminal" : "Show terminal"}
+            title={chatTerminalOpen ? "Hide terminal" : "Show terminal beside the chat"}
+            aria-pressed={chatTerminalOpen}
+            aria-controls="chat-side-terminal"
+            onClick={() => setChatTerminalOpen(!chatTerminalOpen)}><SquareTerminal size={18} aria-hidden="true" /></button>}
           {view === "chat" && <button className="icon-button subtle" type="button"
             aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
             title={sessionInspectorOpen ? "Hide session details" : "Show session details"}
@@ -3961,7 +4008,7 @@ export function SessionsPage() {
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
         </aside>}
-        <section className="session-workspace">
+        <section className={`session-workspace${chatTerminalVisible ? ` chat-terminal-open${chatTerminalStacked ? " stacked" : ""}` : ""}`}>
           {view === "chat" && <header className="conversation-toolbar">
           {!conversationPanelOpen && !mobileListOpen && <button
             className="icon-button subtle session-conversations-toggle"
@@ -3978,9 +4025,10 @@ export function SessionsPage() {
             {conversationActions}
           </header>}
 
-          {api && engagement && <div className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "terminal"}>
-            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" /><button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button></header>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal"} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
+          {api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
+            {chatTerminalVisible && chatTerminalSize.resizeHandle}
+            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label="Open Terminal tab" title="Open the full Terminal tab" onClick={() => setView("terminal")}><Maximize2 size={16} aria-hidden="true" /></button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => setChatTerminalOpen(false)}><X size={16} aria-hidden="true" /></button></> : <button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}><PanelRight size={18} aria-hidden="true" /></button>}</header>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Terminal…</strong></div>}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal" || chatTerminalVisible} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
             {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
               {assistantPanel}
             </BrowserAssistantPanel>}
