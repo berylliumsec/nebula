@@ -1,29 +1,19 @@
 {
-  "change_digest": "6570043bae3837046b32aa260d64562bd949f00588433454d0bf113db905a7ac",
-  "reviewed_by": "Claude review of the standing tool-result sharing consent",
-  "reason": "Chat and missions asked for tool-result sharing on every turn because consent lived only in the request. Provider and harness profiles now carry privacy.auto_share_tool_results (valid only alongside permits_sensitive_data), the confirmation dialog offers an 'Always allow' checkbox that stores it, and chat, missions and the harness runtime treat the stored consent as the per-turn confirmation. Selected: the chat, harness, mission and domain Python suites for the privacy gates and the new model validator; the API client, consent helper, confirmation dialog, mission and harness settings frontend tests for the wire shape, checkbox and persistence; the mocked desktop assistant Playwright entry for the composer and dialog it renders.",
-  "exclusions": "No full suites. Provider, API and knowledge suites are unchanged: the new field is additive, defaults to false, and rides the existing provider/harness PATCH path already covered by test_api_crud_validation and the API client tests. Playwright runs desktop only: the mocked assistant entry covers the confirmation dialog markup, and mobile projects add nothing for a dialog with no phone-specific layout. The real-Core journeys are not rerun because no runtime wiring outside the privacy gates changed. The rollover-stub failure this selection first surfaced in test_harnesses.py was fixed upstream by #365 and is merged in here, so the harness suite passes. The Vertex provider case in ui/src/App.test.tsx times out under full-suite parallel load on main (3d80234) as well and is unrelated.",
+  "change_digest": "2e781f2cb9933914ceb35518c238983bed553748c831dd16819c297500eb9d00",
+  "reviewed_by": "Claude review of the vendor-native capability containment boundary",
+  "reason": "Harness sessions freeze an execution mode next to their native capabilities, and 08be66f dropped the container-only clamp from _session_native_capabilities, so adapters trusted whatever capability flags session metadata carried: tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell has been failing on main with Read/Glob/Grep/Bash leaking into a contained session. _session_native_capabilities now clamps (never grants) back to container-only unless the session froze execution_mode 'host'. Selected both files that own this policy in full: test_harness_adapters.py covers each vendor's config boundary (Claude tool set, disallowed_tools, PreToolUse decisions and system prompt on both sides of the clamp, and the Grok --disallowed-tools argv with its host fixture now carrying the execution_mode the runtime persists), and test_harnesses.py covers the runtime service that freezes capabilities per execution mode, forks sessions when a project changes mode, backfills legacy sessions, and denies legacy host shell flags.",
+  "exclusions": "No full suites. The change is confined to one backend policy helper plus the single reader of session capability metadata, so no UI file, style, API schema, or native module changed: frontend, native and Playwright layers are not applicable. Other Python files are excluded because they neither read native capabilities nor construct harness sessions; tests/v3/test_harness_commands.py, test_harness_connection_state.py, test_approval_handoff.py, test_browser_companion.py and test_diagnostic_guidance.py were run locally against this diff (82 passed) and are excluded as unaffected; rebased onto #368/#371/#373 and both selected files re-run green. Live provider turns and real-Core host-mode journeys are excluded; the host execution path is exercised through the runtime service fixtures.",
   "expected_tests": {
-    "python": 155,
-    "frontend": 87,
+    "python": 145,
+    "frontend": 0,
     "native": 0,
-    "playwright": 43
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_domain.py"
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_harnesses.py"
   ],
-  "frontend": [
-    "ui/src/api/toolSharingConsent.test.ts",
-    "ui/src/api/client.test.ts",
-    "ui/src/components/DialogSystem.test.tsx",
-    "ui/src/components/MissionControls.test.tsx",
-    "ui/src/components/HarnessSettings.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop"
-  ]
+  "playwright": []
 }
