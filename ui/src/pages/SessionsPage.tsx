@@ -508,6 +508,7 @@ export function SessionsPage() {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
   const [mobileConversationMenuOpen, setMobileConversationMenuOpen] = useState(false);
   const mobileConversationMenuRef = useRef<HTMLDivElement>(null);
+  const mobileConversationActionsRef = useRef<HTMLButtonElement>(null);
   const [fullScreen, setFullScreen] = useState(false);
   const [conversationPanelOpen, setConversationPanelOpen] = useState(
     () => readConversationPanelOpen(localStorage),
@@ -3792,7 +3793,8 @@ export function SessionsPage() {
   useEffect(() => { setTranscriptSearchOpen(false); }, [sessionId, view]);
   const closeTranscriptSearch = () => {
     setTranscriptSearchOpen(false);
-    transcriptSearchButtonRef.current?.focus();
+    // Phones open search from the Conversation actions menu; focus returns there.
+    (transcriptSearchButtonRef.current ?? mobileConversationActionsRef.current)?.focus();
   };
   const transcriptSearchAction = <button ref={transcriptSearchButtonRef} type="button" className="icon-button subtle transcript-search-toggle" data-guide="transcript-search" aria-label="Search messages and bookmarks" title="Search messages and bookmarks" aria-expanded={transcriptSearchOpen} aria-controls={transcriptSearchOpen ? "assistant-transcript-search" : undefined} onClick={() => setTranscriptSearchOpen(open => !open)}><Search size={18} aria-hidden="true" /></button>;
 
@@ -4161,7 +4163,7 @@ export function SessionsPage() {
               <small><span>{assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</span><ChevronDown size={13} aria-hidden="true" /></small>
             </button>
             {fullScreen ? focusAction : <div className="mobile-conversation-menu" ref={mobileConversationMenuRef}>
-              <button className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
+              <button ref={mobileConversationActionsRef} className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
               {mobileConversationMenuOpen && <div className="mobile-conversation-menu-panel" id="mobile-conversation-actions" role="menu" aria-label="Conversation actions">
                 {conversationOpen && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setTranscriptSearchOpen(true); }}><Search size={17} aria-hidden="true" /><span><strong>Search messages</strong><small>Messages and bookmarks</small></span></button>}
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>

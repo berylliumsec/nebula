@@ -599,6 +599,14 @@ async function installTruthfulCore(page: Page) {
   });
 }
 
+/** Phones reach session details through the chat header's conversation menu. */
+async function openSessionDetails(page: Page) {
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
+  } else await page.getByRole("button", { name: "Show session details" }).click();
+}
+
 async function openWorkspace(page: Page, route: string, heading: string) {
   if (page.url() === "about:blank") {
     await page.goto(route);
@@ -1415,7 +1423,7 @@ test(firstRunThemeTest, async ({ page }) => {
 });
 
 test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
   const appearance = page.locator("#appearance-settings");
@@ -2315,7 +2323,8 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
         const panel = button.closest('.chat-panel')!;
         const box = button.closest('.chat-composer')!.getBoundingClientRect();
         // Transcript search is an on-demand panel behind one toggle; the toggle must stay reachable.
-        const searchToggle = document.querySelector<HTMLElement>('.transcript-search-toggle')!.getBoundingClientRect();
+        // Phones reach it from the chat header's Conversation actions menu.
+        const searchToggle = document.querySelector<HTMLElement>('.transcript-search-toggle, .mobile-conversation-header [aria-label="Conversation actions"]')!.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
         return {
           bottom: rect.bottom, height: rect.height, width: rect.width, hit: button.contains(hit),
@@ -2401,7 +2410,7 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(durableScope) });
   });
 
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
   const domains = page.getByLabel("Allowed domains");
@@ -2453,7 +2462,7 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   expect(durableScope.allow_all_targets).toBe(true);
 
   await openWorkspace(page, "/", "Workbench");
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
   await expect(page.getByLabel("All targets and ports")).toBeChecked();
@@ -2517,7 +2526,7 @@ test("VPN settings keep upload and project routing calm at every width", async (
       }),
     });
   });
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Automation" }).click();
   const section = page.locator("#automation-runtime-settings");
@@ -3561,7 +3570,8 @@ test("conversation switching between projects detaches the provider viewer witho
   await expect(page.getByText("Inspecting Project A without blocking navigation.")).toBeVisible();
 
   const mobileViewport = (page.viewportSize()?.width ?? 1_000) <= 760;
-  if (mobileViewport) await page.getByRole("button", { name: "Show sidebar" }).click();
+  // Phones switch projects from the Workbench More tab.
+  if (mobileViewport) await page.getByRole("button", { name: "More workbench views" }).click();
   await page.getByRole("button", { name: "Switch project" }).click();
   await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Project B active", exact: true }).click();
   await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Project B");
@@ -3706,7 +3716,7 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   await expect(page.getByText("Hooked answer")).toBeVisible();
   await expect(page.getByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds)).toEqual(["audit"]);
-  await page.getByRole("button", { name: "Show session details" }).click();
+  await openSessionDetails(page);
   await expect(page.getByRole("region", { name: "Workspace controls" })).toBeVisible();
   const closeDetails = page.getByRole("button", { name: "Close details" });
   if (await closeDetails.count()) await closeDetails.click();
@@ -6221,7 +6231,8 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
       return issues;
     }));
     expect(croppedActions, `${name} has incomplete primary toolbar actions`).toEqual([]);
-    if (name === "workbench-assistant") {
+    // Phones drop the shell status cluster from the Workbench header.
+    if (name === "workbench-assistant" && (page.viewportSize()?.width ?? 1440) > 760) {
       const network = page.getByRole("button", {name: /Terminal container public IP.*Show details/});
       await network.click();
       const dialog = page.getByRole("dialog", {name: "Terminal network address"});
@@ -6294,7 +6305,7 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
     await capture(name);
   }
 
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   for (const [name, label] of [
     ["settings-setup", "Setup"],
     ["settings-advanced", "Advanced settings"],
@@ -6802,9 +6813,14 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
   const toggleAssistant = page.getByRole("button", { name: "Assistant", exact: true });
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "false");
   await toggleAssistant.focus();
-  await expect(page.getByRole("tooltip")).toHaveText("Toggle Assistant");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  // Touch-first devices only show tooltips for keyboard focus, never after a tap.
+  if (await page.evaluate(() => matchMedia("(hover: none)").matches)) {
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+  } else {
+    await expect(page.getByRole("tooltip")).toHaveText("Toggle Assistant");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
+  }
   await expect(page.getByRole("complementary", { name: "Browser Assistant", exact: true })).toHaveCount(0);
   await toggleAssistant.click();
   await expect(toggleAssistant).toHaveAttribute("aria-expanded", "true");
@@ -7555,12 +7571,20 @@ test("stabilization transcript search has a compact field and usable filters", a
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const panel = page.locator(".assistant-search");
   await expect(panel).toHaveCount(0);
-  const toggle = page.getByRole("button", {name: "Search messages and bookmarks", exact: true});
-  await expect(page.locator(".session-toolbar-actions").getByRole("button", {name: "Search messages and bookmarks", exact: true})).toBeVisible();
+  // Phones open transcript search from the chat header's Conversation actions menu.
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const toggle = page.getByRole("button", {name: mobile ? "Conversation actions" : "Search messages and bookmarks", exact: true});
+  const openSearch = async () => {
+    if (mobile) {
+      await toggle.click();
+      await page.getByRole("menuitem", {name: /Search messages/}).click();
+    } else await toggle.click();
+  };
+  if (!mobile) await expect(page.locator(".session-toolbar-actions").getByRole("button", {name: "Search messages and bookmarks", exact: true})).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   const toggleBox = await toggle.boundingBox();
   expect(toggleBox!.height).toBeGreaterThanOrEqual(44);
-  await toggle.click();
+  await openSearch();
   const input = panel.getByRole("searchbox", {name: "Search transcript"});
   await expect(input).toBeFocused();
   await expect(input).toHaveAttribute("placeholder", "Find a message…");
@@ -7592,7 +7616,8 @@ test("stabilization transcript search has a compact field and usable filters", a
   await input.press("Escape");
   await expect(panel).toHaveCount(0);
   await expect(toggle).toBeFocused();
-  await toggle.press("Enter");
+  if (mobile) await openSearch();
+  else await toggle.press("Enter");
   await expect(input).toBeFocused();
   await expect(input).toHaveValue("a message worth finding");
   await panel.getByRole("button", {name: "Close transcript search"}).click();

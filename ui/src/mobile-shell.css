@@ -17,7 +17,7 @@
   :root[data-theme] .zero-status-band { border-width: 0 0 1px; border-radius: 0; }
   :root[data-theme] .app-shell.workbench-route > .top-bar { display: none; }
   :root[data-theme] .top-bar { padding-top: env(safe-area-inset-top, 0px); }
-  :root[data-theme] .top-bar :is(.top-bar-public-ip, .guides-trigger, .command-trigger, .connection-chip.ready) { display: none; }
+  :root[data-theme] .top-bar :is(.top-bar-public-ip, .guides-trigger, .connection-chip.ready) { display: none; }
   :root[data-theme] .side-nav { padding-top: env(safe-area-inset-top, 0px); }
   :root[data-theme] .top-bar-back.button { display: inline-flex; min-height: 44px; gap: 2px; padding: 0 10px 0 4px; border: 0; color: var(--blue-bright); background: transparent; font-size: 16px; font-weight: var(--weight-regular); }
   :root[data-theme] .page { padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)); }
@@ -162,11 +162,10 @@
 
   /* ---- Terminal: a full tab with an Ask pill and a key row. */
   :root[data-theme] .sessions-page .terminal-companion-toolbar { min-height: 52px; align-items: flex-start; padding: 2px 6px 0 8px; }
-  /* Tabs and Ask share the first row; shell actions stay one scrollable row. */
-  :root[data-theme] .sessions-page .terminal-toolbar-host .terminal-tab-actions { flex-wrap: nowrap; gap: 0; overflow-x: auto; scrollbar-width: none; }
-  :root[data-theme] .sessions-page .terminal-toolbar-host .terminal-tab-actions::-webkit-scrollbar { display: none; }
-  :root[data-theme] .sessions-page .terminal-toolbar-host :is(.terminal-active-actions, .terminal-header-actions) { flex-wrap: nowrap; }
-  :root[data-theme] .mobile-ask-button.button { flex: 0 0 auto; width: auto; min-width: max-content; height: 36px; min-height: 36px; margin: 6px 2px 0 auto; align-self: flex-start; gap: 6px; padding: 0 14px; border: 1px solid var(--border-soft); border-radius: 18px; color: var(--text); background: var(--surface-raised); font-size: 14px; }
+  /* Tabs and Ask share the first row; shell actions wrap rather than scroll so every control stays reachable. */
+  :root[data-theme] .sessions-page .terminal-toolbar-host .terminal-tab-actions { gap: 0; }
+  :root[data-theme] .sessions-page .terminal-toolbar-host .terminal-tab-actions :is(button, summary) { flex-shrink: 0; min-width: 44px; min-height: 44px; }
+  :root[data-theme] .mobile-ask-button.button { flex: 0 0 auto; width: auto; min-width: max-content; height: 44px; min-height: 44px; margin: 2px 2px 0 auto; align-self: flex-start; gap: 6px; padding: 0 16px; border: 1px solid var(--border-soft); border-radius: 22px; color: var(--text); background: var(--surface-raised); font-size: 14px; }
   :root[data-theme] .mobile-ask-button svg { color: var(--blue-bright); }
 
   :root[data-theme] .browser-assistant-sheet {
