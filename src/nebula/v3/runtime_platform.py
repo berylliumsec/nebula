@@ -23,8 +23,10 @@ from .domain import (
     RunnerIsolation,
     RunnerProfile as StoredRunnerProfile,
     ScopePolicy,
+    SshEnvironment,
     utc_now,
 )
+from .environments import build_ssh_tool_plugins
 from .kali_tool_inventory import TOOL_NAME_PATTERN
 from .mcp import McpProbeService, build_mcp_tool_plugins
 from .policy import PolicyEngine
@@ -179,11 +181,12 @@ class RuntimePlatform:
         provider: ModelProvider,
         model: str,
         mcp_profiles: tuple[McpServerProfile, ...] = (),
+        ssh_environments: tuple[SshEnvironment, ...] = (),
         include_oci: bool = False,
         allow_empty: bool = False,
         **_obsolete_snapshot: Any,
     ) -> RuntimeToolComponents:
-        """Build MCP-only components; OCI command execution is fixed elsewhere."""
+        """Build MCP and SSH-environment components; OCI commands are fixed elsewhere."""
 
         del turn_id, provider, model
         if include_oci:
@@ -196,7 +199,7 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        if not mcp_profiles and not allow_empty:
+        if not mcp_profiles and not ssh_environments and not allow_empty:
             raise RuntimePlatformError("no MCP server was selected")
         registry = ToolRegistry()
         if mcp_profiles:
@@ -207,6 +210,8 @@ class RuntimePlatform:
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc
+        for plugin in build_ssh_tool_plugins(ssh_environments):
+            registry.register(plugin)
         register_artifact_retrieval_tools(
             registry,
             output_service=ToolOutputService(self.store, self.artifact_store),

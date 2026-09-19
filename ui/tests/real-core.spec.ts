@@ -4205,3 +4205,80 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
     if (previous.key !== undefined) process.env.TYPESAFE_API_KEY = previous.key;
   }
 });
+
+reliabilityTest("ssh environments list config hosts, enable, test, edit, and survive reload", async ({page}, info) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "environments");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 430;
+  const audit = async (label: string) => {
+    const a11y = await new AxeBuilder({page}).include("#ssh-environment-settings").withTags(["wcag2a", "wcag2aa"]).analyze();
+    expect(a11y.violations).toEqual([]);
+    expect(await page.locator("body").evaluate(body => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+    if (mobile) {
+      for (const control of await page.locator("#ssh-environment-settings :is(li button, li label)").all()) {
+        const box = await control.boundingBox();
+        expect(box?.height ?? 0, `${label}: ${await control.getAttribute("aria-label") ?? await control.innerText()}`).toBeGreaterThanOrEqual(44);
+      }
+    }
+    await page.screenshot({path: info.outputPath(`ssh-environments-${label}.png`), fullPage: true});
+  };
+  try {
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Environments"}})).json();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Environments acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/settings#ssh-environment-settings`);
+    const section = page.locator("#ssh-environment-settings");
+
+    // Discover: every concrete Host, nothing enabled, wildcards explained.
+    await expect(section.getByRole("heading", {name: "Environments"})).toBeVisible();
+    const hosts = section.getByRole("list", {name: "SSH hosts"});
+    await expect(hosts.getByRole("listitem")).toHaveCount(2);
+    await expect(section.getByText(/2 hosts · 0 enabled/)).toBeVisible();
+    await expect(section.getByText("Skipped: Host *")).toBeVisible();
+    await expect(hosts.getByText("lab-mac · research@127.0.0.1")).toBeVisible();
+    await audit("discovered");
+
+    // Enable runs the first connection test and shows what the machine is.
+    await section.getByRole("switch", {name: "Use lab-mac from Nebula"}).click();
+    await expect(section.getByText("Reachable · 12 ms")).toBeVisible();
+    await expect(section.getByText("macOS 27.0", {exact: true})).toBeVisible();
+
+    // A failing host explains the fix in place.
+    await section.getByRole("button", {name: "Test connection to pi-one"}).click();
+    await expect(section.getByText("Host key not trusted")).toBeVisible();
+    await expect(section.getByText(/Connect once with ssh pi-one on the Nebula host/)).toBeVisible();
+    await audit("tested");
+
+    // Details: config facts are read-only; Nebula settings save with the revision.
+    await section.getByRole("button", {name: "lab-mac details"}).click();
+    // The title follows the display name as it is typed.
+    const dialog = page.getByRole("dialog");
+    await expect(dialog.getByRole("heading", {name: "lab-mac"})).toBeVisible();
+    await expect(dialog.getByText("Build and test machine for the lab.").first()).toBeVisible();
+    await expect(dialog.getByRole("textbox", {name: /Notes for agents/})).toHaveValue("Build and test machine for the lab.");
+    await dialog.getByRole("textbox", {name: "Display name"}).fill("Lab Mac");
+    await dialog.getByRole("textbox", {name: "Working directory"}).fill("~/lab");
+    await dialog.getByRole("combobox", {name: "Command approval"}).selectOption("allow");
+    expect(await dialog.evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await page.screenshot({path: info.outputPath("ssh-environments-details.png")});
+    await dialog.getByRole("button", {name: "Save", exact: true}).click();
+    await expect(dialog).toBeHidden();
+    await expect(section.getByRole("button", {name: "Lab Mac details"})).toBeVisible();
+
+    // Durable: a reload shows the same state from Core.
+    await page.reload();
+    await expect(section.getByRole("switch", {name: "Use Lab Mac from Nebula"})).toBeChecked();
+    await expect(section.getByText(/2 hosts · 1 enabled/)).toBeVisible();
+    await expect(section.getByText("Host key not trusted")).toBeVisible();
+    const saved = await (await core.api.get("ssh-environments?resolve=false")).json();
+    expect(saved.hosts.find((host: {alias: string}) => host.alias === "lab-mac").environment).toMatchObject({display_name: "Lab Mac", working_directory: "~/lab", command_approval: "allow", enabled: true});
+
+    // Disable is immediate and durable.
+    await section.getByRole("switch", {name: "Use Lab Mac from Nebula"}).click();
+    await expect(section.getByText(/2 hosts · 0 enabled/)).toBeVisible();
+  } finally {
+    await core.stop();
+  }
+});
