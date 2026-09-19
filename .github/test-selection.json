@@ -1,35 +1,25 @@
 {
-  "change_digest": "ed561cd4e4653e4c32241d04e4420d1bd632144ef4dce9f400e944b4a48ba23b",
-  "reviewed_by": "Claude review of SSH environments from ~/.ssh/config",
-  "reason": "New SSH environments feature: Core reads ~/.ssh/config (ssh -G for resolved facts), stores per-host SshEnvironment settings, exposes /api/v1/ssh-environments, and turns enabled hosts into ssh.<host>.run_command broker tools with ask/allow approval; chat gains ssh_environment_ids and snapshots hosts for approval resume. UI adds Settings > Environments, a host details dialog, a composer host picker, a host-aware approval card and activity labels. Selected: the new backend tests (parsing, service, API, broker approve-then-run), the chat tool loop, MCP probing and chat API (shared runtime_platform/chat paths), domain and CRUD validation (new entity/custom resource), the Playwright impact manifest test; frontend tests for the new components and the client, ledger and MCP settings they touch; the new real-Core environments journey on all eight assistant-real projects plus the mocked assistant-settings journey that exercises the composer.",
-  "exclusions": "No full suites. Native unchanged. The browser journey uses a real Core with scripted connection tests (no sshd in CI); real ssh probing was checked manually against two LAN Macs. The provider-chat round trip (model calls a host tool, approval card, remote run) is covered by the broker approve-then-run test and component tests, not by a browser journey.",
+  "change_digest": "129da4920ed12bbc1771a67e4c0575651e8515906cc3b4a31ca19f4578ac2403",
+  "reviewed_by": "Claude review of the OpenRouter unlisted-model picker fix",
+  "reason": "Provider health (_provider_health behind POST /providers/{id}/health) trimmed discovered models to the profile's model allowlist, so Assistant settings never showed the 'More <provider> models' group added in #345. Health now also returns unlisted_models and unlisted_model_descriptors; models/model_descriptors stay allowlisted, so routing and the persisted catalog are unchanged. The UI client maps the new fields, WorkspaceContext merges them into availableModels and modelDescriptors, and the chat model select stays enabled when only unlisted models exist. Selected: test_api.py (exact health JSON for allowlisted vLLM and disabled profiles plus a new OpenRouter unlisted-model route test) and test_providers.py (OpenRouter discovery and upstream filtering); App.test.tsx (Assistant settings allowlist-extension flow, now mocking the real Core response shape) and client.test.ts (health mapping); the mocked Assistant settings and provider model-switch journeys on desktop, mobile Chromium and mobile WebKit.",
+  "exclusions": "No full suites. Native unchanged. tests/v3/test_provider_verification.py::test_health_discovered_model_is_persisted_when_verified already fails on origin/main (capability verification, untouched here) and is left out. The live OpenRouter clickthrough needs the real key and is checked on the LAN Core after deploy. No LAN-origin check in CI: no origin, cookie or socket behavior changed.",
   "expected_tests": {
-    "python": 117,
-    "frontend": 107,
+    "python": 68,
+    "frontend": 100,
     "native": 0,
-    "playwright": 11
+    "playwright": 6
   },
   "python": [
-    "tests/v3/test_ssh_environments.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_domain.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/test_playwright_impact.py"
+    "tests/v3/test_api.py",
+    "tests/v3/test_providers.py"
   ],
   "frontend": [
-    "ui/src/components/EnvironmentSettings.test.tsx",
-    "ui/src/components/EnvironmentTargetPicker.test.tsx",
-    "ui/src/sshTools.test.ts",
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/components/activityLedgerModel.test.ts",
-    "ui/src/components/ActivityLedger.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:ssh-environments",
-    "area:assistant-settings-navigation"
+    "area:assistant-settings-navigation",
+    "area:provider-runtime-switch"
   ]
 }
