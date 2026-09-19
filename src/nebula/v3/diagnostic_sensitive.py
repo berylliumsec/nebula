@@ -20,6 +20,8 @@ from typing import Callable, Protocol, cast
 import keyring
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from .vault_probe import vault_state
+
 SENSITIVE_DETAIL_SCHEMA = "nebula.diagnostic-sensitive-detail/v1"
 SENSITIVE_DETAIL_SERVICE = "io.berylliumsec.nebula.diagnostic-details"
 SENSITIVE_DETAIL_KEY_NAME = "aes-256-gcm-v1"
@@ -27,9 +29,6 @@ MAX_SENSITIVE_DETAIL_BYTES = 64 * 1024
 MAX_SENSITIVE_DIRECTORY_BYTES = 32 * 1024 * 1024
 SENSITIVE_DETAIL_TTL = timedelta(hours=24)
 _ERROR_ID = re.compile(r"^err_[A-Za-z0-9._:-]{1,123}$")
-_TRUSTED_VAULT_BACKEND_MODULES = frozenset(
-    {"keyring.backends.SecretService", "keyring.backends.macOS"}
-)
 
 
 class SensitiveDetailError(RuntimeError):
@@ -113,20 +112,18 @@ class SensitiveDiagnosticStore:
         return "encrypted-vault" if self._durable else "session-memory"
 
     def _vault_available(self) -> bool:
-        if self._keyring is None:
-            return False
-        module = type(self._keyring).__module__
-        if (
-            not self._trust_injected_backend
-            and module not in _TRUSTED_VAULT_BACKEND_MODULES
-        ):
-            return False
-        try:
-            return bool(self._keyring.priority > 0)
-        except (
-            Exception
-        ):  # diagnostic-expected: an unusable vault selects memory-only capture
-            return False
+        """A locked vault counts as unavailable: reading one would hang here.
+
+        keyring's get_password waits on a desktop unlock prompt that a headless
+        Core never answers, so the key is only ever read from a vault that is
+        reachable and already unlocked; anything else selects memory-only
+        capture.
+        """
+
+        return (
+            vault_state(self._keyring, trust_backend=self._trust_injected_backend)
+            == "available"
+        )
 
     def _initialize_key(self) -> None:
         if not self._vault_available() or self._keyring is None:

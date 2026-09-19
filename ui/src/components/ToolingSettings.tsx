@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
+import { useCredentialVault, vaultUnavailableNote } from "../hooks/useCredentialVault";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { announceSettingsSaved } from "./SettingsSaveFeedback";
@@ -37,6 +38,9 @@ export function AutomationRuntimeSettings() {
   const [vpnUsername, setVpnUsername] = useState("");
   const [vpnPassword, setVpnPassword] = useState("");
   const [vpnPersistence, setVpnPersistence] = useState<"vault" | "session">("vault");
+  const vault = useCredentialVault();
+  // A locked or absent vault cannot take the profile password; offer what works.
+  const vpnStorage = vault.available ? vpnPersistence : "session";
   const [savingVpn, setSavingVpn] = useState(false);
   const [projectPolicy, setProjectPolicy] = useState<AutomationProjectPolicy>();
   const [selectingVpn, setSelectingVpn] = useState<string>();
@@ -93,7 +97,7 @@ export function AutomationRuntimeSettings() {
       const saved = await api.createVpnProfile({
         name: vpnName.trim() || vpnFile.name.replace(/\.ovpn$/i, ""), filename: vpnFile.name,
         config: await vpnFile.text(), username: vpnUsername || undefined, password: vpnPassword || undefined,
-        persistence: vpnPersistence,
+        persistence: vpnStorage,
       });
       setVpnProfiles((items) => [saved, ...items]);
       setVpnFile(undefined); setVpnName(""); setVpnUsername(""); setVpnPassword("");
@@ -161,8 +165,8 @@ export function AutomationRuntimeSettings() {
       <form className="panel runner-form vpn-profile-form" onSubmit={(event) => void uploadVpn(event)}>
         <label className="vpn-file-drop"><UploadCloud size={22} /><span><strong>{vpnFile?.name ?? "Choose an OpenVPN profile"}</strong><small>.ovpn · TUN client · inline certificates · up to 15 KB</small></span><input type="file" accept=".ovpn,application/x-openvpn-profile" required onChange={(event) => { const file = event.target.files?.[0]; setVpnFile(file); if (file && !vpnName) setVpnName(file.name.replace(/\.ovpn$/i, "")); }} /></label>
         <label>Profile name<input value={vpnName} placeholder="Company VPN" onChange={(event) => setVpnName(event.target.value)} /></label>
-        <details className="inventory-disclosure vpn-options"><summary><span><strong>Credentials and storage</strong><small>Only needed when the profile requests username/password authentication.</small></span><ChevronDown size={17} /></summary><div className="policy-form-body"><label>Username<input autoComplete="username" value={vpnUsername} onChange={(event) => setVpnUsername(event.target.value)} /></label><label>Password<input type="password" autoComplete="new-password" value={vpnPassword} onChange={(event) => setVpnPassword(event.target.value)} /></label><label>Storage<select value={vpnPersistence} onChange={(event) => setVpnPersistence(event.target.value as "vault" | "session")}><option value="vault">Operating-system vault</option><option value="session">This Core session only</option></select></label></div></details>
-        <footer><span>{engagement ? `The profile will be ${vpnPersistence === "vault" ? "kept in the OS vault" : "available for this Core session"} and selected for ${engagement.name}.` : "Open a project to select this profile automatically."} Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : engagement ? "Save for project" : "Save profile"}</button></footer>
+        <details className="inventory-disclosure vpn-options"><summary><span><strong>Credentials and storage</strong><small>Only needed when the profile requests username/password authentication.</small></span><ChevronDown size={17} /></summary><div className="policy-form-body"><label>Username<input autoComplete="username" value={vpnUsername} onChange={(event) => setVpnUsername(event.target.value)} /></label><label>Password<input type="password" autoComplete="new-password" value={vpnPassword} onChange={(event) => setVpnPassword(event.target.value)} /></label><label>Storage<select value={vpnStorage} disabled={!vault.available} onChange={(event) => setVpnPersistence(event.target.value as "vault" | "session")}><option value="vault">Operating-system vault</option><option value="session">This Core session only</option></select></label>{!vault.available && <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "password")}</p>}</div></details>
+        <footer><span>{engagement ? `The profile will be ${vpnStorage === "vault" ? "kept in the OS vault" : "available for this Core session"} and selected for ${engagement.name}.` : "Open a project to select this profile automatically."} Scripts, plugins, TAP, split routes, and external file paths are rejected.</span><button className="button primary" type="submit" disabled={!vpnFile || savingVpn || previewMode}>{savingVpn ? "Checking…" : engagement ? "Save for project" : "Save profile"}</button></footer>
       </form>
       <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>{engagement ? `Choose the route for new terminals in ${engagement.name}.` : "Open a project to choose where a profile is used."}</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => {
         const selected = projectPolicy?.executionMode !== "host" && projectPolicy?.vpnProfileId === profile.id;

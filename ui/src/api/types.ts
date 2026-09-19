@@ -378,8 +378,17 @@ export interface TypeSafeIntegration {
   source?: "vault" | "session" | "environment";
   available: boolean;
   vaultAvailable: boolean;
+  /** A vault can exist and still be locked, which no save can write to. */
+  vaultState: VaultState;
   lastTest?: TypeSafeKeyTest;
   projectsUsing: number;
+}
+
+export type VaultState = "available" | "locked" | "unavailable";
+
+export interface CredentialVaultStatus {
+  state: VaultState;
+  available: boolean;
 }
 
 /** Per-turn Jev summary; probabilities stay in Core's turn record. */

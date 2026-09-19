@@ -228,6 +228,7 @@ from .credentials import (
     CredentialStatus,
     CredentialStore,
     CredentialUnavailableError,
+    VaultState,
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
@@ -900,8 +901,16 @@ class TypeSafeIntegrationStatus(NebulaModel):
     source: Literal["vault", "session", "environment"] | None = None
     available: bool = False
     vault_available: bool = False
+    vault_state: VaultState = "unavailable"
     last_test: ToolSuggestionTest | None = None
     projects_using: int = Field(default=0, ge=0)
+
+
+class CredentialVaultStatus(NebulaModel):
+    """Whether Core can store a credential in the OS vault right now."""
+
+    state: VaultState = "unavailable"
+    available: bool = False
 
 
 class VpnProfileCreateRequest(NebulaModel):
@@ -6902,10 +6911,12 @@ def create_app(
             offset += len(page)
         source, available = key_source(store, credentials)
         settings = load_settings(store)
+        vault_state = credentials.vault_state
         return TypeSafeIntegrationStatus(
             source=source,
             available=available,
-            vault_available=credentials.vault_available,
+            vault_available=vault_state == "available",
+            vault_state=vault_state,
             last_test=settings.last_test if settings is not None else None,
             projects_using=projects_using,
         )
@@ -8023,6 +8034,18 @@ def create_app(
         """Probe fixed loopback model endpoints without generating content."""
 
         return await _discover_local_provider_services(provider_factory)
+
+    @app.get(
+        f"{API_PREFIX}/credentials/vault",
+        response_model=CredentialVaultStatus,
+        tags=["credentials"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def credential_vault_status() -> CredentialVaultStatus:
+        """Report the OS vault state; a locked vault cannot accept a secret."""
+
+        state = await asyncio.to_thread(lambda: credentials.vault_state)
+        return CredentialVaultStatus(state=state, available=state == "available")
 
     @app.post(
         f"{API_PREFIX}/credentials",

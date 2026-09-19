@@ -11,7 +11,7 @@ const scope = (id: string) => ({engagementId: id, revision: 1, allowedCidrs: [],
 function view() { return <MemoryRouter><DialogProvider><EngagementPolicySettings /></DialogProvider></MemoryRouter>; }
 beforeEach(() => {
   fixture.project = "first";
-  fixture.api = {getEngagementScope: vi.fn(async id => scope(id)), getAutomationPolicy: vi.fn(async id => policy(id)), listVpnProfiles: vi.fn(async () => []), listScopeToolCandidates: vi.fn(async () => []), getTypeSafeIntegration: vi.fn(async () => ({available: false, vaultAvailable: true, projectsUsing: 0}))};
+  fixture.api = {getEngagementScope: vi.fn(async id => scope(id)), getAutomationPolicy: vi.fn(async id => policy(id)), listVpnProfiles: vi.fn(async () => []), listScopeToolCandidates: vi.fn(async () => []), getTypeSafeIntegration: vi.fn(async () => ({available: false, vaultAvailable: true, vaultState: "available" as const, projectsUsing: 0}))};
 });
 
 describe("project policy hydration", () => {

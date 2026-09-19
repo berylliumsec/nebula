@@ -2804,6 +2804,10 @@ export function mapToolSuggestions(value: unknown): import("./types").ToolSugges
   };
 }
 
+export function mapVaultState(value: unknown): import("./types").VaultState {
+  return value === "available" || value === "locked" ? value : "unavailable";
+}
+
 function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types").TypeSafeIntegration {
   const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
   const source = value.source === "vault" || value.source === "session" || value.source === "environment" ? value.source : undefined;
@@ -2811,6 +2815,7 @@ function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types
     source,
     available: value.available === true,
     vaultAvailable: value.vault_available === true,
+    vaultState: mapVaultState(value.vault_state),
     projectsUsing: numberField(value.projects_using),
     lastTest: test && typeof test.tested_at === "string"
       ? {
@@ -5301,6 +5306,13 @@ export class ApiClient {
       body: JSON.stringify(projectId ? { project_id: projectId } : {}),
       signal,
     }).then(mapSetupControlResponse);
+  }
+
+  /** Whether the OS vault can take a secret now; a locked vault cannot. */
+  async credentialVaultStatus(signal?: AbortSignal): Promise<import("./types").CredentialVaultStatus> {
+    const value = await this.request<Record<string, unknown>>("credentials/vault", { signal });
+    const state = mapVaultState(value.state);
+    return { state, available: state === "available" };
   }
 
   createCredential(
