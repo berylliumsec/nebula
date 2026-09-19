@@ -145,6 +145,33 @@ These are recognised and skipped with a warning in the preview:
 `nebula.tool_timeout_seconds`), and `envFile` (reference variables with
 `${NAME}`). Any other unknown field is skipped with a warning.
 
+## Editor validation
+
+Nebula publishes a JSON Schema for these files. An editor that uses it
+autocompletes fields, shows what each one means, and flags mistakes such as a
+relative `command`, the `sse` transport, or an unknown `nebula` setting before
+you import. Save it from an installed Nebula:
+
+```bash
+nebula-core mcp schema > ~/.config/nebula/mcp-servers.schema.json
+```
+
+It is also in this repository as
+[`mcp-servers.schema.json`](mcp-servers.schema.json). In VS Code, map it to your
+MCP files in `settings.json`:
+
+```jsonc
+"json.schemas": [
+  { "fileMatch": ["**/.cursor/mcp.json", "**/.mcp.json", "**/nebula-mcp.json"],
+    "url": "file:///home/YOU/.config/nebula/mcp-servers.schema.json" }
+]
+```
+
+or add a `"$schema"` key pointing at the file to a config you keep only for
+Nebula; import ignores that key. The schema cannot see the Nebula host, so a
+missing program or an unset `${NAME}` variable only shows up in the import
+preview or when probing.
+
 ## Preview, conflicts, and re-importing
 
 An import is a preview unless you pass `--apply` (API: `"dry_run": false`). The

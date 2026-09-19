@@ -51,7 +51,12 @@ from .domain import (
 )
 from .missions import MissionService
 from .mcp_gateway import serve as serve_mcp_gateway
-from .mcp_import import McpImportRequest, export_mcp_config, import_mcp_config
+from .mcp_import import (
+    McpImportRequest,
+    export_mcp_config,
+    import_mcp_config,
+    mcp_config_json_schema,
+)
 from .exporter import export_engagement
 from .importer import import_2x_engagement
 from .knowledge_index import ChromaKnowledgeIndex
@@ -262,6 +267,13 @@ def mcp_export(
     if destination.exists() and not overwrite:
         raise typer.BadParameter(f"{destination} exists; pass --overwrite")
     destination.write_text(text, encoding="utf-8")
+
+
+@mcp_app.command("schema")
+def mcp_schema() -> None:
+    """Print the JSON Schema for MCP import files, for editor validation."""
+
+    typer.echo(json.dumps(mcp_config_json_schema(), indent=2))
 
 
 def _is_loopback(host: str) -> bool:

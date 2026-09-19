@@ -469,3 +469,75 @@ def test_failed_apply_rolls_back_secrets_it_already_stored(tmp_path):
     assert "could not save" in report.entries[0].error
     assert keyring.values == {}
     assert store.list_entities(McpServerProfile) == []
+
+
+def test_checked_in_schema_matches_the_importer():
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator
+
+    from nebula.v3.mcp_import import mcp_config_json_schema
+
+    schema = mcp_config_json_schema()
+    Draft202012Validator.check_schema(schema)
+    checked_in = Path(__file__).resolve().parents[2] / "docs/mcp-servers.schema.json"
+    assert json.loads(checked_in.read_text(encoding="utf-8")) == schema, (
+        "regenerate with: nebula-core mcp schema > docs/mcp-servers.schema.json"
+    )
+
+
+def test_schema_accepts_documented_examples_and_rejects_what_import_rejects():
+    import re
+    from pathlib import Path
+
+    from jsonschema import Draft202012Validator
+
+    from nebula.v3.mcp_import import mcp_config_json_schema
+
+    validator = Draft202012Validator(mcp_config_json_schema())
+    guide = (Path(__file__).resolve().parents[2] / "docs/MCP-SERVERS.md").read_text(
+        encoding="utf-8"
+    )
+    examples = [
+        json.loads(block)
+        for block in re.findall(r"```json\n(.*?)```", guide, flags=re.DOTALL)
+    ]
+    assert len(examples) >= 2
+    for example in [*examples, CLAUDE_CONFIG]:
+        assert validator.is_valid(example), list(validator.iter_errors(example))
+
+    for server in [
+        {"command": "./server.js"},
+        {"command": "~/bin/server"},
+        {"type": "sse", "url": "https://x.test/sse"},
+        {"command": "npx", "url": "https://x.test"},
+        {"type": "stdio", "url": "https://x.test"},
+        {"url": "https://x.test", "env": {"A": "b"}},
+        {"command": "npx", "cwd": "relative"},
+        {"command": "npx", "nebula": {"trusted_stdio": True}},
+        {"command": "npx", "nebula": {"enabled": True}},
+        {"command": "npx", "nebula": {"default_approval": "always"}},
+        {"command": "npx", "nebula": {"tool_timeout_seconds": 901}},
+        {"description": "nothing to run"},
+    ]:
+        document = {"mcpServers": {"bad": server}}
+        assert not validator.is_valid(document), server
+    assert not validator.is_valid({"tools": {}})
+    assert not validator.is_valid({"mcpServers": {}})
+
+
+def test_schema_is_served_by_api_and_cli(tmp_path):
+    from nebula.v3.mcp_import import mcp_config_json_schema
+
+    client = TestClient(create_app(NebulaStore(tmp_path / "n.db"), auth_token="t"))
+    with client:
+        assert client.get("/api/v1/mcp-servers/schema").status_code == 401
+        served = client.get(
+            "/api/v1/mcp-servers/schema", headers={"Authorization": "Bearer t"}
+        )
+    assert served.status_code == 200
+    assert served.json() == mcp_config_json_schema()
+
+    printed = CliRunner().invoke(cli_module.app, ["mcp", "schema"])
+    assert printed.exit_code == 0
+    assert json.loads(printed.output) == mcp_config_json_schema()

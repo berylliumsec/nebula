@@ -86,13 +86,34 @@ class McpImportError(ValueError):
 class McpImportOptions(NebulaModel):
     """Nebula-specific settings that may accompany one imported server."""
 
-    default_approval: McpApprovalMode | None = None
-    tool_overrides: dict[str, McpApprovalMode] = Field(default_factory=dict)
-    enabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
-    disabled_tools: list[str] = Field(default_factory=list, max_length=2_000)
-    required: bool | None = None
-    startup_timeout_seconds: float | None = Field(default=None, gt=0, le=120)
-    tool_timeout_seconds: float | None = Field(default=None, gt=0, le=900)
+    default_approval: McpApprovalMode | None = Field(
+        default=None,
+        description="Approval for this server's tools; risk_based when omitted.",
+    )
+    tool_overrides: dict[str, McpApprovalMode] = Field(
+        default_factory=dict,
+        description="Approval for individual tools, keyed by tool name.",
+    )
+    enabled_tools: list[str] = Field(
+        default_factory=list,
+        max_length=2_000,
+        description="Offer only these tools. Empty offers every tool.",
+    )
+    disabled_tools: list[str] = Field(
+        default_factory=list,
+        max_length=2_000,
+        description="Never offer these tools.",
+    )
+    required: bool | None = Field(
+        default=None,
+        description="Fail new sessions when this server cannot start.",
+    )
+    startup_timeout_seconds: float | None = Field(
+        default=None, gt=0, le=120, description="Startup timeout; 10 when omitted."
+    )
+    tool_timeout_seconds: float | None = Field(
+        default=None, gt=0, le=900, description="Per-call timeout; 60 when omitted."
+    )
 
 
 class McpImportRequest(NebulaModel):
@@ -298,6 +319,134 @@ def export_mcp_config(profiles: list[McpServerProfile]) -> McpExportReport:
             entry["nebula"] = options
         servers[profile.name] = entry
     return McpExportReport(config={"mcpServers": servers}, warnings=warnings)
+
+
+def mcp_config_json_schema() -> dict[str, Any]:
+    """JSON Schema for the files ``import_mcp_config`` accepts.
+
+    The ``nebula`` block comes from ``McpImportOptions`` so editor validation
+    cannot drift from the importer. The rest mirrors ``_draft``: fields other
+    clients use are allowed, because the importer skips them with a warning.
+    """
+
+    options = McpImportOptions.model_json_schema()
+    definitions = options.pop("$defs", {})
+    string_value = {"type": ["string", "number", "boolean"]}
+    reference = "Use ${NAME} or ${env:NAME} for a variable of the Nebula Core process."
+    server = {
+        "type": "object",
+        "description": "One MCP server: a local program (command) or an HTTP url.",
+        "properties": {
+            "type": {
+                "enum": [
+                    "stdio",
+                    "http",
+                    "streamable-http",
+                    "streamable_http",
+                    "streamableHttp",
+                ],
+                "description": "Inferred from command or url when omitted.",
+            },
+            "command": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Program on the Nebula host: a name on PATH such as npx, "
+                    "or an absolute path."
+                ),
+                "pattern": "^(/.*|[^/~][^/]*)$",
+            },
+            "args": {
+                "type": "array",
+                "items": {"type": ["string", "number"]},
+                "description": "Passed literally; ${...} is not expanded here.",
+            },
+            "env": {
+                "type": "object",
+                "propertyNames": {"pattern": _IDENTIFIER.pattern},
+                "additionalProperties": string_value,
+                "description": f"Environment for the program. {reference}",
+            },
+            "cwd": {
+                "type": "string",
+                "pattern": "^/",
+                "description": "Absolute directory; omit to use the Project workspace.",
+            },
+            "url": {
+                "type": "string",
+                "pattern": "^https?://",
+                "description": ("Streamable HTTP endpoint; https unless on localhost."),
+            },
+            "headers": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": (
+                    "Request headers, all treated as secrets. "
+                    f"Authorization: Bearer ... becomes bearer auth. {reference}"
+                ),
+            },
+            "nebula": {"$ref": "#/$defs/NebulaOptions"},
+            **{
+                name: {"description": f"Not imported: {note or 'ignored'}."}
+                for name, note in _IGNORED_FIELDS.items()
+            },
+        },
+        "anyOf": [
+            {
+                "title": "Local (stdio) server",
+                "required": ["command"],
+                "properties": {"type": {"const": "stdio"}},
+                "not": {"anyOf": [{"required": ["url"]}, {"required": ["headers"]}]},
+            },
+            {
+                "title": "Remote (HTTP) server",
+                "required": ["url"],
+                "properties": {"type": {"not": {"const": "stdio"}}},
+                "not": {
+                    "anyOf": [
+                        {"required": [name]}
+                        for name in ("command", "args", "env", "cwd")
+                    ]
+                },
+            },
+        ],
+    }
+    servers = {
+        "type": "object",
+        "minProperties": 1,
+        "maxProperties": MAX_IMPORTED_SERVERS,
+        "additionalProperties": {"$ref": "#/$defs/Server"},
+    }
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Nebula MCP server configuration",
+        "description": (
+            "MCP servers in the Claude Desktop, Cursor, or VS Code format, as "
+            "imported by nebula-core mcp import."
+        ),
+        "type": "object",
+        "properties": {
+            "$schema": {"type": "string"},
+            "mcpServers": {"$ref": "#/$defs/Servers"},
+            "servers": {"$ref": "#/$defs/Servers"},
+            "mcp": {
+                "type": "object",
+                "properties": {"servers": {"$ref": "#/$defs/Servers"}},
+                "required": ["servers"],
+            },
+        },
+        "anyOf": [
+            {"required": ["mcpServers"]},
+            {"required": ["servers"]},
+            {"required": ["mcp"]},
+        ],
+        "$defs": {
+            **definitions,
+            "Servers": servers,
+            "Server": server,
+            "NebulaOptions": {**options, "title": "Nebula settings"},
+        },
+    }
 
 
 def _servers(config: Mapping[str, Any]) -> dict[str, Any]:

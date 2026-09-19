@@ -393,6 +393,7 @@ from .mcp_import import (
     McpImportRequest,
     export_mcp_config,
     import_mcp_config,
+    mcp_config_json_schema,
 )
 from .operators import OperatorProfileService
 from .model_catalog import (
@@ -3771,6 +3772,14 @@ def create_app(
     )
     async def import_mcp_servers(request: McpImportRequest) -> McpImportReport:
         return import_mcp_config(request, store=store, credential_store=credentials)
+
+    @app.get(
+        f"{API_PREFIX}/mcp-servers/schema",
+        tags=["mcp"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def mcp_servers_schema() -> dict[str, Any]:
+        return mcp_config_json_schema()
 
     @app.get(
         f"{API_PREFIX}/mcp-servers/export",
