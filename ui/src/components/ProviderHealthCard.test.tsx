@@ -17,6 +17,7 @@ const discoveredProvider: ProviderHealth = {
   models: ["Qwen/Qwen2.5-Coder-7B-Instruct-AWQ"],
   modelAllowlist: [],
   permitsSensitiveData: false,
+  autoShareToolResults: false,
   residency: [],
   options: {},
   metadata: {},

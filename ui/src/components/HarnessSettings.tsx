@@ -57,6 +57,7 @@ export function HarnessSettings() {
   const vault = useCredentialVault();
   const [harnessLocalOnly, setHarnessLocalOnly] = useState(false);
   const [harnessSensitiveData, setHarnessSensitiveData] = useState(false);
+  const [harnessAutoShareToolResults, setHarnessAutoShareToolResults] = useState(false);
   const [nativeWebSearch, setNativeWebSearch] = useState(false);
   const [nativeBrowser, setNativeBrowser] = useState(false);
   const [nativeComputerUse, setNativeComputerUse] = useState(false);
@@ -160,6 +161,7 @@ export function HarnessSettings() {
     setHarnessSessionCredential(false);
     setHarnessLocalOnly(profile?.localOnly ?? false);
     setHarnessSensitiveData(profile?.permitsSensitiveData ?? false);
+    setHarnessAutoShareToolResults(profile?.autoShareToolResults ?? false);
     setNativeWebSearch(profile?.nativeCapabilities.webSearch ?? false);
     setNativeBrowser(profile?.nativeCapabilities.browser ?? false);
     setNativeComputerUse(profile?.nativeCapabilities.computerUse ?? false);
@@ -198,6 +200,7 @@ export function HarnessSettings() {
         privacy: {
           local_only: harnessLocalOnly,
           permits_sensitive_data: harnessSensitiveData,
+          auto_share_tool_results: harnessSensitiveData && harnessAutoShareToolResults,
         },
         native_capabilities: {
           workspace_access: "none",
@@ -293,12 +296,26 @@ export function HarnessSettings() {
 
   const finishImport = async (report: McpImportReport, sourceName: string) => {
     setImportDialog(false);
-    const saved = report.created + report.replaced;
+    const added = report.created + report.replaced;
+    const saved = added + report.updated;
+    const counts = [added ? `${added} added` : "", report.updated ? `${report.updated} updated` : ""].filter(Boolean).join(", ");
+    const waiting = report.entries.some((entry) => (entry.action === "create" || entry.action === "replace") && !entry.enabled);
+    const title = `Saved ${saved} server${saved === 1 ? "" : "s"} from ${sourceName} (${counts}).${waiting ? " Review and probe the new ones, then enable them." : ""}`;
     const failed = report.entries.filter((entry) => entry.action === "invalid");
-    setImportNotice({
-      title: `Imported ${saved} server${saved === 1 ? "" : "s"} from ${sourceName}. Review and probe each one, then enable it.`,
-      detail: failed.length ? `${failed.length} could not be imported: ${failed.map((entry) => `${entry.name ?? entry.sourceName} (${entry.error ?? "invalid"})`).join("; ")}` : undefined,
+    const problems = failed.length ? [`${failed.length} could not be imported: ${failed.map((entry) => `${entry.name ?? entry.sourceName} (${entry.error ?? "invalid"})`).join("; ")}.`] : [];
+    // Enabled servers need probed tools before agents can use them.
+    const probes = api ? report.entries.filter((entry) => entry.needsProbe && entry.profileId) : [];
+    setImportNotice({ title: probes.length ? `${title} Probing ${probes.length === 1 ? probes[0].name ?? probes[0].sourceName : `${probes.length} servers`}…` : title, detail: problems.join(" ") || undefined });
+    await reload();
+    if (!api || !probes.length) return;
+    const results = await Promise.allSettled(probes.map((entry) => api.probeMcpServer(entry.profileId as string, engagement?.id)));
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") return;
+      void logCaughtDiagnostic("interface.harness_settings.import_probe_failed", "An imported MCP server could not be probed.", result.reason, "harness_settings");
+      problems.push(`${probes[index].name ?? probes[index].sourceName} could not be probed: ${result.reason instanceof Error ? result.reason.message : "probe failed"}. It stays enabled; probe it again from its card.`);
     });
+    const probed = results.filter((result) => result.status === "fulfilled").length;
+    setImportNotice({ title: probed ? `${title} Probed ${probed} server${probed === 1 ? "" : "s"}.` : title, detail: problems.join(" ") || undefined });
     await reload();
   };
 
@@ -362,7 +379,7 @@ export function HarnessSettings() {
         <p className="integration-card-summary" role="status">Sign-in: {profile.authenticationState ?? "unverified"} · Session: {profile.sessionState ?? "unverified"} · Model turn: {profile.turnState ?? "unverified"}{profile.lastSuccessfulTurnAt ? ` · Last success ${new Date(profile.lastSuccessfulTurnAt).toLocaleString()}` : ""}{profile.lastTurnFailureReason ? ` · ${profile.lastTurnFailureReason.replaceAll("_", " ")}` : ""}</p>
         {!!profile.exercisedCapabilities?.length && <p className="integration-card-summary">Verified in use: {profile.exercisedCapabilities.map(item => item.replaceAll("_", " ")).join(", ")}.</p>}
         {harnessRecovery(profile) && <p role="alert" className="integration-card-summary">{harnessRecovery(profile)}</p>}
-        <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
+        <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? profile.autoShareToolResults ? "Cloud project data · tool results auto-shared" : "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
         <details className="provider-capability-policy">
           <summary>Vendor-native capabilities</summary>
           <p className="provider-dialog-note"><ShieldAlert size={14} /> Project files and commands use Nebula's pinned automation container at <code>/workspace</code>. The vendor harness has no host workspace or native shell access.</p>
@@ -411,7 +428,8 @@ export function HarnessSettings() {
         <label>Default model<select value={model} disabled={!harnessModelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{harnessModelOptions.length ? "Automatic (harness default)" : "Discovered after saving"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
         <p className="provider-dialog-note">{harnessModelOptions.length ? "Choose a model reported by the harness, or use its automatic default." : "Saving runs a harness check and discovers available models and modes."}</p>
         <label className="provider-consent"><input type="checkbox" checked={harnessLocalOnly} onChange={(event) => setHarnessLocalOnly(event.target.checked)} /><span><strong>Model runtime is local</strong><small>Only enable when prompts and outputs do not leave this machine.</small></span></label>
-        <label className="provider-consent"><input type="checkbox" checked={harnessSensitiveData} onChange={(event) => setHarnessSensitiveData(event.target.checked)} /><span><strong>Permit project/document data</strong><small>Allow bounded excerpts in knowledge-enabled requests. Local-only items remain blocked.</small></span></label>
+        <label className="provider-consent"><input type="checkbox" checked={harnessSensitiveData} onChange={(event) => { setHarnessSensitiveData(event.target.checked); if (!event.target.checked) setHarnessAutoShareToolResults(false); }} /><span><strong>Permit project/document data</strong><small>Allow bounded excerpts in knowledge-enabled requests. Local-only items remain blocked.</small></span></label>
+        {harnessSensitiveData && !harnessLocalOnly && <label className="provider-consent"><input type="checkbox" checked={harnessAutoShareToolResults} onChange={(event) => setHarnessAutoShareToolResults(event.target.checked)} /><span><strong>Share tool results without asking each turn</strong><small>Standing consent for bounded tool inputs and results. Canonical output stays local and risky calls still require approval.</small></span></label>}
         <p className="provider-dialog-note">Nebula launches the harness executable directly, but project files and commands are available only through the pinned automation container. Optional web, skills, and subagent capabilities are frozen per session.</p>
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer><button className="button secondary" type="button" onClick={() => setHarnessDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(busy) || !name.trim()}>{busy ? "Saving and checking…" : "Save harness"}</button></footer>

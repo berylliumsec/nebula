@@ -49,6 +49,7 @@ import type {
   ScopeImport,
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
+  ScopeToolCandidate,
   SecurityBrowserAction,
   SecurityBrowserAssessment,
   SecurityBrowserAssessmentProfile,
@@ -1105,6 +1106,7 @@ interface WireProvider extends WireEntity {
     retention?: string | null;
     residency?: string[];
     permits_sensitive_data?: boolean;
+    auto_share_tool_results?: boolean;
   };
   metadata?: JsonObject;
 }
@@ -1435,7 +1437,11 @@ interface WireHarnessProfile extends WireEntity {
   secret_ref?: string | null;
   default_model?: string | null;
   enabled: boolean;
-  privacy?: { local_only?: boolean; permits_sensitive_data?: boolean };
+  privacy?: {
+    local_only?: boolean;
+    permits_sensitive_data?: boolean;
+    auto_share_tool_results?: boolean;
+  };
   native_capabilities?: {
     workspace_access?: "none" | "read" | "write";
     shell?: boolean;
@@ -1927,6 +1933,7 @@ interface WireEngagementScope extends JsonObject {
   prohibited_actions?: string[];
   local_only?: boolean;
   tool_suggestions?: boolean;
+  always_loaded_tools?: string[];
   max_concurrency?: number;
   grants?: Array<{
     risk_classes?: string[];
@@ -1937,6 +1944,14 @@ interface WireEngagementScope extends JsonObject {
     granted_by?: string;
   }>;
   revision?: number;
+}
+
+interface WireScopeToolCandidate extends JsonObject {
+  name: string;
+  server_id: string;
+  server_name: string;
+  tool_name: string;
+  description?: string;
 }
 
 interface WireScopeImport extends WireEntity {
@@ -2556,6 +2571,7 @@ function mapProvider(value: WireProvider): ProviderHealth {
       : undefined,
     credentialRef: value.secret_ref ?? undefined,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    autoShareToolResults: value.privacy?.auto_share_tool_results === true,
     retention: value.privacy?.retention ?? undefined,
     residency: value.privacy?.residency ?? [],
     options: objectOptions(metadata.options),
@@ -3373,6 +3389,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    autoShareToolResults: value.privacy?.auto_share_tool_results === true,
     nativeCapabilities: {
       workspaceAccess: value.native_capabilities?.workspace_access ?? "none",
       shell: value.native_capabilities?.shell === true,
@@ -3443,6 +3460,11 @@ interface WireMcpImportEntry {
   url?: string | null;
   profile_id?: string | null;
   secrets?: { target: string; source: McpImportSecret["source"]; reference?: string | null }[];
+  changes?: { field: string; before?: string | null; after?: string | null }[];
+  enabled?: boolean;
+  default_approval?: McpServerProfile["defaultApproval"] | null;
+  needs_trust?: boolean;
+  needs_probe?: boolean;
   warnings?: string[];
   error?: string | null;
 }
@@ -3451,6 +3473,8 @@ interface WireMcpImportReport {
   dry_run: boolean;
   entries: WireMcpImportEntry[];
   created: number;
+  updated?: number;
+  unchanged?: number;
   replaced: number;
   skipped: number;
   invalid: number;
@@ -3460,6 +3484,8 @@ function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
   return {
     dryRun: value.dry_run,
     created: value.created,
+    updated: value.updated ?? 0,
+    unchanged: value.unchanged ?? 0,
     replaced: value.replaced,
     skipped: value.skipped,
     invalid: value.invalid,
@@ -3477,6 +3503,15 @@ function mapMcpImportReport(value: WireMcpImportReport): McpImportReport {
         source: secret.source,
         reference: secret.reference ?? undefined,
       })),
+      changes: (entry.changes ?? []).map((change) => ({
+        field: change.field,
+        before: change.before ?? undefined,
+        after: change.after ?? undefined,
+      })),
+      enabled: entry.enabled === true,
+      defaultApproval: entry.default_approval ?? undefined,
+      needsTrust: entry.needs_trust === true,
+      needsProbe: entry.needs_probe === true,
       warnings: entry.warnings ?? [],
       error: entry.error ?? undefined,
     })),
@@ -3969,6 +4004,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
     toolSuggestions: value.tool_suggestions === true,
+    alwaysLoadedTools: value.always_loaded_tools ?? [],
     maxConcurrency: numberField(value.max_concurrency) || 1,
     grants: (value.grants ?? []).map((grant) => ({
       riskClasses: grant.risk_classes ?? [],
@@ -5557,6 +5593,24 @@ export class ApiClient {
     ).then(mapHarnessProfile);
   }
 
+  /** Record or revoke standing consent for sending tool results to a harness. */
+  setHarnessToolResultSharing(
+    profile: HarnessProfile,
+    always: boolean,
+  ): Promise<HarnessProfile> {
+    return this.updateHarness(
+      profile.id,
+      {
+        privacy: {
+          local_only: profile.localOnly,
+          permits_sensitive_data: profile.permitsSensitiveData,
+          auto_share_tool_results: profile.permitsSensitiveData && always,
+        },
+      },
+      profile.revision,
+    );
+  }
+
   checkHarness(id: string): Promise<HarnessProfile> {
     return this.request<Record<string, unknown>>(
       `harnesses/${encodeURIComponent(id)}/health`,
@@ -6111,8 +6165,11 @@ export class ApiClient {
   importMcpServers(request: {
     config: Record<string, unknown>;
     dryRun: boolean;
-    onConflict: "skip" | "replace";
+    onConflict: "update" | "skip" | "replace";
     sourceName?: string;
+    /** Choices for the servers this import creates. */
+    defaults?: { enabled: boolean; defaultApproval: McpServerProfile["defaultApproval"] };
+    trustLocalPrograms?: boolean;
   }): Promise<McpImportReport> {
     return this.request<WireMcpImportReport>("mcp-servers/import", {
       method: "POST",
@@ -6121,6 +6178,11 @@ export class ApiClient {
         dry_run: request.dryRun,
         on_conflict: request.onConflict,
         source_name: request.sourceName,
+        defaults: request.defaults && {
+          enabled: request.defaults.enabled,
+          default_approval: request.defaults.defaultApproval,
+        },
+        trust_local_programs: request.trustLocalPrograms ?? false,
       }),
     }).then(mapMcpImportReport);
   }
@@ -6322,6 +6384,25 @@ export class ApiClient {
     ).then(mapEngagementScope);
   }
 
+  /** Connected-source tools this project can keep loaded; [] on older Core. */
+  listScopeToolCandidates(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ScopeToolCandidate[]> {
+    return this.request<WireScopeToolCandidate[]>(
+      `engagements/${encodeURIComponent(engagementId)}/scope/tool-candidates`,
+      { signal },
+    ).then((items) =>
+      (items ?? []).map((item) => ({
+        name: item.name,
+        serverId: item.server_id,
+        serverName: item.server_name,
+        toolName: item.tool_name,
+        description: item.description ?? "",
+      })),
+    );
+  }
+
   createScopeImport(
     body: ScopeImportCreateRequest,
     signal?: AbortSignal,
@@ -6409,6 +6490,7 @@ export class ApiClient {
           prohibited_actions: body.prohibitedActions,
           local_only: body.localOnly,
           tool_suggestions: body.toolSuggestions,
+          always_loaded_tools: body.alwaysLoadedTools,
           max_concurrency: body.maxConcurrency,
           grants: body.grants.map((grant) => ({
             risk_classes: grant.riskClasses,
@@ -6894,6 +6976,9 @@ export class ApiClient {
         privacy: {
           local_only: body.local,
           permits_sensitive_data: body.permitsSensitiveData === true,
+          auto_share_tool_results:
+            body.permitsSensitiveData === true &&
+            body.autoShareToolResults === true,
         },
         metadata: {
           ...(defaultModel ? { default_model: defaultModel } : {}),
@@ -6936,12 +7021,39 @@ export class ApiClient {
             retention: body.retention ?? null,
             residency: body.residency,
             permits_sensitive_data: body.permitsSensitiveData,
+            auto_share_tool_results:
+              body.permitsSensitiveData && body.autoShareToolResults === true,
           },
           metadata,
         },
         expected_revision: body.expectedRevision,
       }),
     }).then(mapProvider);
+  }
+
+  /** Record or revoke standing consent for sending tool results to a provider. */
+  setProviderToolResultSharing(
+    provider: ProviderHealth,
+    always: boolean,
+  ): Promise<ProviderHealth> {
+    return this.request<WireProvider>(
+      `providers/${encodeURIComponent(provider.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          changes: {
+            privacy: {
+              local_only: provider.local,
+              retention: provider.retention ?? null,
+              residency: provider.residency,
+              permits_sensitive_data: provider.permitsSensitiveData,
+              auto_share_tool_results: provider.permitsSensitiveData && always,
+            },
+          },
+          expected_revision: provider.revision,
+        }),
+      },
+    ).then(mapProvider);
   }
 
   setProviderEnabled(

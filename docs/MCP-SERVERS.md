@@ -10,10 +10,18 @@ nebula-core mcp import ~/.cursor/mcp.json --apply    # save the servers
 nebula-core mcp export mcp.json                      # write Nebula's servers
 ```
 
-Imported servers always start **disabled** and local programs start
-**untrusted**. After importing, open **Settings → Automation → MCP servers**,
-review each server, tick **I trust this local program** for stdio servers you
-trust (**Edit**), then **Probe** and **Enable** it.
+New servers start **disabled** and local programs start **untrusted**, unless
+you choose otherwise for that import: tick **Enable after import** (CLI:
+`--enable`) and pick a **Tool approval** (CLI: `--approval ask`). Enabling a
+local (stdio) program also needs **Trust** (CLI: `--trust-local-programs`),
+because it runs on the Nebula host outside the automation container; without
+it the program is saved disabled. Nebula probes every server it enables so its
+tools are ready. You can also enable servers later: open **Settings →
+Automation → MCP servers**, tick **I trust this local program** for a stdio
+server (**Edit**), then **Probe** and **Enable** it.
+
+Importing a file you imported before updates only what changed; see
+[Preview, conflicts, and re-importing](#preview-conflicts-and-re-importing).
 
 ## Where to find an existing file
 
@@ -135,7 +143,8 @@ An optional `nebula` object on a server sets options other clients don't have:
 | `tool_timeout_seconds` | Up to 900 (default 60) |
 
 `enabled` and `trusted_stdio` cannot be set from a file; that decision is
-always made in Nebula.
+always made in Nebula, when importing or afterwards. A `default_approval` in
+the file wins over the Tool approval chosen for the import.
 
 ## How the assistant uses MCP tools
 
@@ -172,7 +181,7 @@ local ranking when Jev is unavailable.
 ## Fields that are not imported
 
 These are recognised and skipped with a warning in the preview:
-`disabled` (servers always start disabled), `alwaysAllow` and `autoApprove`
+`disabled` (enable servers in Nebula when importing), `alwaysAllow` and `autoApprove`
 (set approvals in Nebula instead), `timeout` (use
 `nebula.tool_timeout_seconds`), and `envFile` (reference variables with
 `${NAME}`). Any other unknown field is skipped with a warning.
@@ -207,13 +216,35 @@ preview or when probing.
 ## Preview, conflicts, and re-importing
 
 An import is a preview unless you pass `--apply` (API: `"dry_run": false`). The
-preview lists, for each server, whether it will be created, replaced, skipped,
-or is invalid and why, the resolved command, and where each secret will come
-from. Secret values are never shown.
+preview lists, for each server, whether it will be created, updated, left
+unchanged, replaced, skipped, or is invalid and why, the resolved command,
+where each secret will come from, and whether it will be enabled. Secret values
+are never shown.
 
-A server whose name already exists is skipped. Pass `--replace` (API:
-`"on_conflict": "replace"`) to overwrite it; the replaced server is disabled
-and untrusted again so it is reviewed before use.
+Servers are matched by name. When a server already exists, Nebula compares it
+with the file and saves only what differs; the preview lists each changed
+setting with its old and new value. Importing the same file twice changes
+nothing.
+
+- The file owns the connection: `command`, `args`, `env`, `cwd`, `url`, and
+  `headers`. A variable or header removed from the file is removed from the
+  server.
+- Settings made in Nebula (enabled state, approvals, tool overrides, timeouts)
+  are kept unless the server's `nebula` block sets them.
+- A literal secret that matches the stored one keeps the stored credential; a
+  different value is stored and the old one is deleted.
+- If the `command`, `args`, `env`, or `cwd` of a trusted local program changes,
+  it becomes untrusted and disabled again, unless you tick **Trust** (CLI:
+  `--trust-local-programs`) for that import.
+- Any connection change clears the server's probed tools. Nebula probes it
+  again straight away if it stays enabled.
+- Enable and Tool approval apply only to new servers.
+- Servers that are not in the file are never deleted.
+
+Pass `--skip-existing` (API: `"on_conflict": "skip"`) to leave existing servers
+untouched, or `--replace` (API: `"on_conflict": "replace"`) to overwrite them
+from the file and discard settings made in Nebula; a replaced server is treated
+like a new one.
 
 ## Exporting
 
@@ -230,9 +261,11 @@ imported.
 POST /api/v1/mcp-servers/import
 { "config": { "mcpServers": { ... } },
   "dry_run": true,
-  "on_conflict": "skip",          // or "replace"
+  "on_conflict": "update",        // or "skip", "replace"
   "literal_secrets": "vault",     // or "session", "reject"
-  "source_name": "mcp.json" }
+  "source_name": "mcp.json",
+  "defaults": { "enabled": false, "default_approval": "risk_based" },
+  "trust_local_programs": false }
 
 GET /api/v1/mcp-servers/export?profile_id=ID&profile_id=ID
 ```

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { AutomationProjectPolicy, EngagementScopePolicy, TypeSafeIntegration, VpnProfile } from "../api/types";
+import type { AutomationProjectPolicy, EngagementScopePolicy, ScopeToolCandidate, TypeSafeIntegration, VpnProfile } from "../api/types";
 import { ApiError } from "../api/client";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -93,6 +93,8 @@ export function EngagementPolicySettings() {
   const [prohibitedActions, setProhibitedActions] = useState("");
   const [localOnly, setLocalOnly] = useState(true);
   const [toolSuggestions, setToolSuggestions] = useState(false);
+  const [alwaysLoadedTools, setAlwaysLoadedTools] = useState<string[]>([]);
+  const [toolCandidates, setToolCandidates] = useState<ScopeToolCandidate[]>([]);
   const [typesafe, setTypesafe] = useState<TypeSafeIntegration>();
   const [maxConcurrency, setMaxConcurrency] = useState(1);
   const [approvalPolicy, setApprovalPolicy] = useState<AutomationProjectPolicy["approvalPolicy"]>("on_boundary");
@@ -107,6 +109,10 @@ export function EngagementPolicySettings() {
   const [validationError, setValidationError] = useState<string>();
   const loadRevision = useRef(0);
   const policyReady = Boolean(engagement && scope?.engagementId === engagement.id && policy?.engagementId === engagement.id);
+  // A pinned tool whose server was removed, disabled or re-probed stays listed
+  // so that saving the form never drops the choice silently.
+  const unavailablePins = alwaysLoadedTools.filter((name) => !toolCandidates.some((candidate) => candidate.name === name));
+  const pinnedSummary = `${alwaysLoadedTools.length} of ${toolCandidates.length + unavailablePins.length} tools pinned.`;
 
   const applyScope = (next: EngagementScopePolicy) => {
     setScope(next);
@@ -120,6 +126,7 @@ export function EngagementPolicySettings() {
     setProhibitedActions(next.prohibitedActions.join("\n"));
     setLocalOnly(next.localOnly);
     setToolSuggestions(next.toolSuggestions);
+    setAlwaysLoadedTools(next.alwaysLoadedTools);
     setMaxConcurrency(next.maxConcurrency);
   };
 
@@ -154,6 +161,15 @@ export function EngagementPolicySettings() {
       applyScope(nextScope);
       applyPolicy(nextPolicy);
       setVpnProfiles(nextVpnProfiles);
+      // The pinned-tool choices load on their own; a Core without the
+      // endpoint, or an MCP probe failure, must not block the policy form.
+      api.listScopeToolCandidates(engagement.id).then((next) => {
+        if (revision === loadRevision.current) setToolCandidates(next);
+      }).catch((candidateError) => {
+        if (revision === loadRevision.current) setToolCandidates([]);
+        if (candidateError instanceof ApiError && (candidateError.status === 404 || candidateError.status === 501)) return;
+        void logCaughtDiagnostic("interface.engagement_policy.tool_candidates_unavailable", "Always-loaded tool choices could not be loaded.", candidateError, "engagement_policy");
+      });
       // Key status only gates the opt-in; its failure never blocks the policy.
       api.getTypeSafeIntegration().then((next) => {
         if (revision === loadRevision.current) setTypesafe(next);
@@ -174,6 +190,10 @@ export function EngagementPolicySettings() {
     window.addEventListener(TYPESAFE_CHANGED_EVENT, follow);
     return () => window.removeEventListener(TYPESAFE_CHANGED_EVENT, follow);
   }, []);
+
+  const pinTool = (name: string, pinned: boolean) => setAlwaysLoadedTools((current) => pinned
+    ? [...new Set([...current, name])].sort()
+    : current.filter((item) => item !== name));
 
   const saveScope = async (event: FormEvent) => {
     event.preventDefault();
@@ -221,6 +241,7 @@ export function EngagementPolicySettings() {
         prohibitedActions: lines(prohibitedActions),
         localOnly,
         toolSuggestions,
+        alwaysLoadedTools,
         maxConcurrency,
         grants: scope.grants,
         expectedRevision: scope.revision,
@@ -301,6 +322,14 @@ export function EngagementPolicySettings() {
           <label className="provider-consent" id="tool-suggestions-option"><input type="checkbox" aria-describedby="tool-suggestions-detail" checked={toolSuggestions && !localOnly} disabled={localOnly || (!toolSuggestions && !typesafeUsable(typesafe))} onChange={(event) => setToolSuggestions(event.target.checked)} /><span><strong>Suggest tools with TypeSafe Jev</strong><small id="tool-suggestions-detail">{localOnly ? "Unavailable while Local only is on." : "Before each turn, send redacted operator messages and MCP tool names to TypeSafe. The model then loads only the tools it needs. Tool output is never sent."}</small></span></label>
           {!localOnly && !typesafeUsable(typesafe) && <a className="tool-suggestions-key-link" href="#typesafe-integration-settings">Add a key in Settings › Integrations →</a>}
           {toolSuggestions && !localOnly && typesafe && !typesafeUsable(typesafe) && <InlineValidationNotice message="Tool suggestions are on, but no working TypeSafe key is available. Turns run without suggestions until a key works." />}
+          <fieldset className="resource-checklist always-loaded-tools" aria-describedby="always-loaded-tools-detail">
+            <legend>Always loaded tools</legend>
+            {toolCandidates.map((candidate) => <label key={candidate.name}><input type="checkbox" checked={alwaysLoadedTools.includes(candidate.name)} onChange={(event) => pinTool(candidate.name, event.target.checked)} /><span><strong>{candidate.toolName}</strong><small>{candidate.serverName}{candidate.description ? ` \u00b7 ${candidate.description}` : ""}</small></span></label>)}
+            {unavailablePins.map((name) => <label key={name}><input type="checkbox" checked onChange={(event) => pinTool(name, event.target.checked)} /><span><strong>{name}</strong><small>Kept from an earlier choice; no enabled, probed MCP server offers it now.</small></span></label>)}
+            {!toolCandidates.length && !unavailablePins.length && <p>No connected-source tools yet. Add an MCP server and probe it to choose tools.</p>}
+          </fieldset>
+          <p id="always-loaded-tools-detail" className="provider-dialog-note">{pinnedSummary} Pinned tools stay in the model's function list for every request; other tools from connected sources are searched and loaded on demand.</p>
+          {!toolCandidates.length && !unavailablePins.length && <a className="tool-suggestions-key-link" href="#mcp-settings">Add an MCP server in Settings › MCP servers →</a>}
           <footer><span>Private and link-local destinations require an explicit CIDR.</span><button className="button primary" type="submit" disabled={previewMode || !scope || saving === "scope"}><Save size={14} /> {saving === "scope" ? "Saving…" : "Save scope"}</button></footer>
         </fieldset>
       </form>

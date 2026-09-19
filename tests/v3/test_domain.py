@@ -12,6 +12,7 @@ from nebula.v3.domain import (
     FindingStatus,
     MissionGrant,
     ModelCapabilities,
+    ProviderPrivacy,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -62,6 +63,17 @@ def test_scope_normalizes_targets_and_validates_window():
         ScopePolicy(engagement_id="eng-1", allowed_ports=[-1])
     with pytest.raises(ValidationError):
         ScopePolicy(engagement_id="eng-1", allowed_domains=["bad domain"])
+
+
+def test_scope_normalizes_always_loaded_tool_names():
+    scope = ScopePolicy(
+        engagement_id="eng-1",
+        always_loaded_tools=["  mcp.b.search ", "mcp.a.read", "mcp.b.search", "  "],
+    )
+    assert scope.always_loaded_tools == ["mcp.a.read", "mcp.b.search"]
+    assert ScopePolicy(engagement_id="eng-1").always_loaded_tools == []
+    with pytest.raises(ValidationError, match="too long"):
+        ScopePolicy(engagement_id="eng-1", always_loaded_tools=["m" * 301])
 
 
 def test_scope_treats_root_urls_as_domains_but_rejects_lossy_domain_urls():
@@ -158,3 +170,11 @@ def test_provider_capabilities_are_explicit_not_model_name_inference():
     assert provider.is_local is True
     assert provider.capabilities.streaming is True
     assert provider.capabilities.tool_calling is False
+
+
+def test_standing_tool_sharing_consent_requires_permitted_sensitive_data():
+    privacy = ProviderPrivacy(permits_sensitive_data=True, auto_share_tool_results=True)
+    assert privacy.auto_share_tool_results is True
+
+    with pytest.raises(ValidationError, match="permits_sensitive_data"):
+        ProviderPrivacy(auto_share_tool_results=True)

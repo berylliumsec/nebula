@@ -149,6 +149,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [contextWindow, setContextWindow] = useState("");
   const [maxOutputTokens, setMaxOutputTokens] = useState("");
   const [permitsSensitiveData, setPermitsSensitiveData] = useState(false);
+  const [autoShareToolResults, setAutoShareToolResults] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
   const [formValidationError, setFormValidationError] = useState<string>();
@@ -316,6 +317,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setContextWindow("");
     setMaxOutputTokens("");
     setPermitsSensitiveData(false);
+    setAutoShareToolResults(false);
     setProviderActionError(undefined);
     setFormError(undefined);
     setFormValidationError(undefined);
@@ -343,6 +345,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setContextWindow("");
     setMaxOutputTokens("");
     setPermitsSensitiveData(false);
+    setAutoShareToolResults(false);
     setProviderActionError(undefined);
     setFormError(undefined);
     setFormValidationError(undefined);
@@ -374,6 +377,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setContextWindow(providerNumberOption(provider, "context_window"));
     setMaxOutputTokens(providerNumberOption(provider, "max_output_tokens"));
     setPermitsSensitiveData(provider.permitsSensitiveData);
+    setAutoShareToolResults(provider.autoShareToolResults);
     setProviderActionError(undefined);
     setFormError(undefined);
     setFormValidationError(undefined);
@@ -401,6 +405,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setContextWindow("");
     setMaxOutputTokens("");
     setPermitsSensitiveData(false);
+    setAutoShareToolResults(false);
   };
 
   const submitProvider = async (event: FormEvent) => {
@@ -471,6 +476,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
           credentialRef,
           permitsSensitiveData,
+          autoShareToolResults,
           retention: editingProvider.retention,
           residency: editingProvider.residency,
           options,
@@ -488,6 +494,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
           credentialEnv: credentialRef ? undefined : credentialEnv || undefined,
           credentialRef,
           permitsSensitiveData,
+          autoShareToolResults,
           options,
         });
       }
@@ -847,7 +854,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
               {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
               {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
               <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
-              {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => setPermitsSensitiveData(event.target.checked)} /><span><strong>Allow project and document data</strong><small>Automatically permit bounded excerpts for knowledge-enabled requests. Local-only items remain blocked.</small></span></label>}
+              {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => { setPermitsSensitiveData(event.target.checked); if (!event.target.checked) setAutoShareToolResults(false); }} /><span><strong>Allow project and document data</strong><small>Automatically permit bounded excerpts for knowledge-enabled requests. Local-only items remain blocked.</small></span></label>}
+              {!dialogLocal && permitsSensitiveData && <label className="provider-consent"><input type="checkbox" checked={autoShareToolResults} onChange={(event) => setAutoShareToolResults(event.target.checked)} /><span><strong>Share tool results without asking each turn</strong><small>Standing consent for bounded tool inputs and results. Canonical output stays local and risky calls still require approval.</small></span></label>}
             </div>
             </details>
             <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential || !vault.available ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>

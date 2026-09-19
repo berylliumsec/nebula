@@ -1,31 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, chatRequestBody } from "./client";
+import type { ProviderHealth } from "./types";
 
 describe("ApiClient", () => {
   it("sends MCP imports as snake_case and maps the preview report", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      dry_run: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+      dry_run: true, created: 1, updated: 1, unchanged: 0, replaced: 0, skipped: 0, invalid: 0,
       entries: [{
         source_name: "remote", name: "remote", action: "create", transport: "streamable_http",
         command: null, arguments: [], url: "https://mcp.example.test/mcp", profile_id: null,
         secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        enabled: true, default_approval: "ask", needs_trust: false, needs_probe: true,
         warnings: [], error: null,
+      }, {
+        source_name: "local", name: "local", action: "update", transport: "stdio",
+        command: "/usr/bin/npx", arguments: ["local-mcp@2"], profile_id: "p1",
+        changes: [{ field: "args", before: "local-mcp", after: "local-mcp@2" }, { field: "env TOKEN", before: "${TOKEN}", after: null }],
+        enabled: false, default_approval: "risk_based", needs_trust: true, needs_probe: false,
       }],
     }), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
     const config = { mcpServers: { remote: { url: "https://mcp.example.test/mcp" } } };
 
-    await expect(client.importMcpServers({ config, dryRun: true, onConflict: "skip", sourceName: "mcp.json" })).resolves.toEqual({
-      dryRun: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+    await expect(client.importMcpServers({
+      config, dryRun: true, onConflict: "update", sourceName: "mcp.json",
+      defaults: { enabled: true, defaultApproval: "ask" }, trustLocalPrograms: true,
+    })).resolves.toEqual({
+      dryRun: true, created: 1, updated: 1, unchanged: 0, replaced: 0, skipped: 0, invalid: 0,
       entries: [{
         sourceName: "remote", name: "remote", action: "create", transport: "streamable_http",
         command: undefined, arguments: [], url: "https://mcp.example.test/mcp", profileId: undefined,
         secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        changes: [], enabled: true, defaultApproval: "ask", needsTrust: false, needsProbe: true,
+        warnings: [], error: undefined,
+      }, {
+        sourceName: "local", name: "local", action: "update", transport: "stdio",
+        command: "/usr/bin/npx", arguments: ["local-mcp@2"], url: undefined, profileId: "p1", secrets: [],
+        changes: [{ field: "args", before: "local-mcp", after: "local-mcp@2" }, { field: "env TOKEN", before: "${TOKEN}", after: undefined }],
+        enabled: false, defaultApproval: "risk_based", needsTrust: true, needsProbe: false,
         warnings: [], error: undefined,
       }],
     });
     expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/mcp-servers/import");
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ config, dry_run: true, on_conflict: "skip", source_name: "mcp.json" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      config, dry_run: true, on_conflict: "update", source_name: "mcp.json",
+      defaults: { enabled: true, default_approval: "ask" }, trust_local_programs: true,
+    });
   });
 
   it("loads OpenRouter's upstream provider directory with locations", async () => {
@@ -1248,7 +1268,7 @@ describe("ApiClient", () => {
 
     const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(request.secret_ref).toBe("env:OPENAI_API_KEY");
-    expect(request.privacy).toEqual({ local_only: false, permits_sensitive_data: true });
+    expect(request.privacy).toEqual({ local_only: false, permits_sensitive_data: true, auto_share_tool_results: false });
     expect(JSON.stringify(request)).not.toContain("sk-");
     expect(created).toMatchObject({
       credentialEnv: "OPENAI_API_KEY",
@@ -1429,6 +1449,7 @@ describe("ApiClient", () => {
       modelAllowlist: ["claude-old"],
       credentialEnv: "ANTHROPIC_API_KEY",
       permitsSensitiveData: true,
+      autoShareToolResults: false,
       retention: "provider-policy",
       residency: ["us"],
       options: { anthropic_version: "2023-06-01", input_cost_per_million: 3 },
@@ -1442,7 +1463,7 @@ describe("ApiClient", () => {
         endpoint: "https://api.anthropic.com",
         secret_ref: "env:ANTHROPIC_API_KEY",
         model_allowlist: ["claude-new", "claude-old"],
-        privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true },
+        privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: false },
         metadata: { default_model: "claude-new", options: { anthropic_version: "2023-06-01", input_cost_per_million: 3 }, managed_note: "preserve" },
       },
       expected_revision: 3,
@@ -1454,6 +1475,67 @@ describe("ApiClient", () => {
     await client.deleteProvider(provider.id, 5);
     expect(fetchMock.mock.calls[2][1]?.method).toBe("DELETE");
     expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get("If-Match")).toBe("5");
+  });
+
+  it("records standing tool-result consent on the runtime profile", async () => {
+    const wire = {
+      id: "provider-openai",
+      name: "OpenAI",
+      provider_type: "openai",
+      enabled: true,
+      is_local: false,
+      model_allowlist: [],
+      capabilities: {},
+      privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: true },
+      metadata: {},
+      created_at: "2026-07-12T11:00:00Z",
+      updated_at: "2026-07-12T11:00:00Z",
+      revision: 4,
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(wire), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const saved = await client.setProviderToolResultSharing({
+      id: "provider-openai",
+      revision: 3,
+      local: false,
+      permitsSensitiveData: true,
+      retention: "provider-policy",
+      residency: ["us"],
+    } as unknown as ProviderHealth, true);
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      changes: { privacy: { local_only: false, retention: "provider-policy", residency: ["us"], permits_sensitive_data: true, auto_share_tool_results: true } },
+      expected_revision: 3,
+    });
+    expect(saved.autoShareToolResults).toBe(true);
+  });
+
+  it("refuses standing tool-result consent for a text-only profile", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "provider-openai",
+      name: "OpenAI",
+      provider_type: "openai",
+      enabled: true,
+      is_local: false,
+      model_allowlist: [],
+      capabilities: {},
+      privacy: { local_only: false, residency: [], permits_sensitive_data: false },
+      metadata: {},
+      revision: 4,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await client.setProviderToolResultSharing({
+      id: "provider-openai",
+      revision: 3,
+      local: false,
+      permitsSensitiveData: false,
+      residency: [],
+    } as unknown as ProviderHealth, true);
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.changes.privacy.auto_share_tool_results).toBe(false);
   });
 
   it("keeps explicit and fallback provider model semantics distinct", async () => {
@@ -1486,6 +1568,7 @@ describe("ApiClient", () => {
       defaultModel: undefined,
       modelAllowlist: provider.model_allowlist,
       permitsSensitiveData: false,
+      autoShareToolResults: false,
       residency: [],
       metadata: { default_model: "old-explicit" },
       expectedRevision: 2,
@@ -2335,5 +2418,35 @@ describe("ApiClient", () => {
       duration_seconds: 300,
       idempotency_key: "validation-grant:candidate/one:4",
     });
+  });
+});
+
+describe("project scope tool pinning", () => {
+  it("maps always-loaded tools in both directions and lists the choices", async () => {
+    const scope = {
+      id: "scope:project", engagement_id: "project", allowed_cidrs: [], allowed_domains: [],
+      allowed_urls: [], allowed_ports: [], allow_all_targets: false, prohibited_actions: [],
+      local_only: true, tool_suggestions: false, always_loaded_tools: ["mcp.abc123abc123.search"],
+      max_concurrency: 1, grants: [], revision: 3,
+    };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        name: "mcp.abc123abc123.search", server_id: "mcp-1", server_name: "tracker",
+        tool_name: "search", description: "Search issues.",
+      }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const loaded = await client.getEngagementScope("project");
+    expect(loaded.alwaysLoadedTools).toEqual(["mcp.abc123abc123.search"]);
+    await expect(client.listScopeToolCandidates("project")).resolves.toEqual([{
+      name: "mcp.abc123abc123.search", serverId: "mcp-1", serverName: "tracker",
+      toolName: "search", description: "Search issues.",
+    }]);
+    expect(String(fetchMock.mock.calls[1][0])).toBe("http://127.0.0.1:8765/api/v1/engagements/project/scope/tool-candidates");
+
+    await client.updateEngagementScope("project", { ...loaded, alwaysLoadedTools: [], expectedRevision: 3 });
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({ always_loaded_tools: [] });
   });
 });

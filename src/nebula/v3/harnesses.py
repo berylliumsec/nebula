@@ -322,11 +322,12 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 def _container_only_native_capabilities(
     capabilities: HarnessNativeCapabilities,
 ) -> HarnessNativeCapabilities:
-    # Nebula owns project command execution.  The vendor harness may still use
-    # explicitly enabled research/skill capabilities, but it must never receive
-    # a host-backed project filesystem or shell.  Keeping this enforcement at
-    # the permission/config boundary also protects sessions created from legacy
-    # profiles that persisted these flags before the container-only policy.
+    # Outside host execution mode Nebula owns project command execution.  The
+    # vendor harness may still use explicitly enabled research/skill
+    # capabilities, but it must never receive a host-backed project filesystem
+    # or shell.  Keeping this enforcement at the permission/config boundary also
+    # protects sessions created from legacy profiles that persisted these flags
+    # before the container-only policy.
     return capabilities.model_copy(
         update={
             "workspace_access": HarnessWorkspaceAccess.NONE,
@@ -349,6 +350,12 @@ def _native_capabilities_for_execution_mode(
     return _container_only_native_capabilities(capabilities)
 
 
+def _session_execution_mode(session: HarnessSession) -> Literal["docker", "host"]:
+    """Read the mode frozen on the session; anything unknown stays contained."""
+
+    return "host" if session.metadata.get("execution_mode") == "host" else "docker"
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -358,7 +365,13 @@ def _session_native_capabilities(
         if isinstance(raw, dict)
         else profile.native_capabilities
     )
-    return capabilities
+    if _session_execution_mode(session) == "host":
+        return capabilities
+    # Only host sessions run in the linked project workspace, so a session that
+    # carries filesystem or shell flags without that mode is stale or
+    # inconsistent metadata.  Clamp (never grant) so vendor tool config and
+    # native permission decisions match the workspace the session actually got.
+    return _container_only_native_capabilities(capabilities)
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -6730,6 +6743,8 @@ class HarnessRuntimeService:
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         profile = self.store.get(HarnessProfile, profile_id)
+        # Standing profile consent stands in for the per-turn confirmation.
+        allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         image_blocks = [
             block for block in content_blocks or [] if block.type == "image"
         ]
@@ -7866,6 +7881,8 @@ class HarnessRuntimeService:
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
         profile = self.store.get(HarnessProfile, profile_id)
+        # Standing profile consent stands in for the per-turn confirmation.
+        allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         if harness_session_id:
             session = self._compatible_session(
                 harness_session_id, engagement_id, profile.id, model
@@ -10475,7 +10492,7 @@ class HarnessRuntimeService:
         )
         launch = await gateway.start()
         self._gateways[session.id] = gateway
-        execution_mode = session.metadata.get("execution_mode", "docker")
+        execution_mode = _session_execution_mode(session)
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
             if execution_mode == "host" and not analysis_only

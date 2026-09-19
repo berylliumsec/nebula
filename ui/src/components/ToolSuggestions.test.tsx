@@ -126,12 +126,13 @@ describe("TypeSafe key settings", () => {
 });
 
 describe("project opt-in", () => {
-  const scope = (overrides: Record<string, unknown> = {}) => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, maxConcurrency: 1, allowAllTargets: false, grants: [], ...overrides});
+  const scope = (overrides: Record<string, unknown> = {}) => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, alwaysLoadedTools: [], maxConcurrency: 1, allowAllTargets: false, grants: [], ...overrides});
   const setup = (scopeValue: ReturnType<typeof scope>, status: TypeSafeIntegration) => {
     fixture.api = {
       getEngagementScope: vi.fn(async () => scopeValue),
       getAutomationPolicy: vi.fn(async () => ({engagementId: "project", revision: 1, executionMode: "docker", approvalPolicy: "on_boundary", networkEnabled: false, maxTimeoutMs: 300000})),
       listVpnProfiles: vi.fn(async () => []),
+      listScopeToolCandidates: vi.fn(async () => []),
       getTypeSafeIntegration: vi.fn(async () => status),
       updateEngagementScope: vi.fn(async (_id, body) => ({...scopeValue, ...body, revision: 2})),
     };
@@ -175,9 +176,10 @@ describe("key changes reach the project opt-in", () => {
   it("enables the option when a key is saved elsewhere on the page", async () => {
     const {TYPESAFE_CHANGED_EVENT} = await import("./TypeSafeIntegrationSettings");
     fixture.api = {
-      getEngagementScope: vi.fn(async () => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, maxConcurrency: 1, allowAllTargets: false, grants: []})),
+      getEngagementScope: vi.fn(async () => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, alwaysLoadedTools: [], maxConcurrency: 1, allowAllTargets: false, grants: []})),
       getAutomationPolicy: vi.fn(async () => ({engagementId: "project", revision: 1, executionMode: "docker", approvalPolicy: "on_boundary", networkEnabled: false, maxTimeoutMs: 300000})),
       listVpnProfiles: vi.fn(async () => []),
+      listScopeToolCandidates: vi.fn(async () => []),
       getTypeSafeIntegration: vi.fn(async () => integration()),
     };
     render(<MemoryRouter><DialogProvider><EngagementPolicySettings /></DialogProvider></MemoryRouter>);

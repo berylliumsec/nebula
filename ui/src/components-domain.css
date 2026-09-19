@@ -513,6 +513,21 @@
 .mcp-import-row details { color: var(--muted); font-size: var(--type-secondary); }
 .mcp-import-row details summary { cursor: pointer; }
 .mcp-import-row details ul { margin: 4px 0 0; padding-left: 18px; }
+.mcp-import-row-top > .mcp-import-outcome { flex: 0 1 auto; text-align: right; }
+.mcp-import-changes ul { display: grid; gap: 2px; padding-left: 0; list-style: none; }
+.mcp-import-changes li { overflow-wrap: anywhere; }
+.mcp-import-changes li > span:first-child { margin-right: 4px; color: var(--text); font-family: var(--font-mono); }
+.mcp-import-trust-note { margin: 0; color: var(--orange); font-size: var(--type-secondary); }
+.mcp-import-choices, .mcp-import-approval { min-width: 0; margin: 0; padding: 0; border: 0; }
+.mcp-import-choices > legend { margin-bottom: 10px; padding: 0; color: var(--muted); font-size: 11px; font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
+.mcp-import-choices > .mcp-import-approval { margin-top: 14px; }
+.mcp-import-approval > legend { margin-bottom: 8px; padding: 0; color: var(--text); font-size: var(--type-secondary); font-weight: var(--weight-semibold); }
+.mcp-import-approval > small { display: block; margin-top: 8px; color: var(--muted); font-size: var(--type-secondary); line-height: 1.45; }
+.mcp-import-approval-options { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--canvas); }
+.provider-dialog .mcp-import-approval-options label { position: relative; display: flex; align-items: center; justify-content: center; min-height: 30px; padding: 0 14px; border: 1px solid transparent; border-radius: 6px; color: var(--muted); font-weight: var(--weight-medium); cursor: pointer; }
+.provider-dialog .mcp-import-approval-options input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
+.provider-dialog .mcp-import-approval-options label:has(input:checked) { border-color: var(--border); color: var(--text-strong); background: var(--surface-raised); }
+.provider-dialog .mcp-import-approval-options label:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 1px; }
 .mcp-import-footnote { flex: 1 1 auto; margin: 0; color: var(--muted); font-size: var(--type-secondary); }
 .mcp-import-dialog > footer .button { flex: 0 0 auto; white-space: nowrap; }
 .mcp-next-step { color: var(--orange); }
@@ -520,6 +535,10 @@
   .mcp-import-dialog > footer { flex-wrap: wrap; }
   .mcp-import-footnote { flex-basis: 100%; }
   .mcp-import-dialog > footer .button.primary { flex: 1 1 auto; }
+  .mcp-import-row-top { flex-wrap: wrap; }
+  .mcp-import-row-top > .mcp-import-outcome { order: 1; flex-basis: 100%; text-align: left; }
+  .mcp-import-approval-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .provider-dialog .mcp-import-approval-options label { min-height: var(--touch-target); }
   .mcp-import-links :where(a, button) { min-height: var(--touch-target); }
   .mcp-import-example > summary { min-height: var(--touch-target); display: flex; align-items: center; }
   .mcp-import-example-toolbar .icon-button { width: var(--touch-target); height: var(--touch-target); }
@@ -531,6 +550,7 @@
 .policy-form .resource-checklist label > span, .mission-tool-selection .resource-checklist label > span { display: flex; flex-direction: column; gap: 2px; }
 .policy-form .resource-checklist label strong, .mission-tool-selection .resource-checklist label strong { color: var(--text); font-size: 11px; }
 .policy-form .resource-checklist label small, .mission-tool-selection .resource-checklist label small { color: var(--muted); font-size: 11px; }
+.policy-form .always-loaded-tools label > span { overflow-wrap: anywhere; }
 .mission-grants { display: grid; gap: 7px; padding: 9px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-muted); }
 .mission-grants > header, .mission-grants article { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .mission-grants > header > div, .mission-grants article > div { display: flex; min-width: 0; flex: 1; flex-direction: column; }

@@ -23,7 +23,7 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, Literal, Protocol
 from uuid import NAMESPACE_URL, uuid5
 
@@ -89,8 +89,17 @@ def is_deferrable(spec: ToolSpec) -> bool:
     return spec.source_id is not None and spec.name not in CATALOG_TOOL_NAMES
 
 
-def deferrable_specs(specs: Mapping[str, ToolSpec]) -> dict[str, ToolSpec]:
-    return {name: spec for name, spec in specs.items() if is_deferrable(spec)}
+def deferrable_specs(
+    specs: Mapping[str, ToolSpec], *, always_loaded: Collection[str] = ()
+) -> dict[str, ToolSpec]:
+    """Sourced tools, minus the ones the operator pinned to every request."""
+
+    pinned = set(always_loaded)
+    return {
+        name: spec
+        for name, spec in specs.items()
+        if is_deferrable(spec) and name not in pinned
+    }
 
 
 def on_demand_enabled(scope: ScopePolicy) -> bool:

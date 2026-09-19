@@ -329,9 +329,20 @@ export interface EngagementScopePolicy {
   localOnly: boolean;
   /** Opt-in: send redacted operator messages and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
+  /** Runtime names of connected-source tools kept in every request. */
+  alwaysLoadedTools: string[];
   maxConcurrency: number;
   grants: MissionGrant[];
   revision: number;
+}
+
+/** One connected-source tool an operator can keep loaded, as Core names it. */
+export interface ScopeToolCandidate {
+  name: string;
+  serverId: Identifier;
+  serverName: string;
+  toolName: string;
+  description: string;
 }
 
 export interface MissionGrant {
@@ -344,10 +355,15 @@ export interface MissionGrant {
 }
 
 export interface EngagementScopeUpdateRequest
-  extends Omit<EngagementScopePolicy, "engagementId" | "revision" | "toolSuggestions"> {
+  extends Omit<
+    EngagementScopePolicy,
+    "engagementId" | "revision" | "toolSuggestions" | "alwaysLoadedTools"
+  > {
   expectedRevision: number;
   /** Omitted keeps the stored value. */
   toolSuggestions?: boolean;
+  /** Omitted keeps the stored value. */
+  alwaysLoadedTools?: string[];
 }
 
 export interface TypeSafeKeyTest {
@@ -1374,6 +1390,8 @@ export interface ProviderHealth {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData: boolean;
+  /** Standing consent: send tool results without the per-turn prompt. */
+  autoShareToolResults: boolean;
   retention?: string;
   residency: string[];
   options: Record<string, unknown>;
@@ -1452,6 +1470,7 @@ export interface ProviderCreateRequest {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData?: boolean;
+  autoShareToolResults?: boolean;
   options?: Record<string, unknown>;
 }
 
@@ -1465,6 +1484,7 @@ export interface ProviderUpdateRequest {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData: boolean;
+  autoShareToolResults: boolean;
   retention?: string;
   residency: string[];
   options?: Record<string, unknown>;
@@ -2017,6 +2037,8 @@ export interface HarnessProfile {
   enabled: boolean;
   localOnly: boolean;
   permitsSensitiveData: boolean;
+  /** Standing consent: send tool results without the per-turn prompt. */
+  autoShareToolResults: boolean;
   nativeCapabilities: HarnessNativeCapabilities;
   healthy?: boolean;
   authenticationState?: "verified" | "failed" | "unverified";
@@ -2197,16 +2219,31 @@ export interface McpImportSecret {
   reference?: string;
 }
 
+export interface McpImportChange {
+  field: string;
+  before?: string;
+  after?: string;
+}
+
 export interface McpImportEntry {
   sourceName: string;
   name?: string;
-  action: "create" | "replace" | "skip" | "invalid";
+  action: "create" | "update" | "unchanged" | "replace" | "skip" | "invalid";
   transport?: McpServerProfile["transport"];
   command?: string;
   arguments: string[];
   url?: string;
   profileId?: string;
   secrets: McpImportSecret[];
+  /** Settings that differ from the saved server, for an update. */
+  changes: McpImportChange[];
+  /** Whether the server is enabled once saved. */
+  enabled: boolean;
+  defaultApproval?: McpServerProfile["defaultApproval"];
+  /** A local program saved disabled until it is trusted. */
+  needsTrust: boolean;
+  /** Enabled once saved but not probed yet. */
+  needsProbe: boolean;
   warnings: string[];
   error?: string;
 }
@@ -2215,6 +2252,8 @@ export interface McpImportReport {
   dryRun: boolean;
   entries: McpImportEntry[];
   created: number;
+  updated: number;
+  unchanged: number;
   replaced: number;
   skipped: number;
   invalid: number;

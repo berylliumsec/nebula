@@ -8145,7 +8145,8 @@ test("tool suggestions key settings gate the project opt-in", async ({ page }, t
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(durableScope) });
   });
 
-  await openWorkspace(page, "/settings", "Settings");
+  // Phone widths land on the settings lens, which has no navigation links.
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
   const option = page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ });

@@ -282,6 +282,7 @@ from .domain import (
     HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
+    McpApprovalMode,
     McpServerProfile,
     MissionGrant,
     NebulaModel,
@@ -396,7 +397,12 @@ from .environments import (
     SshEnvironmentService,
     SshEnvironmentSettings,
 )
-from .mcp import McpProbeError, McpProbeReport, McpProbeService
+from .mcp import (
+    McpProbeError,
+    McpProbeReport,
+    McpProbeService,
+    mcp_tool_runtime_name,
+)
 from .mcp_import import (
     McpExportReport,
     McpImportReport,
@@ -1060,9 +1066,20 @@ class ScopePolicyUpdateRequest(NebulaModel):
     # None keeps the stored value, so clients unaware of the field never clear it.
     tool_suggestions: bool | None = None
     on_demand_tools: bool | None = None
+    always_loaded_tools: list[str] | None = Field(default=None, max_length=500)
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ScopeToolCandidate(NebulaModel):
+    """One connected-source tool, named the way the tool catalog names it."""
+
+    name: str
+    server_id: str
+    server_name: str
+    tool_name: str
+    description: str = ""
 
 
 class RunnerProfileRequest(NebulaModel):
@@ -6751,6 +6768,42 @@ def create_app(
             raise ConflictError("engagement scope policy ownership is inconsistent")
         return scope
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope/tool-candidates",
+        response_model=list[ScopeToolCandidate],
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def engagement_scope_tool_candidates(
+        engagement_id: str,
+    ) -> list[ScopeToolCandidate]:
+        """Tools an operator can pin to every request, from probed MCP servers."""
+
+        store.get(Engagement, engagement_id)
+        candidates: list[ScopeToolCandidate] = []
+        for profile in store.list_entities(McpServerProfile, limit=1000):
+            if not profile.enabled or profile.capabilities.checked_at is None:
+                continue
+            for tool in profile.capabilities.tools:
+                # The same selection the runtime makes when it builds plugins.
+                if profile.enabled_tools and tool.name not in profile.enabled_tools:
+                    continue
+                if tool.name in profile.disabled_tools:
+                    continue
+                if profile.tool_overrides.get(tool.name) == McpApprovalMode.DENY:
+                    continue
+                candidates.append(
+                    ScopeToolCandidate(
+                        name=mcp_tool_runtime_name(profile.id, tool.name),
+                        server_id=profile.id,
+                        server_name=profile.name,
+                        tool_name=tool.name,
+                        description=" ".join(tool.description.split())[:300],
+                    )
+                )
+        candidates.sort(key=lambda item: (item.server_name, item.tool_name))
+        return candidates
+
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope",
         response_model=ScopePolicy,
@@ -6763,7 +6816,7 @@ def create_app(
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
-        for optional in ("tool_suggestions", "on_demand_tools"):
+        for optional in ("tool_suggestions", "on_demand_tools", "always_loaded_tools"):
             if payload[optional] is None:
                 del payload[optional]
         payload["grants"] = [
