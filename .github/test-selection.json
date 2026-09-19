@@ -1,19 +1,18 @@
 {
-  "change_digest": "2e781f2cb9933914ceb35518c238983bed553748c831dd16819c297500eb9d00",
-  "reviewed_by": "Claude review of the vendor-native capability containment boundary",
-  "reason": "Harness sessions freeze an execution mode next to their native capabilities, and 08be66f dropped the container-only clamp from _session_native_capabilities, so adapters trusted whatever capability flags session metadata carried: tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell has been failing on main with Read/Glob/Grep/Bash leaking into a contained session. _session_native_capabilities now clamps (never grants) back to container-only unless the session froze execution_mode 'host'. Selected both files that own this policy in full: test_harness_adapters.py covers each vendor's config boundary (Claude tool set, disallowed_tools, PreToolUse decisions and system prompt on both sides of the clamp, and the Grok --disallowed-tools argv with its host fixture now carrying the execution_mode the runtime persists), and test_harnesses.py covers the runtime service that freezes capabilities per execution mode, forks sessions when a project changes mode, backfills legacy sessions, and denies legacy host shell flags.",
-  "exclusions": "No full suites. The change is confined to one backend policy helper plus the single reader of session capability metadata, so no UI file, style, API schema, or native module changed: frontend, native and Playwright layers are not applicable. Other Python files are excluded because they neither read native capabilities nor construct harness sessions; tests/v3/test_harness_commands.py, test_harness_connection_state.py, test_approval_handoff.py, test_browser_companion.py and test_diagnostic_guidance.py were run locally against this diff (82 passed) and are excluded as unaffected; rebased onto #368/#371/#373 and both selected files re-run green. Live provider turns and real-Core host-mode journeys are excluded; the host execution path is exercised through the runtime service fixtures.",
+  "change_digest": "87d482fe6227aea573fa87c5b5128982bf3be86ae48f64e87020dde27dd91515",
+  "reviewed_by": "Claude review of phone-width critical workspace baselines",
+  "reason": "area:critical-workspaces listed only the desktop and compact projects, so the narrow (390x844) renders of the same six workspaces were reconciled only in the full scope that playwright-impact.yml gates behind RUN_FULL_SUITE plus explicit approval. That scope does not run on pull requests, and the phone-width baselines had not moved since #190/#211: the Settings captures still showed the pre-#355 Setup/Advanced/Diagnostics tab strip instead of CompactSettingsList, and the rest still showed the pre-#355 Chat/Conversations/Activity/More companion nav that SessionsPage.tsx now renders as Chat/Terminal/Activity/More. Adding the narrow project to the area with the same \"critical workspace|navigable panoramic shell\" grep runs the same seven tests desktop and compact already run, so phone-width workspace renders are checked on every PR that maps to this area. Ten baselines are refreshed from this PR's own CI actuals (six dark, four light); reports-light and project-light already matched. The captures were byte-identical across all three CI attempts except workbench-light, which varied by two pixels. The 18 orphaned *-zero-light-*.png files are deleted: the only theme-interpolated capture is `${name}-${theme}.png` in \"Light preserves each critical workspace hierarchy\" and its loop is [\"light\"], so no test can emit a zero-light snapshot name.",
+  "exclusions": "No Python, frontend or native tests: this change touches only the Playwright impact manifest and PNG baselines, no product or backend source. No mobile-chromium/mobile-webkit phone-shell entries: those projects capture different snapshot names and none of their baselines change. The desktop and compact critical-workspaces entries stay selected because the manifest edit and the deleted desktop/compact zero-light files sit in the same area, and both projects passed unchanged on the previous runs of this branch.",
   "expected_tests": {
-    "python": 145,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 21
   },
-  "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harnesses.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:critical-workspaces"
+  ]
 }
