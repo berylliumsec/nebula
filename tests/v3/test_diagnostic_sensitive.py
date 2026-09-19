@@ -83,7 +83,14 @@ def test_sensitive_detail_is_authenticated_encrypted_bounded_and_expires(
     assert not list((tmp_path / "core").glob("err_*.json"))
 
 
-def test_sensitive_detail_falls_back_to_session_memory_without_vault(tmp_path) -> None:
+def test_sensitive_detail_falls_back_to_session_memory_without_vault(
+    monkeypatch, tmp_path
+) -> None:
+    import keyring
+
+    # keyring_backend=None means "ask the host", so a developer machine with an
+    # unlocked vault must not quietly change what this test covers.
+    monkeypatch.setattr(keyring, "get_keyring", lambda: None)
     store = SensitiveDiagnosticStore(
         tmp_path,
         enabled=True,
@@ -112,17 +119,18 @@ def test_locked_host_vault_selects_session_memory_without_prompting(
 
     from keyring.backends.SecretService import Keyring
 
-    monkeypatch.setattr(Keyring, "priority", 5, raising=False)
-    monkeypatch.setattr(
-        Keyring,
-        "get_password",
-        lambda *_: pytest.fail("a locked vault must not be read interactively"),
-    )
-    monkeypatch.setattr(
-        Keyring,
-        "set_password",
-        lambda *_: pytest.fail("a locked vault must not be written interactively"),
-    )
+    class LockedVault(Keyring):
+        # keyring's own priority probes the session bus; the reads and writes
+        # below are the interactive calls that hang on a locked collection.
+        __module__ = "keyring.backends.SecretService"
+        priority = 5
+
+        def get_password(self, *_: object) -> str | None:
+            pytest.fail("a locked vault must not be read interactively")
+
+        def set_password(self, *_: object) -> None:
+            pytest.fail("a locked vault must not be written interactively")
+
     monkeypatch.setattr(
         secretstorage, "dbus_init", lambda: SimpleNamespace(close=lambda: None)
     )
@@ -132,7 +140,9 @@ def test_locked_host_vault_selects_session_memory_without_prompting(
         lambda *_: SimpleNamespace(is_locked=lambda: True),
     )
 
-    store = SensitiveDiagnosticStore(tmp_path, enabled=True, keyring_backend=Keyring())
+    store = SensitiveDiagnosticStore(
+        tmp_path, enabled=True, keyring_backend=LockedVault()
+    )
 
     capture = store.capture(
         "err_locked_vault",

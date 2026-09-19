@@ -189,10 +189,13 @@ def _fake_secret_service(monkeypatch, *, locked, reachable=True):
     )
     from keyring.backends.SecretService import Keyring
 
-    # A positive priority is keyring's own "this backend is usable" answer; the
-    # real one probes the session bus, which no test may depend on.
-    monkeypatch.setattr(Keyring, "priority", 5, raising=False)
-    return CredentialStore(Keyring())
+    class LinuxVault(Keyring):
+        # keyring's own priority probes the session bus, which no test may
+        # depend on; a fixed one keeps the backend check hermetic.
+        __module__ = "keyring.backends.SecretService"
+        priority = 5
+
+    return CredentialStore(LinuxVault())
 
 
 def test_locked_linux_vault_is_reported_and_not_offered(monkeypatch):
