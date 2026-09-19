@@ -1,21 +1,19 @@
 {
-  "change_digest": "198583edb4e5c387bf9f9bb1f4b2bec1910158bd3812aa6dbcf07552aa4cca52",
-  "reviewed_by": "Claude review of the skill autocomplete and phone typography fixes",
-  "reason": "Two tests that fail on main. (1) The harness skill autocomplete never opened: opening or closing Assistant settings bumps the project catalog key and the skills effect then cleared the typed skill token (regressed with #344); operator skill state now resets only when the runtime, harness, modes or project change. (2) The phone typography contract caught 10.5px tab labels from #355; they return to the 13px control size. Also: the Vite dev server serves the real path of a linked ui/node_modules so fonts load in worktrees (local 403s were masking the typography check). Selected: the skill autocomplete component test, the stabilization area on all eight desktop/compact/phone projects (includes the completed-harness-output journey that exercises the autocomplete), and the phone-shell area, which now includes the typography contract.",
-  "exclusions": "No full suites. No Python changes. The phone panoramic baselines change with the tab label size and are captured from CI renders. The mobile Browser-engine switch flake was fixed separately in #357.",
+  "change_digest": "ff7f6eda28910aa747d0cad654badd33d170ec28c307fda74f9e5f7944fae3be",
+  "reviewed_by": "Claude review of the phone sidebar drawer stacking fix",
+  "reason": "On phones (<=760px) in the standard themes (Dark verified; Light uses the same rules), the open sidebar drawer (z-index 10) and its scrim (8) sat under full-width resource inspectors (16), so the drawer was hidden and scrim taps hit the inspector form. Zero already layers its open drawer at 80/75 and was verified unaffected. The standard open drawer and scrim now use the same 80/75, scoped to .app-shell:not(.sidebar-collapsed) inside the 760px query. Selected: the phone-shell entries on mobile-chromium and mobile-webkit, which include the new regression 'phone shell opens the sidebar drawer above resource inspectors' (findings, assets, evidence, sources and library inspectors in Zero Dark and Dark: drawer and scrim are the hit targets, a scrim tap closes the drawer and leaves the inspector route intact, drawer navigation works over an inspector) plus the existing phone shell journeys that open the drawer.",
+  "exclusions": "No full suites. No Python, native or frontend unit changes: the fix is CSS-only and its behavior is observable only in a browser. Desktop and compact projects are excluded because the CSS sits inside the 760px media query. No screenshot baselines change: every baseline is captured with the sidebar collapsed or in Zero, whose unlayered rules already set 80/75. The new test also passed locally on narrow and on the small and wide phone projects.",
   "expected_tests": {
     "python": 0,
-    "frontend": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 191
+    "playwright": 10
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/HarnessSkillAutocomplete.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:stabilization",
-    "area:phone-shell"
+    "entry:phone-shell/mobile-chromium",
+    "entry:phone-shell/mobile-webkit"
   ]
 }
