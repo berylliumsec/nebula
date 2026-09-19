@@ -521,6 +521,7 @@ export function SessionsPage() {
     refreshProvider,
     reverifyProvider,
     resolveApproval,
+    updateProvider,
     setupStatus,
     startMission,
     uploadEvidence,
@@ -1401,14 +1402,15 @@ export function SessionsPage() {
       lastModelDiscoveryProviderIdRef.current = undefined;
       return;
     }
-    if (coreState !== "online" || sessionId) return;
+    // Existing conversations discover models when the operator opens Assistant settings.
+    if (coreState !== "online" || (sessionId && !assistantSettingsOpen)) return;
     if (lastModelDiscoveryProviderIdRef.current === providerId) return;
     lastModelDiscoveryProviderIdRef.current = providerId;
     setDiscoveringProviderId(providerId);
     void refreshProvider(providerId).finally(() => {
       setDiscoveringProviderId((current) => current === providerId ? undefined : current);
     });
-  }, [coreState, providerId, refreshProvider, runtimeKind, sessionId]);
+  }, [assistantSettingsOpen, coreState, providerId, refreshProvider, runtimeKind, sessionId]);
 
   useEffect(() => {
     sessionLoadAbortRef.current?.abort();
@@ -1874,12 +1876,47 @@ export function SessionsPage() {
   const selectedModelIsUnavailable = Boolean(model && selectedProvider && !selectedProvider.models.includes(model));
   const selectedModelSummary = modelCatalogSummary(model, selectedProvider?.modelDescriptors);
   const normalizedProviderModelQuery = providerModelQuery.trim().toLocaleLowerCase();
-  const filteredProviderModels = selectedProvider?.models.filter((item) => {
+  const matchesProviderModelQuery = (item: string) => {
     if (!normalizedProviderModelQuery || item === model) return true;
-    const descriptor = selectedProvider.modelDescriptors?.find((candidate) => candidate.id === item);
+    const descriptor = selectedProvider?.modelDescriptors?.find((candidate) => candidate.id === item);
     return [item, descriptor?.name, descriptor?.description]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedProviderModelQuery));
-  }) ?? [];
+  };
+  const filteredProviderModels = selectedProvider?.models.filter(matchesProviderModelQuery) ?? [];
+  // Discovered models outside the provider's allowlist; choosing one adds it to the allowlist.
+  const unlistedProviderModels = selectedProvider?.modelAllowlist.length
+    ? (selectedProvider.availableModels ?? []).filter((item) => !selectedProvider.models.includes(item))
+    : [];
+  const filteredUnlistedProviderModels = unlistedProviderModels.filter((item) => item !== model && matchesProviderModelQuery(item));
+  const chooseProviderModel = async (nextModel: string) => {
+    const provider = selectedProvider;
+    if (provider && nextModel && provider.modelAllowlist.length && !provider.modelAllowlist.includes(nextModel)) {
+      setAssistantSettingsStatus(`Adding ${nextModel} to ${provider.name}'s allowed models…`);
+      try {
+        await updateProvider(provider.id, {
+          name: provider.name,
+          providerType: provider.providerType,
+          endpoint: provider.endpoint,
+          local: provider.local,
+          defaultModel: provider.defaultModel,
+          modelAllowlist: [...provider.modelAllowlist, nextModel],
+          credentialEnv: provider.credentialRef ? undefined : provider.credentialEnv,
+          credentialRef: provider.credentialRef,
+          permitsSensitiveData: provider.permitsSensitiveData,
+          retention: provider.retention,
+          residency: provider.residency,
+          options: provider.options,
+          metadata: provider.metadata,
+          expectedRevision: provider.revision,
+        });
+      } catch (error) {
+        void logCaughtDiagnostic("interface.sessions.model_allowlist_update_failed", "The model could not be added to the provider's allowed models.", error, "assistant_settings");
+        setAssistantSettingsStatus(error instanceof Error ? error.message : `Could not add ${nextModel} to ${provider.name}'s allowed models.`);
+        return;
+      }
+    }
+    await proposeProviderRuntime(providerId, nextModel);
+  };
   const modelPlaceholder = modelDiscoveryInProgress
     ? "Discovering models…"
     : selectedProvider?.models.length
@@ -3722,7 +3759,9 @@ export function SessionsPage() {
                 <div className="chat-settings-fields" data-guide="assistant-runtime">
                 <label><span>Runtime</span><select aria-label="Chat runtime" value={runtimeKind} disabled={composerBusy} onChange={(event) => { const next = event.target.value as "provider" | "harness"; if (engagement) runtimeDefaultEngagementRef.current = engagement.id; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); setAssistantSettingsStatus("Runtime updated. Applies to your next message."); if (next === "provider") selectProvider(providerId || enabledProviders[0]?.id || ""); else { setModel(selectedHarness?.defaultModel?.trim() || selectedHarness?.models[0] || ""); } }}><option value="provider">Provider</option><option value="harness">Agent harness</option></select></label>
                 {runtimeKind === "provider" ? <label><span>Provider</span><select aria-label="Chat provider" value={providerId} disabled={composerBusy} onChange={(event) => { const nextProvider = enabledProviders.find(item => item.id === event.target.value); void proposeProviderRuntime(event.target.value, nextProvider?.models[0] ?? ""); }}><option value="">Select provider</option>{enabledProviders.map((provider) => <option value={provider.id} key={provider.id}>{provider.name} · {provider.state}</option>)}</select></label> : <><label><span>Harness</span><select aria-label="Chat harness" value={harnessId} disabled={composerBusy} onChange={(event) => { const profile = harnesses.find(item => item.id === event.target.value); setHarnessSessionId(""); setSelectedMcpIds([]); setHarnessId(event.target.value); setModel(profile?.defaultModel || profile?.models[0] || ""); setAssistantSettingsStatus("Harness updated. Applies to your next message."); }}><option value="">Select harness</option>{harnesses.map((harness) => <option value={harness.id} key={harness.id}>{harness.name}</option>)}</select></label></>}
-                {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => void proposeProviderRuntime(providerId, event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
+                {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) + unlistedProviderModels.length > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || !selectedProvider?.models.length} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredUnlistedProviderModels.length > 0
+                  ? <><optgroup label="Allowed models">{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup><optgroup label={`More ${selectedProvider?.name ?? "provider"} models · adds to allowed`}>{filteredUnlistedProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup></>
+                  : filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={composerBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={composerBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
