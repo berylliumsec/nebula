@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from .chat import ChatCompletionRequest
+from .chat import ChatCompletionRequest, unarchive_chat_session
 from .harnesses import HarnessSkillInvocation
 from .database import EntityRow
 from .domain import (
@@ -581,8 +581,11 @@ def queue_router(service):
 
     @router.post("/chat/sessions/{session_id}/queue")
     def write_queue(session_id: str, body: QueueWrite, request: Request):
-        return service.write(
+        queue = service.write(
             session_id, body, getattr(request.state, "auth_device_id", None)
         )
+        if body.action == "enqueue":
+            unarchive_chat_session(service.store, session_id)
+        return queue
 
     return router
