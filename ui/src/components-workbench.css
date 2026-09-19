@@ -587,6 +587,11 @@ kbd { font-size: 11px; }
 .session-list nav { display: grid; grid-auto-rows: max-content; align-content: start; gap: 3px; padding: 8px; }
 .session-list-group { display: grid; gap: 3px; }
 .session-list-group > h3 { margin: 7px 4px 2px; color: var(--muted); font-size: 10px; font-weight: var(--weight-semibold); letter-spacing: .06em; text-transform: uppercase; }
+.session-list-group-toggle { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.session-list-group-toggle:hover, .session-list-group-toggle:focus-visible { color: var(--text); }
+.session-list-group-toggle svg { transition: transform .12s ease; }
+.session-list-group-toggle svg.collapsed { transform: rotate(-90deg); }
+.session-list-group-toggle span { font-variant-numeric: tabular-nums; opacity: .8; }
 .session-list nav > button { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 46px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; text-align: left; cursor: pointer; }
 .session-list nav > button:hover { background: var(--surface-hover); }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }

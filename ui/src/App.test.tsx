@@ -820,14 +820,15 @@ describe("Nebula workspace", () => {
     let chatPresent = true;
     let chatTitle = "Saved context";
     let chatRevision = 1;
+    let chatMetadata: Record<string, unknown> = { message_count: 2 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
       if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Memory review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
       if (path.endsWith("/providers")) return new Response(JSON.stringify([{ ...entity, id: "provider-1", name: "Local analyst", provider_type: "vllm", endpoint: null, enabled: true, is_local: true, secret_ref: null, model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "model-1" } }]), { status: 200 });
       if (path.endsWith("/chat-sessions/session-1") && init?.method === "DELETE") { chatPresent = false; return new Response(null, { status: 204 }); }
-      if (path.endsWith("/chat-sessions/session-1") && init?.method === "PATCH") { const body = JSON.parse(String(init.body)); chatTitle = body.title; chatRevision += 1; return new Response(JSON.stringify({ ...entity, revision: chatRevision, id: "session-1", engagement_id: "engagement-1", title: chatTitle, provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }), { status: 200 }); }
-      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chatPresent ? [{ ...entity, revision: chatRevision, id: "session-1", engagement_id: "engagement-1", title: chatTitle, provider_profile_id: "provider-1", model: "model-1", metadata: { message_count: 2 } }] : []), { status: 200 });
+      if (path.endsWith("/chat-sessions/session-1") && init?.method === "PATCH") { const body = JSON.parse(String(init.body)); if (body.title) chatTitle = body.title; if (body.archived === true) chatMetadata = { ...chatMetadata, archived_at: "2026-07-12T12:00:00Z" }; if (body.archived === false) { const { archived_at: _archivedAt, ...rest } = chatMetadata; chatMetadata = rest; } chatRevision += 1; return new Response(JSON.stringify({ ...entity, revision: chatRevision, id: "session-1", engagement_id: "engagement-1", title: chatTitle, provider_profile_id: "provider-1", model: "model-1", metadata: chatMetadata }), { status: 200 }); }
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(chatPresent ? [{ ...entity, revision: chatRevision, id: "session-1", engagement_id: "engagement-1", title: chatTitle, provider_profile_id: "provider-1", model: "model-1", metadata: chatMetadata }] : []), { status: 200 });
       if (path.endsWith("/chat/sessions/session-1/messages")) return new Response(JSON.stringify([
         { ...entity, id: "message-1", engagement_id: "engagement-1", session_id: "session-1", sequence: 1, role: "user", content: "Use port 8443", citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
         { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained\n\nUse `nmap` for verification.", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
@@ -920,6 +921,17 @@ describe("Nebula workspace", () => {
     expect((await screen.findAllByTitle("Port review"))[0]).toBeVisible();
     const renameCall = fetchMock.mock.calls.find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(renameCall?.[1]?.body))).toEqual({ title: "Port review", expected_revision: 1 });
+    await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Archive" }));
+    const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
+    expect(archivedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument();
+    const archiveCall = fetchMock.mock.calls.findLast(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
+    expect(JSON.parse(String(archiveCall?.[1]?.body))).toEqual({ archived: true, expected_revision: 2 });
+    await user.click(archivedToggle);
+    await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
+    await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Unarchive" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: /Archived\s*1/ })).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     const portReviewMenu = screen.getByRole("menu", { name: "Actions for Port review" });
     await user.click(within(portReviewMenu).getByRole("menuitem", { name: "Delete" }));

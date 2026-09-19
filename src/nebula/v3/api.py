@@ -720,8 +720,15 @@ def _observation_dependencies(
 
 
 class ChatSessionRenameRequest(NebulaModel):
-    title: str = Field(min_length=1, max_length=300)
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    archived: bool | None = None
     expected_revision: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def changes_something(self) -> "ChatSessionRenameRequest":
+        if self.title is None and self.archived is None:
+            raise ValueError("Provide a title or an archived state")
+        return self
 
 
 class ChatSessionForkRequest(NebulaModel):
@@ -9232,15 +9239,22 @@ def create_app(
         current = store.get(ChatSession, session_id)
         if chat_service().pending_turn(session_id) is not None:
             raise ConflictError(
-                "conversation cannot be renamed while a response is active"
+                "conversation cannot be changed while a response is active"
             )
+        changes: dict[str, Any] = {}
+        metadata = dict(current.metadata)
+        if request.title is not None:
+            changes["title"] = request.title
+            metadata["initial_title_state"] = "operator"
+        if request.archived is True:
+            metadata.setdefault("archived_at", utc_now().isoformat())
+        elif request.archived is False:
+            metadata.pop("archived_at", None)
+        changes["metadata"] = metadata
         return store.update(
             ChatSession,
             session_id,
-            {
-                "title": request.title,
-                "metadata": {**current.metadata, "initial_title_state": "operator"},
-            },
+            changes,
             expected_revision=request.expected_revision or current.revision,
         )
 

@@ -1736,6 +1736,18 @@ describe("ApiClient", () => {
     });
   });
 
+  it("archives and restores chat sessions through the session patch", async () => {
+    const wire = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 3, id: "session-1", engagement_id: "engagement-1", title: "Scope review", provider_profile_id: "provider-1", model: "model-1" };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...wire, metadata: { archived_at: "2026-07-12T11:00:00Z" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...wire, revision: 4, metadata: {} }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    expect(await client.setChatSessionArchived("session-1", true, 2)).toMatchObject({ archivedAt: "2026-07-12T11:00:00Z" });
+    expect((await client.setChatSessionArchived("session-1", false)).archivedAt).toBeUndefined();
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ archived: true, expected_revision: 2 }) });
+  });
+
   it("maps provenance-backed chat and mission context status", async () => {
     const status = {
       owner_type: "chat_session",

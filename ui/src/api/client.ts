@@ -3262,6 +3262,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
+    archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     revision: value.revision,
@@ -7981,6 +7982,20 @@ export class ApiClient {
           title: body.title.trim(),
           expected_revision: body.expectedRevision,
         }),
+      },
+    ).then(mapChatSession);
+  }
+
+  setChatSessionArchived(
+    sessionId: string,
+    archived: boolean,
+    expectedRevision?: number,
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat-sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ archived, expected_revision: expectedRevision }),
       },
     ).then(mapChatSession);
   }

@@ -4469,7 +4469,11 @@ class ChatService:
                 parent_session_id=source.id,
                 forked_from_message_id=boundary.id,
                 metadata={
-                    **source.metadata,
+                    **{
+                        key: value
+                        for key, value in source.metadata.items()
+                        if key != "archived_at"
+                    },
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
                     "workspace_is_shared": True,
