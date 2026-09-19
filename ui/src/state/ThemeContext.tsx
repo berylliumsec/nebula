@@ -55,6 +55,9 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
     document.documentElement.style.colorScheme = resolvedTheme === "light" || resolvedTheme === "zero-light" ? "light" : "dark";
+    // Browser chrome and the iPhone shell (WKWebView.themeColor) follow the page canvas.
+    const canvas = getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim();
+    if (canvas) document.querySelector('meta[name="theme-color"]')?.setAttribute("content", canvas);
   }, [resolvedTheme]);
 
   const setPreference = useCallback((value: ThemePreference) => {
@@ -72,6 +75,11 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+/** The resolved theme, or undefined outside ThemeProvider (isolated component tests). */
+export function useOptionalResolvedTheme(): ThemePreference | undefined {
+  return useContext(ThemeContext)?.resolvedTheme;
 }
 
 export function useTheme(): ThemeContextValue {

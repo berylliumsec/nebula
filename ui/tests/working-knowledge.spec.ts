@@ -18,7 +18,8 @@ test("working knowledge survives retired model links, reload and project navigat
   await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
   await page.getByLabel("Device name").fill("Working knowledge fixture");
   await page.getByRole("button", {name: "Pair device", exact: true}).click();
-  await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20000});
+  // Phones drop the shell status chip from the Workbench; their navigation marks the paired shell.
+  await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/}).or(page.getByRole("navigation", {name: "Mobile operator navigation"})).first()).toBeVisible({timeout: 20000});
   for (const old of [`/projects/${project.id}/application-model?object=login-flow&edge=old`, `/projects/${project.id}/workbench?view=model`]) {
     await page.goto(old);
     await expect(page).toHaveURL(new RegExp(`/projects/${project.id}/workbench\\?view=chat$`));
@@ -35,8 +36,14 @@ test("working knowledge survives retired model links, reload and project navigat
     await more.click();
   }
   const projectLink = page.getByRole("link", {name: "Project", exact: true});
-  if (!await projectLink.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click();
-  await projectLink.click();
+  if (await more.isVisible()) {
+    // Phones reach project pages from the Workbench More tab.
+    await more.click();
+    await page.getByRole("dialog", {name: "More"}).getByRole("button", {name: "Project overview"}).click();
+  } else {
+    if (!await projectLink.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click();
+    await projectLink.click();
+  }
   await expect(page.getByRole("navigation", {name: "Project sections"})).toBeVisible();
   await expect(page.getByRole("button", {name: "Application model", exact: true})).toHaveCount(0);
   await page.goBack();

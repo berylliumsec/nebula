@@ -16,6 +16,7 @@
 @import url("./calm-responsive.css") layer(responsive);
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
+@import url("./mobile-shell.css");
 
 /* The shell allocates notice height before the bounded workbench. A 100%-height
    page plus a sibling banner clips the composer behind the navigation dock. */

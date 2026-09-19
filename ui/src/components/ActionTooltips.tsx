@@ -16,6 +16,10 @@ export function ActionTooltips() {
     let hideTimer: ReturnType<typeof setTimeout> | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let touch = false;
+    // Touch-first devices get tooltips only for keyboard focus; a tap must never
+    // leave a label floating over the content it just revealed.
+    let keyboard = false;
+    const hoverless = () => typeof window.matchMedia === "function" && window.matchMedia("(hover: none)").matches;
     const hide = () => {
       clearTimeout(timer);
       clearTimeout(hideTimer);
@@ -55,18 +59,19 @@ export function ActionTooltips() {
     const over = (event: PointerEvent) => {
       clearTimeout(hideTimer);
       if (event.target instanceof Node && tip.current?.contains(event.target)) return;
-      touch = event.pointerType === "touch";
+      touch = event.pointerType === "touch" || hoverless();
       if (!touch) show(event.target);
     };
     const out = (event: PointerEvent) => {
       if (event.relatedTarget instanceof Node && (anchor?.contains(event.relatedTarget) || tip.current?.contains(event.relatedTarget))) return;
       hideTimer = setTimeout(hide, 120);
     };
-    const focus = (event: FocusEvent) => { if (!touch) show(event.target, true); };
-    const key = (event: KeyboardEvent) => { touch = false; if (event.key === "Escape") hide(); };
+    const focus = (event: FocusEvent) => { if (hoverless() ? keyboard : !touch) show(event.target, true); };
+    const key = (event: KeyboardEvent) => { touch = false; keyboard = true; if (event.key === "Escape") hide(); };
+    const down = () => { keyboard = false; hide(); };
     document.addEventListener("pointerover", over, true);
     document.addEventListener("pointerout", out, true);
-    document.addEventListener("pointerdown", hide, true);
+    document.addEventListener("pointerdown", down, true);
     document.addEventListener("focusin", focus, true);
     document.addEventListener("focusout", hide, true);
     document.addEventListener("keydown", key, true);
@@ -76,7 +81,7 @@ export function ActionTooltips() {
       hide();
       document.removeEventListener("pointerover", over, true);
       document.removeEventListener("pointerout", out, true);
-      document.removeEventListener("pointerdown", hide, true);
+      document.removeEventListener("pointerdown", down, true);
       document.removeEventListener("focusin", focus, true);
       document.removeEventListener("focusout", hide, true);
       document.removeEventListener("keydown", key, true);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { TerminalToolbarDetails } from "./TerminalToolbarDetails";
+import { TERMINAL_KEYS, withControl } from "./terminalKeys";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
@@ -168,6 +169,13 @@ function LiveContainerTerminal({
   const [networkWarning, setNetworkWarning] = useState<string>();
   const [networkBoundaryVisible, setNetworkBoundaryVisible] = useState(true);
   const acceptedCommandRef = useRef<string | undefined>(undefined);
+  // Phone keyboards have no Control key; the key row latches it for one keystroke.
+  const controlLatchRef = useRef(false);
+  const [controlLatched, setControlLatched] = useState(false);
+  const latchControl = (latched: boolean) => {
+    controlLatchRef.current = latched;
+    setControlLatched(latched);
+  };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -278,7 +286,15 @@ function LiveContainerTerminal({
       },
     });
     socketRef.current = socket;
-    const input = terminal.onData((data) => socket.sendInput(data));
+    const input = terminal.onData((data) => {
+      if (!controlLatchRef.current) {
+        socket.sendInput(data);
+        return;
+      }
+      controlLatchRef.current = false;
+      setControlLatched(false);
+      socket.sendInput(withControl(data));
+    });
     const resize = terminal.onResize(({ cols, rows }) => {
       if (activeRef.current) socket.resize(cols, rows);
     });
@@ -390,6 +406,26 @@ function LiveContainerTerminal({
     </div>
     <div className="xterm-shell" ref={hostRef} aria-label="Terminal output" />
     {exit?.exitCode !== undefined && <footer>Exit code {exit.exitCode}.</footer>}
+    <div className="terminal-key-row" role="toolbar" aria-label="Terminal keys">
+      {TERMINAL_KEYS.map((key) => <button
+        key={key.id}
+        type="button"
+        className={`terminal-key${key.id === "ctrl" && controlLatched ? " latched" : ""}`}
+        aria-label={key.name}
+        aria-pressed={key.id === "ctrl" ? controlLatched : undefined}
+        disabled={state !== "ready" || Boolean(exit)}
+        // Keep focus (and the software keyboard) on the terminal input.
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={() => {
+          if (key.id === "ctrl") latchControl(!controlLatchRef.current);
+          else {
+            latchControl(false);
+            socketRef.current?.sendInput(key.sequence);
+          }
+          terminalRef.current?.focus();
+        }}
+      >{key.label}</button>)}
+    </div>
   </div>;
 }
 

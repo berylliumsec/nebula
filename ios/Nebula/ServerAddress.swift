@@ -41,4 +41,33 @@ enum ServerAddress {
             && url.host?.lowercased() == server.host?.lowercased()
             && port(url) == port(server)
     }
+
+    /// `nebula://settings` is the page's only way to ask for native UI; it carries no data.
+    static func isSettingsLink(_ url: URL) -> Bool {
+        url.scheme == "nebula" && url.host == "settings"
+    }
+
+    /// Host plus any non-default port, for compact address chips.
+    static func label(_ url: URL) -> String {
+        guard let host = url.host else { return url.absoluteString }
+        let defaultPort = url.scheme == "https" ? 443 : 80
+        if let port = url.port, port != defaultPort { return "\(host):\(port)" }
+        return host
+    }
+}
+
+/// Recently connected servers (for example the VPN and the home LAN address), most recent first.
+enum ServerHistory {
+    static let limit = 3
+
+    static func remember(_ url: URL, in history: [String]) -> [String] {
+        let others = history.compactMap(ServerAddress.parse).filter { !ServerAddress.sameOrigin($0, url) }
+        return ([url] + others).prefix(limit).map(\.absoluteString)
+    }
+
+    static func alternates(to current: URL?, in history: [String]) -> [URL] {
+        history.compactMap(ServerAddress.parse).filter { saved in
+            current.map { !ServerAddress.sameOrigin(saved, $0) } ?? true
+        }
+    }
 }
