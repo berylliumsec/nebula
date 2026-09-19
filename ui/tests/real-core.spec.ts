@@ -3673,7 +3673,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
   } finally {await core.stop();}
 });
 
-reliabilityTest("mcp import previews, saves, trusts, probes, and replaces servers from a JSON file", async ({page}, info) => {
+reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers from a JSON file", async ({page}, info) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
   const repository = path.resolve(import.meta.dirname, "../..");
@@ -3707,8 +3707,11 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and replaces server
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("MCP import acceptance");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    // Pairing finishes by reloading the app at "/"; navigating earlier would be interrupted.
+    await expect(page.locator(".app-shell")).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/settings#harness-settings`);
+    // Checked from Settings: phones hide the top bar, and its Core chip, on the Workbench.
+    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
     const section = page.locator("#mcp-settings");
 
     // Empty state entry point, source step, example, schema download.
@@ -3743,9 +3746,9 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and replaces server
     expect(await (await core.api.get("mcp-servers")).json()).toEqual([]);
     await auditDialog(dialog, "preview");
 
-    await dialog.getByRole("button", {name: "Import 2 servers", exact: true}).click();
+    await dialog.getByRole("button", {name: "Save 2 servers", exact: true}).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(section.locator(".surface-notice")).toContainText("Imported 2 servers from claude_desktop_config.json");
+    await expect(section.locator(".surface-notice")).toContainText("Saved 2 servers from claude_desktop_config.json (2 added)");
     await expect(section.locator(".surface-notice")).toContainText("1 could not be imported: recon");
     const card = (name: string) => section.locator(".integration-card").filter({has: page.getByRole("heading", {name, exact: true})});
     await expect(card("fixture")).toContainText("Local program · not trusted");
@@ -3765,21 +3768,45 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and replaces server
     await card("fixture").getByRole("button", {name: "Enable"}).click();
     await expect(card("fixture").getByRole("button", {name: "Disable"})).toBeVisible();
 
-    // Re-importing skips existing names unless Replace is ticked; replace resets trust.
+    // Re-importing the same file changes nothing.
     await section.getByRole("button", {name: "Import", exact: true}).click();
     await dialog.getByLabel("Choose MCP configuration file").setInputFiles(file);
     await dialog.getByRole("button", {name: "Preview", exact: true}).click();
-    await expect(row("fixture")).toContainText("Exists · skipped");
-    await expect(dialog.getByRole("button", {name: /^Import/})).toBeDisabled();
-    await dialog.getByRole("checkbox", {name: /Replace 2 existing servers/}).check();
-    await expect(row("fixture")).toContainText("Replaces existing");
-    await dialog.getByRole("button", {name: "Import 2 servers", exact: true}).click();
+    await expect(row("fixture")).toContainText("Unchanged");
+    await expect(row("intel")).toContainText("Unchanged");
+    await expect(dialog.getByRole("button", {name: "Nothing to save", exact: true})).toBeDisabled();
+    await dialog.getByRole("button", {name: "Back", exact: true}).click();
+
+    // An edited file updates only what changed, and a new server is enabled on import.
+    await dialog.getByLabel("Choose MCP configuration file").setInputFiles({...file, buffer: Buffer.from(JSON.stringify({mcpServers: {
+      fixture: {command: "python3", args: [fixtureServer], env: {LOG_LEVEL: "debug"}, cwd: core.dataDir, alwaysAllow: ["read_file"]},
+      intel: {type: "http", url: "https://mcp.example.test/mcp", headers: {Authorization: "Bearer ${INTEL_TOKEN}"}},
+      fixture2: {command: "python3", args: [fixtureServer], cwd: core.dataDir},
+    }}, null, 2))});
+    await dialog.getByRole("button", {name: "Preview", exact: true}).click();
+    await expect(row("fixture")).toContainText("Update");
+    await expect(row("fixture")).toContainText("env LOG_LEVEL info");
+    await expect(row("fixture")).toContainText("Its launch settings changed, so fixture is untrusted again.");
+    await expect(row("intel")).toContainText("Unchanged");
+    await expect(row("fixture2")).toContainText("Disabled · Risk-based");
+    await dialog.getByRole("checkbox", {name: /Enable after import/}).check();
+    await dialog.getByRole("radio", {name: "Ask", exact: true}).check();
+    await expect(row("fixture2")).toContainText("Disabled until trusted");
+    await dialog.getByRole("checkbox", {name: /Trust 2 local programs to run on this Core/}).check();
+    await expect(row("fixture2")).toContainText("Enabled · Ask");
+    await expect(row("fixture")).toContainText("Stays enabled · Risk-based");
+    await auditDialog(dialog, "update");
+    await dialog.getByRole("button", {name: "Save 2 servers", exact: true}).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(card("fixture")).toContainText("Local program · not trusted");
-    await expect(card("fixture").getByRole("button", {name: "Enable"})).toBeDisabled();
-    const saved = (await (await core.api.get("mcp-servers")).json()).find((item: {name: string}) => item.name === "fixture");
-    expect(saved).toMatchObject({enabled: false, trusted_stdio: false, command: expect.stringMatching(/^\/.*python3/)});
-    await page.screenshot({path: info.outputPath("mcp-import-after-replace.png")});
+    await expect(section.locator(".surface-notice")).toContainText("Saved 2 servers from claude_desktop_config.json (1 added, 1 updated). Probed 2 servers.", {timeout: 30_000});
+    for (const name of ["fixture", "fixture2"]) {
+      await expect(card(name)).toContainText("read_file");
+      await expect(card(name).getByRole("button", {name: "Disable"})).toBeVisible();
+    }
+    const servers = await (await core.api.get("mcp-servers")).json() as {name: string}[];
+    expect(servers.find((item) => item.name === "fixture")).toMatchObject({enabled: true, trusted_stdio: true, environment: {LOG_LEVEL: "debug"}, command: expect.stringMatching(/^\/.*python3/)});
+    expect(servers.find((item) => item.name === "fixture2")).toMatchObject({enabled: true, trusted_stdio: true, default_approval: "ask"});
+    await page.screenshot({path: info.outputPath("mcp-import-after-update.png")});
     await info.attach("mcp-import", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), runtime: "real Core, LAN origin, production assets, stdio fixture probe"}), contentType: "application/json"});
   } finally {await core.stop();}
 });

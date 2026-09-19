@@ -1,24 +1,25 @@
 {
-  "change_digest": "850290ca4d917bacf6fd83ce601ed3705bfb987b7dcb9dff0fb70c6232f45459",
-  "reviewed_by": "Claude review of side navigation current-page authority",
-  "reason": "SideNav NavLinks matched their canonical base path with `end`, so no primary navigation item was current on finding/report detail URLs (ReportsPage auto-opens its first report, so Reports was rarely highlighted), Library detail URLs, or the Project page's assets/evidence/sources tabs. SideNav now derives the current item from navigationItemForPath, the same authority TopBar uses, and sets aria-current=\"page\" and the active class from one boolean; navigationItemForPath also maps the legacy /assets, /evidence and /knowledge routes (which render the Project page in place when no project is loaded) to Project. SideNav.test.tsx covers every canonical detail and tab route in the standard and Zero variants, section-root hrefs from a detail page, and the legacy routes; TopBar.test.tsx covers the helper change. The new Playwright journey opens a finding, follows the side navigation to Reports (auto-selected detail) and Project, and switches Project tabs in Zero Dark and Dark: critical-workspaces runs it on desktop and compact beside the unchanged side-nav baselines, and the phone-shell entries run it through the sidebar drawer on mobile Chromium and WebKit beside the existing phone shell, navigation, typography and drawer-layering contracts. Merging main brought #361, which keeps the phone drawer above resource inspectors, so the phone path now reads the section from the drawer on the finding detail route itself instead of closing the inspector first. App.test.tsx renders the full shell with the side navigation.",
-  "exclusions": "No Python or native tests: no backend, catalog or Tauri change. No screenshot baselines change: every baseline captures a base route where `end` already matched, and Link renders the same anchor markup as NavLink, so critical-workspaces re-runs them unchanged. Other mobile widths (small/wide/narrow) are excluded because the fix is width-independent URL state covered on phone viewports in mobile Chromium (Pixel 5) and mobile WebKit (iPhone 13). The calm-structure single-active-navigation check is not catalogued narrowly; the new journey asserts exactly one current item on each route, and it passed locally on desktop and compact. No full suites.",
+  "change_digest": "fba7695224357ca5844507b550c28953f713f9561fce113b4f0e53070269f640",
+  "reviewed_by": "Claude review of MCP import defaults and delta re-import",
+  "reason": "POST /mcp-servers/import gains defaults {enabled, default_approval} for new servers and trust_local_programs, and on_conflict now defaults to update: an existing server is compared with the file and only differing settings are saved (connection fields from the file, Nebula-side settings kept unless the nebula block sets them, matching literal secrets reuse the stored credential, a trusted program whose command/args/env/cwd changed is untrusted and disabled unless trust is re-confirmed, connection changes clear probed tools). The CLI adds --enable, --approval, --trust-local-programs and --skip-existing. test_mcp_import.py covers defaults vs file precedence, unchanged/updated re-import with secret reuse and rotation, trust re-confirmation, and the API/CLI plumbing; test_operator_help.py checks the edited help article. The dialog (McpImportDialog.test.tsx), post-import auto-probe (HarnessSettings.test.tsx) and client mapping (client.test.ts) have unit coverage. area:mcp-import runs the real-Core journey on desktop, compact and Chromium/WebKit phones: first import, unchanged re-import, delta update with trust and enable-on-import with a real stdio probe. It also caught a real-browser bug fixed here: React reused the clicked Back button as the Preview submit button and re-submitted the form. The journey now checks Core readiness from Settings because phones hide the top bar on the Workbench since #355.",
+  "exclusions": "No full suites. No native tests: no Tauri/Rust change. The new CSS is scoped to .mcp-import-* selectors, so no visual baselines or other dialogs are affected. Other Core API routes are untouched apart from the import request/report models.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 72,
+    "python": 32,
+    "frontend": 90,
     "native": 0,
-    "playwright": 26
+    "playwright": 8
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_operator_help.py"
+  ],
   "frontend": [
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/App.test.tsx"
+    "ui/src/components/McpImportDialog.test.tsx",
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:critical-workspaces",
-    "entry:phone-shell/mobile-chromium",
-    "entry:phone-shell/mobile-webkit"
+    "area:mcp-import"
   ]
 }

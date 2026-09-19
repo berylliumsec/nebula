@@ -337,13 +337,20 @@ that environment variable of the Core process. Literal credentials in headers or
 credential-named `env` entries move to the operating-system credential vault,
 and are reported invalid when the vault is unavailable. An optional `nebula`
 object per server sets `default_approval`, `tool_overrides`, `enabled_tools`,
-`disabled_tools`, `required`, and timeouts. A server with an existing name is
-skipped unless `--replace` is given. `nebula-core mcp export FILE` writes the
-same format without secret values.
+`disabled_tools`, `required`, and timeouts. Re-importing a server with an
+existing name updates only what changed in the file and keeps settings made in
+Nebula; `--skip-existing` leaves it alone and `--replace` overwrites it.
+`nebula-core mcp export FILE` writes the same format without secret values.
 
-Imported servers start disabled, and local programs start untrusted. To use one,
-choose Edit and tick I trust this local program for a stdio server you trust,
-then Probe, then Enable. If Probe fails, read the detail on the server card: a
+New servers start disabled, and local programs start untrusted, unless the
+operator ticks Enable after import (CLI `--enable`) and, for local programs,
+Trust (CLI `--trust-local-programs`); Tool approval (CLI `--approval`) sets
+risk_based, ask, allow, or deny for new servers. Nebula probes servers it
+enables on import. A trusted local program whose command, args, env, or cwd
+changes on re-import becomes untrusted and disabled unless Trust is ticked
+again. To use a server that is still disabled, choose Edit and tick I trust
+this local program for a stdio server you trust, then Probe, then Enable. If
+Probe fails, read the detail on the server card: a
 stdio command must exist on the Nebula host, `${NAME}` variables must be set in
 the Core environment, and HTTP endpoints must use HTTPS unless they are on
 loopback. Do not suggest enabling a server the operator has not reviewed, and do
