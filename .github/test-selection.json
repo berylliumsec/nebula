@@ -1,25 +1,22 @@
 {
-  "change_digest": "fba7695224357ca5844507b550c28953f713f9561fce113b4f0e53070269f640",
-  "reviewed_by": "Claude review of MCP import defaults and delta re-import",
-  "reason": "POST /mcp-servers/import gains defaults {enabled, default_approval} for new servers and trust_local_programs, and on_conflict now defaults to update: an existing server is compared with the file and only differing settings are saved (connection fields from the file, Nebula-side settings kept unless the nebula block sets them, matching literal secrets reuse the stored credential, a trusted program whose command/args/env/cwd changed is untrusted and disabled unless trust is re-confirmed, connection changes clear probed tools). The CLI adds --enable, --approval, --trust-local-programs and --skip-existing. test_mcp_import.py covers defaults vs file precedence, unchanged/updated re-import with secret reuse and rotation, trust re-confirmation, and the API/CLI plumbing; test_operator_help.py checks the edited help article. The dialog (McpImportDialog.test.tsx), post-import auto-probe (HarnessSettings.test.tsx) and client mapping (client.test.ts) have unit coverage. area:mcp-import runs the real-Core journey on desktop, compact and Chromium/WebKit phones: first import, unchanged re-import, delta update with trust and enable-on-import with a real stdio probe. It also caught a real-browser bug fixed here: React reused the clicked Back button as the Preview submit button and re-submitted the form. The journey now checks Core readiness from Settings because phones hide the top bar on the Workbench since #355.",
-  "exclusions": "No full suites. No native tests: no Tauri/Rust change. The new CSS is scoped to .mcp-import-* selectors, so no visual baselines or other dialogs are affected. Other Core API routes are untouched apart from the import request/report models.",
+  "change_digest": "5b62294804c2d031af89c3dcb1f67d6f9eb2fbe0e3da597c3ec291117db374d7",
+  "reviewed_by": "Claude review of real-Core phone readiness waits",
+  "reason": "Six real-Core journeys waited for the shell's Core chip as a visible button, which phones never satisfy: AppShell has hidden the top bar on the Workbench since #355, so these journeys failed at the gate on every phone project (measured on main at 390px). The spec already had coreReady(), which accepts the chip or the phone operator navigation, but these waits bypassed it. coreReady is now coreShell(page, chip) with two callers: coreReady (exact \"Nebula Core ready\", unchanged semantics for its ~20 existing call sites) and coreConnected (ready or degraded, for fixture Cores that report limited availability). The eight bypassing waits now call coreConnected. Verified locally: the six journeys pass on chromium-390, and on desktop, compact, chromium-320 and webkit-390 (23 of 24), plus the pending-approval journey on desktop and chromium-390. The selected areas cover every journey whose wait changed and that CI selects: assistant-reliability, harness-accounts, harness-commands-real, advanced-session-binding and ssh-environments.",
+  "exclusions": "Test-only change: no Python, frontend unit or native tests, and no product code. area:branch-review is not selected although it shares one changed wait: its real-Core phone jobs also run journeys that fail on main for unrelated, pre-existing reasons (the stabilization replay matrix, project creation), so selecting it would report failures this change neither causes nor fixes; that journey was verified locally on desktop and chromium-390 instead. The durable-knowledge journey belongs to no area, so CI never selects it; it was verified locally too. The popup journey still fails later on webkit-390 for an unrelated phone reason (its Ask Nebula status text); CI runs that journey only on the desktop-sized real-core project, where it passes. The wider phone rot (35 of 48 real-Core tests fail at 390px on main) is out of scope here.",
   "expected_tests": {
-    "python": 32,
-    "frontend": 90,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 36
   },
-  "python": [
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_operator_help.py"
-  ],
-  "frontend": [
-    "ui/src/components/McpImportDialog.test.tsx",
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/api/client.test.ts"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:mcp-import"
+    "area:assistant-reliability",
+    "area:harness-accounts",
+    "area:harness-commands-real",
+    "area:advanced-session-binding",
+    "area:ssh-environments"
   ]
 }
