@@ -2190,11 +2190,12 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   :root { --side-width: 0px; --side-width-collapsed: 0px; --top-height: 58px; }
   .app-shell, .app-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr) 0; }
   .side-nav { position: fixed; inset: var(--top-height) auto 0 0; width: min(280px, calc(100vw - 48px)); transform: translateX(-102%); transition: transform 220ms ease; box-shadow: none; }
-  .app-shell:not(.sidebar-collapsed) .side-nav { transform: translateX(0); }
+  /* An open drawer and its scrim cover page overlays such as resource inspectors, as in Zero. */
+  .app-shell:not(.sidebar-collapsed) .side-nav { z-index: 80; transform: translateX(0); }
   .app-shell:not(.sidebar-collapsed) .sidebar-scrim {
     display: block;
     position: fixed;
-    z-index: 8;
+    z-index: 75;
     inset: var(--top-height) 0 0;
     width: 100%;
     height: auto;
