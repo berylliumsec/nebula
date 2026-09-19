@@ -1105,6 +1105,7 @@ interface WireProvider extends WireEntity {
     retention?: string | null;
     residency?: string[];
     permits_sensitive_data?: boolean;
+    auto_share_tool_results?: boolean;
   };
   metadata?: JsonObject;
 }
@@ -1435,7 +1436,11 @@ interface WireHarnessProfile extends WireEntity {
   secret_ref?: string | null;
   default_model?: string | null;
   enabled: boolean;
-  privacy?: { local_only?: boolean; permits_sensitive_data?: boolean };
+  privacy?: {
+    local_only?: boolean;
+    permits_sensitive_data?: boolean;
+    auto_share_tool_results?: boolean;
+  };
   native_capabilities?: {
     workspace_access?: "none" | "read" | "write";
     shell?: boolean;
@@ -2556,6 +2561,7 @@ function mapProvider(value: WireProvider): ProviderHealth {
       : undefined,
     credentialRef: value.secret_ref ?? undefined,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    autoShareToolResults: value.privacy?.auto_share_tool_results === true,
     retention: value.privacy?.retention ?? undefined,
     residency: value.privacy?.residency ?? [],
     options: objectOptions(metadata.options),
@@ -3368,6 +3374,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
     permitsSensitiveData: value.privacy?.permits_sensitive_data === true,
+    autoShareToolResults: value.privacy?.auto_share_tool_results === true,
     nativeCapabilities: {
       workspaceAccess: value.native_capabilities?.workspace_access ?? "none",
       shell: value.native_capabilities?.shell === true,
@@ -5545,6 +5552,24 @@ export class ApiClient {
     ).then(mapHarnessProfile);
   }
 
+  /** Record or revoke standing consent for sending tool results to a harness. */
+  setHarnessToolResultSharing(
+    profile: HarnessProfile,
+    always: boolean,
+  ): Promise<HarnessProfile> {
+    return this.updateHarness(
+      profile.id,
+      {
+        privacy: {
+          local_only: profile.localOnly,
+          permits_sensitive_data: profile.permitsSensitiveData,
+          auto_share_tool_results: profile.permitsSensitiveData && always,
+        },
+      },
+      profile.revision,
+    );
+  }
+
   checkHarness(id: string): Promise<HarnessProfile> {
     return this.request<Record<string, unknown>>(
       `harnesses/${encodeURIComponent(id)}/health`,
@@ -6882,6 +6907,9 @@ export class ApiClient {
         privacy: {
           local_only: body.local,
           permits_sensitive_data: body.permitsSensitiveData === true,
+          auto_share_tool_results:
+            body.permitsSensitiveData === true &&
+            body.autoShareToolResults === true,
         },
         metadata: {
           ...(defaultModel ? { default_model: defaultModel } : {}),
@@ -6924,12 +6952,39 @@ export class ApiClient {
             retention: body.retention ?? null,
             residency: body.residency,
             permits_sensitive_data: body.permitsSensitiveData,
+            auto_share_tool_results:
+              body.permitsSensitiveData && body.autoShareToolResults === true,
           },
           metadata,
         },
         expected_revision: body.expectedRevision,
       }),
     }).then(mapProvider);
+  }
+
+  /** Record or revoke standing consent for sending tool results to a provider. */
+  setProviderToolResultSharing(
+    provider: ProviderHealth,
+    always: boolean,
+  ): Promise<ProviderHealth> {
+    return this.request<WireProvider>(
+      `providers/${encodeURIComponent(provider.id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          changes: {
+            privacy: {
+              local_only: provider.local,
+              retention: provider.retention ?? null,
+              residency: provider.residency,
+              permits_sensitive_data: provider.permitsSensitiveData,
+              auto_share_tool_results: provider.permitsSensitiveData && always,
+            },
+          },
+          expected_revision: provider.revision,
+        }),
+      },
+    ).then(mapProvider);
   }
 
   setProviderEnabled(

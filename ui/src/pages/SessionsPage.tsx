@@ -1,4 +1,5 @@
 import { modelCatalogSummary, modelOptionLabel } from "../api/modelCatalog";
+import { rememberToolSharing, sharesToolResultsAlways, type ToolSharingRuntime } from "../api/toolSharingConsent";
 import { HarnessReasoningDetails } from "../components/HarnessReasoningDetails";
 import { IconAction } from "../components/IconAction";
 import { ManagedAssistantBrowser } from "../components/ManagedAssistantBrowser";
@@ -537,6 +538,7 @@ export function SessionsPage() {
     knowledgeSources,
     libraryItems,
     providers,
+    applyProviderToolSharing,
     refreshProvider,
     reverifyProvider,
     resolveApproval,
@@ -599,6 +601,15 @@ export function SessionsPage() {
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
   const [harnessesLoaded, setHarnessesLoaded] = useState(false);
+  // Standing tool-sharing consent lives on the runtime profile; mirror the saved
+  // answer locally so later turns in this session stop asking too.
+  const rememberToolSharingRuntime = useCallback((saved: ToolSharingRuntime) => {
+    if (saved.kind === "harness") {
+      setHarnesses((current) => current.map((item) => item.id === saved.profile.id ? saved.profile : item));
+      return;
+    }
+    applyProviderToolSharing(saved.profile);
+  }, [applyProviderToolSharing]);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
   const [externalHarnessSessions, setExternalHarnessSessions] = useState<ExternalHarnessSessionSummary[]>([]);
   const [externalSessionQuery, setExternalSessionQuery] = useState("");
@@ -1967,6 +1978,7 @@ export function SessionsPage() {
           credentialEnv: provider.credentialRef ? undefined : provider.credentialEnv,
           credentialRef: provider.credentialRef,
           permitsSensitiveData: provider.permitsSensitiveData,
+          autoShareToolResults: provider.autoShareToolResults,
           retention: provider.retention,
           residency: provider.residency,
           options: provider.options,
@@ -2907,6 +2919,9 @@ export function SessionsPage() {
     const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
     const toolRuntimePermitsSensitive = runtimeKind === "harness" ? harnessRuntime?.permitsSensitiveData : providerRuntime?.permitsSensitiveData;
+    const toolSharingRuntime: ToolSharingRuntime | undefined = runtimeKind === "harness"
+      ? harnessRuntime && { kind: "harness", profile: harnessRuntime }
+      : providerRuntime && { kind: "provider", profile: providerRuntime };
     if (wantsTools && !toolRuntimeIsLocal && toolRuntimeName) {
       if (!toolRuntimePermitsSensitive) {
         const detail = "This runtime profile does not permit tool results to leave the device.";
@@ -2914,10 +2929,13 @@ export function SessionsPage() {
         failQueuedFollowUp(detail);
         return;
       }
-      allowCloudToolResults = await confirm({
+      allowCloudToolResults = sharesToolResultsAlways(toolSharingRuntime) || await confirm({
         title: "Share redacted tool results?",
         message: `Allow this turn to send bounded tool inputs and results to ${toolRuntimeName}? Canonical output remains local and risky calls still require approval.`,
         confirmLabel: "Allow this turn",
+        ...(api && toolSharingRuntime
+          ? { remember: rememberToolSharing(api, toolSharingRuntime, rememberToolSharingRuntime) }
+          : {}),
       });
       if (!allowCloudToolResults) {
         failQueuedFollowUp("Tool-result sharing was cancelled. Review the queued message before retrying.");

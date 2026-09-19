@@ -153,6 +153,8 @@ export interface ConfirmationOptions {
   confirmLabel?: string;
   cancelLabel?: string;
   tone?: "default" | "danger";
+  /** Optional standing-consent checkbox; the callback runs when the operator confirms. */
+  remember?: { label: string; hint?: string; onConfirm: (remember: boolean) => void };
 }
 
 interface PendingConfirmation {
@@ -166,6 +168,7 @@ const DialogOpenContext = createContext(false);
 
 export function DialogProvider({ children }: PropsWithChildren) {
   const [pending, setPending] = useState<PendingConfirmation>();
+  const [remembered, setRemembered] = useState(false);
   const [registeredDialogs, setRegisteredDialogs] = useState(0);
 
   const registerDialog = useCallback<RegisterDialog>(() => {
@@ -179,11 +182,14 @@ export function DialogProvider({ children }: PropsWithChildren) {
   }, []);
 
   const confirm = useCallback<Confirm>((options) => new Promise((resolve) => {
+    setRemembered(false);
     setPending({ options, resolve });
   }), []);
 
   const finish = (value: boolean) => {
+    if (value) pending?.options.remember?.onConfirm(remembered);
     pending?.resolve(value);
+    setRemembered(false);
     setPending(undefined);
   };
 
@@ -206,6 +212,19 @@ export function DialogProvider({ children }: PropsWithChildren) {
                 <X size={17} />
               </button>
             </header>
+            {pending.options.remember && (
+              <label className="confirmation-remember">
+                <input
+                  type="checkbox"
+                  checked={remembered}
+                  onChange={(event) => setRemembered(event.target.checked)}
+                />
+                <span>
+                  <strong>{pending.options.remember.label}</strong>
+                  {pending.options.remember.hint && <small>{pending.options.remember.hint}</small>}
+                </span>
+              </label>
+            )}
             <footer>
               <button className="button secondary" type="button" onClick={() => finish(false)}>
                 {pending.options.cancelLabel ?? "Cancel"}

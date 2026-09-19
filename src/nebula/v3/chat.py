@@ -1770,6 +1770,11 @@ class ChatService:
             model_request = self._fit_goal_request_budget(goal.id, model_request)
         self._ensure_request_capacity(profile, model_request)
         tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
+        # Standing profile consent stands in for the per-turn confirmation the
+        # operator would otherwise give before tool results leave the device.
+        allow_cloud_tool_results = (
+            request.allow_cloud_tool_results or profile.privacy.auto_share_tool_results
+        )
         turn: ChatTurn | None = None
         mcp_profiles: tuple[McpServerProfile, ...] = ()
         if request.mcp_server_ids:
@@ -1811,7 +1816,7 @@ class ChatService:
                     not provider.config.local
                     and (
                         not profile.privacy.permits_sensitive_data
-                        or not request.allow_cloud_tool_results
+                        or not allow_cloud_tool_results
                     )
                 )
             ):
@@ -1855,7 +1860,7 @@ class ChatService:
                     raise ChatPrivacyError(
                         "provider profile does not permit command-result transfer"
                     )
-                if not request.allow_cloud_tool_results:
+                if not allow_cloud_tool_results:
                     raise ChatPrivacyError(
                         "cloud command-result transfer requires explicit confirmation "
                         "for this turn"

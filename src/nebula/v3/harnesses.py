@@ -6732,6 +6732,8 @@ class HarnessRuntimeService:
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         profile = self.store.get(HarnessProfile, profile_id)
+        # Standing profile consent stands in for the per-turn confirmation.
+        allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         image_blocks = [
             block for block in content_blocks or [] if block.type == "image"
         ]
@@ -7868,6 +7870,8 @@ class HarnessRuntimeService:
         browser_autonomy: BrowserAutonomyRequestModel | None = None,
     ) -> AgentRun:
         profile = self.store.get(HarnessProfile, profile_id)
+        # Standing profile consent stands in for the per-turn confirmation.
+        allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         if harness_session_id:
             session = self._compatible_session(
                 harness_session_id, engagement_id, profile.id, model

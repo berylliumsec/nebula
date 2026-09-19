@@ -16,6 +16,7 @@ const harnessWithoutDiscoveredModel: HarnessProfile = {
   enabled: true,
   localOnly: true,
   permitsSensitiveData: true,
+  autoShareToolResults: false,
   nativeCapabilities: {
     workspaceAccess: "write",
     shell: true,

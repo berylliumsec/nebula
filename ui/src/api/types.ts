@@ -1365,6 +1365,8 @@ export interface ProviderHealth {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData: boolean;
+  /** Standing consent: send tool results without the per-turn prompt. */
+  autoShareToolResults: boolean;
   retention?: string;
   residency: string[];
   options: Record<string, unknown>;
@@ -1443,6 +1445,7 @@ export interface ProviderCreateRequest {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData?: boolean;
+  autoShareToolResults?: boolean;
   options?: Record<string, unknown>;
 }
 
@@ -1456,6 +1459,7 @@ export interface ProviderUpdateRequest {
   credentialEnv?: string;
   credentialRef?: string;
   permitsSensitiveData: boolean;
+  autoShareToolResults: boolean;
   retention?: string;
   residency: string[];
   options?: Record<string, unknown>;
@@ -2008,6 +2012,8 @@ export interface HarnessProfile {
   enabled: boolean;
   localOnly: boolean;
   permitsSensitiveData: boolean;
+  /** Standing consent: send tool results without the per-turn prompt. */
+  autoShareToolResults: boolean;
   nativeCapabilities: HarnessNativeCapabilities;
   healthy?: boolean;
   authenticationState?: "verified" | "failed" | "unverified";

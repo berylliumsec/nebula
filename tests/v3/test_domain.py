@@ -12,6 +12,7 @@ from nebula.v3.domain import (
     FindingStatus,
     MissionGrant,
     ModelCapabilities,
+    ProviderPrivacy,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
@@ -158,3 +159,11 @@ def test_provider_capabilities_are_explicit_not_model_name_inference():
     assert provider.is_local is True
     assert provider.capabilities.streaming is True
     assert provider.capabilities.tool_calling is False
+
+
+def test_standing_tool_sharing_consent_requires_permitted_sensitive_data():
+    privacy = ProviderPrivacy(permits_sensitive_data=True, auto_share_tool_results=True)
+    assert privacy.auto_share_tool_results is True
+
+    with pytest.raises(ValidationError, match="permits_sensitive_data"):
+        ProviderPrivacy(auto_share_tool_results=True)

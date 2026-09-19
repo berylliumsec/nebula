@@ -337,6 +337,10 @@ class MissionService:
 
         engagement = self.store.get(Engagement, engagement_id)
         profile = self.store.get(ProviderProfile, clean_provider_id)
+        # Standing profile consent stands in for the per-mission confirmation.
+        allow_cloud_tool_results = (
+            allow_cloud_tool_results or profile.privacy.auto_share_tool_results
+        )
         if not profile.enabled:
             raise MissionConfigurationError(
                 f"provider profile {clean_provider_id!r} is disabled"

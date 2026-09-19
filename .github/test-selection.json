@@ -1,28 +1,29 @@
 {
-  "change_digest": "85780d399d3535f09a3c45118163e9fe458f2d14d40e8f8b696e627378afb35e",
-  "reviewed_by": "Claude review of the OpenRouter context-window and environment picker fixes",
-  "reason": "A DeepSeek chat through OpenRouter failed with 'complete provider request exceeds the selected model context capacity (6413 > 6144)'. Capability verification had recorded the model's endpoint limits (1M window), but the next provider health refresh rewrote model_descriptors from the catalog and dropped them, re-imposing the unverified OpenRouter 8K cap. Catalog refresh now keeps route-limit fields, and chat preparation loads unverified OpenRouter endpoint limits once before sizing context (failures keep the cap). The composer's environment picker menu was clipped by the composer's overflow; it now floats in the viewport, focuses the current choice, and the runtime summary keeps the space before its separator. Selected: chat, API, context, provider and SSH environment Python suites; the picker component test; the ssh-environments real-Core journey (extended to enable two hosts at once) on all eight projects, the mocked assistant specs on desktop, and critical-workspaces for the composer CSS.",
-  "exclusions": "No full suites. The OpenRouter cap policy itself is unchanged; only verified limits are now retained and fetched. The backend fix is covered by the Python chat/API/context/provider suites, so the real-Core assistant and core-api journeys are not rerun. The mocked assistant entries on mobile-chromium/mobile-webkit are excluded: 'assistant settings expose provider metadata and harness model options' fails identically on main (30f4ceb) because the #355 phone Settings list has no 'Advanced settings' link; the other 34 mobile-chromium assistant tests passed on this branch. The ssh-environments journey's pairing wait now reads the connection chip label, since the phone shell hides the ready chip (also failing on main before this change).",
+  "change_digest": "be0483bc4f5b01f1690476ed699cca37f64ea3946b9ddb6e0d0e6edb4caee05a",
+  "reviewed_by": "Claude review of the standing tool-result sharing consent",
+  "reason": "Chat and missions asked for tool-result sharing on every turn because consent lived only in the request. Provider and harness profiles now carry privacy.auto_share_tool_results (valid only alongside permits_sensitive_data), the confirmation dialog offers an 'Always allow' checkbox that stores it, and chat, missions and the harness runtime treat the stored consent as the per-turn confirmation. Selected: the chat, harness, mission and domain Python suites for the privacy gates and the new model validator; the API client, consent helper, confirmation dialog, mission and harness settings frontend tests for the wire shape, checkbox and persistence; the mocked desktop assistant Playwright entry for the composer and dialog it renders.",
+  "exclusions": "No full suites. Provider, API and knowledge suites are unchanged: the new field is additive, defaults to false, and rides the existing provider/harness PATCH path already covered by test_api_crud_validation and the API client tests. Playwright runs desktop only: the mocked assistant entry covers the confirmation dialog markup, and mobile projects add nothing for a dialog with no phone-specific layout. The real-Core journeys are not rerun because no runtime wiring outside the privacy gates changed. tests/v3/test_harnesses.py::test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session fails identically on main (30f4ceb) in this environment ('Commands' object has no attribute 'manager') and is unrelated to this change.",
   "expected_tests": {
-    "python": 170,
-    "frontend": 5,
+    "python": 155,
+    "frontend": 86,
     "native": 0,
-    "playwright": 63
+    "playwright": 43
   },
   "python": [
     "tests/v3/test_chat.py",
-    "tests/v3/test_api.py",
-    "tests/v3/test_context.py",
-    "tests/v3/test_providers.py",
-    "tests/v3/test_ssh_environments.py"
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_missions.py",
+    "tests/v3/test_domain.py"
   ],
   "frontend": [
-    "ui/src/components/EnvironmentTargetPicker.test.tsx"
+    "ui/src/api/toolSharingConsent.test.ts",
+    "ui/src/api/client.test.ts",
+    "ui/src/components/DialogSystem.test.tsx",
+    "ui/src/components/MissionControls.test.tsx",
+    "ui/src/components/HarnessSettings.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:ssh-environments",
-    "entry:assistant/desktop",
-    "area:critical-workspaces"
+    "entry:assistant/desktop"
   ]
 }
