@@ -1973,6 +1973,7 @@ export interface ChatSessionSummary {
   forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;
+  archivedAt?: string;
   createdAt: string;
   updatedAt: string;
   revision: number;

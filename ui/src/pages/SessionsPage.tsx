@@ -37,6 +37,8 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react";
 import {
+  Archive,
+  ArchiveRestore,
   Bot,
   Bookmark,
   Boxes,
@@ -572,6 +574,8 @@ export function SessionsPage() {
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
+  const [archivingSessionId, setArchivingSessionId] = useState<string>();
+  const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
   const [providerId, setProviderId] = useState("");
@@ -885,13 +889,14 @@ export function SessionsPage() {
     for (const session of visibleSessions) {
       const activity = sessionActivity[session.id] ?? "idle";
       const updated = Date.parse(session.updatedAt);
-      const label = activity === "waiting" ? "Needs you"
+      const label = session.archivedAt ? "Archived"
+        : activity === "waiting" ? "Needs you"
         : activity === "working" ? "Working"
           : updated >= startOfToday.getTime() ? "Today"
             : updated >= weekAgo ? "Previous 7 days" : "Older";
       groups.set(label, [...(groups.get(label) ?? []), session]);
     }
-    return ["Needs you", "Working", "Today", "Previous 7 days", "Older"]
+    return ["Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
       .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
   }, [sessionActivity, visibleSessions]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
@@ -1708,6 +1713,22 @@ export function SessionsPage() {
       setChatError(`${failures.length} of ${targets.length} conversations could not be deleted. A conversation with an active response must finish before it can be deleted.`);
     }
     setDeletingAllSessions(false);
+  };
+
+  const setConversationArchived = async (session: ChatSessionSummary, archived: boolean) => {
+    if (!api || archivingSessionId) return;
+    setSessionActionsId(undefined);
+    setArchivingSessionId(session.id);
+    setChatError(undefined);
+    try {
+      const updated = await api.setChatSessionArchived(session.id, archived, session.revision);
+      setSessions((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.caught_failure_22", "A conversation could not be archived or restored.", error, "sessions_page");
+      setChatError(error instanceof Error ? error.message : `Could not ${archived ? "archive" : "unarchive"} the conversation.`);
+    } finally {
+      setArchivingSessionId(undefined);
+    }
   };
 
   const toggleConversationPanel = () => {
@@ -4011,10 +4032,10 @@ export function SessionsPage() {
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
-            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label}</h3>{group.sessions.map((session) => {
+            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.sessions.length}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.sessions.map((session) => {
               const actionsOpen = sessionActionsId === session.id;
               const activityState = sessionActivity[session.id] ?? "idle";
-              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
+              const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
               return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
@@ -4035,7 +4056,7 @@ export function SessionsPage() {
                   }
                   const bounds = event.currentTarget.getBoundingClientRect();
                   const menuWidth = 196;
-                  const menuHeight = 176;
+                  const menuHeight = 212;
                   const openAbove = window.innerHeight - bounds.bottom < menuHeight + 8 && bounds.top > menuHeight + 8;
                   setSessionActionsPosition({
                     left: Math.max(8, Math.min(bounds.right - menuWidth, window.innerWidth - menuWidth - 8)),
@@ -4044,7 +4065,7 @@ export function SessionsPage() {
                   });
                   setSessionActionsId(session.id);
                 }}
-              >{deletingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
+              >{deletingSessionId === session.id || archivingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <MoreHorizontal size={18} />}</button>{actionsOpen && sessionActionsPosition && createPortal(<div
                 ref={sessionActionsMenuRef}
                 id={`conversation-actions-${session.id}`}
                 className="session-actions-menu"
@@ -4060,7 +4081,7 @@ export function SessionsPage() {
                   const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (current + 1) % items.length : (current - 1 + items.length) % items.length;
                   items[next]?.focus();
                 }}
-              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
+              ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button><button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
             {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
