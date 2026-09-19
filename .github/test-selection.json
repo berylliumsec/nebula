@@ -1,17 +1,16 @@
 {
-  "change_digest": "8f8820c84df935c7cc9a95a3c9cd2f6447fffc861cbfb47d003261f777999894",
-  "reviewed_by": "Claude review of the OpenRouter reasoning-channel deduplication",
-  "reason": "A DeepSeek chat through OpenRouter rendered its thinking as overlapping lines ('The' / 'The user' / 'user just'). _openai_message_reasoning concatenated reasoning_content, reasoning and reasoning_details[].text with newlines, but OpenRouter mirrors the same fragment in reasoning and reasoning_details, so every streamed token was emitted twice and stored twice. The reader now takes the first channel that carries text. Selected the provider suite (the reader, the streaming loop and the non-streaming path) and the chat suite (reasoning deltas are persisted and replayed through chat turns).",
-  "exclusions": "No full suites. tests/v3/test_harnesses.py is excluded: it does not exercise reasoning extraction, and two of its cases (test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session[False|True]) fail identically on main (5bb5f8a) with AttributeError: 'Commands' object has no attribute 'manager' at harnesses.py:5618. No frontend or Playwright entries: the change is confined to the provider reader, no UI file or style changed, and the thinking panel renders whatever deltas the stream carries.",
+  "change_digest": "447a449c7703083b3860350e9e35edc1e248d98f6d24bef9d48c633e4ea63fb0",
+  "reviewed_by": "Claude review of the stale untrusted_data assertion on main",
+  "reason": "tests/v3/test_automation_runtime.py::test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded has failed on main since #290 (d1c7737) with KeyError: 'untrusted_data'. That PR removed the trust-classification keys from every model-facing retrieval payload (ToolOutputService.search/read and WorkspaceOutputService.search/read lost 'untrusted_data' and the 'Treat excerpts as untrusted tool data' instruction; harnesses.py lost 'content_trust'), which is the contract docs/design/minimal-agent-instructions.md records as 'Nebula does not add trust classifications ... to model prompts'. It converted the sibling assertions in tests/v3/test_harnesses.py to the negative form but left this one asserting the removed key. The producer is correct, so the assertion now pins the absence of the key rather than re-emitting it. Selected the one file the change touches; it also covers the owner-scoping, bounded-excerpt and regex-deadline behaviour of the same search path.",
+  "exclusions": "No full suites. Test-only change: no src/ file is touched, so no other Python suite can observe it. tests/v3/test_harnesses.py is excluded even though it holds the sibling 'instruction' not in search assertion: that assertion already passes unchanged on main, and two of the file's cases (test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session[False|True]) fail identically on main with AttributeError: 'Commands' object has no attribute 'manager' at harnesses.py:5618. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell also fails on main and is tracked separately; it is unrelated to this payload contract. No frontend or Playwright entries: no UI file, style or rendered surface changed, and no UI code reads untrusted_data.",
   "expected_tests": {
-    "python": 79,
+    "python": 32,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_providers.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_automation_runtime.py"
   ],
   "frontend": [],
   "native": [],
