@@ -6369,14 +6369,39 @@ test("mobile Workbench navigation has one authority and no duplicate tab strip",
   await expect(navigation.getByRole("button", { name: "More workbench views" })).toHaveAttribute("aria-current", "page");
 
   await navigation.getByRole("button", { name: "More workbench views" }).click();
+  // Act in the very commit that reveals Browser, before React runs deferred
+  // router work. Controls visible in that commit must already agree with the
+  // URL, or their writes restore the previous view.
+  await page.locator(".persistent-browser").evaluate((pane: HTMLElement) => {
+    const observer = new MutationObserver(() => {
+      if (pane.hidden) return;
+      observer.disconnect();
+      const engine = pane.querySelector<HTMLSelectElement>('select[aria-label="Browser engine"]');
+      if (!engine) throw new Error("Browser engine selector is missing");
+      engine.value = "native";
+      engine.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    observer.observe(pane, { attributes: true, attributeFilter: ["hidden"] });
+  });
   await more.getByRole("button", { name: "Browser", exact: true }).click();
-  await expect(page).toHaveURL(/view=browser/);
-  await page.getByLabel("Browser engine").selectOption("native");
+  await expect(page).toHaveURL(/view=browser&browserEngine=native|browserEngine=native&view=browser/);
+  await expect(page.locator(".persistent-code-editor")).toBeHidden();
+  await expect(page.getByLabel("Browser engine")).toHaveValue("native");
   await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
   await expect(page.getByText(/No target · Open a page to compare it with Project scope/)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Web address" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add to Sources" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Ask Nebula about the live page" })).toHaveCount(0);
+
+  // History entries and deep links that omit `view` keep the current view.
+  await page.evaluate(() => {
+    history.pushState(null, "", `${location.pathname}?browserEngine=native`);
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page).not.toHaveURL(/view=/);
+  await expect(page.getByText("Browse from this device", { exact: true })).toBeVisible();
+  await expect(page.locator(".persistent-code-editor")).toBeHidden();
+  await expect(navigation.getByRole("button", { name: "More workbench views" })).toHaveAttribute("aria-current", "page");
 });
 
 test("phone shell keeps the terminal in its own tab and the chat edge to edge", async ({ page }, testInfo) => {

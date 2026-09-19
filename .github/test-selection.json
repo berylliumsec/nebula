@@ -1,22 +1,22 @@
 {
-  "change_digest": "4214069b2d7cae24df431dbfe6f113eb419740b177c4f2f4904b70b8d645c55a",
-  "reviewed_by": "Claude review of the top bar page label fix and critical workspace baseline refresh",
-  "reason": "TopBar matched navigationItems by exact pathname, so after canonical /projects/<id>/<surface> routes (#218) every project page (Findings, Reports, Project, Assets, Evidence, Sources, /library/<id>) was titled 'Workbench' and its toolbar groups were named 'Workbench actions'/'Workbench primary action'. navigation.ts now exports navigationItemForPath, which maps canonical and legacy routes (including resource subpaths) to their item, and TopBar uses it. TopBar.test.tsx renders each route and asserts the visible title and both group names (8 of the 11 cases fail on main). The desktop/compact baselines of 'critical workspaces remain visually stable', 'Light preserves each critical workspace hierarchy' and 'Zero keeps one navigable panoramic shell at every breakpoint' predated the Guides (#344), Commands and Workbench icon (#302), terminal public IP (a27a8f5), compact Workbench header and Findings empty state/flat buttons (#334); every old/new pair was reviewed and all 25 were regenerated with only those tests/projects. New catalog area critical-workspaces selects exactly those three tests plus 'critical workspaces meet automated accessibility checks' (light/dark/zero-dark), which cover the renamed toolbar groups, on desktop and compact. tests/test_playwright_impact.py covers the manifest addition. Rebased onto #355 (phone shell): TopBar keeps its phone back button, all 25 regenerated desktop/compact baselines re-render pixel-identically, and the selection passes against the production preview.",
-  "exclusions": "No native tests: no Rust or Tauri change. Narrow and mobile baselines are unchanged because .top-bar-title is hidden at or below 1000px; the group-name change there is covered by TopBar.test.tsx, and the Zero shell test passed locally on mobile-chromium and mobile-webkit against the production preview. Other interface.spec.ts screenshot tests are excluded: the Zero Dark desktop hierarchy, overlay and dialog tests pass with this change, while 'Zero Dark preserves the appearance selector' already fails identically on main (panel 245px -> 246px) and is out of scope. No real-Core or LAN-origin runs: only client-side route labelling changed, with no server state, origin, cookie or socket behavior. No full suites.",
+  "change_digest": "6e698aba9b63e3efab19c1e86355784922ff25461736bc3a08a6824b35e998b2",
+  "reviewed_by": "Claude review of Workbench view URL ownership",
+  "reason": "The mobile Workbench navigation test flaked because BrowserRouter commits locations in a transition: setView updated view state urgently, so the Browser pane rendered while useSearchParams() still said view=code, and the engine selector rebuilt the query from that snapshot (view=code&browserEngine=native); the requestedView effect then restored Code. SessionsPage now derives the view from the URL (view-less links keep the last URL-named view) and routes every search-param write through one updater that composes from the address bar. workbench-view-authority covers each changed writer: mobile nav plus engine selection (the deterministic regression check), the phone shell's Chat/Terminal/Activity/More tabs from #355, New chat (openUnattachedChatView), conversation URL identity (openSessionChatView), handoff recovery (clearSubmittedContext), drawer push/reload navigation, transcript search hits, chat inside the Browser view, and switching every primary view. workbench-navigation-core and real-core-browser-handoff exercise session identity and the Browser engine against real Core with the production bundle. tests/test_playwright_impact.py guards the new catalog area.",
+  "exclusions": "No frontend unit tests: the defect is an ordering race between React's urgent render and the router's transition, only observable with the real router in a browser, and SessionsPage has no component harness; Playwright is the layer where it escaped. No native tests: no Tauri/Rust change. Other mobile widths (small/wide/ledger/landscape) are excluded because the change is width-independent URL state already covered at 390px on Chromium and WebKit plus desktop. No full suites.",
   "expected_tests": {
     "python": 33,
-    "frontend": 14,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 20
   },
   "python": [
     "tests/test_playwright_impact.py"
   ],
-  "frontend": [
-    "ui/src/components/TopBar.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:critical-workspaces"
+    "area:workbench-view-authority",
+    "area:workbench-navigation-core",
+    "area:real-core-browser-handoff"
   ]
 }
