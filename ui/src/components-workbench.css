@@ -152,7 +152,7 @@ body {
 .top-bar-title > span:first-child { display: none; }
 .top-bar-title > span[aria-hidden] { display: none; }
 .top-bar-title strong { font-size: 14px; font-weight: var(--weight-semibold); }
-.top-bar-page-actions { min-width: 0; flex: 1; justify-content: flex-end; overflow: hidden; }
+.top-bar-page-actions { min-width: 0; flex: 1; justify-content: flex-end; overflow-x: clip; overflow-y: visible; }
 .top-bar-page-actions:empty { display: none; }
 .top-bar-actions { flex: 0 0 auto; }
 .toolbar-page-actions .button { flex: 0 0 auto; min-width: 44px; min-height: 44px; white-space: nowrap; }
@@ -2306,7 +2306,9 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .code-editor-sidebar { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--border-soft); }
   .code-editor-files { max-height: 160px; }
   .code-editor-sidebar-tabs button { min-height: 44px; }
-  .code-source-control { max-height: 300px; }
+  /* The short phone sidebar scrolls as a whole so changed files never collapse behind the footer. */
+  .code-editor-sidebar { overflow-y: auto; }
+  .code-editor-sidebar > .code-source-control { flex: none; max-height: none; overflow: visible; grid-template-rows: auto; }
   .code-source-control-files article > div button, .code-source-control > footer .button { min-height: 44px; }
   .source-control-diff-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
   .code-editor-surfaces.split { grid-template-columns: minmax(0, 1fr); grid-template-rows: repeat(2, minmax(180px, 1fr)); overflow: auto; }
@@ -2571,7 +2573,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 }
 
 /* Workbench tools share the shell action row with New chat. */
-.top-bar-page-actions:has(.compact-workbench-toolbar) { overflow: hidden; }
+.top-bar-page-actions:has(.compact-workbench-toolbar) { overflow-x: clip; overflow-y: visible; }
 .compact-workbench-toolbar.in-shell-header { border: 0; background: transparent; padding: 0; min-height: 44px; gap: 8px; }
 .compact-workbench-toolbar.in-shell-header { min-width: 0; max-width: 100%; }
 .compact-workbench-toolbar.in-shell-header .workbench-view-tabs { min-width: 0; flex: 1 1 auto; overflow-x: auto; overscroll-behavior-x: contain; }
@@ -2778,3 +2780,6 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 }
 /* On phones the stacked pane keeps only tab controls; "Open Terminal tab" has the rest. */
 .session-workspace.stacked .chat-side-terminal .terminal-header-actions { display: none; }
+/* Page actions placed in the Workbench toolbar are icon-only, like their neighbours; the name stays in aria-label and title. */
+.session-toolbar-actions .toolbar-icon-action.page-header-action { width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; gap: 0; padding: 0; justify-content: center; }
+.session-toolbar-actions .toolbar-icon-action .page-header-action-label { display: none; }

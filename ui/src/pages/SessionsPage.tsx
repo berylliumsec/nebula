@@ -3929,7 +3929,7 @@ export function SessionsPage() {
           { id: "activity", label: "Activity", ariaLabel: "Activity history", iconOnly: true, icon: <History size={18} /> },
         ] as const} />
         {view !== "chat" && <div className="session-toolbar-actions">
-          {view === "missions" && <NewMissionButton showSetupGuidance={false} />}
+          {view === "missions" && <NewMissionButton className="icon-button subtle toolbar-icon-action" showSetupGuidance={false} />}
           {toolAssistanceAction}
           {focusAction}
         </div>}
