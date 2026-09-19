@@ -1,22 +1,23 @@
 {
-  "change_digest": "5b62294804c2d031af89c3dcb1f67d6f9eb2fbe0e3da597c3ec291117db374d7",
-  "reviewed_by": "Claude review of real-Core phone readiness waits",
-  "reason": "Six real-Core journeys waited for the shell's Core chip as a visible button, which phones never satisfy: AppShell has hidden the top bar on the Workbench since #355, so these journeys failed at the gate on every phone project (measured on main at 390px). The spec already had coreReady(), which accepts the chip or the phone operator navigation, but these waits bypassed it. coreReady is now coreShell(page, chip) with two callers: coreReady (exact \"Nebula Core ready\", unchanged semantics for its ~20 existing call sites) and coreConnected (ready or degraded, for fixture Cores that report limited availability). The eight bypassing waits now call coreConnected. Verified locally: the six journeys pass on chromium-390, and on desktop, compact, chromium-320 and webkit-390 (23 of 24), plus the pending-approval journey on desktop and chromium-390. The selected areas cover every journey whose wait changed and that CI selects: assistant-reliability, harness-accounts, harness-commands-real, advanced-session-binding and ssh-environments.",
-  "exclusions": "Test-only change: no Python, frontend unit or native tests, and no product code. area:branch-review is not selected although it shares one changed wait: its real-Core phone jobs also run journeys that fail on main for unrelated, pre-existing reasons (the stabilization replay matrix, project creation), so selecting it would report failures this change neither causes nor fixes; that journey was verified locally on desktop and chromium-390 instead. The durable-knowledge journey belongs to no area, so CI never selects it; it was verified locally too. The popup journey still fails later on webkit-390 for an unrelated phone reason (its Ask Nebula status text); CI runs that journey only on the desktop-sized real-core project, where it passes. The wider phone rot (35 of 48 real-Core tests fail at 390px on main) is out of scope here.",
+  "change_digest": "ed202ba18c7a38844fa974d7e469e6b67dd9c6d352061379e20e2a46372d7df6",
+  "reviewed_by": "Claude review of automatic retries for transient provider failures",
+  "reason": "A chat turn died on OpenRouter's 'provider returned HTTP 503: Provider returned error (upstream: service overloaded, please try again later)', which is a temporary upstream refusal carrying no model output. providers.py now classifies 408/425/429/500/502/504/503 as ProviderOverloadedError and resends the identical request: ModelProvider._post wraps every complete() POST (OpenAI Responses, OpenAI-compatible/OpenRouter/vLLM, Anthropic, Gemini) and _stream_with_retry wraps the Chat Completions SSE open, so a stream is only replayed before its first token. Attempts are bounded (3 by default, 1 disables), waits are exponential with jitter and honour Retry-After up to a 20s ceiling, connect-phase transport failures retry because they never reached the provider, and an exhausted retry appends 'after N attempts' so the operator knows a manual retry adds nothing. tests/v3/test_providers.py adds the retry contract: recovery after transient 503s, the bounded stop with the attempts suffix, no retry for a 401 request defect, the per-provider disable, a stream retried before its first token, a stream that fails after output and is not replayed, option/environment precedence for the limits, and Retry-After parsing and clamping. tests/v3/test_provider_contracts.py and test_provider_verification.py hold the adapter contracts and health paths that _post now routes through; tests/v3/test_chat.py, test_chat_tool_loop.py and test_api_stream_context.py exercise the chat completion, tool-loop and SSE consumers of those same adapters.",
+  "exclusions": "No frontend, native or Playwright entries: no UI file, route, style or rendered surface changed, and the operator-visible failure card renders the same normalized provider message with the attempts suffix appended by Core. No full suites. Bedrock is excluded because it calls boto3, which applies its own retry configuration rather than httpx. Provider health probes and the OpenRouter catalog/route discovery calls are excluded deliberately: they stay single-shot so a degraded provider still reports unhealthy promptly instead of stalling Settings. Other Python suites are excluded because no shared model, schema, route or storage contract changed; the new types are additive and ProviderOverloadedError subclasses the ProviderError every caller already handles. tests/v3/test_harness_adapters.py::test_claude_native_capabilities_exclude_project_files_and_shell fails on main for unrelated reasons and is tracked separately.",
   "expected_tests": {
-    "python": 0,
+    "python": 111,
     "frontend": 0,
     "native": 0,
-    "playwright": 36
+    "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_providers.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_provider_verification.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_api_stream_context.py"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:assistant-reliability",
-    "area:harness-accounts",
-    "area:harness-commands-real",
-    "area:advanced-session-binding",
-    "area:ssh-environments"
-  ]
+  "playwright": []
 }
