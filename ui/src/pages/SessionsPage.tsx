@@ -1351,11 +1351,16 @@ export function SessionsPage() {
     selectedHarnessSession?.reasoningEffort,
     selectedHarnessSession?.serviceTier,
   ]);
+  const harnessModesKey = (selectedHarness?.capabilities?.modes ?? []).join("\n");
   useEffect(() => {
-    const modes = selectedHarness?.capabilities?.modes ?? [];
+    // A different runtime, harness or project invalidates the operator's skill choice.
+    // Catalog refreshes (projectCatalogKey) must not: they would erase a skill being typed.
+    const modes = harnessModesKey ? harnessModesKey.split("\n") : [];
     setHarnessMode((current) => modes.includes(current) ? current : "");
     setHarnessSkillPath("");
     setSkillToken(undefined);
+  }, [engagement?.id, harnessModesKey, runtimeKind, selectedHarness?.id]);
+  useEffect(() => {
     setHarnessSkillError(undefined);
     const harnessSkillsAvailable = runtimeKind === "harness"
       && Boolean(selectedHarness?.capabilities?.skillInvocation)
