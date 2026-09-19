@@ -1,20 +1,24 @@
 {
-  "change_digest": "8e893bc775e06d0477307d86b2fe992a22479fa9fc958f9820df65639340160a",
-  "reviewed_by": "Claude review of the Zero Dark appearance baseline refresh",
-  "reason": "'Zero Dark preserves the appearance selector' failed on main with 'Expected an image 421px by 245px, received 421px by 246px'. Bisecting b9ba56e..c992aab (main at the time) with only this test puts the first failure at e40f47e (#349), which added the collapsed Settings > Environments group above the Appearance panel. Measured in the test at 02e831a and e40f47e: the panel is 244.516px tall in both, and its top moves from 464.078px to 463.859px. Playwright floors the top and ceils the bottom of an element screenshot clip, so the 0.22px upward shift captures 246 rows instead of 245. The panel did not grow and no appearance CSS changed, so there is nothing to fix; the baseline is regenerated for the new sub-pixel phase. The old and new images show the same heading, focus ring, four theme options, Zero Dark active state, help text and zoom note. No catalog area selected this test, so it had never run in CI since #334. New area appearance-settings selects exactly this test on desktop, its only project, and tests/test_playwright_impact.py validates the manifest. Rebased onto #365: the test still passes against this baseline on the rebased branch.",
-  "exclusions": "No frontend unit tests: no ui/src change. No native tests: no Rust or Tauri change. Other Playwright projects are excluded because the test skips every project except desktop. Other screenshot tests are out of scope: only this baseline changed. No real-Core or LAN-origin runs: only a test baseline and the test catalog changed. No full suites.",
+  "change_digest": "850290ca4d917bacf6fd83ce601ed3705bfb987b7dcb9dff0fb70c6232f45459",
+  "reviewed_by": "Claude review of side navigation current-page authority",
+  "reason": "SideNav NavLinks matched their canonical base path with `end`, so no primary navigation item was current on finding/report detail URLs (ReportsPage auto-opens its first report, so Reports was rarely highlighted), Library detail URLs, or the Project page's assets/evidence/sources tabs. SideNav now derives the current item from navigationItemForPath, the same authority TopBar uses, and sets aria-current=\"page\" and the active class from one boolean; navigationItemForPath also maps the legacy /assets, /evidence and /knowledge routes (which render the Project page in place when no project is loaded) to Project. SideNav.test.tsx covers every canonical detail and tab route in the standard and Zero variants, section-root hrefs from a detail page, and the legacy routes; TopBar.test.tsx covers the helper change. The new Playwright journey opens a finding, follows the side navigation to Reports (auto-selected detail) and Project, and switches Project tabs in Zero Dark and Dark: critical-workspaces runs it on desktop and compact beside the unchanged side-nav baselines, and the phone-shell entries run it through the sidebar drawer on mobile Chromium and WebKit beside the existing phone shell, navigation, typography and drawer-layering contracts. Merging main brought #361, which keeps the phone drawer above resource inspectors, so the phone path now reads the section from the drawer on the finding detail route itself instead of closing the inspector first. App.test.tsx renders the full shell with the side navigation.",
+  "exclusions": "No Python or native tests: no backend, catalog or Tauri change. No screenshot baselines change: every baseline captures a base route where `end` already matched, and Link renders the same anchor markup as NavLink, so critical-workspaces re-runs them unchanged. Other mobile widths (small/wide/narrow) are excluded because the fix is width-independent URL state covered on phone viewports in mobile Chromium (Pixel 5) and mobile WebKit (iPhone 13). The calm-structure single-active-navigation check is not catalogued narrowly; the new journey asserts exactly one current item on each route, and it passed locally on desktop and compact. No full suites.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 72,
     "native": 0,
-    "playwright": 1
+    "playwright": 26
   },
-  "python": [
-    "tests/test_playwright_impact.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/App.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "area:appearance-settings"
+    "area:critical-workspaces",
+    "entry:phone-shell/mobile-chromium",
+    "entry:phone-shell/mobile-webkit"
   ]
 }
