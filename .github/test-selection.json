@@ -1,5 +1,5 @@
 {
-  "change_digest": "c6e4736d4a85258e3dce07b99fb34c0872d4267110cb7c3b538a0d1d750c30ce",
+  "change_digest": "23f7895e1c8f3e05211304fbe53448731488610cf0c5a13bf75c38b25c3aa88b",
   "reviewed_by": "Claude review of the OpenRouter model picker upstream-provider filter",
   "reason": "OpenRouter model discovery (_openrouter_health) now keeps only models served by the allowed upstream providers, failing closed on unknown slugs or a failed filter request; Assistant settings can pick models outside the provider's model allowlist (patching the allowlist) and run discovery for existing conversations when the panel opens. Selected tests cover discovery, filtering, pagination and fail-closed cases in test_providers.py, the Assistant settings allowlist-extension flow in App.test.tsx, and the mocked Assistant settings and provider model-switch journeys on desktop, mobile Chromium and mobile WebKit.",
   "exclusions": "No full suites. The live OpenRouter real-Core clickthrough needs a real OpenRouter key and is excluded; the filter parameters were checked against OpenRouter's public /api/v1/models API. Harness runtimes, missions and writing AI only read the unchanged model allowlist. No LAN-origin check: no origin, cookie or socket behavior changed.",

@@ -1171,7 +1171,9 @@ class OpenAICompatibleProvider(ModelProvider):
         empty match yields no models instead of every model.
         """
 
-        known = [slug for slug in self.openrouter_allowed_providers if slug in directory]
+        known = [
+            slug for slug in self.openrouter_allowed_providers if slug in directory
+        ]
         if not known:
             return set()
         served: set[str] = set()
@@ -1185,7 +1187,11 @@ class OpenAICompatibleProvider(ModelProvider):
             served.update(item.id for item in openrouter_models(payload))
             links = payload.get("links") if isinstance(payload, dict) else None
             following = links.get("next") if isinstance(links, dict) else None
-            offset = httpx.URL(following).params.get("offset") if isinstance(following, str) else None
+            offset = (
+                httpx.URL(following).params.get("offset")
+                if isinstance(following, str)
+                else None
+            )
             if not offset:
                 break
             params = {**params, "offset": offset}

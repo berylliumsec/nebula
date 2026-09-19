@@ -1334,13 +1334,21 @@ def _openrouter_discovery(allowed, *, filtered_status=200):
         if request.url.path == "/api/v1/models/user":
             return httpx.Response(
                 200,
-                json={"data": [{"id": "us/served"}, {"id": "offshore/only"}, {"id": "us/paged"}]},
+                json={
+                    "data": [
+                        {"id": "us/served"},
+                        {"id": "offshore/only"},
+                        {"id": "us/paged"},
+                    ]
+                },
             )
         assert request.url.path == "/api/v1/models"
         if filtered_status != 200:
             return httpx.Response(filtered_status, json={})
         if request.url.params.get("offset") == "1":
-            return httpx.Response(200, json={"data": [{"id": "us/paged"}], "links": {"next": None}})
+            return httpx.Response(
+                200, json={"data": [{"id": "us/paged"}], "links": {"next": None}}
+            )
         return httpx.Response(
             200,
             json={
