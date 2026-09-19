@@ -1,28 +1,19 @@
 {
-  "change_digest": "85780d399d3535f09a3c45118163e9fe458f2d14d40e8f8b696e627378afb35e",
-  "reviewed_by": "Claude review of the OpenRouter context-window and environment picker fixes",
-  "reason": "A DeepSeek chat through OpenRouter failed with 'complete provider request exceeds the selected model context capacity (6413 > 6144)'. Capability verification had recorded the model's endpoint limits (1M window), but the next provider health refresh rewrote model_descriptors from the catalog and dropped them, re-imposing the unverified OpenRouter 8K cap. Catalog refresh now keeps route-limit fields, and chat preparation loads unverified OpenRouter endpoint limits once before sizing context (failures keep the cap). The composer's environment picker menu was clipped by the composer's overflow; it now floats in the viewport, focuses the current choice, and the runtime summary keeps the space before its separator. Selected: chat, API, context, provider and SSH environment Python suites; the picker component test; the ssh-environments real-Core journey (extended to enable two hosts at once) on all eight projects, the mocked assistant specs on desktop, and critical-workspaces for the composer CSS.",
-  "exclusions": "No full suites. The OpenRouter cap policy itself is unchanged; only verified limits are now retained and fetched. The backend fix is covered by the Python chat/API/context/provider suites, so the real-Core assistant and core-api journeys are not rerun. The mocked assistant entries on mobile-chromium/mobile-webkit are excluded: 'assistant settings expose provider metadata and harness model options' fails identically on main (30f4ceb) because the #355 phone Settings list has no 'Advanced settings' link; the other 34 mobile-chromium assistant tests passed on this branch. The ssh-environments journey's pairing wait now reads the connection chip label, since the phone shell hides the ready chip (also failing on main before this change).",
+  "change_digest": "8f8820c84df935c7cc9a95a3c9cd2f6447fffc861cbfb47d003261f777999894",
+  "reviewed_by": "Claude review of the OpenRouter reasoning-channel deduplication",
+  "reason": "A DeepSeek chat through OpenRouter rendered its thinking as overlapping lines ('The' / 'The user' / 'user just'). _openai_message_reasoning concatenated reasoning_content, reasoning and reasoning_details[].text with newlines, but OpenRouter mirrors the same fragment in reasoning and reasoning_details, so every streamed token was emitted twice and stored twice. The reader now takes the first channel that carries text. Selected the provider suite (the reader, the streaming loop and the non-streaming path) and the chat suite (reasoning deltas are persisted and replayed through chat turns).",
+  "exclusions": "No full suites. tests/v3/test_harnesses.py is excluded: it does not exercise reasoning extraction, and two of its cases (test_chat_rolls_over_to_current_command_runtime_without_mutating_frozen_session[False|True]) fail identically on main (5bb5f8a) with AttributeError: 'Commands' object has no attribute 'manager' at harnesses.py:5618. No frontend or Playwright entries: the change is confined to the provider reader, no UI file or style changed, and the thinking panel renders whatever deltas the stream carries.",
   "expected_tests": {
-    "python": 170,
-    "frontend": 5,
+    "python": 79,
+    "frontend": 0,
     "native": 0,
-    "playwright": 63
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_api.py",
-    "tests/v3/test_context.py",
     "tests/v3/test_providers.py",
-    "tests/v3/test_ssh_environments.py"
+    "tests/v3/test_chat.py"
   ],
-  "frontend": [
-    "ui/src/components/EnvironmentTargetPicker.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:ssh-environments",
-    "entry:assistant/desktop",
-    "area:critical-workspaces"
-  ]
+  "playwright": []
 }

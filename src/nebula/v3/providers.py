@@ -672,13 +672,18 @@ def _openai_message_content(message: dict[str, Any]) -> str:
 
 
 def _openai_message_reasoning(message: dict[str, Any]) -> str:
-    """Model thoughts from OpenRouter/OpenAI-compatible reasoning channels."""
+    """Model thoughts from OpenRouter/OpenAI-compatible reasoning channels.
 
-    parts: list[str] = []
+    The channels are alternative encodings of the same thought: OpenRouter sends
+    each fragment in both `reasoning` and `reasoning_details`. Read only the first
+    channel that carries text, or every streamed token would be repeated.
+    """
+
     for key in ("reasoning_content", "reasoning"):
         value = message.get(key)
         if isinstance(value, str) and value:
-            parts.append(value)
+            return value
+    parts: list[str] = []
     details = message.get("reasoning_details")
     if isinstance(details, list):
         for item in details:
