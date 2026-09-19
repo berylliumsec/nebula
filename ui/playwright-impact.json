@@ -10,6 +10,7 @@
   "rules": [
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant"]},
+    {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
@@ -49,6 +50,16 @@
       {"area":"provider-native-hooks-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
       {"area":"provider-native-hooks-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
       {"area":"provider-native-hooks-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"}
+    ],
+    "interactive-guides": [
+      {"area":"interactive-guides","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},
+      {"area":"interactive-guides","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"}
     ],
     "provider-live-openrouter-gui": [
       {"area":"provider-live-openrouter-gui","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade live OpenRouter Flash operator clickthrough","runtime":"real-core","shard":"1/1"}

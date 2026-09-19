@@ -555,6 +555,213 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
   }
 });
 
+test("assistant upgrade interactive guides create real hook files and resume from Core progress", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 20 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
+    const providerResponse = await api.post("providers", { data: {
+      name: "Guide acceptance",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Guide LAN browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Guide LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+
+    // The hub is reachable from the top bar with a usable touch target.
+    const guidesButton = page.getByRole("button", { name: "Guides", exact: true });
+    const buttonBox = await guidesButton.boundingBox();
+    expect(Math.min(buttonBox!.width, buttonBox!.height)).toBeGreaterThanOrEqual(testInfo.project.name.includes("real-desktop") || testInfo.project.name.includes("compact") ? 28 : 44);
+    await guidesButton.click();
+    const hub = page.getByRole("dialog", { name: "Guides" });
+    await expect(hub.getByRole("region", { name: "For this page" })).toBeVisible();
+    expect((await new AxeBuilder({ page }).include(".guides-drawer").withTags(["wcag2a", "wcag2aa"]).analyze()).violations).toEqual([]);
+    await testInfo.attach("guides-hub", { body: await page.screenshot(), contentType: "image/png" });
+    await hub.getByRole("searchbox", { name: "Search guides" }).fill("hook.json");
+    await hub.getByRole("button", { name: /^Run your own script on every chat turn\. Start/ }).click();
+
+    await expect(page.getByRole("dialog", { name: "What a lifecycle hook does" })).toBeVisible();
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    const createStep = page.getByRole("dialog", { name: "Create the hook files" });
+    await expect(createStep.getByRole("status")).toContainText("Waiting for .agents/hooks/audit/hook.json");
+    expect((await new AxeBuilder({ page }).include(".guide-card").withTags(["wcag2a", "wcag2aa"]).analyze()).violations).toEqual([]);
+    await createStep.getByRole("button", { name: "Create starter files" }).click();
+    await expect(page).toHaveURL(/view=code/);
+    await expect(page).toHaveURL(/openFile=\.agents%2Fhooks%2Faudit%2Fhook\.json/);
+    await expect(createStep.getByRole("status")).toContainText("Nebula lists “Audit” for this project.", { timeout: 15_000 });
+    await testInfo.attach("guide-file-step", { body: await page.screenshot(), contentType: "image/png" });
+    expect((await readFile(path.join(workspaceRoot, ".agents/hooks/audit/hook.json"), "utf8"))).toContain("chat.turn.started");
+
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    const tickStep = page.getByRole("dialog", { name: "Turn the hook on for your next turn" });
+    await expect(tickStep).toBeVisible();
+    await expect(page.locator(".guide-spotlight")).toBeVisible({ timeout: 10_000 });
+    const settings = page.getByRole("dialog", { name: "Assistant settings" });
+    await settings.getByRole("checkbox", { name: /Audit/ }).check();
+    await expect(tickStep.getByRole("status")).toContainText("Ticked.");
+    await testInfo.attach("guide-spotlight-step", { body: await page.screenshot(), contentType: "image/png" });
+    // Using the guide card must not close the popover it points at.
+    await tickStep.getByRole("heading", { name: "Turn the hook on for your next turn" }).click();
+    await expect(settings).toBeVisible();
+    const cardBox = await tickStep.boundingBox();
+    const viewport = page.viewportSize()!;
+    expect(cardBox!.x).toBeGreaterThanOrEqual(0);
+    expect(cardBox!.x + cardBox!.width).toBeLessThanOrEqual(viewport.width);
+    expect(cardBox!.y + cardBox!.height).toBeLessThanOrEqual(viewport.height);
+    expect(await tickStep.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+    // Translucent theme surfaces must not let the page read through the guide card.
+    const cardAlpha = await tickStep.evaluate(element => Number(getComputedStyle(element).backgroundColor.match(/rgba\([^)]*,\s*([\d.]+)\)/)?.[1] ?? 1));
+    expect(cardAlpha).toBeGreaterThanOrEqual(0.9);
+
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    const sendStep = page.getByRole("dialog", { name: "Send a turn and read the outcome" });
+    await expect(sendStep).toBeVisible();
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Run the audit hook");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(sendStep.getByRole("status")).toContainText("The hook ran.", { timeout: 30_000 });
+    await expect.poll(async () => (await readFile(path.join(workspaceRoot, ".agents/hooks/audit/events.jsonl"), "utf8").catch(() => "")), { timeout: 15_000 })
+      .toContain("nebula.native-hook-event/v1");
+
+    // Progress is Core-owned: a reload (or another paired device) resumes at the same step.
+    const progress = await (await api.get("guides/progress")).json() as Array<{ guide_id: string; step_index: number; status: string }>;
+    expect(progress).toEqual([expect.objectContaining({ guide_id: "lifecycle-hooks", step_index: 3, status: "in_progress" })]);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Guides", exact: true }).click();
+    await page.getByRole("dialog", { name: "Guides" }).getByRole("button", { name: /^Run your own script on every chat turn\. Resume at step 4 \/ 5/ }).click();
+    await expect(page.getByRole("dialog", { name: "Send a turn and read the outcome" })).toBeVisible();
+    await page.getByRole("button", { name: "Next", exact: true }).click();
+    await page.getByRole("button", { name: "Finish", exact: true }).click();
+    await expect.poll(async () => ((await (await api.get("guides/progress")).json()) as Array<{ status: string }>)[0]?.status).toBe("completed");
+    await testInfo.attach("interactive-guides-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize() }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
+test("assistant upgrade interactive guides reach every assistant control on real Core", async ({ page }, testInfo) => {
+  test.setTimeout(300_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 20 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const providerResponse = await api.post("providers", { data: {
+      name: "Guide tour",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Guide tour browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Guide tour browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(page.getByRole("button", { name: "Nebula Core ready" })).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    // A saved provider turn makes message actions, goals and operator context available.
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Summarize the scope");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.locator('[data-guide="message-actions"]').first()).toBeAttached({ timeout: 30_000 });
+    await expect(page).toHaveURL(/session=/);
+    const chatUrl = page.url();
+
+    const guides = [
+      "Choose who answers: a model or a coding harness",
+      "Bring files, pages and selections into the chat",
+      "Run the assistant’s commands beside the chat",
+      "Decide what the assistant may run",
+      "Keep talking while the assistant works",
+      "Branch, fork and find earlier messages",
+      "Pin decisions the assistant must follow",
+      "Let the assistant work toward a goal",
+      "Give the assistant MCP tools",
+      "Answer from your project’s documents",
+      "Get suggested next steps after each command",
+      "Hand work to a mission and catch up later",
+    ];
+    // Continue as mission exists only for harness conversations; this tour uses a provider model.
+    const expectedNotes = new Set(["Hand work to a mission and catch up later"]);
+    const reached: Record<string, number> = {};
+    for (const title of guides) {
+      await page.getByRole("button", { name: "Guides", exact: true }).click();
+      const hub = page.getByRole("dialog", { name: "Guides" });
+      await hub.getByRole("searchbox", { name: "Search guides" }).fill(title.split(" ").slice(0, 3).join(" "));
+      await hub.getByRole("button", { name: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.`) }).click();
+      reached[title] = 0;
+      for (;;) {
+        const card = page.locator(".guide-card");
+        await expect(card).toBeVisible();
+        // Let navigation and panel opening settle past the guide's 1.5 s missing-control window.
+        await page.waitForTimeout(2_000);
+        // Every step either explains itself or highlights its real control; none may report a missing control.
+        const hasTarget = await card.evaluate(element => element.classList.contains("anchored"));
+        if (hasTarget || await page.locator(".guide-spotlight").isVisible()) reached[title] += 1;
+        if (!expectedNotes.has(title)) await expect(card.locator(".guide-card-note")).toHaveCount(0);
+        if (testInfo.project.name.includes("real-desktop")) {
+          expect(await card.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
+        }
+        const finish = card.getByRole("button", { name: "Finish", exact: true });
+        if (await finish.isVisible()) { await finish.click(); break; }
+        await card.getByRole("button", { name: "Next", exact: true }).click();
+      }
+      // Return to the same conversation; a guide leaves Settings for the Workbench it last used.
+      if (!page.url().includes("session=")) await page.goto(chatUrl);
+      await page.keyboard.press("Escape");
+    }
+    // Each guide highlighted at least one real control.
+    for (const title of guides) if (!expectedNotes.has(title)) expect(reached[title], title).toBeGreaterThan(0);
+    const progress = await (await api.get("guides/progress")).json() as Array<{ guide_id: string; status: string }>;
+    expect(progress.filter(item => item.status === "completed")).toHaveLength(guides.length);
+    await testInfo.attach("guide-tour-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, reached }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("production mission defaults to unlimited duration through real Core", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();

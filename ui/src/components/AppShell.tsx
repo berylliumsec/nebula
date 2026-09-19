@@ -18,6 +18,9 @@ import { SettingsLens } from "./SettingsLens";
 import { HandoffRecoveryNotice } from "./HandoffRecoveryNotice";
 import type { SettingCatalogEntry } from "../settingsCatalog";
 import { projectSurface } from "../resourceRoutes";
+import { useNavigationChords } from "../state/useNavigationChords";
+import { GuideProvider } from "../guides/GuideProvider";
+import { useGuideAction } from "../guides/guideActions";
 
 const resourceLabels: Record<string, string> = {
   projects: "Projects", providers: "Model providers", harnesses: "Harnesses", library: "Library", providerCatalog: "Provider setup",
@@ -87,6 +90,10 @@ export function AppShell() {
     if (command === "home") navigate(engagement ? projectSurface(engagement.id, "workbench") : "/");
     if (command === "new-contextual") runContextualNew();
   }, [engagement, navigate, openPalette, runContextualNew, toggleActivity, toggleSidebar]);
+
+  useGuideAction("open-palette", openPalette);
+
+  useNavigationChords(navigate);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -169,6 +176,7 @@ export function AppShell() {
       <WorkbenchEditorProvider>
         <WorkbenchDraftProvider>
           <ChromeProvider value={chrome}>
+            <GuideProvider>
             <BrowserAutomationWorker />
             <div className={`app-shell${zero ? " zero-layer-shell" : ""}${activityOpen ? " with-activity" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
               <a className="skip-link" href="#main-content">Skip to main content</a>
@@ -217,6 +225,7 @@ export function AppShell() {
               />
               {settingLens && <SettingsLens entry={settingLens.entry} key={settingLens.entry.id} returnFocus={settingLens.returnFocus} onClose={() => setSettingLens(undefined)} />}
             </div>
+            </GuideProvider>
           </ChromeProvider>
         </WorkbenchDraftProvider>
       </WorkbenchEditorProvider>

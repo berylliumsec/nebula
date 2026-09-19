@@ -50,6 +50,8 @@ interface CodeEditorPanelProps {
     truncated: boolean;
   }) => void;
   initialWorkspaceSearch?: string;
+  /** Workspace-relative file to open once, e.g. from a guide's `?openFile=`. */
+  initialOpenPath?: string;
 }
 
 function validWorkspacePath(path: string): boolean {
@@ -85,7 +87,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch, initialOpenPath }: CodeEditorPanelProps) {
   const sidebarSize = useEditorSidebarWidth();
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
@@ -619,6 +621,21 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     });
     if (match.line) setNavigation({ line: match.line, column: match.column ?? 1, request: Date.now() });
   };
+
+  const openedPathRef = useRef<string | undefined>(undefined);
+  const openFileRef = useRef(openFile);
+  openFileRef.current = openFile;
+  useEffect(() => {
+    if (!active || !initialOpenPath || openedPathRef.current === initialOpenPath) return;
+    openedPathRef.current = initialOpenPath;
+    void openFileRef.current({
+      path: initialOpenPath,
+      name: initialOpenPath.split("/").at(-1) ?? initialOpenPath,
+      kind: "file",
+      size: 0,
+      modifiedAt: new Date().toISOString(),
+    });
+  }, [active, initialOpenPath]);
 
   const executionLanguage = (path: string): ExecutionLanguage | undefined => {
     const extension = path.split(".").at(-1)?.toLowerCase();

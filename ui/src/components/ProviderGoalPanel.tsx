@@ -97,7 +97,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
     } finally { setBusy(false); }
   };
 
-  if (!goal) return <section className="chat-goal-panel empty" aria-label="Conversation goal">
+  if (!goal) return <section className="chat-goal-panel empty" aria-label="Conversation goal" data-guide="goal-panel">
     <button className="button quiet chat-goal-chip" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}><Flag size={13} aria-hidden="true" /> Add goal</button>
     {expanded && <div className="chat-goal-form">
       <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
@@ -119,7 +119,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
     ...(skills ?? []).map(skill => [skill.path, skill] as const),
     ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),
   ]).values()];
-  return <section className="chat-goal-panel" aria-label="Conversation goal">
+  return <section className="chat-goal-panel" aria-label="Conversation goal" data-guide="goal-panel">
     <header><span><Flag size={14} /><strong>{goal.objective}</strong></span><small>{goal.status.replaceAll("_", " ")} · step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""} · {goal.usage.totalTokens.toLocaleString()} tokens · {Math.floor(goal.elapsedSeconds)}s active{goal.childBudget !== undefined ? ` · ${goal.childrenStarted}/${goal.childBudget} children` : ""} · {goal.skillSnapshots.length} skills</small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     {!terminal && <div className="chat-goal-actions">

@@ -1,34 +1,41 @@
 {
-  "change_digest": "454d004807abf4434ebee8717c240f7c4a6f1850cd966699edb59901ec3bfdbe",
-  "reviewed_by": "Claude review of MCP JSON import: backend, docs, schema, and the approved import dialog UI",
-  "reason": "Adds mcp_import.py plus POST /mcp-servers/import, GET /mcp-servers/export and `nebula-core mcp import|export`. Imported mcpServers/VS Code servers become disabled, untrusted McpServerProfile records; ${VAR} values become env: references, literal credentials go to the vault/session store or are rejected, and replace resets trust and capabilities. test_mcp_import.py covers preview, apply, secret handling and rollback, invalid-entry messages, conflicts, export round trip, the API routes and the CLI. test_cli.py covers the CLI module the new commands were added to; the credential API test and OpenAPI contract test cover the shared credential store and the new routes' registration. The MCP probe now treats only JSON-RPC -32601 (method not found) as an optional-list miss instead of matching message text, and requests resources/prompts only when the server advertises them; test_mcp_probe.py covers both directions (non-standard messages no longer fail the probe, real errors mentioning 'not found' are no longer swallowed), and the two existing stdio/HTTP probe tests in test_harnesses.py cover unchanged discovery. Documentation: docs/MCP-SERVERS.md is the file-format reference, linked from docs/NEBULA3.md, and a new mcp-servers operator-help article lets the analyst assistant answer format and troubleshooting questions. The stale release-boundary article no longer says MCP is out of scope. test_operator_help.py pins the article list and routing of an MCP import question; the chat help-retrieval test and the package member audit cover the bundled corpus. JSON Schema: mcp_config_json_schema() builds the import-file schema, with the nebula block generated from McpImportOptions; it is checked in as docs/mcp-servers.schema.json and served by `nebula-core mcp schema` and GET /mcp-servers/schema. New tests in test_mcp_import.py pin the checked-in file to the generator, validate the documented examples, reject the same forms import rejects, and cover the route and command. UI: McpImportDialog (paste or choose a file, example, format guide and schema links, Core dry-run preview, replace re-preview, import) is wired into HarnessSettings with an Import button, an empty-state entry, a post-import notice, and next-step hints on cards; Probe is disabled for untrusted stdio servers. The Edit MCP dialog no longer resets a saved fixed cwd to the workspace policy, which the real-Core journey exposed. Frontend tests cover the dialog, settings wiring, and client mapping. The new mcp-import Playwright area runs the whole journey against real Core at a LAN origin with production assets on the 8 assistant-real profiles, including a real stdio probe of tests/v3/fixtures/fake_mcp_server.py. test_playwright_impact.py covers the manifest change.",
-  "exclusions": "No full suites. ui/tests/** and ui/playwright.config.ts are shared files: the only change is one new real-Core test and adding 'mcp import' to the assistant-real grep, so coverage is the new mcp-import area rather than a full run. Mocked interface.spec visual tests were checked by hand: 'critical workspaces remain visually stable' fails identically on the Findings baseline with and without this change (a pre-existing, environment-dependent 21497-pixel diff), while the Settings Zero Dark baseline and the shared dialog audit pass. No native (Tauri) change. Physical devices were not available; mobile coverage is emulated Chromium and WebKit.",
+  "change_digest": "478f3a7fdd1e8fe84f88c99247f71e0fc1d42353c1b4cbde1767953df82f6c93",
+  "reviewed_by": "Claude review of the interactive guides change (operator-approved Figma page \"Guides\")",
+  "reason": "Adds in-app interactive guides: a Guides hub, a step card that spotlights the real control, Core-owned per-operator progress (guides.py, GuideProgress entity), a starter-files endpoint and an AGENTS.md probe. Anchors were added to Workbench, Settings and chat components, and hook/skill catalogs now refresh when the chat or Assistant settings come back into view. The selection covers the new Core module and entity registry, operator identity, hooks, operator help, every frontend component that gained an anchor or behavior, App integration, and the real-Core guide journeys (hook files, resume from Core, all assistant guides reaching their controls) on all eight assistant-real profiles plus the existing lifecycle-hooks real-Core journey.",
+  "exclusions": "No full suites. Native: only the SIDECAR_ENV_ALLOWLIST constant gained three names; no sidecar test asserts the list and behavior is unchanged otherwise (verified locally with cargo test --locked sidecar: 8 passed). README/NEBULA3.md edits are documentation. The calm-CSS audit's pre-existing failures are in untouched files; guides.css passes it.",
   "expected_tests": {
-    "python": 87,
-    "frontend": 85,
+    "python": 26,
+    "frontend": 172,
     "native": 0,
-    "playwright": 8
+    "playwright": 19
   },
   "python": [
-    "tests/test_playwright_impact.py",
-    "tests/v3/test_api.py::test_artifact_content_and_openapi_contract",
-    "tests/v3/test_chat.py::test_chat_retrieves_bundled_operator_help_without_project_documents",
-    "tests/v3/test_cli.py",
-    "tests/v3/test_credentials.py::test_credential_api_is_write_only_and_persists_only_opaque_reference",
-    "tests/v3/test_harnesses.py::test_explicit_stdio_mcp_probe_validates_schema_and_closes_process",
-    "tests/v3/test_harnesses.py::test_streamable_http_mcp_probe_injects_bearer_and_closes_session",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_mcp_probe.py",
+    "tests/v3/test_guides.py",
+    "tests/v3/test_domain.py",
     "tests/v3/test_operator_help.py",
-    "tests/v3/test_packaging.py::test_artifact_member_audit_accepts_only_complete_v3_payload"
+    "tests/v3/test_native_hooks.py",
+    "tests/v3/test_operators.py"
   ],
   "frontend": [
-    "ui/src/components/McpImportDialog.test.tsx",
+    "ui/src/guides/guides.test.tsx",
+    "ui/src/state/useNavigationChords.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/components/CommandPalette.test.tsx",
+    "ui/src/components/DevicePairingSettings.test.tsx",
+    "ui/src/components/ProviderSessionAdvanced.test.tsx",
+    "ui/src/components/CodeEditorPanel.test.tsx",
+    "ui/src/App.test.tsx",
+    "ui/src/components/ChatDecisions.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
+    "ui/src/components/EngagementPolicySettings.test.ts",
     "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/api/client.test.ts"
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:mcp-import"
+    "area:interactive-guides",
+    "area:provider-native-hooks-core"
   ]
 }

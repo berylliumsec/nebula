@@ -40,7 +40,7 @@ Nebula supports hosted, local, and OpenAI-compatible model runtimes. A model pro
 
 ## Install the preview
 
-The current release candidate is **[Nebula 3.0.0-alpha.5](docs/releases/3.0.0-alpha.5.md)** for Linux x86_64. Docker or Podman is required for terminal and automation features.
+Nebula 3 preview builds are published for Linux x86_64 as `nebula-v3.*` prereleases on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases); the newest one is the current release candidate, and its notes are in [docs/releases](docs/releases/). Docker or Podman is required for terminal and automation features.
 
 The preferred installation method is the signed [Nebula APT repository](https://github.com/BerylliumSec/nebula-apt). Its archive-key fingerprint is:
 
@@ -71,11 +71,11 @@ under administrator control through the normal APT workflow.
 <details>
 <summary>Install a downloaded DEB manually instead</summary>
 
-Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install:
+Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install (replace `<version>` with the release version, such as `3.0.0-alpha.20`):
 
 ```console
 sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
-sudo apt install ./Nebula-3.0.0-alpha.5-linux-x86_64.deb
+sudo apt install ./Nebula-<version>-linux-x86_64.deb
 ```
 
 </details>
@@ -87,8 +87,8 @@ Download the AppImage and checksum file from the same release, then run:
 
 ```console
 sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
-chmod +x Nebula-3.0.0-alpha.5-linux-x86_64.AppImage
-./Nebula-3.0.0-alpha.5-linux-x86_64.AppImage
+chmod +x Nebula-<version>-linux-x86_64.AppImage
+./Nebula-<version>-linux-x86_64.AppImage
 ```
 
 The AppImage requires no system-wide installation and uses Nebula's signed direct-update channel.
@@ -166,7 +166,7 @@ Verify the imported project and its evidence before deleting the original data. 
 - [Usage scenarios](docs/NEBULA3_USAGE_SCENARIOS.md)
 - [Automation runtime](docs/AUTOMATION-RUNTIME.md)
 - [Local diagnostics](docs/NEBULA3_DIAGNOSTICS.md)
-- [Release notes](docs/releases/3.0.0-alpha.5.md)
+- [Release notes](docs/releases/)
 - [Release process](packaging/RELEASING.md)
 
 <br />

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronRight, Command, FileSearch, PanelLeft, PanelRight, Search, SlidersHorizontal } from "lucide-react";
+import { ChevronRight, Command, Compass, FileSearch, PanelLeft, PanelRight, Search, SlidersHorizontal } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import type { ApiClient } from "../api/client";
 import type { ActionDescriptor, SearchResult } from "../api/types";
@@ -8,6 +8,7 @@ import { resourcePath } from "../resourceRoutes";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { settingCatalog, settingCatalogText, type SettingCatalogEntry } from "../settingsCatalog";
 import type { ContextualCommand } from "../state/ChromeContext";
+import { useOptionalGuides } from "../guides/GuideProvider";
 
 interface CommandPaletteProps {
   open: boolean;
@@ -53,6 +54,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
   const inputRef = useRef<HTMLInputElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
+  const guides = useOptionalGuides();
 
   const actions = useMemo<PaletteAction[]>(
     () => [
@@ -62,8 +64,25 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         description: item.description,
         icon: item.icon,
         keywords: `${item.label} ${item.legacyLabel ?? ""} ${item.aliases.join(" ")} ${item.description}`,
+        shortcut: item.shortcut,
         run: () => navigate(item.path),
       })),
+      ...(guides ? [{
+        id: "guides.open",
+        label: "Open guides",
+        description: "Interactive walkthroughs that take you to each feature",
+        icon: Compass,
+        keywords: "guides help tour walkthrough how to learn tutorial",
+        run: guides.openHub,
+      }, ...guides.guides.map(guide => ({
+        id: `guide:${guide.id}`,
+        label: `Guide: ${guide.title}`,
+        description: guide.summary,
+        icon: Compass,
+        keywords: `guide help how ${guide.keywords} ${guide.summary}`,
+        meta: `${guide.steps.length} step${guide.steps.length === 1 ? "" : "s"}`,
+        run: () => guides.start(guide.id),
+      }))] : []),
       ...settingCatalog.map((entry) => ({
         id: entry.id,
         label: entry.label,
@@ -96,7 +115,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         keywords: `${command.keywords ?? ""} editor code`,
       })),
     ],
-    [contextualCommands, navigate, onOpenSetting, onToggleActivity, onToggleSidebar],
+    [contextualCommands, guides, navigate, onOpenSetting, onToggleActivity, onToggleSidebar],
   );
 
   const results = useMemo(() => {
@@ -217,6 +236,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
       <div
         ref={paletteRef}
         className="command-palette"
+        data-guide="palette"
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"

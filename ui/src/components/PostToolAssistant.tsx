@@ -210,7 +210,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
 
   return <>
     <div className="post-tool-menu" ref={togglesRef}>
-      <button className={triggerVariant === "menu" ? "workbench-menu-item" : "icon-button subtle"} type="button" role={triggerVariant === "menu" ? "menuitem" : undefined} aria-label="Tool assistance" title="Tool assistance" aria-expanded={controlsOpen} aria-controls="post-tool-assistance-menu" onClick={() => setControlsOpen((open) => !open)}>
+      <button className={triggerVariant === "menu" ? "workbench-menu-item" : "icon-button subtle"} type="button" role={triggerVariant === "menu" ? "menuitem" : undefined} data-guide="tool-assistance" aria-label="Tool assistance" title="Tool assistance" aria-expanded={controlsOpen} aria-controls="post-tool-assistance-menu" onClick={() => setControlsOpen((open) => !open)}>
         {busy ? <LoaderCircle className="spin" size={16} aria-label="Analyzing tool result" /> : <Sparkles size={16} aria-hidden="true" />}
         {triggerVariant === "menu" && <span><strong>Tool assistance</strong><small>Suggestions and project notes</small></span>}
         {(config.suggestNextSteps || config.takeNotes) && <span className="status-dot healthy" aria-label="Tool assistance enabled" />}
