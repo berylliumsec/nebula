@@ -91,7 +91,11 @@ REQUIRED_MEMBERS = (
     ("playwright/driver/node",),
     ("nebula/v3/BUILD_INFO.json", "nebula.v3.BUILD_INFO.json"),
     ("nebula/v3/migrations/script.py.mako",),
+    # The Kali workstation image build copies these files out of the bundle.
     ("nebula/v3/kali_tool_inventory.py",),
+    ("nebula/v3/egress_helper.py",),
+    ("nebula/v3/public_ip_update.py",),
+    ("nebula/v3/terminal_entrypoint.sh",),
     ("nebula/v3/operator_help.md",),
     ("nebula/v3/diagnostic_guidance.json",),
     ("nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",),

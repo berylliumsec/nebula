@@ -541,6 +541,9 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
             "nebula/v3/BUILD_INFO.json",
             "nebula/v3/migrations/script.py.mako",
             "nebula/v3/kali_tool_inventory.py",
+            "nebula/v3/egress_helper.py",
+            "nebula/v3/public_ip_update.py",
+            "nebula/v3/terminal_entrypoint.sh",
             "nebula/v3/operator_help.md",
             "nebula/v3/diagnostic_guidance.json",
             "nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",
@@ -554,6 +557,34 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
         }
     )
     assert result["status"] == "ok"
+
+
+def test_core_bundles_and_audits_every_source_file_read_beside_its_module():
+    # sandbox.py copies helper files next to itself into the Kali image build
+    # context; a frozen Core without them cannot prepare the workstation image.
+    source_root = ROOT / "src" / "nebula" / "v3"
+    read_beside_module: set[str] = set()
+    for module in source_root.glob("*.py"):
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8"))):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "with_name"
+                and ast.unparse(node.func.value) == "Path(__file__)"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and (source_root / str(node.args[0].value)).is_file()
+            ):
+                read_beside_module.add(str(node.args[0].value))
+    assert {"public_ip_update.py", "terminal_entrypoint.sh"} <= read_beside_module
+
+    build_script = (ROOT / "scripts" / "build_nebula_core.py").read_text(
+        encoding="utf-8"
+    )
+    audited = {member for aliases in REQUIRED_MEMBERS for member in aliases}
+    for name in sorted(read_beside_module):
+        assert f'"{name}"' in build_script, f"{name} is not bundled"
+        assert f"nebula/v3/{name}" in audited, f"{name} is not audited"
 
 
 @pytest.mark.parametrize(
