@@ -153,6 +153,26 @@ Model-backed specialists receive no executable tools in this path. The run
 ledger records the provider, model, request provenance, token usage, and the
 analysis result; tool execution remains exclusively behind the policy broker.
 
+## Transient provider failures
+
+Providers answer some requests with a temporary refusal: OpenRouter's
+`HTTP 503 ... (upstream: service overloaded, please try again later)`, a gateway
+`502`/`504`, or a rate-limited `429`. Those statuses mean the upstream produced
+no output, so Nebula resends the identical request instead of failing the turn.
+Retries are bounded (3 attempts by default) and wait with exponential backoff
+plus jitter, never longer than the upstream's `Retry-After` or 20 seconds. A
+streaming turn is retried only before its first token; once any text, reasoning,
+or tool call has been delivered the partial answer is never replayed. Request
+defects -- an unknown model, a rejected key, an oversized context -- are reported
+immediately, and an exhausted retry names the attempts (`... after 3 attempts`)
+so the operator knows a manual retry adds nothing. Each retry is recorded in
+`providers.log` as `providers.request.retried`.
+
+Tune this per provider profile with the `retry_attempts` and
+`retry_backoff_seconds` options, or per deployment with
+`NEBULA_PROVIDER_RETRY_ATTEMPTS` and `NEBULA_PROVIDER_RETRY_BACKOFF_SECONDS`.
+A single attempt disables automatic retries.
+
 ## Import and export
 
 ```bash

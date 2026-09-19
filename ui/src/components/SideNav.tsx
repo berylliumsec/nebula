@@ -1,7 +1,7 @@
 import { useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
 import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { navigationGroups, navigationItems } from "../navigation";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -21,6 +21,8 @@ interface SideNavProps {
 export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "standard" }: SideNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
+  // Detail and tab routes (findings/<id>, assets, …) belong to their section, as in the top bar.
+  const currentPath = navigationItemForPath(location.pathname).path;
   const {
     api,
     coreState,
@@ -171,18 +173,18 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
           <section className="nav-group" aria-labelledby={`nav-group-${group.id}`} key={group.id}>
             <h2 id={`nav-group-${group.id}`}>{group.label}</h2>
             {navigationItems.filter((item) => item.group === group.id).map(({ path, label, icon: Icon }) => (
-              <NavLink
+              <Link
                 key={path}
                 to={canonicalNavigationPath(path, engagement?.id)}
-                end
                 title={collapsed ? label : undefined}
                 aria-label={label}
+                aria-current={path === currentPath ? "page" : undefined}
                 onClick={onNavigate}
-                className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+                className={`nav-item${path === currentPath ? " active" : ""}`}
               >
                 <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
                 <span>{label}</span>
-              </NavLink>
+              </Link>
             ))}
           </section>
         ))}
@@ -190,17 +192,18 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
 
       <div className="side-nav-footer">
         {navigationItems.filter((item) => item.group === "settings").map(({ path, label, icon: Icon }) => (
-          <NavLink
+          <Link
             key={path}
             to={path}
             title={collapsed ? label : undefined}
             aria-label={label}
+            aria-current={path === currentPath ? "page" : undefined}
             onClick={onNavigate}
-            className={({ isActive }) => `nav-item settings-nav-item${isActive ? " active" : ""}`}
+            className={`nav-item settings-nav-item${path === currentPath ? " active" : ""}`}
           >
             <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
             <span>{label}</span>
-          </NavLink>
+          </Link>
         ))}
         <div className="operator-row">
           <span className="operator-avatar">{operatorInitials}</span>

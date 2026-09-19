@@ -5,28 +5,47 @@ import type { ProviderHealth } from "./types";
 describe("ApiClient", () => {
   it("sends MCP imports as snake_case and maps the preview report", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
-      dry_run: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+      dry_run: true, created: 1, updated: 1, unchanged: 0, replaced: 0, skipped: 0, invalid: 0,
       entries: [{
         source_name: "remote", name: "remote", action: "create", transport: "streamable_http",
         command: null, arguments: [], url: "https://mcp.example.test/mcp", profile_id: null,
         secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        enabled: true, default_approval: "ask", needs_trust: false, needs_probe: true,
         warnings: [], error: null,
+      }, {
+        source_name: "local", name: "local", action: "update", transport: "stdio",
+        command: "/usr/bin/npx", arguments: ["local-mcp@2"], profile_id: "p1",
+        changes: [{ field: "args", before: "local-mcp", after: "local-mcp@2" }, { field: "env TOKEN", before: "${TOKEN}", after: null }],
+        enabled: false, default_approval: "risk_based", needs_trust: true, needs_probe: false,
       }],
     }), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
     const config = { mcpServers: { remote: { url: "https://mcp.example.test/mcp" } } };
 
-    await expect(client.importMcpServers({ config, dryRun: true, onConflict: "skip", sourceName: "mcp.json" })).resolves.toEqual({
-      dryRun: true, created: 1, replaced: 0, skipped: 0, invalid: 0,
+    await expect(client.importMcpServers({
+      config, dryRun: true, onConflict: "update", sourceName: "mcp.json",
+      defaults: { enabled: true, defaultApproval: "ask" }, trustLocalPrograms: true,
+    })).resolves.toEqual({
+      dryRun: true, created: 1, updated: 1, unchanged: 0, replaced: 0, skipped: 0, invalid: 0,
       entries: [{
         sourceName: "remote", name: "remote", action: "create", transport: "streamable_http",
         command: undefined, arguments: [], url: "https://mcp.example.test/mcp", profileId: undefined,
         secrets: [{ target: "Authorization bearer token", source: "environment", reference: "env:TOKEN" }],
+        changes: [], enabled: true, defaultApproval: "ask", needsTrust: false, needsProbe: true,
+        warnings: [], error: undefined,
+      }, {
+        sourceName: "local", name: "local", action: "update", transport: "stdio",
+        command: "/usr/bin/npx", arguments: ["local-mcp@2"], url: undefined, profileId: "p1", secrets: [],
+        changes: [{ field: "args", before: "local-mcp", after: "local-mcp@2" }, { field: "env TOKEN", before: "${TOKEN}", after: undefined }],
+        enabled: false, defaultApproval: "risk_based", needsTrust: true, needsProbe: false,
         warnings: [], error: undefined,
       }],
     });
     expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/mcp-servers/import");
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ config, dry_run: true, on_conflict: "skip", source_name: "mcp.json" });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      config, dry_run: true, on_conflict: "update", source_name: "mcp.json",
+      defaults: { enabled: true, default_approval: "ask" }, trust_local_programs: true,
+    });
   });
 
   it("loads OpenRouter's upstream provider directory with locations", async () => {

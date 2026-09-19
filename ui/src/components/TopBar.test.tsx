@@ -29,6 +29,7 @@ describe("TopBar page title", () => {
     ["/projects/project-1/assets/asset-3", "Project"],
     ["/projects/project-1/evidence", "Project"],
     ["/projects/project-1/sources", "Project"],
+    ["/knowledge", "Project"],
     ["/library/doc-1", "Library"],
     ["/settings", "Settings"],
     ["/", "Workbench"],

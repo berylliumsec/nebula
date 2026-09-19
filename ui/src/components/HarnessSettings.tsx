@@ -294,12 +294,26 @@ export function HarnessSettings() {
 
   const finishImport = async (report: McpImportReport, sourceName: string) => {
     setImportDialog(false);
-    const saved = report.created + report.replaced;
+    const added = report.created + report.replaced;
+    const saved = added + report.updated;
+    const counts = [added ? `${added} added` : "", report.updated ? `${report.updated} updated` : ""].filter(Boolean).join(", ");
+    const waiting = report.entries.some((entry) => (entry.action === "create" || entry.action === "replace") && !entry.enabled);
+    const title = `Saved ${saved} server${saved === 1 ? "" : "s"} from ${sourceName} (${counts}).${waiting ? " Review and probe the new ones, then enable them." : ""}`;
     const failed = report.entries.filter((entry) => entry.action === "invalid");
-    setImportNotice({
-      title: `Imported ${saved} server${saved === 1 ? "" : "s"} from ${sourceName}. Review and probe each one, then enable it.`,
-      detail: failed.length ? `${failed.length} could not be imported: ${failed.map((entry) => `${entry.name ?? entry.sourceName} (${entry.error ?? "invalid"})`).join("; ")}` : undefined,
+    const problems = failed.length ? [`${failed.length} could not be imported: ${failed.map((entry) => `${entry.name ?? entry.sourceName} (${entry.error ?? "invalid"})`).join("; ")}.`] : [];
+    // Enabled servers need probed tools before agents can use them.
+    const probes = api ? report.entries.filter((entry) => entry.needsProbe && entry.profileId) : [];
+    setImportNotice({ title: probes.length ? `${title} Probing ${probes.length === 1 ? probes[0].name ?? probes[0].sourceName : `${probes.length} servers`}…` : title, detail: problems.join(" ") || undefined });
+    await reload();
+    if (!api || !probes.length) return;
+    const results = await Promise.allSettled(probes.map((entry) => api.probeMcpServer(entry.profileId as string, engagement?.id)));
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") return;
+      void logCaughtDiagnostic("interface.harness_settings.import_probe_failed", "An imported MCP server could not be probed.", result.reason, "harness_settings");
+      problems.push(`${probes[index].name ?? probes[index].sourceName} could not be probed: ${result.reason instanceof Error ? result.reason.message : "probe failed"}. It stays enabled; probe it again from its card.`);
     });
+    const probed = results.filter((result) => result.status === "fulfilled").length;
+    setImportNotice({ title: probed ? `${title} Probed ${probed} server${probed === 1 ? "" : "s"}.` : title, detail: problems.join(" ") || undefined });
     await reload();
   };
 

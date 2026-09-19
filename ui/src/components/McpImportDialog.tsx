@@ -1,7 +1,7 @@
 import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { ArrowLeft, Copy, Download, ExternalLink, FileUp, LoaderCircle, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
-import type { McpImportEntry, McpImportReport, McpImportSecret } from "../api/types";
+import type { McpImportEntry, McpImportReport, McpImportSecret, McpServerProfile } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { ModalSurface } from "./DialogSystem";
 import { StatusChip, type StatusTone } from "./SurfacePrimitives";
@@ -56,10 +56,45 @@ function secretSummary(secret: McpImportSecret): string {
 
 const rowStatus: Record<McpImportEntry["action"], [string, StatusTone]> = {
   create: ["New", "informational"],
+  update: ["Update", "warning"],
+  unchanged: ["Unchanged", "neutral"],
   replace: ["Replaces existing", "warning"],
   skip: ["Exists · skipped", "warning"],
   invalid: ["Can't import", "danger"],
 };
+
+type Approval = McpServerProfile["defaultApproval"];
+
+export const MCP_APPROVAL_CHOICES: { value: Approval; label: string; help: string }[] = [
+  { value: "risk_based", label: "Risk-based", help: "Asks unless a probed tool is read-only, non-destructive, and uses no credentials." },
+  { value: "ask", label: "Ask", help: "Asks before every tool call." },
+  { value: "allow", label: "Allow", help: "Runs tools without asking. Tools marked destructive still ask." },
+  { value: "deny", label: "Deny", help: "Blocks every tool call from these servers." },
+];
+
+function approvalLabel(value?: Approval): string {
+  return MCP_APPROVAL_CHOICES.find((choice) => choice.value === value)?.label ?? "Risk-based";
+}
+
+/** What the server will look like once saved, for rows that save something. */
+function outcome(entry: McpImportEntry): string | undefined {
+  const approval = approvalLabel(entry.defaultApproval);
+  const fresh = entry.action === "create" || entry.action === "replace";
+  if (!fresh && entry.action !== "update") return undefined;
+  if (entry.enabled) return `${fresh ? "Enabled" : "Stays enabled"} · ${approval}`;
+  if (entry.needsTrust) return "Disabled until trusted";
+  return `${fresh ? "Disabled" : "Stays disabled"} · ${approval}`;
+}
+
+function listNames(names: string[]): string {
+  return names.length <= 2 ? names.join(" and ") : `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+interface ImportChoices {
+  enabled: boolean;
+  approval: Approval;
+  trust: boolean;
+}
 
 function target(entry: McpImportEntry): string | undefined {
   if (entry.url) return entry.url;
@@ -83,7 +118,8 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
   const [sourceName, setSourceName] = useState(PASTED_SOURCE);
   const [exampleOpen, setExampleOpen] = useState(true);
   const [report, setReport] = useState<McpImportReport>();
-  const [replace, setReplace] = useState(false);
+  const [choices, setChoices] = useState<ImportChoices>({ enabled: false, approval: "risk_based", trust: false });
+  const previewRequest = useRef(0);
   const [busy, setBusy] = useState<"read" | "preview" | "import" | "schema">();
   const [parseError, setParseError] = useState<string>();
   const [error, setError] = useState<string>();
@@ -132,21 +168,37 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
     return value as Record<string, unknown>;
   };
 
-  const preview = async (nextReplace = replace) => {
+  const request = (config: Record<string, unknown>, dryRun: boolean, next: ImportChoices) => api.importMcpServers({
+    config,
+    dryRun,
+    onConflict: "update",
+    sourceName,
+    defaults: { enabled: next.enabled, defaultApproval: next.approval },
+    trustLocalPrograms: next.trust,
+  });
+
+  /** Core's dry run is the source of truth for every row, so each choice previews again. */
+  const preview = async (change: Partial<ImportChoices> = {}) => {
     const config = parse();
     if (!config) return;
-    const previous = replace;
-    setReplace(nextReplace);
+    const previous = choices;
+    const next = { ...choices, ...change };
+    setChoices(next);
+    const current = ++previewRequest.current;
     setBusy("preview");
     setError(undefined);
     try {
-      setReport(await api.importMcpServers({ config, dryRun: true, onConflict: nextReplace ? "replace" : "skip", sourceName }));
+      const result = await request(config, true, next);
+      if (current !== previewRequest.current) return;
+      if (next.trust && !result.entries.some((entry) => entry.needsTrust)) setChoices({ ...next, trust: false });
+      setReport(result);
     } catch (previewError) {
-      setReplace(previous);
+      if (current !== previewRequest.current) return;
+      setChoices(previous);
       void logCaughtDiagnostic("interface.mcp_import.preview_failed", "An MCP import preview failed.", previewError, "mcp_import_dialog");
       setError(previewError instanceof Error ? previewError.message : "Nebula could not read this configuration.");
     } finally {
-      setBusy(undefined);
+      if (current === previewRequest.current) setBusy(undefined);
     }
   };
 
@@ -156,8 +208,8 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
     setBusy("import");
     setError(undefined);
     try {
-      const applied = await api.importMcpServers({ config, dryRun: false, onConflict: replace ? "replace" : "skip", sourceName });
-      if (applied.created + applied.replaced === 0) {
+      const applied = await request(config, false, choices);
+      if (applied.created + applied.replaced + applied.updated === 0) {
         setReport(applied);
         setError("No servers were saved. Review the rows below, then go back to fix the file.");
         return;
@@ -204,8 +256,17 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
   const close = () => { if (!busy || busy === "schema") onClose(); };
   const submit = (event: FormEvent) => { event.preventDefault(); if (report) void importServers(); else void preview(); };
 
-  const conflicts = report?.entries.filter((entry) => entry.action === "skip" || entry.action === "replace") ?? [];
-  const saving = report ? report.created + report.replaced : 0;
+  const saving = report ? report.created + report.replaced + report.updated : 0;
+  const hasNew = report?.entries.some((entry) => entry.action === "create" || entry.action === "replace") ?? false;
+  const trustTargets = report?.entries.filter((entry) => entry.needsTrust) ?? [];
+  const trustNames = trustTargets.map((entry) => entry.name ?? entry.sourceName);
+  const relaunched = trustTargets.length === 1 && trustTargets[0].action === "update";
+  const approvalHelp = MCP_APPROVAL_CHOICES.find((choice) => choice.value === choices.approval)?.help ?? "";
+  const footnote = report && report.updated + report.unchanged > 0
+    ? "Only what changed is saved. Nebula settings the file doesn't mention are kept."
+    : choices.enabled
+      ? "Nebula probes enabled servers right after saving."
+      : "New servers start disabled. Trust, probe, and enable each one afterwards.";
 
   return (
     <ModalSurface as="form" className="provider-dialog resource-dialog mcp-import-dialog" labelledBy="mcp-import-title" onClose={close} onSubmit={submit}>
@@ -252,6 +313,8 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
         <div className="mcp-import-summary">
           <span>{sourceName} · {plural(report.entries.length, "server")}</span>
           {report.created > 0 && <StatusChip tone="informational">{report.created} new</StatusChip>}
+          {report.updated > 0 && <StatusChip tone="warning">{report.updated} update{report.updated === 1 ? "" : "s"}</StatusChip>}
+          {report.unchanged > 0 && <StatusChip tone="neutral">{report.unchanged} unchanged</StatusChip>}
           {report.replaced > 0 && <StatusChip tone="warning">{report.replaced} replace{report.replaced === 1 ? "s" : ""}</StatusChip>}
           {report.skipped > 0 && <StatusChip tone="warning">{report.skipped} exist{report.skipped === 1 ? "s" : ""}</StatusChip>}
           {report.invalid > 0 && <StatusChip tone="danger">{report.invalid} can't import</StatusChip>}
@@ -260,15 +323,27 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
           {report.entries.map((entry) => {
             const [status, tone] = rowStatus[entry.action];
             const where = target(entry);
+            const result = outcome(entry);
+            const name = entry.name ?? entry.sourceName;
             return <li className="mcp-import-row" key={entry.sourceName}>
               <div className="mcp-import-row-top">
-                <strong>{entry.name ?? entry.sourceName}</strong>
+                <strong>{name}</strong>
                 {entry.transport && <span>{entry.transport === "stdio" ? "stdio" : "HTTP"}</span>}
+                {result && <span className="mcp-import-outcome">{result}</span>}
                 <StatusChip tone={tone}>{status}</StatusChip>
               </div>
               {where && <code>{where}</code>}
               {entry.error && <p className="mcp-import-error">{entry.error}</p>}
-              {entry.secrets.length > 0 && <p className="mcp-import-secrets">{entry.secrets.map(secretSummary).join(" · ")}</p>}
+              {entry.action === "unchanged"
+                ? <p className="mcp-import-secrets">Matches the saved server. Nothing to save.</p>
+                : entry.secrets.length > 0 && <p className="mcp-import-secrets">{entry.secrets.map(secretSummary).join(" · ")}</p>}
+              {entry.changes.length > 0 && <details className="mcp-import-changes" open>
+                <summary>{plural(entry.changes.length, "change")}</summary>
+                <ul>{entry.changes.map((change) => <li key={change.field}>
+                  <span>{change.field}</span> <code>{change.before ?? "not set"}</code> <span aria-hidden="true">→</span><span className="sr-only">becomes</span> <code>{change.after ?? "removed"}</code>
+                </li>)}</ul>
+              </details>}
+              {entry.action === "update" && entry.needsTrust && !entry.enabled && <p className="mcp-import-trust-note">Its launch settings changed, so {name} is untrusted again. Tick Trust below to keep it enabled.</p>}
               {entry.warnings.length > 0 && <details>
                 <summary>{plural(entry.warnings.length, "note")}</summary>
                 <ul>{entry.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
@@ -276,27 +351,48 @@ export function McpImportDialog({ api, onClose, onImported }: McpImportDialogPro
             </li>;
           })}
         </ul>
-        {conflicts.length > 0 && <label className="provider-consent">
-          <input type="checkbox" checked={replace} disabled={Boolean(busy)} onChange={(event) => void preview(event.target.checked)} />
+        {hasNew && <fieldset className="mcp-import-choices">
+          <legend>New servers</legend>
+          <label className="provider-consent">
+            <input type="checkbox" checked={choices.enabled} onChange={(event) => void preview({ enabled: event.target.checked, trust: false })} />
+            <span>
+              <strong>Enable after import</strong>
+              <small>Nebula probes each new server right away so its tools are ready to use.</small>
+            </span>
+          </label>
+          <fieldset className="mcp-import-approval" aria-describedby="mcp-import-approval-help">
+            <legend>Tool approval</legend>
+            <div className="mcp-import-approval-options">
+              {MCP_APPROVAL_CHOICES.map((choice) => <label key={choice.value}>
+                <input type="radio" name="mcp-import-approval" value={choice.value} checked={choices.approval === choice.value} onChange={() => void preview({ approval: choice.value })} />
+                <span>{choice.label}</span>
+              </label>)}
+            </div>
+            <small id="mcp-import-approval-help">{approvalHelp} A server whose file sets nebula.default_approval keeps its own.</small>
+          </fieldset>
+        </fieldset>}
+        {trustTargets.length > 0 && <label className="provider-consent">
+          <input type="checkbox" checked={choices.trust} onChange={(event) => void preview({ trust: event.target.checked })} />
           <span>
-            <strong>{conflicts.length === 1 ? `Replace ${conflicts[0].name ?? conflicts[0].sourceName}` : `Replace ${conflicts.length} existing servers`}</strong>
-            <small>Overwrites the existing server with this file's settings. It is disabled and untrusted again until you review it.</small>
+            <strong>{trustNames.length === 1 ? `Trust ${trustNames[0]} to run on this Core` : `Trust ${trustNames.length} local programs to run on this Core`}</strong>
+            <small>{relaunched ? "Its launch settings changed. " : ""}Local programs run on the Core host, outside the automation container. Without this, {listNames(trustNames)} {trustNames.length === 1 ? "is" : "are"} saved disabled.</small>
           </span>
         </label>}
       </>}
       {error && <DiagnosticErrorNotice error={error} fallback="The import could not be completed." compact />}
+      {/* Keys stop React from turning the clicked Back button into Preview mid-click, which would submit the form. */}
       <footer>
         {report
           ? <>
-            <p className="mcp-import-footnote">Imported servers start disabled. Trust, probe, and enable each one afterwards.</p>
-            <button className="button secondary" type="button" disabled={Boolean(busy)} onClick={() => { setReport(undefined); setReplace(false); setError(undefined); }}><ArrowLeft size={15} /> Back</button>
-            <button className="button primary" type="submit" disabled={Boolean(busy) || saving === 0}>
-              {busy === "import" ? <><LoaderCircle className="spin" size={15} /> Importing…</> : busy === "preview" ? <><LoaderCircle className="spin" size={15} /> Checking…</> : `Import ${plural(saving, "server")}`}
+            <p className="mcp-import-footnote">{footnote}</p>
+            <button key="back" className="button secondary" type="button" disabled={Boolean(busy)} onClick={() => { setReport(undefined); setError(undefined); }}><ArrowLeft size={15} /> Back</button>
+            <button key="save" className="button primary" type="submit" disabled={Boolean(busy) || saving === 0}>
+              {busy === "import" ? <><LoaderCircle className="spin" size={15} /> Saving…</> : busy === "preview" ? <><LoaderCircle className="spin" size={15} /> Checking…</> : saving ? `Save ${plural(saving, "server")}` : "Nothing to save"}
             </button>
           </>
           : <>
-            <button className="button secondary" type="button" disabled={Boolean(busy) && busy !== "schema"} onClick={close}>Cancel</button>
-            <button className="button primary" type="submit" disabled={Boolean(busy) || !text.trim() || Boolean(parseError)}>
+            <button key="cancel" className="button secondary" type="button" disabled={Boolean(busy) && busy !== "schema"} onClick={close}>Cancel</button>
+            <button key="preview" className="button primary" type="submit" disabled={Boolean(busy) || !text.trim() || Boolean(parseError)}>
               {busy === "preview" ? <><LoaderCircle className="spin" size={15} /> Checking…</> : "Preview"}
             </button>
           </>}

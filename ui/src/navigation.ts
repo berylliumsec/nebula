@@ -95,12 +95,23 @@ const projectSurfaceItemPaths: Record<string, string> = {
   sources: "/project",
 };
 
-/** Resolves legacy and canonical `/projects/<id>/<surface>/<resource>` routes to their navigation item. */
+// Legacy top-level routes that render another item's page when no project is loaded.
+const legacySurfaceItemPaths: Record<string, string> = {
+  assets: "/project",
+  evidence: "/project",
+  knowledge: "/project",
+};
+
+/**
+ * Resolves legacy and canonical `/projects/<id>/<surface>/<resource>` routes to their navigation item.
+ * This is the single authority for the current page in the top bar and side navigation.
+ */
 export function navigationItemForPath(pathname: string): NavigationItem {
   const project = /^\/projects\/[^/]+(?:\/([^/]+))?/.exec(pathname);
+  const segment = pathname.split("/")[1] ?? "";
   const path = project
     ? project[1] ? projectSurfaceItemPaths[project[1]] : "/project"
-    : `/${pathname.split("/")[1] ?? ""}`;
+    : legacySurfaceItemPaths[segment] ?? `/${segment}`;
   return navigationItems.find((item) => item.path === path) ?? navigationItems[0];
 }
 
