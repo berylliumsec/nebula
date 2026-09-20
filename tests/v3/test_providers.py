@@ -850,6 +850,83 @@ def test_openrouter_health_survives_an_unreadable_public_catalog():
     assert all(item.alias_target is None for item in health.model_descriptors)
 
 
+def test_openrouter_health_retries_a_refused_connection_before_recovering():
+    attempts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request.url.path)
+        if request.url.path == "/api/v1/key" and attempts.count(request.url.path) == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return _alias_catalog_handler(httpx.Response(200, json={"data": []}))(request)
+
+    config = config_from_catalog(
+        provider_id="openrouter-health-retry",
+        flavor=ProviderFlavor.OPENROUTER,
+        api_key_value="test-key",
+        options={"retry_attempts": 2, "retry_backoff_seconds": 0},
+    )
+    provider = OpenAICompatibleProvider(
+        config,
+        transport=httpx.MockTransport(handler),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    assert attempts.count("/api/v1/key") == 2
+
+
+def test_openai_compatible_health_retries_a_refused_connection_before_recovering():
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, json={"data": [{"id": "model-a"}]})
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("compatible-health-retry", retry_attempts=2),
+        transport=httpx.MockTransport(handler),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    assert health.models == ["model-a"]
+    assert attempts == 2
+
+
+def test_openrouter_health_reports_exhausted_connection_retries():
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("connection refused", request=request)
+
+    config = config_from_catalog(
+        provider_id="openrouter-health-retry-exhausted",
+        flavor=ProviderFlavor.OPENROUTER,
+        api_key_value="test-key",
+        options={"retry_attempts": 2, "retry_backoff_seconds": 0},
+    )
+    provider = OpenAICompatibleProvider(
+        config,
+        transport=httpx.MockTransport(handler),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is False
+    assert attempts == 2
+    assert health.detail == (
+        "OpenRouter model discovery failed after bounded retries. "
+        "Check the connection and refresh."
+    )
+
+
 def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
     observed = []
 

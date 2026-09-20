@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import httpx
+
 from nebula.v3.diagnostic_guidance import (
     REASON_CODES,
     load_catalog,
@@ -75,6 +77,17 @@ def test_reason_classification_is_semantic_and_unknown_is_honest() -> None:
             event_code="chat.internal.failed",
         )
         == "unknown_internal_fault"
+    )
+    assert (
+        reason_code_for(
+            httpx.ConnectError("connection refused"),
+            feature="providers",
+            event_code="providers.health.failed",
+        )
+        == "dependency_unavailable"
+    )
+    assert (
+        load_catalog()["reason_families"]["dependency_unavailable"]["retryable"] is True
     )
 
 
