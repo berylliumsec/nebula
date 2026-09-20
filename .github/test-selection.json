@@ -1,17 +1,16 @@
 {
-  "change_digest": "203512e48cb1c0fc6bdf5edeee61c51dda0c112be97f56b60a4fb6c948076889",
-  "reviewed_by": "Claude review of provider chat schedule resilience",
-  "reason": "Deleting a conversation left its chat_schedules row behind (delete_chat_session never listed that kind), and the scheduler's per-tick loop called ChatScheduleService.revalidate, whose store.get on the missing conversation or provider raised NotFoundError straight out of fire_due_schedules. _chat_schedule_loop had no guard, so that one orphan ended the 'nebula-chat-schedules' task and every other schedule stopped firing until Core restarted, where it died again 15 s later. delete_chat_session now removes chat_schedules with the conversation; ChatScheduleService.reconcile drops a schedule whose conversation is gone and pauses (enabled=false, skip_reason) one whose provider is gone, which ProviderSessionAdvanced already renders; fire_due_schedules fires each schedule inside its own ConflictError/NotFoundError guard; and the API loop records a failed tick instead of ending. test_chat_schedules covers the cascade, the orphan, and the missing-provider pause; test_storage covers delete_chat_session's owned-record cascade.",
-  "exclusions": "No frontend tests: no ui/ change; the paused reason reuses the existing schedule status line. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py/storage.py) is the real-Core journey suite and does not create or fire chat schedules; the fix is exercised by the Python suites listed here. No full suites.",
+  "change_digest": "45c5b4030c17bd90909871080572b33c4747e2b69d117d80a738b819564e9073",
+  "reviewed_by": "Claude review of in-band streaming error frames",
+  "reason": "The OpenAI-compatible SSE loop in _stream_openai_compatible read only choices, usage and ids from each data frame. OpenRouter, vLLM and similar gateways report an upstream failure that happens after the 200 headers were sent as a {\"error\": {...}} data frame, so such a frame produced no events and the stream ended with a COMPLETED event carrying empty text: the operator saw an empty successful reply (or a truncated one) with no failure, and nothing retried or explained it. _stream_error_frame now maps that frame to ProviderError (ProviderContextLengthError for context-length codes and markers) using the same detail extraction as HTTP errors, factored into _error_detail and _context_length_error so both paths unwrap OpenRouter's metadata.raw upstream reason. Raising inside the stream body reaches the existing except that yields a StreamEventType.ERROR event with the message, which chat.py already turns into a failed turn; _stream_with_retry never replays a started stream, so no retry happens. test_providers covers the frame after partial output, the frame before any token, the typed context-length mapping, and all existing HTTP error, retry and streaming cases.",
+  "exclusions": "No frontend tests: no ui/ change; the failure renders through the existing turn error path. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through the remaining-core fallback for providers.py) is the real-Core journey suite and cannot inject a provider error frame; the Python provider suite exercises the transport with httpx.MockTransport. No full suites.",
   "expected_tests": {
-    "python": 23,
+    "python": 53,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_storage.py"
+    "tests/v3/test_providers.py"
   ],
   "frontend": [],
   "native": [],

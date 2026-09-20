@@ -834,36 +834,69 @@ async def _stream_with_retry(
         attempt += 1
 
 
+_CONTEXT_ERROR_CODES = frozenset(
+    {
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "max_tokens_exceeded",
+        "prompt_too_long",
+    }
+)
+_CONTEXT_ERROR_MARKERS = (
+    "context length",
+    "context window",
+    "maximum context",
+    "prompt is too long",
+    "prompt too long",
+    "too many tokens",
+)
+
+
+def _error_detail(body: Any) -> tuple[str | None, str | None]:
+    """Return the operator-readable message and code from a provider error body."""
+
+    error = body.get("error", {}) if isinstance(body, dict) else {}
+    detail = (error.get("message") if isinstance(error, dict) else None) or (
+        body.get("message") if isinstance(body, dict) else None
+    )
+    if detail is None and isinstance(error, str) and error.strip():
+        detail = error
+    raw_code = (error.get("code") if isinstance(error, dict) else None) or (
+        body.get("code") if isinstance(body, dict) else None
+    )
+    error_code = str(raw_code).casefold() if raw_code is not None else None
+    # OpenRouter wraps the upstream provider's reason in metadata.raw; the
+    # generic "Provider returned error" alone is not actionable.
+    metadata = error.get("metadata") if isinstance(error, dict) else None
+    upstream = metadata.get("raw") if isinstance(metadata, dict) else None
+    if isinstance(upstream, str) and upstream.strip():
+        try:
+            decoded = json.loads(upstream)
+            inner = decoded.get("error") if isinstance(decoded, dict) else None
+            upstream = (
+                inner.get("message") if isinstance(inner, dict) else None
+            ) or upstream
+        except ValueError:  # diagnostic-expected: upstream reason is not JSON; the raw text is shown instead
+            pass
+        upstream = " ".join(str(upstream).split())[:400]
+        detail = f"{detail} (upstream: {upstream})" if detail else upstream
+    return (str(detail) if detail is not None else None), error_code
+
+
+def _context_length_error(detail: str | None, error_code: str | None) -> bool:
+    normalized = str(detail or "").casefold()
+    return error_code in _CONTEXT_ERROR_CODES or any(
+        marker in normalized for marker in _CONTEXT_ERROR_MARKERS
+    )
+
+
 def _safe_error(response: httpx.Response) -> ProviderError:
     request_id = response.headers.get("x-request-id") or response.headers.get(
         "request-id"
     )
     error_code: str | None = None
     try:
-        body = response.json()
-        error = body.get("error", {}) if isinstance(body, dict) else {}
-        detail = (error.get("message") if isinstance(error, dict) else None) or (
-            body.get("message") if isinstance(body, dict) else None
-        )
-        raw_code = (error.get("code") if isinstance(error, dict) else None) or (
-            body.get("code") if isinstance(body, dict) else None
-        )
-        error_code = str(raw_code).casefold() if raw_code is not None else None
-        # OpenRouter wraps the upstream provider's reason in metadata.raw; the
-        # generic "Provider returned error" alone is not actionable.
-        metadata = error.get("metadata") if isinstance(error, dict) else None
-        upstream = metadata.get("raw") if isinstance(metadata, dict) else None
-        if isinstance(upstream, str) and upstream.strip():
-            try:
-                decoded = json.loads(upstream)
-                inner = decoded.get("error") if isinstance(decoded, dict) else None
-                upstream = (
-                    inner.get("message") if isinstance(inner, dict) else None
-                ) or upstream
-            except ValueError:  # diagnostic-expected: upstream reason is not JSON; the raw text is shown instead
-                pass
-            upstream = " ".join(str(upstream).split())[:400]
-            detail = f"{detail} (upstream: {upstream})" if detail else upstream
+        detail, error_code = _error_detail(response.json())
     except (ValueError, AttributeError) as caught_error:
         record_caught_exception(
             "providers",
@@ -877,24 +910,8 @@ def _safe_error(response: httpx.Response) -> ProviderError:
     message = f"provider returned HTTP {response.status_code}{suffix}" + (
         f": {detail}" if detail else ""
     )
-    normalized_detail = str(detail or "").casefold()
-    context_codes = {
-        "context_length_exceeded",
-        "context_window_exceeded",
-        "max_tokens_exceeded",
-        "prompt_too_long",
-    }
-    context_markers = (
-        "context length",
-        "context window",
-        "maximum context",
-        "prompt is too long",
-        "prompt too long",
-        "too many tokens",
-    )
-    if response.status_code in {400, 413, 422} and (
-        error_code in context_codes
-        or any(marker in normalized_detail for marker in context_markers)
+    if response.status_code in {400, 413, 422} and _context_length_error(
+        detail, error_code
     ):
         return ProviderContextLengthError(message)
     if response.status_code in _RETRYABLE_STATUS_CODES:
@@ -903,6 +920,26 @@ def _safe_error(response: httpx.Response) -> ProviderError:
             status_code=response.status_code,
             retry_after=_retry_after_seconds(response),
         )
+    return ProviderError(message)
+
+
+def _stream_error_frame(data: Any) -> ProviderError | None:
+    """Map an in-band error frame on a 200 SSE stream to a provider failure.
+
+    OpenRouter, vLLM and other OpenAI-compatible gateways report an upstream
+    failure that happens after the response headers were sent as a
+    ``{"error": {...}}`` data frame instead of an HTTP status. Ignoring the
+    frame ends the stream as an empty, successful reply.
+    """
+
+    if not isinstance(data, dict) or not data.get("error"):
+        return None
+    detail, error_code = _error_detail(data)
+    message = "provider reported an error while streaming" + (
+        f": {detail}" if detail else ""
+    )
+    if _context_length_error(detail, error_code):
+        return ProviderContextLengthError(message)
     return ProviderError(message)
 
 
@@ -1648,6 +1685,9 @@ async def _stream_openai_compatible(
                     if not encoded or encoded == "[DONE]":
                         continue
                     data = json.loads(encoded)
+                    failure = _stream_error_frame(data)
+                    if failure is not None:
+                        raise failure
                     response_id = data.get("id", response_id)
                     response_model = data.get("model", response_model)
                     chunk_usage = data.get("usage") or {}
