@@ -304,3 +304,71 @@ def test_committed_core_mutation_without_device_result_requires_reconciliation(
 
     # Without a committed Core mutation there is nothing to reconcile.
     assert broker.get(plain.id).status == ActionIntentStatus.EXPIRED
+
+
+def test_actions_resolve_for_an_existing_browser_exchange(tmp_path):
+    # The endpoint map named a kind no entity declares, so every action on an
+    # exchange was disabled with "no longer exists" while the row was present.
+    from nebula.v3.domain import ActionResolutionRequest, BrowserTrafficExchange
+
+    store = NebulaStore(tmp_path / "exchange-actions.db")
+    project = store.create(Engagement(name="Exchange actions"))
+    exchange = store.create(
+        BrowserTrafficExchange(
+            engagement_id=project.id,
+            session_id="session-1",
+            tab_id="tab-1",
+            identity_id="identity-1",
+            method="GET",
+            url="https://target.example/login",
+            scope_state="in_scope",
+            scope_policy_id="scope-1",
+            scope_policy_revision=1,
+        )
+    )
+    broker = ActionBroker(store)
+
+    resolved = broker.registry.resolve(
+        ActionResolutionRequest(
+            resources=[
+                ResourceRef(
+                    project_id=project.id,
+                    kind=ResourceKind.BROWSER_EXCHANGE,
+                    id=exchange.id,
+                    revision=exchange.revision,
+                )
+            ]
+        )
+    )
+
+    preserve = next(item for item in resolved if item.id == "preserve_as_evidence")
+    assert preserve.available is True, preserve.disabled_reason
+
+
+def test_heartbeat_stamps_server_time_and_keeps_the_client_clock_as_metadata(
+    tmp_path,
+):
+    # A phone whose clock ran slow could never be healthy, and a fast clock
+    # kept an offline phone healthy: the client's timestamp was the liveness.
+    store = NebulaStore(tmp_path / "heartbeat.db")
+    device = _device(store)
+    client_clock = utc_now() - timedelta(minutes=10)
+    broker = ActionBroker(store)
+
+    before = utc_now()
+    updated = broker.heartbeat(
+        device.id,
+        DeviceCapabilitySnapshot(
+            platform="ios",
+            app_version="3.0.0",
+            capabilities=["share.sheet"],
+            heartbeat_at=client_clock,
+            expected_revision=device.revision,
+        ),
+    )
+
+    assert updated.heartbeat_at is not None
+    assert updated.heartbeat_at >= before
+    assert updated.last_used_at >= before
+    assert broker.healthy(updated) is True
+    assert updated.metadata["client_heartbeat_at"] == client_clock.isoformat()

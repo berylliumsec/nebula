@@ -1375,8 +1375,9 @@ class DiagnosticManager:
             "schema": "nebula.diagnostics-status/v1",
             "writable": writable and not self._degraded,
             "degraded": self._degraded or not writable,
-            "log_directory": str(self.log_dir),
-            "settings_path": str(self.settings_path),
+            # Absolute log/settings paths stay out of this payload: /health and
+            # /diagnostics/files answer cookie-paired devices, and the paths
+            # reveal the operator's account name and home layout.
             "global_level": self._settings.global_level,
             "feature_levels": dict(sorted(self._settings.feature_levels.items())),
             "effective_levels": {

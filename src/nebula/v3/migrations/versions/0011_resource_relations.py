@@ -32,7 +32,7 @@ RESOURCE_KINDS = {
     "reports": "report",
     "command_executions": "terminal_command",
     "browser_sessions": "browser_session",
-    "browser_traffic_exchanges": "browser_exchange",
+    "browser_traffic": "browser_exchange",
     "agent_runs": "mission",
     "operator_executions": "execution",
     "approvals": "approval",

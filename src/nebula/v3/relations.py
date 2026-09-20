@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .database import EntityRow, ResourceRelationRow
 from .domain import (
+    ENTITY_MODEL_BY_KIND,
     Entity,
     Evidence,
     Finding,
@@ -39,7 +40,7 @@ RESOURCE_ENTITY_KINDS: dict[ResourceKind, str] = {
     ResourceKind.TERMINAL_COMMAND: "command_executions",
     ResourceKind.BROWSER_SESSION: "browser_sessions",
     ResourceKind.BROWSER_ASSESSMENT: "browser_assessments",
-    ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
+    ResourceKind.BROWSER_EXCHANGE: "browser_traffic",
     ResourceKind.MISSION: "runs",
     ResourceKind.TERMINAL_SESSION: "automation_sessions",
     ResourceKind.RECEIPT: "action_intents",
@@ -47,6 +48,17 @@ RESOURCE_ENTITY_KINDS: dict[ResourceKind, str] = {
     ResourceKind.APPROVAL: "approvals",
     ResourceKind.ARTIFACT: "artifacts",
 }
+
+# Every endpoint kind must name a durable entity; a stale name here made every
+# browser exchange resolve as deleted, so the map is checked when it is built.
+_UNMAPPED_ENDPOINT_KINDS = sorted(
+    kind for kind in RESOURCE_ENTITY_KINDS.values() if kind not in ENTITY_MODEL_BY_KIND
+)
+if _UNMAPPED_ENDPOINT_KINDS:
+    raise RuntimeError(
+        "RESOURCE_ENTITY_KINDS names entity kinds without a model: "
+        + ", ".join(_UNMAPPED_ENDPOINT_KINDS)
+    )
 
 VALID_ENDPOINTS: dict[RelationPredicate, set[tuple[ResourceKind, ResourceKind]]] = {
     RelationPredicate.AFFECTS: {(ResourceKind.FINDING, ResourceKind.ASSET)},

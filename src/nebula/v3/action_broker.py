@@ -95,6 +95,11 @@ class ActionBroker:
         if device.revoked_at is not None:
             raise ConflictError("paired device is revoked")
         expected = snapshot.expected_revision or device.revision
+        # Liveness is judged on Core's clock. The client's own timestamp is
+        # kept as advisory metadata: written into heartbeat_at it let a slow
+        # phone clock hide a live device and a fast one keep an offline
+        # device "healthy" until its intents expired.
+        now = utc_now()
         return self.store.update(
             PairedDeviceSession,
             device.id,
@@ -103,8 +108,12 @@ class ActionBroker:
                 "app_version": snapshot.app_version,
                 "capabilities": sorted(set(snapshot.capabilities)),
                 "ownership_claims": snapshot.ownership_claims,
-                "heartbeat_at": snapshot.heartbeat_at,
-                "last_used_at": snapshot.heartbeat_at,
+                "heartbeat_at": now,
+                "last_used_at": now,
+                "metadata": {
+                    **device.metadata,
+                    "client_heartbeat_at": snapshot.heartbeat_at.isoformat(),
+                },
             },
             expected_revision=expected,
         )

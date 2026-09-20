@@ -183,3 +183,44 @@ def test_legacy_api_arrays_are_atomic_edge_projections(tmp_path):
     projected = client.get(f"/api/v1/findings/{finding['id']}", headers=headers)
     assert projected.status_code == 200
     assert projected.json()["asset_ids"] == []
+
+
+def test_browser_exchange_is_a_resolvable_relation_endpoint(tmp_path):
+    # The endpoint map named a kind no entity declares, so every exchange edge
+    # was refused as "not found" although the exchange row existed.
+    from nebula.v3.domain import ENTITY_MODEL_BY_KIND, BrowserTrafficExchange, Evidence
+    from nebula.v3.relations import RESOURCE_ENTITY_KINDS
+
+    assert set(RESOURCE_ENTITY_KINDS.values()) <= set(ENTITY_MODEL_BY_KIND)
+
+    store = NebulaStore(tmp_path / "exchange-relations.db")
+    project = store.create(Engagement(name="Exchanges"))
+    evidence = store.create(
+        Evidence(engagement_id=project.id, evidence_type="http", title="Proof")
+    )
+    exchange = store.create(
+        BrowserTrafficExchange(
+            engagement_id=project.id,
+            session_id="session-1",
+            tab_id="tab-1",
+            identity_id="identity-1",
+            method="GET",
+            url="https://target.example/login",
+            scope_state="in_scope",
+            scope_policy_id="scope-1",
+            scope_policy_revision=1,
+        )
+    )
+    service = ResourceRelationService(store)
+
+    relation = service.create(
+        project.id,
+        ResourceRelationCreate(
+            source=_ref(project.id, ResourceKind.EVIDENCE, evidence),
+            predicate=RelationPredicate.PRODUCED_BY,
+            target=_ref(project.id, ResourceKind.BROWSER_EXCHANGE, exchange),
+        ),
+    )
+
+    assert relation.target.kind is ResourceKind.BROWSER_EXCHANGE
+    assert relation.target.id == exchange.id
