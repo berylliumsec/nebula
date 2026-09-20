@@ -400,6 +400,24 @@ class NebulaStore:
                 for row in session.scalars(statement)
             ]
 
+    def has_entity_with_metadata(
+        self, model: type[Entity], key: str, value: str
+    ) -> bool:
+        """Report whether any ``model`` row carries ``metadata[key] == value``.
+
+        Checked in SQL so the answer does not depend on how many rows of the
+        kind exist; a first-page scan stops seeing newer rows past 1,000.
+        """
+
+        statement = select(
+            exists().where(
+                EntityRow.kind == model.entity_kind,
+                EntityRow.payload["metadata"][key].as_string() == value,
+            )
+        )
+        with self.database.session() as session:
+            return bool(session.scalar(statement))
+
     def create_many(self, entities: list[Entity]) -> list[Entity]:
         with self.transaction() as transaction:
             transaction.add_all(entities)

@@ -1978,9 +1978,11 @@ class AutomationRuntimeManager:
             or durable.engagement_id != managed.entity.engagement_id
         ):
             raise AutomationPolicyDenied("approval does not match this exact command")
-        if durable.id in managed.used_approval_ids or any(
-            item.metadata.get("approval_id") == durable.id
-            for item in self.store.list_entities(CommandExecution, limit=1_000)
+        if (
+            durable.id in managed.used_approval_ids
+            or self.store.has_entity_with_metadata(
+                CommandExecution, "approval_id", durable.id
+            )
         ):
             raise AutomationPolicyDenied("approval has already been consumed")
         if durable.status == ApprovalStatus.PENDING:

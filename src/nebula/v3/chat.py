@@ -4668,16 +4668,22 @@ class ChatService:
             raise ChatConfigurationError(
                 "mission has no provider runtime to continue in chat"
             )
-        existing = next(
-            (
-                item
-                for item in self.store.list_entities(
-                    ChatSession, engagement_id=run.engagement_id, limit=1_000
-                )
-                if run.id in item.metadata.get("attached_run_ids", [])
-            ),
-            None,
-        )
+        existing: ChatSession | None = None
+        offset = 0
+        while page := self.store.list_entities(
+            ChatSession, engagement_id=run.engagement_id, offset=offset, limit=1_000
+        ):
+            existing = next(
+                (
+                    item
+                    for item in page
+                    if run.id in item.metadata.get("attached_run_ids", [])
+                ),
+                None,
+            )
+            if existing is not None:
+                break
+            offset += len(page)
         if existing is not None:
             return existing
         summary = run.metadata.get("final_summary")
