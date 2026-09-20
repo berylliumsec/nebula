@@ -163,7 +163,21 @@ def snapshot_skill(
         instructions = payload.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("selected skill instructions must be UTF-8") from exc
-    resources = _referenced_resources(path, instructions)
+    resource_boundary = path.parent
+    if summary.source == "project":
+        catalog_root = Path(summary.root).resolve(strict=True)
+        if catalog_root.name == "skills" and catalog_root.parent.name == ".agents":
+            resource_boundary = catalog_root.parent
+    resources = _referenced_resources(
+        path,
+        instructions,
+        boundary=resource_boundary,
+        boundary_label=(
+            "project .agents directory"
+            if summary.source == "project" and resource_boundary != path.parent
+            else "skill directory"
+        ),
+    )
     return SkillSnapshot(
         **summary.model_dump(),
         sha256=hashlib.sha256(payload).hexdigest(),
@@ -176,9 +190,14 @@ _MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 
 
 def _referenced_resources(
-    entrypoint: Path, instructions: str
+    entrypoint: Path,
+    instructions: str,
+    *,
+    boundary: Path,
+    boundary_label: str,
 ) -> list[SkillResourceReference]:
     skill_root = entrypoint.parent.resolve(strict=True)
+    resource_boundary = boundary.resolve(strict=True)
     references: list[SkillResourceReference] = []
     seen: set[str] = set()
     for raw_target in _MARKDOWN_LINK.findall(instructions):
@@ -197,19 +216,24 @@ def _referenced_resources(
         relative = unquote(parsed.path)
         if relative in {".", ".."} or "\x00" in relative:
             continue
+        cursor = skill_root
+        for part in Path(relative).parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                cursor = cursor.parent
+                continue
+            cursor /= part
+            if cursor.is_symlink():
+                raise ValueError(f"skill resource cannot use symlinks: {relative}")
         unresolved = skill_root / relative
         try:
             candidate = unresolved.resolve(strict=True)
-            candidate.relative_to(skill_root)
+            candidate.relative_to(resource_boundary)
         except (OSError, ValueError):
             raise ValueError(
-                f"skill resource must resolve inside its skill directory: {relative}"
+                f"skill resource must resolve inside its {boundary_label}: {relative}"
             )
-        cursor = unresolved
-        while cursor != skill_root:
-            if cursor.is_symlink():
-                raise ValueError(f"skill resource cannot use symlinks: {relative}")
-            cursor = cursor.parent
         if not candidate.is_file():
             raise ValueError(f"skill resource is not a file: {relative}")
         key = str(candidate)

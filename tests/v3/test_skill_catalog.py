@@ -93,15 +93,54 @@ def test_referenced_resources_are_manifested_then_loaded_by_exact_digest(tmp_pat
         )
 
 
+def test_project_skill_can_snapshot_shared_agents_rule(tmp_path):
+    root = tmp_path / ".agents" / "skills"
+    entrypoint = _skill(
+        root,
+        "review",
+        "Read [the shared rule](../../../.agents/rules/accuracy.md).",
+    )
+    rule = tmp_path / ".agents" / "rules" / "accuracy.md"
+    rule.parent.mkdir()
+    rule.write_text("Report only verified results.", encoding="utf-8")
+
+    snapshot = snapshot_skill(
+        SkillSelection(name="review", path=str(entrypoint)),
+        discover_skills(native_skill_roots(tmp_path)),
+    )
+
+    assert snapshot.resources[0].path == str(rule.resolve())
+    assert snapshot.resources[0].relative_path == "../../../.agents/rules/accuracy.md"
+    loaded = read_skill_resource(
+        [snapshot],
+        skill_path=snapshot.path,
+        resource_path="../../../.agents/rules/accuracy.md",
+    )
+    assert loaded["content"] == "Report only verified results."
+
+
 def test_skill_resource_references_cannot_escape_or_use_symlinks(tmp_path):
     root = tmp_path / ".agents" / "skills"
     outside = tmp_path / "outside.md"
     outside.write_text("outside", encoding="utf-8")
     escaping = _skill(root, "escape", "[outside](../../../outside.md)")
-    with pytest.raises(ValueError, match="inside its skill directory"):
+    with pytest.raises(ValueError, match="inside its project .agents directory"):
         snapshot_skill(
             SkillSelection(name="escape", path=str(escaping)),
             discover_skills(native_skill_roots(tmp_path)),
+        )
+
+    installed_root = tmp_path / "managed" / "skills"
+    installed = _skill(
+        installed_root,
+        "installed",
+        "[outside](../shared-rule.md)",
+    )
+    (installed_root / "shared-rule.md").write_text("outside", encoding="utf-8")
+    with pytest.raises(ValueError, match="inside its skill directory"):
+        snapshot_skill(
+            SkillSelection(name="installed", path=str(installed)),
+            discover_skills([(installed_root, "installed")]),
         )
 
     linked = _skill(root, "linked", "[outside](reference.md)")
@@ -109,6 +148,21 @@ def test_skill_resource_references_cannot_escape_or_use_symlinks(tmp_path):
     with pytest.raises(ValueError, match="inside its skill directory|symlinks"):
         snapshot_skill(
             SkillSelection(name="linked", path=str(linked)),
+            discover_skills(native_skill_roots(tmp_path)),
+        )
+
+    shared_rule = tmp_path / ".agents" / "rules" / "shared.md"
+    shared_rule.parent.mkdir()
+    shared_rule.write_text("shared", encoding="utf-8")
+    shared_link = _skill(
+        root,
+        "shared-link",
+        "[shared](../../../.agents/rules/linked.md)",
+    )
+    (shared_rule.parent / "linked.md").symlink_to(shared_rule)
+    with pytest.raises(ValueError, match="symlinks"):
+        snapshot_skill(
+            SkillSelection(name="shared-link", path=str(shared_link)),
             discover_skills(native_skill_roots(tmp_path)),
         )
 

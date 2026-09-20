@@ -64,7 +64,13 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     workspace = tmp_path / "goal-workspace"
     skill = workspace / ".agents" / "skills" / "review" / "SKILL.md"
     skill.parent.mkdir(parents=True)
-    skill.write_text("Review carefully.", encoding="utf-8")
+    rule = workspace / ".agents" / "rules" / "accuracy.md"
+    rule.parent.mkdir()
+    rule.write_text("Report only verified results.", encoding="utf-8")
+    skill.write_text(
+        "Review carefully. Read [the shared rule](../../../.agents/rules/accuracy.md).",
+        encoding="utf-8",
+    )
     store.create(
         Engagement(
             id="goal-project", name="Goal project", workspace_path=str(workspace)
@@ -117,6 +123,9 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert attached.status_code == 200, attached.text
     attached_goal = attached.json()
     assert attached_goal["skill_snapshots"][0]["name"] == "review"
+    assert attached_goal["skill_snapshots"][0]["resources"][0]["path"] == str(
+        rule.resolve()
+    )
     original_digest = attached_goal["skill_snapshots"][0]["sha256"]
     skill.write_text("Changed after attachment.", encoding="utf-8")
     loaded = client.get("/api/v1/chat/sessions/goal-session/goal", headers=_auth())
