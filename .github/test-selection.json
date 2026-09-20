@@ -1,17 +1,20 @@
 {
-  "change_digest": "4154017f6019a64e41d42b4841cd8218168199b5806343af33439b7a52de27d8",
-  "reviewed_by": "Claude review of chat-schedules",
-  "reason": "Provider-chat schedules never ran: _fire_schedule called the sync prepare() wrapper, which uses asyncio.run(), from inside the scheduler's event loop, so every due occurrence raised RuntimeError and was recorded as 'Scheduled occurrence failed'. The fire path now awaits prepare_async and, since occurrences actually run, reuses the conversation's last-sent tool settings (tools, MCP servers, SSH hosts, subagents) via ChatScheduleService.turn_settings instead of running tool-less. A schedule now follows the conversation's provider/model (reconcile re-snapshots them) instead of parking forever on 'Saved provider or model changed', which no UI action could resolve; the non-running goal skip names Start or Resume. Archiving a conversation pauses its schedule (paused_by='archive') and unarchiving resumes only an archive-paused one; the fire path also skips archived conversations reached by other routes. ChatSchedule.next_run_at/last_run_at reject naive datetimes (the generic PATCH returns 422) and fire_due_schedules isolates any per-schedule exception so one bad row cannot stop the rest. tests/v3/test_chat_schedules.py adds eight tests that fail on main for each defect; tests/v3/test_chat_api.py covers the patched archive endpoint.",
-  "exclusions": "No frontend tests: no ui/ change (the existing schedule status line renders the new skip reasons). No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through api.py) does not exercise the scheduler tick or the archive/schedule interaction; the Python tests drive them directly. No full suites.",
+  "change_digest": "dad176afc02b84944dc60ddd66fbbc449573e237bb21d16de1b9a432b1cb1d73",
+  "reviewed_by": "Claude review of recent-merge-regressions",
+  "reason": "Three regressions from the #382-#423 merge range. (2) #411 made DiagnosticManager.recent_errors() and export() call flush(), which busy-waits on the writer thread with time.sleep, and recent_errors() then takes _writer_lock, which the writer holds for the whole append/fsync; both ran inline in the async diagnostics routes (errors, incident lookup, incident action, incident resolve, export), so with a slow or stalled disk every Diagnostics refresh froze the Core event loop, and all other requests, SSE streams and websockets with it, for as long as the writer needed. The routes now run those manager calls under asyncio.to_thread. test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer in tests/v3/test_diagnostics_api.py stalls the writer, queues an ERROR from a loop, issues GET /diagnostics/errors from a second thread and proves a concurrent GET /diagnostics/settings returns while the writer is still stuck, that the queued record still lands in the viewer response, and that every one of the five routes calls flush() off the loop; on main the settings request waits until the writer gives up. (3) #410's delete_chat_session route closed a harness chat's vendor session before store.delete_chat_session validated the delete, so a 409 (active turn, running subagent, stale revision) left the surviving conversation on a CLOSED vendor session with its process and gateway gone. The store's refusal checks are factored into validate_chat_session_delete (shared with delete_chat_session, which still re-validates atomically) and the route calls it before close_session. test_a_refused_harness_chat_delete_leaves_its_vendor_session_open in tests/v3/test_chat_api.py puts a queued HarnessTurn on the chat and shows the 409 leaves the connection, gateway and session status untouched; on main the connection is already closed. (4) The done frame follow_chat_turn synthesises for an already-completed turn was built without elapsed_ms, approval_wait_ms (#384) and message.reasoning (#405), so a viewer reattaching after the turn finished lost the elapsed pill and thinking the transcript shows after a reload. The reconstructed ChatCompletionResponse now carries them from the durable ChatMessage. test_following_a_completed_turn_replays_its_timing_and_reasoning in tests/v3/test_chat_api.py fails on main with elapsed_ms None. tests/v3/test_diagnostics.py, tests/v3/test_chat_reconnection.py and tests/v3/test_storage.py are selected because they cover the seams touched: the manager flush and read-your-writes semantics, the follow route for saved turns, and delete_chat_session's cascade and refusals after the refactor.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/api.py) does not exercise a stalled diagnostics writer, a refused harness delete, or a follower attaching to a finished turn; the Python tests drive these routes directly through TestClient. No full suites.",
   "expected_tests": {
-    "python": 31,
+    "python": 74,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_chat_api.py"
+    "tests/v3/test_diagnostics_api.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_diagnostics.py",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_storage.py"
   ],
   "frontend": [],
   "native": [],

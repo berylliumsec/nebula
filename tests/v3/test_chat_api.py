@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -19,6 +20,7 @@ from nebula.v3.domain import (
     ChatBackend,
     ChatSession,
     ChatMessage,
+    ChatRole,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
@@ -1208,3 +1210,128 @@ def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
     assert redeemed.status_code == 200, redeemed.text
     # Redeeming prunes the expired third pairing along with the redeemed one.
     assert pending == {}
+
+
+def test_a_refused_harness_chat_delete_leaves_its_vendor_session_open(tmp_path):
+    from nebula.v3.domain import (
+        HarnessSession,
+        HarnessSessionStatus,
+        HarnessTurn,
+        HarnessTurnOrigin,
+    )
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Harness"))
+    vendor = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="model-a",
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Harness chat",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=vendor.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            backend=ChatBackend.HARNESS,
+            model="model-a",
+            status=ChatTurnStatus.COMPLETE,
+        )
+    )
+    # A harness turn the store still sees as queued (between prepare_chat and
+    # the turn task registering itself), so the runtime has nothing active.
+    store.create(
+        HarnessTurn(
+            engagement_id=engagement.id,
+            harness_session_id=vendor.id,
+            origin=HarnessTurnOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            prompt="Keep going",
+        )
+    )
+    app = create_app(store, auth_token="test-token")
+    runtime = app.state.harness_runtime_service
+    connection = _FakeVendorProcess()
+    gateway = _FakeVendorProcess()
+    runtime._connections[vendor.id] = connection
+    runtime._gateways[vendor.id] = gateway
+    client = TestClient(app)
+
+    refused = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+
+    assert refused.status_code == 409, refused.text
+    assert "harness turn is active" in refused.json()["detail"]
+    # The conversation survives, so it must keep its live vendor session.
+    assert connection.closed is False
+    assert gateway.closed is False
+    assert runtime._connections[vendor.id] is connection
+    assert runtime._gateways[vendor.id] is gateway
+    assert store.get(HarnessSession, vendor.id).status != HarnessSessionStatus.CLOSED
+    assert store.get(ChatSession, session.id).id == session.id
+
+
+def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
+    store = NebulaStore(tmp_path / "completed-follow.db")
+    engagement = store.create(Engagement(name="Completed follow"))
+    profile = store.create(
+        ProviderProfile(name="Local provider", provider_type="vllm", is_local=True)
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Already answered",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    message = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            sequence=1,
+            role=ChatRole.ASSISTANT,
+            content="Final answer",
+            reasoning="Weighed both readings first.",
+            elapsed_ms=4321,
+            approval_wait_ms=1200,
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.COMPLETE,
+            final_message_id=message.id,
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.get(f"/api/v1/chat/turns/{turn.id}/events", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    frames = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    done = frames[-1]
+    assert done["type"] == "done"
+    assert done["message"]["content"] == "Final answer"
+    # A viewer that reattaches after the turn finished sees the same elapsed
+    # time, approval wait and thinking the transcript shows after a reload.
+    assert done["elapsed_ms"] == 4321
+    assert done["approval_wait_ms"] == 1200
+    assert done["message"]["reasoning"] == "Weighed both readings first."

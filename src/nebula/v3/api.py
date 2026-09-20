@@ -3098,8 +3098,14 @@ def create_app(
         after: str | None = Query(default=None, min_length=1, max_length=64),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> dict[str, Any]:
-        records = require_diagnostic_manager().recent_errors(
-            feature=feature, after=after, limit=limit
+        # Reading recent errors waits for the writer thread to land queued
+        # records (and takes its lock), which on a slow disk stalls every
+        # request and stream on the loop; a worker thread waits instead.
+        records = await asyncio.to_thread(
+            require_diagnostic_manager().recent_errors,
+            feature=feature,
+            after=after,
+            limit=limit,
         )
         return {"errors": records}
 
@@ -3113,7 +3119,8 @@ def create_app(
         request: DiagnosticIncidentResolveRequest,
     ) -> list[dict[str, Any]]:
         manager = require_diagnostic_manager()
-        records = [*manager.recent_errors(limit=500), *request.records]
+        recent = await asyncio.to_thread(manager.recent_errors, limit=500)
+        records = [*recent, *request.records]
         return manager.resolve_incidents(records[-500:])
 
     @app.get(
@@ -3123,7 +3130,9 @@ def create_app(
         response_model=DiagnosticIncident,
     )
     async def get_diagnostic_incident(error_id: str) -> dict[str, Any]:
-        incident = require_diagnostic_manager().incident(error_id)
+        incident = await asyncio.to_thread(
+            require_diagnostic_manager().incident, error_id
+        )
         if incident is None:
             raise HTTPException(status_code=404, detail="diagnostic incident not found")
         return incident
@@ -3139,7 +3148,7 @@ def create_app(
         request: DiagnosticIncidentActionRequest,
     ) -> dict[str, Any]:
         manager = require_diagnostic_manager()
-        incident = manager.incident(error_id)
+        incident = await asyncio.to_thread(manager.incident, error_id)
         if incident is None:
             raise HTTPException(status_code=404, detail="diagnostic incident not found")
         actions = {
@@ -3191,11 +3200,12 @@ def create_app(
                     "diagnostics": manager.status(),
                     "storage": store.database.health(),
                 }
+            still_active = await asyncio.to_thread(manager.incident, error_id)
             result = {
                 "kind": "health_check",
                 "status": "completed",
                 "health": health_payload,
-                "incident_active": manager.incident(error_id) is not None,
+                "incident_active": still_active is not None,
             }
         elif action.get("kind") == "retry":
             primary = incident["primary"]
@@ -3324,7 +3334,9 @@ def create_app(
         export_dir = manager.data_dir / "diagnostics-exports"
         export_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         destination = export_dir / f"nebula-diagnostics-{secrets.token_hex(8)}.zip"
-        manager.export(destination)
+        # The bundle drains the writer first and then zips the log directory,
+        # neither of which belongs on the event loop.
+        await asyncio.to_thread(manager.export, destination)
 
         def remove_temporary_export() -> None:
             try:
@@ -9222,9 +9234,16 @@ def create_app(
                 harness_turn_id=completed.harness_turn_id,
                 model=completed.model,
                 message=ChatResponseMessage(
-                    id=message.id, role=ChatRole.ASSISTANT, content=message.content
+                    id=message.id,
+                    role=ChatRole.ASSISTANT,
+                    content=message.content,
+                    reasoning=message.reasoning,
                 ),
                 usage=completed.usage,
+                # The live stream's done frame carries these once the turn is
+                # persisted; a viewer attaching afterwards gets the same ones.
+                elapsed_ms=message.elapsed_ms,
+                approval_wait_ms=message.approval_wait_ms,
                 finish_reason="stop",
                 citations=message.citations,
             )
@@ -9876,6 +9895,12 @@ def create_app(
                 AgentRun, "harness_session_id", chat.harness_session_id
             )
             if shared_with_run is None:
+                # A refused delete (active turn, running subagent, stale
+                # revision) keeps the conversation, so it must keep its live
+                # vendor session: check before anything is closed.
+                store.validate_chat_session_delete(
+                    session_id, expected_revision=if_match
+                )
                 try:
                     await harness_runtime.close_session(chat.harness_session_id)
                 except NotFoundError:
