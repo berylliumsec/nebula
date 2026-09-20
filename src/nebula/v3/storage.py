@@ -7,7 +7,7 @@ from .diagnostics import record_caught_exception
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Sequence, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, TypeVar, cast
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -116,6 +116,17 @@ def _automation_lookup_fields(entity: Entity) -> dict[str, Any]:
         "automation_status": getattr(status, "value", status),
         "automation_expires_at": getattr(entity, "expires_at", None),
     }
+
+
+PayloadFilterValue = str | Sequence[str] | None
+
+
+def _entity_order(newest_first: bool) -> tuple[Any, Any]:
+    """Return the stable ``(created_at, id)`` ordering for entity pages."""
+
+    if newest_first:
+        return (EntityRow.created_at.desc(), EntityRow.id.desc())
+    return (EntityRow.created_at, EntityRow.id)
 
 
 def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> EntityT:
@@ -777,6 +788,7 @@ class NebulaStore:
         offset: int = 0,
         limit: int = 100,
         include_temporary: bool = False,
+        newest_first: bool = False,
     ) -> list[EntityT]:
         if offset < 0:
             raise ValueError("offset cannot be negative")
@@ -804,10 +816,57 @@ class NebulaStore:
                 EntityRow.automation_expires_at <= automation_expires_before
             )
         statement = (
-            statement.order_by(EntityRow.created_at, EntityRow.id)
-            .offset(offset)
-            .limit(limit)
+            statement.order_by(*_entity_order(newest_first)).offset(offset).limit(limit)
         )
+        with self.database.session() as session:
+            return [_row_to_entity(row, model) for row in session.scalars(statement)]
+
+    def find_entities(
+        self,
+        model: type[EntityT],
+        filters: Mapping[str, PayloadFilterValue],
+        *,
+        engagement_id: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+        newest_first: bool = False,
+    ) -> list[EntityT]:
+        """Return the ``model`` rows whose payload matches ``filters``, filtered in SQL.
+
+        ``list_entities`` pages a whole kind oldest first, so a lookup that
+        reads its first 1,000-row page and filters in Python stops seeing newer
+        rows once Core holds that many records of the kind. Each filter names a
+        top-level payload field, or ``"metadata.<key>"`` for one metadata
+        entry; a string must equal the field, a sequence lists the accepted
+        values and ``None`` requires the field to be null or absent. Rows come
+        back oldest first unless ``newest_first`` is set, and ``limit=None``
+        returns every match.
+        """
+
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least 1")
+        statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
+        if engagement_id is not None:
+            statement = statement.where(EntityRow.engagement_id == engagement_id)
+        for field, value in filters.items():
+            column: Any = EntityRow.payload
+            for part in field.split("."):
+                column = column[part]
+            column = column.as_string()
+            if value is None:
+                statement = statement.where(column.is_(None))
+            elif isinstance(value, str):
+                statement = statement.where(column == value)
+            else:
+                accepted = list(value)
+                if not accepted:
+                    return []
+                statement = statement.where(column.in_(accepted))
+        statement = statement.order_by(*_entity_order(newest_first)).offset(offset)
+        if limit is not None:
+            statement = statement.limit(limit)
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
 

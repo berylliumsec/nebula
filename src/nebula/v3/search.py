@@ -372,6 +372,29 @@ def projected_entity_rows() -> ColumnElement[bool]:
     )
 
 
+class SearchCursorError(ValueError):
+    """The paging cursor a client sent is not one this search issued."""
+
+
+def _decode_search_cursor(cursor: str | None) -> int:
+    """Return the page offset a cursor encodes, rejecting anything else.
+
+    Decoded on its own so that a ``ValueError`` raised later while building
+    the page (a stale ``resource_kind`` in the projection, for example) is
+    never reported to the operator as an invalid cursor.
+    """
+
+    if not cursor:
+        return 0
+    try:
+        offset = int(base64.urlsafe_b64decode(cursor + "===").decode())
+    except ValueError as exc:  # diagnostic-expected: a malformed cursor is the client's 422, not a Core fault.
+        raise SearchCursorError("invalid search cursor") from exc
+    if offset < 0:
+        raise SearchCursorError("invalid search cursor")
+    return offset
+
+
 class FederatedSearch:
     def __init__(self, store: NebulaStore, actions: ActionRegistry) -> None:
         self.store = store
@@ -433,8 +456,8 @@ class FederatedSearch:
         cursor: str | None,
         limit: int,
     ) -> SearchResponse:
+        offset = _decode_search_cursor(cursor)
         repaired = self.repair_stale_projection()
-        offset = int(base64.urlsafe_b64decode(cursor + "===").decode()) if cursor else 0
         terms = [term.casefold() for term in query.split() if term]
         with self.store.database.session() as session:
             statement = select(SearchDocumentRow)

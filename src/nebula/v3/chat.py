@@ -204,6 +204,15 @@ class ChatCompactionError(ChatError):
     """Required context compaction failed and the request may be retried."""
 
 
+_UNFINISHED_TURN_STATUSES = (
+    ChatTurnStatus.ROUTING.value,
+    ChatTurnStatus.WAITING_APPROVAL.value,
+    ChatTurnStatus.WAITING_CALLBACK.value,
+    ChatTurnStatus.FINALIZING.value,
+    ChatTurnStatus.INTERRUPTED.value,
+)
+
+
 class ChatHistoryConflict(ChatError):
     """Client history diverged from the durable session transcript."""
 
@@ -4794,27 +4803,48 @@ class ChatService:
                 stage=event_name,
             )
 
+    @staticmethod
+    def _turn_is_pending(turn: ChatTurn) -> bool:
+        """Report whether an unfinished turn still blocks its conversation."""
+
+        return turn.status != ChatTurnStatus.INTERRUPTED or bool(
+            turn.request_snapshot.get("recovery", {}).get("required")
+        )
+
     def pending_turn(self, session_id: str) -> ChatTurn | None:
         self.store.get(ChatSession, session_id)
         active = [
             item
             for item in self.store.list_session_entities(
-                ChatTurn,
-                session_id,
-                statuses=[
-                    ChatTurnStatus.ROUTING.value,
-                    ChatTurnStatus.WAITING_APPROVAL.value,
-                    ChatTurnStatus.WAITING_CALLBACK.value,
-                    ChatTurnStatus.FINALIZING.value,
-                    ChatTurnStatus.INTERRUPTED.value,
-                ],
+                ChatTurn, session_id, statuses=list(_UNFINISHED_TURN_STATUSES)
             )
-            if item.status != ChatTurnStatus.INTERRUPTED
-            or bool(item.request_snapshot.get("recovery", {}).get("required"))
+            if self._turn_is_pending(item)
         ]
         if len(active) > 1:
             raise ChatHistoryConflict("chat session has multiple active turns")
         return active[0] if active else None
+
+    def pending_turns(self, engagement_id: str) -> dict[str, ChatTurn]:
+        """Return the pending turn of every conversation in a project, by session.
+
+        One SQL query over the project's unfinished turns replaces a
+        ``pending_turn`` lookup per conversation, so the activity listing costs
+        the same for a project with thousands of conversations as for one
+        with ten.
+        """
+
+        pending: dict[str, ChatTurn] = {}
+        for turn in self.store.find_entities(
+            ChatTurn,
+            {"status": list(_UNFINISHED_TURN_STATUSES)},
+            engagement_id=engagement_id,
+        ):
+            if not self._turn_is_pending(turn):
+                continue
+            if turn.session_id in pending:
+                raise ChatHistoryConflict("chat session has multiple active turns")
+            pending[turn.session_id] = turn
+        return pending
 
     def reconcile_interrupted_tool(
         self,

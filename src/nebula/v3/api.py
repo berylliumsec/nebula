@@ -476,7 +476,7 @@ from .relations import (
     RESOURCE_ENTITY_KINDS,
     ResourceRelationService,
 )
-from .search import FederatedSearch
+from .search import FederatedSearch, SearchCursorError
 from .handoffs import (
     HandoffCancelRequest,
     HandoffConsumeRequest,
@@ -2741,8 +2741,7 @@ def create_app(
         current = _device_for_token(request.cookies.get("nebula_device"))
         return [
             _device_response(device, current_id=current.id if current else None)
-            for device in store.list_entities(PairedDeviceSession, limit=1_000)
-            if device.revoked_at is None
+            for device in store.find_entities(PairedDeviceSession, {"revoked_at": None})
         ]
 
     @app.put(
@@ -3516,7 +3515,7 @@ def create_app(
                 cursor=cursor,
                 limit=limit,
             )
-        except (ValueError, UnicodeDecodeError) as exc:
+        except SearchCursorError as exc:
             raise HTTPException(
                 status_code=422, detail="invalid search cursor"
             ) from exc
@@ -3623,8 +3622,12 @@ def create_app(
         tags=["resources"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_action_intents(project_id: str) -> list[ActionIntent]:
-        return action_broker.list_intents(project_id)
+    async def list_action_intents(
+        project_id: str,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=1_000),
+    ) -> list[ActionIntent]:
+        return action_broker.list_intents(project_id, offset=offset, limit=limit)
 
     @app.post(
         f"{API_PREFIX}/handoffs",
@@ -3857,14 +3860,12 @@ def create_app(
         ),
     ) -> list[HarnessInteraction]:
         turn = store.get(HarnessTurn, turn_id)
-        return [
-            item
-            for item in store.list_entities(
-                HarnessInteraction, engagement_id=turn.engagement_id, limit=1_000
-            )
-            if item.harness_turn_id == turn.id
-            and (interaction_status is None or item.status == interaction_status)
-        ]
+        filters: dict[str, str] = {"harness_turn_id": turn.id}
+        if interaction_status is not None:
+            filters["status"] = interaction_status.value
+        return store.find_entities(
+            HarnessInteraction, filters, engagement_id=turn.engagement_id
+        )
 
     @app.post(
         f"{API_PREFIX}/harness-interactions/{{interaction_id}}/decision",
@@ -4480,16 +4481,13 @@ def create_app(
                 "output offset is beyond the available terminal result",
                 status_code=416,
             )
-        page_end = min(len(data), offset + limit)
-        if not raw:
-            if offset < len(data) and data[offset] & 0xC0 == 0x80:
-                raise ContainerTerminalError(
-                    "output_offset_invalid",
-                    "output offset is not a UTF-8 boundary",
-                    status_code=416,
-                )
-            while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
-                page_end -= 1
+        if not raw and not _utf8_boundary(data, offset):
+            raise ContainerTerminalError(
+                "output_offset_invalid",
+                "output offset is not a UTF-8 boundary",
+                status_code=416,
+            )
+        page_end = _output_page_end(data, offset, limit, raw=raw)
         headers = {
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
@@ -5315,20 +5313,13 @@ def create_app(
                 "output offset is beyond the available stream",
                 status_code=416,
             )
-        page_end = min(len(data), offset + limit)
-        if not raw:
-            if offset < len(data) and data[offset] & 0xC0 == 0x80:
-                raise ExecutionServiceError(
-                    "output_offset_invalid",
-                    "output offset is not a UTF-8 boundary",
-                    status_code=416,
-                )
-            while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
-                page_end -= 1
-            if page_end == offset and offset < len(data):
-                page_end = min(len(data), offset + 1)
-                while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
-                    page_end += 1
+        if not raw and not _utf8_boundary(data, offset):
+            raise ExecutionServiceError(
+                "output_offset_invalid",
+                "output offset is not a UTF-8 boundary",
+                status_code=416,
+            )
+        page_end = _output_page_end(data, offset, limit, raw=raw)
         page = data[offset:page_end]
         headers = {
             "Cache-Control": "private, no-store",
@@ -7500,19 +7491,23 @@ def create_app(
         profile_id: str, request: VpnProfileDeleteRequest
     ) -> Response:
         profile = store.get(VpnProfile, profile_id)
-        if any(
-            policy.vpn_profile_id == profile_id
-            for policy in store.list_entities(AutomationProjectPolicy, limit=1_000)
+        if store.find_entities(
+            AutomationProjectPolicy, {"vpn_profile_id": profile_id}, limit=1
         ):
             raise HTTPException(
                 status_code=409,
                 detail="remove this VPN profile from project command policies first",
             )
-        if any(
-            session.vpn_profile_id == profile_id
-            and session.status
+        active_statuses = [
+            status.value
+            for status in AutomationSessionStatus
+            if status
             not in {AutomationSessionStatus.CLOSED, AutomationSessionStatus.FAILED}
-            for session in store.list_entities(AutomationSession, limit=1_000)
+        ]
+        if store.find_entities(
+            AutomationSession,
+            {"vpn_profile_id": profile_id, "status": active_statuses},
+            limit=1,
         ):
             raise HTTPException(
                 status_code=409,
@@ -9784,23 +9779,29 @@ def create_app(
         engagement_id: str,
     ) -> list[ChatSessionActivity]:
         activity: list[ChatSessionActivity] = []
-        for session in store.list_entities(ChatSession, engagement_id=engagement_id):
-            if session.metadata.get("temporary_assistant") is True:
-                continue
-            turn = chat_service().pending_turn(session.id)
-            activity.append(
-                ChatSessionActivity(
-                    session_id=session.id,
-                    state=(
-                        "idle"
-                        if turn is None
-                        else "waiting"
-                        if turn.status == ChatTurnStatus.WAITING_APPROVAL
-                        else "working"
-                    ),
-                    turn_id=turn.id if turn else None,
+        pending = chat_service().pending_turns(engagement_id)
+        offset = 0
+        while page := store.list_entities(
+            ChatSession, engagement_id=engagement_id, offset=offset, limit=1_000
+        ):
+            offset += len(page)
+            for session in page:
+                if session.metadata.get("temporary_assistant") is True:
+                    continue
+                turn = pending.get(session.id)
+                activity.append(
+                    ChatSessionActivity(
+                        session_id=session.id,
+                        state=(
+                            "idle"
+                            if turn is None
+                            else "waiting"
+                            if turn.status == ChatTurnStatus.WAITING_APPROVAL
+                            else "working"
+                        ),
+                        turn_id=turn.id if turn else None,
+                    )
                 )
-            )
         return activity
 
     @app.get(
@@ -10439,16 +10440,7 @@ def create_app(
         )
         async def tool_call_artifacts(tool_call_id: str) -> list[Artifact]:
             call = store.get(ToolCall, tool_call_id)
-            return sorted(
-                [
-                    item
-                    for item in store.list_entities(
-                        Artifact, engagement_id=call.engagement_id, limit=1_000
-                    )
-                    if item.metadata.get("tool_call_id") == call.id
-                ],
-                key=lambda item: (item.created_at, item.id),
-            )
+            return store.list_tool_call_artifacts(call.engagement_id, call.id)
 
         @app.post(
             f"{API_PREFIX}/tool-calls/{{tool_call_id}}/output/search",
@@ -11655,6 +11647,17 @@ def create_app(
             pass
         return handoff
 
+    def legacy_handoff_intent(handoff: BrowserHandoff) -> ActionIntent | None:
+        """Return the device action queued for a legacy browser handoff, if any."""
+
+        matches = store.find_entities(
+            ActionIntent,
+            {"metadata.legacy_handoff_id": handoff.id},
+            engagement_id=handoff.engagement_id,
+            limit=1,
+        )
+        return action_broker.get(matches[0].id) if matches else None
+
     @app.post(
         f"{API_PREFIX}/browser-handoffs/{{handoff_id}}/claim",
         response_model=BrowserHandoff,
@@ -11665,14 +11668,7 @@ def create_app(
         handoff_id: str, request: BrowserHandoffClaimRequest
     ) -> BrowserHandoff:
         handoff = store.get(BrowserHandoff, handoff_id)
-        intent = next(
-            (
-                item
-                for item in action_broker.list_intents(handoff.engagement_id)
-                if item.metadata.get("legacy_handoff_id") == handoff_id
-            ),
-            None,
-        )
+        intent = legacy_handoff_intent(handoff)
         if intent is not None:
             intent = action_broker.claim(
                 intent.id,
@@ -11705,14 +11701,7 @@ def create_app(
         handoff_id: str, request: BrowserHandoffResultRequest
     ) -> BrowserHandoff:
         handoff = store.get(BrowserHandoff, handoff_id)
-        intent = next(
-            (
-                item
-                for item in action_broker.list_intents(handoff.engagement_id)
-                if item.metadata.get("legacy_handoff_id") == handoff_id
-            ),
-            None,
-        )
+        intent = legacy_handoff_intent(handoff)
         if intent is not None:
             action_broker.result(
                 intent.id,
@@ -11766,6 +11755,56 @@ def create_app(
         app.mount("/", SpaStaticFiles(directory=frontend, html=True), name="workspace")
 
     return app
+
+
+def _utf8_boundary(data: bytes, offset: int) -> bool:
+    """Report whether ``offset`` starts a character or is the end of ``data``."""
+
+    return offset >= len(data) or data[offset] & 0xC0 != 0x80
+
+
+def _output_page_end(data: bytes, offset: int, limit: int, *, raw: bool) -> int:
+    """Return where the output page that starts at ``offset`` ends.
+
+    Redacted pages end on a UTF-8 character boundary. When ``limit`` is
+    smaller than the character at ``offset`` the page still carries that whole
+    character, so an empty page never reports ``offset`` as the next offset
+    and a client paging by ``X-Nebula-Output-Next`` always advances.
+    """
+
+    page_end = min(len(data), offset + limit)
+    if raw:
+        return page_end
+    while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
+        page_end -= 1
+    if page_end == offset and offset < len(data):
+        page_end = min(len(data), offset + 1)
+        while page_end < len(data) and data[page_end] & 0xC0 == 0x80:
+            page_end += 1
+    return page_end
+
+
+def _resolve_engagement_workspace_path(workspace_path: str) -> str:
+    """Return the canonical folder a project links, or reject an unusable one.
+
+    Create, replace and patch all store this resolved form so a later
+    workspace read never resolves a relative or missing path against Core's
+    working directory.
+    """
+
+    try:
+        linked_workspace = Path(workspace_path).expanduser().resolve(strict=True)
+    except OSError as exc:  # diagnostic-expected: the 422 below tells the operator the folder is unusable.
+        raise HTTPException(
+            status_code=422,
+            detail="project workspace folder does not exist or is inaccessible",
+        ) from exc
+    if not linked_workspace.is_dir() or linked_workspace == Path("/"):
+        raise HTTPException(
+            status_code=422,
+            detail="project workspace must be an existing non-root folder",
+        )
+    return str(linked_workspace)
 
 
 def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:
@@ -12346,22 +12385,12 @@ def _register_crud_routes(
                 )
             entity = enforce_harness_command_boundary(entity)
             if isinstance(entity, Engagement) and entity.workspace_path:
-                try:
-                    linked_workspace = (
-                        Path(entity.workspace_path).expanduser().resolve(strict=True)
-                    )
-                except OSError as exc:
-                    raise HTTPException(
-                        status_code=422,
-                        detail="project workspace folder does not exist or is inaccessible",
-                    ) from exc
-                if not linked_workspace.is_dir() or linked_workspace == Path("/"):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="project workspace must be an existing non-root folder",
-                    )
                 entity = entity.model_copy(
-                    update={"workspace_path": str(linked_workspace)}
+                    update={
+                        "workspace_path": _resolve_engagement_workspace_path(
+                            entity.workspace_path
+                        )
+                    }
                 )
             entity_validator.validate_create(entity)
             created = (
@@ -12497,6 +12526,19 @@ def _register_crud_routes(
                 raise ConflictError(
                     f"revision conflict: expected {if_match}, found {current.revision}"
                 )
+            if (
+                isinstance(current, Engagement)
+                and isinstance(entity, Engagement)
+                and entity.workspace_path
+                and entity.workspace_path != current.workspace_path
+            ):
+                entity = entity.model_copy(
+                    update={
+                        "workspace_path": _resolve_engagement_workspace_path(
+                            entity.workspace_path
+                        )
+                    }
+                )
             entity_validator.validate_update(current, entity)
             if isinstance(current, ProviderProfile) and isinstance(
                 entity, ProviderProfile
@@ -12544,6 +12586,18 @@ def _register_crud_routes(
             candidate = model.model_validate(payload)
             candidate = enforce_harness_command_boundary(candidate)
             changes = dict(patch.changes)
+            if (
+                isinstance(current, Engagement)
+                and isinstance(candidate, Engagement)
+                and candidate.workspace_path
+                and candidate.workspace_path != current.workspace_path
+            ):
+                changes["workspace_path"] = _resolve_engagement_workspace_path(
+                    candidate.workspace_path
+                )
+                candidate = candidate.model_copy(
+                    update={"workspace_path": changes["workspace_path"]}
+                )
             if isinstance(current, ProviderProfile) and isinstance(
                 candidate, ProviderProfile
             ):

@@ -2068,3 +2068,412 @@ def test_diagnostics_settings_write_failure_is_a_retryable_503(tmp_path, monkeyp
         assert "could not be saved" in response.json()["detail"]
     finally:
         manager.close()
+
+
+def test_action_intents_and_handoffs_list_newest_first_with_offset(api):
+    from nebula.v3.domain import (
+        ActionIntent,
+        HandoffEnvelope,
+        ResourceKind,
+        ResourceRef,
+    )
+
+    client, store, _ = api
+    project = store.create(Engagement(name="Device actions"))
+    base = utc_now()
+    expires = base + timedelta(hours=1)
+    ref = ResourceRef(project_id=project.id, kind=ResourceKind.PROJECT, id=project.id)
+    store.create_many(
+        [
+            ActionIntent(
+                id=f"intent-{index}",
+                engagement_id=project.id,
+                resources=[ref],
+                action_id="share",
+                requester="operator",
+                idempotency_key=f"share-{index}",
+                logical_lease_key=f"lease-{index}",
+                expires_at=expires,
+                created_at=base + timedelta(seconds=index),
+                updated_at=base + timedelta(seconds=index),
+            )
+            for index in range(3)
+        ]
+        + [
+            HandoffEnvelope(
+                id=f"handoff-{index}",
+                engagement_id=project.id,
+                action_id="ask_nebula",
+                origin_device_id="mac",
+                expires_at=expires,
+                created_at=base + timedelta(seconds=index),
+                updated_at=base + timedelta(seconds=index),
+            )
+            for index in range(3)
+        ]
+    )
+
+    def ids(path: str, **params) -> list[str]:
+        response = client.get(
+            f"/api/v1/{path}",
+            headers=_auth(),
+            params={"project_id": project.id, **params},
+        )
+        assert response.status_code == 200, response.text
+        return [item["id"] for item in response.json()]
+
+    assert ids("action-intents", limit=2) == ["intent-2", "intent-1"]
+    assert ids("action-intents", limit=2, offset=2) == ["intent-0"]
+    assert ids("handoffs", limit=2) == ["handoff-2", "handoff-1"]
+    assert ids("handoffs", limit=2, offset=2) == ["handoff-0"]
+
+
+def test_delete_vpn_profile_sees_dependants_past_a_thousand_older_rows(api):
+    from nebula.v3.domain import (
+        AutomationProjectPolicy,
+        AutomationSession,
+        AutomationSessionStatus,
+        VpnProfile,
+    )
+
+    client, store, _ = api
+    project = store.create(Engagement(name="VPN project"))
+    base = utc_now()
+
+    def profile(name: str) -> VpnProfile:
+        return store.create(
+            VpnProfile(
+                name=name,
+                filename=f"{name}.ovpn",
+                remote_host="vpn.example.test",
+                remote_port=1194,
+                protocol="udp",
+                fingerprint="a" * 64,
+                secret_ref=f"vpn:{name}",
+            )
+        )
+
+    def policy(vpn_profile_id: str | None, at) -> AutomationProjectPolicy:
+        return AutomationProjectPolicy(
+            engagement_id=project.id, vpn_profile_id=vpn_profile_id, created_at=at
+        )
+
+    def automation_session(status, vpn_profile_id: str, at) -> AutomationSession:
+        return AutomationSession(
+            engagement_id=project.id,
+            owner_kind="api",
+            owner_id="owner",
+            runtime_image="ghcr.io/example/runtime:latest",
+            runtime_digest="sha256:" + "b" * 64,
+            runner_profile_id="runner",
+            runner_profile_revision=1,
+            policy_id="policy",
+            policy_revision=1,
+            status=status,
+            vpn_profile_id=vpn_profile_id,
+            vpn_profile_revision=1,
+            created_at=at,
+        )
+
+    policy_bound = profile("policy-bound")
+    session_bound = profile("session-bound")
+    store.create_many(
+        [policy(None, base - timedelta(minutes=1)) for _ in range(1_000)]
+        + [policy(policy_bound.id, base)]
+    )
+    store.create_many(
+        [
+            automation_session(
+                AutomationSessionStatus.CLOSED,
+                session_bound.id,
+                base - timedelta(minutes=1),
+            )
+            for _ in range(1_000)
+        ]
+        + [automation_session(AutomationSessionStatus.READY, session_bound.id, base)]
+    )
+
+    def delete(profile: VpnProfile):
+        return client.request(
+            "DELETE",
+            f"/api/v1/vpn-profiles/{profile.id}",
+            headers=_auth(),
+            json={"expected_revision": profile.revision},
+        )
+
+    blocked_by_policy = delete(policy_bound)
+    assert blocked_by_policy.status_code == 409, blocked_by_policy.text
+    assert (
+        blocked_by_policy.json()["detail"]
+        == "remove this VPN profile from project command policies first"
+    )
+    blocked_by_session = delete(session_bound)
+    assert blocked_by_session.status_code == 409, blocked_by_session.text
+    assert (
+        blocked_by_session.json()["detail"]
+        == "close active command sessions using this VPN profile first"
+    )
+
+
+def test_engagement_updates_validate_workspace_path_like_create(api, tmp_path):
+    client, store, _ = api
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = client.post(
+        "/api/v1/engagements",
+        headers=_auth(),
+        json={"name": "Linked", "workspace_path": str(workspace)},
+    )
+    assert created.status_code == 201, created.text
+    project = created.json()
+    url = f"/api/v1/engagements/{project['id']}"
+
+    patched = client.patch(
+        url, headers=_auth(), json={"changes": {"workspace_path": "relative/missing"}}
+    )
+    assert patched.status_code == 422, patched.text
+    replaced = client.put(
+        url, headers=_auth(), json={**project, "workspace_path": str(tmp_path / "gone")}
+    )
+    assert replaced.status_code == 422, replaced.text
+    assert store.get(Engagement, project["id"]).workspace_path == str(
+        workspace.resolve()
+    )
+
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    patched = client.patch(
+        url,
+        headers=_auth(),
+        json={"changes": {"workspace_path": str(workspace / ".." / "moved")}},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["workspace_path"] == str(moved.resolve())
+    replaced = client.put(
+        url,
+        headers=_auth(),
+        json={**patched.json(), "workspace_path": str(moved / ".." / "workspace")},
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert replaced.json()["workspace_path"] == str(workspace.resolve())
+
+
+def test_harness_turn_interactions_are_listed_past_a_thousand_older_ones(api):
+    from nebula.v3.domain import (
+        HarnessInteraction,
+        HarnessInteractionKind,
+        HarnessSession,
+        HarnessTurn,
+        HarnessTurnOrigin,
+    )
+
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Long harness project"))
+    session = store.create(
+        HarnessSession(
+            engagement_id=engagement.id, harness_profile_id="harness-1", model="m"
+        )
+    )
+    older, newer = (
+        store.create(
+            HarnessTurn(
+                engagement_id=engagement.id,
+                harness_session_id=session.id,
+                origin=HarnessTurnOrigin.MISSION,
+                run_id="mission-run",
+                prompt=prompt,
+            )
+        )
+        for prompt in ("older", "newer")
+    )
+    base = utc_now()
+
+    def interaction(turn: HarnessTurn, index: int, at) -> HarnessInteraction:
+        return HarnessInteraction(
+            engagement_id=engagement.id,
+            harness_turn_id=turn.id,
+            harness_session_id=session.id,
+            origin=HarnessTurnOrigin.MISSION,
+            run_id="mission-run",
+            kind=HarnessInteractionKind.USER_INPUT,
+            vendor_request_id=f"request-{turn.id}-{index}",
+            created_at=at,
+        )
+
+    store.create_many(
+        [
+            interaction(older, index, base - timedelta(minutes=1))
+            for index in range(1_000)
+        ]
+    )
+    pending = store.create(interaction(newer, 0, base))
+    url = f"/api/v1/harness-turns/{newer.id}/interactions"
+
+    response = client.get(url, headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()] == [pending.id]
+    filtered = client.get(url, headers=_auth(), params={"status": "pending"})
+    assert [item["id"] for item in filtered.json()] == [pending.id]
+    assert client.get(url, headers=_auth(), params={"status": "answered"}).json() == []
+
+
+def test_live_paired_devices_are_listed_past_a_thousand_revoked_pairings(api):
+    from nebula.v3.domain import PairedDeviceSession
+
+    client, store, _ = api
+    now = utc_now()
+    expiry = now + timedelta(days=1)
+    store.create_many(
+        [
+            PairedDeviceSession(
+                id=f"revoked-{index}",
+                name="Revoked phone",
+                token_sha256=hashlib.sha256(f"revoked-{index}".encode()).hexdigest(),
+                csrf_sha256="0" * 64,
+                idle_expires_at=expiry,
+                absolute_expires_at=expiry,
+                revoked_at=now,
+                created_at=now - timedelta(minutes=1),
+            )
+            for index in range(1_000)
+        ]
+    )
+    live = store.create(
+        PairedDeviceSession(
+            id="live-phone",
+            name="Live phone",
+            token_sha256=hashlib.sha256(b"live").hexdigest(),
+            csrf_sha256="0" * 64,
+            idle_expires_at=expiry,
+            absolute_expires_at=expiry,
+        )
+    )
+
+    response = client.get("/api/v1/auth/devices", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()] == [live.id]
+
+
+def test_session_activity_covers_conversations_beyond_the_first_page(api):
+    client, store, _ = api
+    store.create(Engagement(id="busy-project", name="Busy project"))
+    provider = store.create(
+        ProviderProfile(
+            id="busy-provider", name="OpenRouter", provider_type="openrouter"
+        )
+    )
+    base = utc_now()
+    store.create_many(
+        [
+            ChatSession(
+                id=f"chat-{index:03d}",
+                engagement_id="busy-project",
+                title=f"Chat {index}",
+                provider_profile_id=provider.id,
+                model="model",
+                created_at=base + timedelta(seconds=index),
+                updated_at=base + timedelta(seconds=index),
+            )
+            for index in range(101)
+        ]
+    )
+    store.create(
+        ChatTurn(
+            engagement_id="busy-project",
+            session_id="chat-100",
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.WAITING_APPROVAL,
+        )
+    )
+
+    response = client.get(
+        "/api/v1/chat/session-activity",
+        headers=_auth(),
+        params={"engagement_id": "busy-project"},
+    )
+
+    assert response.status_code == 200, response.text
+    states = {item["session_id"]: item["state"] for item in response.json()}
+    assert len(states) == 101
+    assert states["chat-100"] == "waiting"
+    assert states["chat-000"] == "idle"
+
+
+def test_terminal_output_page_always_advances_past_a_multibyte_character(api):
+    from nebula.v3.terminal_history import CapturedTerminalCommand
+
+    client, store, _ = api
+    project = store.create(Engagement(name="Terminal paging"))
+    history = client.app.state.terminal_command_history
+    output = "a☃b\n".encode()
+    now = utc_now()
+    record = history.record_capture(
+        engagement_id=project.id,
+        session_id="terminal-paging",
+        operator_id="operator",
+        capture=CapturedTerminalCommand(
+            shell_sequence="1",
+            command="printf snowman",
+            cwd="/workspace",
+            status="completed",
+            exit_code=0,
+            started_at=now,
+            completed_at=now,
+            output=output,
+            observed_output_bytes=len(output),
+            output_sha256=hashlib.sha256(output).hexdigest(),
+            output_truncated=False,
+        ),
+    )
+    url = f"/api/v1/engagements/{project.id}/terminal/commands/{record.id}/output"
+    snowman = output.index("☃".encode())
+
+    page = client.get(url, headers=_auth(), params={"offset": snowman, "limit": 1})
+
+    assert page.status_code == 200, page.text
+    assert page.content == "☃".encode()
+    assert page.headers["X-Nebula-Output-Next"] == str(snowman + len("☃".encode()))
+
+
+def test_tool_call_artifacts_are_listed_past_a_thousand_older_ones(api):
+    from nebula.v3.domain import Artifact
+    from nebula.v3.domain import ToolCall as ToolCallEntity
+
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Artifact-heavy project"))
+    run = store.create(AgentRun(engagement_id=engagement.id, objective="Collect"))
+    call = store.create(
+        ToolCallEntity(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="shell",
+            risk_class=RiskClass.LOCAL_READ,
+        )
+    )
+    base = utc_now()
+
+    def artifact(index: int, tool_call_id: str, at) -> Artifact:
+        return Artifact(
+            engagement_id=engagement.id,
+            sha256="0" * 64,
+            size=1,
+            storage_path=f"artifacts/{tool_call_id}/{index}",
+            metadata={"tool_call_id": tool_call_id},
+            created_at=at,
+        )
+
+    store.create_many(
+        [
+            artifact(index, "older-call", base - timedelta(minutes=1))
+            for index in range(1_000)
+        ]
+    )
+    newest = store.create(artifact(0, call.id, base))
+
+    response = client.get(f"/api/v1/tool-calls/{call.id}/artifacts", headers=_auth())
+
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()] == [newest.id]
