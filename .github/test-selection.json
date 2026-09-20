@@ -1,24 +1,33 @@
 {
- "change_digest": "f76538c48d08e407b8e33dae0a330055a11b6f09a01ed09159f597d984380f28",
- "reviewed_by": "Claude review of making the diagnostic log readers tolerate a torn line instead of logging one error per read",
- "reason": "recent_errors() recorded an ERROR for every line of errors.log* it could not parse, and that report is itself an error record appended to the aggregate it had just read, so one permanently corrupt line produced a new diagnostics.viewer_record_invalid on every read: 1168 of them on this machine's Core since a torn write on 2026-08-26, 59% of the current errors.log and 67 of the default 100-record viewer window, crowding real errors out of the diagnostics page. export() had the same per-line reporting. The record's copy was wrong as well, because reason_code_for() matches \"decode\" in JSONDecodeError and gave a stale log line the protocol_invalid family's text about a component returning an unsupported response and the operation not completing, when the read had returned every other record. Both readers now share _read_log_records(), which skips blank lines and lines that are not one JSON object, counts them per file, and reports them once per launch as integrity_failed with an honest cause and impact; the count is exposed as status()[\"unreadable_record_count\"]. _append() writes through a completing os.write() loop instead of a buffered handle whose unwritten remainder is discarded when a later write raises (which is how the 2026-08-26 record lost its tail while its copy in sandbox.log stayed intact), and a write that fails partway terminates the torn line so the next record is not glued onto the fragment and lost with it. tests/v3/test_diagnostics.py adds three tests, all failing on origin/main: the reader test counts 4 reports for 2 reads before the fix and 1 after and asserts the records on both sides of the fragment plus the blank line are still returned, the short-write test asserts a 20-byte-at-a-time writer still lands the whole record and that the append retried rather than delegating to a buffer, and the failed-append test asserts the fragment owns its own line and the next record survives. tests/v3/test_diagnostics_api.py covers the status and errors endpoints that carry the new field. The native reader and writer get the same treatment, and diagnostics::tests::native_viewer_skips_unreadable_lines_and_reports_them_once_per_launch fails on origin/main with 2 reports for 2 reads; the three neighbouring native tests that exercise append() and the unwritable sink are selected with it.",
- "exclusions": "No frontend tests: no ui/src file changes. ui/src/diagnostics/types.ts is untouched, and the UI never reads the new status field, so DiagnosticsPanel renders exactly what it rendered before. No screenshot baselines: nothing rendered changes. No Playwright: src/nebula/v3/diagnostics.py matches the catch-all core-api rule and ui/src-tauri/** matches desktop-shell, but the browser suites never create a corrupt log line, the diagnostics page reads the same errors and status payloads (one additive integer), and desktop-shell covers Tauri behaviour no browser test can reach. tests/v3/test_diagnostic_sensitive.py and test_diagnostic_guidance.py are excluded because the record schema, the sensitive-detail store and the remediation catalog are unchanged -- the new record supplies an existing reason family (integrity_failed) with per-call cause and impact overrides that guidance_for() already supported; both files were run locally and pass. The two compaction tests in tests/v3/test_orchestration.py remain red on origin/main for the reason recorded in earlier receipts and are unrelated to diagnostics.",
- "expected_tests": {
-  "python": 29,
-  "frontend": 0,
-  "native": 4,
-  "playwright": 0
- },
- "python": [
-  "tests/v3/test_diagnostics.py",
-  "tests/v3/test_diagnostics_api.py"
- ],
- "frontend": [],
- "native": [
-  "diagnostics::tests::native_viewer_skips_unreadable_lines_and_reports_them_once_per_launch",
-  "diagnostics::tests::error_default_is_bounded_unredacted_and_correlated_across_native_files",
-  "diagnostics::tests::unwritable_native_sink_retains_errors_in_memory_for_the_viewer",
-  "diagnostics::tests::core_error_aggregation_rejects_payload_fields_and_preserves_text"
- ],
- "playwright": []
+  "change_digest": "f872a876e413366de50e69db3649349c79536fddc279247c1451e3c599a2c7da",
+  "reviewed_by": "Claude review of the native web.search tool, its local metasearch runtime, and its two project opt-ins",
+  "reason": "New capability: web.search answers from a SearXNG container Nebula runs on loopback. tests/v3/test_web_search.py is the feature's own suite and proves the parts that carry the security contract: the spec declares LOCAL_READ + cloud_transfer with no target_argument (a network risk class would force a scope-checked target and deny every search), the policy engine allows it normally and denies it for a local_only or prohibiting project, the scope-disclosure guard names the in-scope domain, wildcard domain, subdomain or CIDR member a query would leak while leaving near-misses alone, and the tool refuses such a query with zero calls to the runtime. It also covers result normalization (dedupe, scheme filter, redaction, count bound), the new web_result receipt observations alongside the unchanged nmap ones, the receipt summary that carries a refusal into the transcript, loopback-only container arguments, the generated settings.yml enabling JSON and disabling the bot limiter, the integration status and scope round-trip through the API, registration in RuntimePlatform.chat_components for an opted-in project only, and ChatService._web_search_selected so the turn actually builds components when web search is the sole tool source. Frontend: the three new suites cover the runtime card's states (ready, stopped, not installed, no container runtime, failed test, failed action), the engine checkboxes including the last-engine guard, the transcript results list with its provenance line and link rel, and the project toggles including the nested disclosure option, the local-only explanation, saving both fields, and never leaving disclosure armed once web search is off. The six existing frontend files are selected because this change edited them: the EngagementScopePolicy type gained two fields (workbenchBrowser, ScopeImportDialog, WorkbenchBrowser fixtures), the policy panel now reads the runtime status (loading fixture), the settings catalog gained an entry and an Integrations category (CompactSettingsList), and the ledger model now labels and files web.search under research (activityLedgerModel).",
+  "exclusions": "No native tests: no Tauri or Rust change. No new screenshot baselines: the settings card and policy toggles are new nodes inside already-baselined routes, so area:critical-workspaces re-renders them at desktop and narrow widths; if CI reports a diff the CI actuals become the baselines rather than being regenerated locally, because local antialiasing differs. src/nebula/v3/chat.py matches area:assistant, area:chat-edit-in-place and area:provider-thinking, but the change there only adds a store read that decides whether to ask the tool platform for components; those three are mock-runtime browser tests whose stub provider exposes no web search and whose projects never opt in, so their behaviour is identical. src/nebula/v3/api.py matches area:core-api; the new endpoints are additive and no existing request or response schema changed, and tests/v3/test_web_search.py exercises them directly through TestClient. ui/src/pages/SessionsPage.tsx matches area:assistant and area:mobile-layout; the only change is one conditional branch that renders WebSearchResults when a tool entry's capability is web.search, which no existing transcript fixture produces. tests/v3/test_policy.py, test_tool_catalog.py, test_tool_suggestions.py, test_ssh_environments.py, test_storage.py and test_chat_tool_loop.py were run locally against this branch and pass (171 tests); they cover the seams this change touches (policy evaluation, catalog deferral, the chat_components signature, entity persistence) but none asserts anything web-search specific, so they are not selected.",
+  "expected_tests": {
+    "python": 40,
+    "frontend": 87,
+    "native": 0,
+    "playwright": 34
+  },
+  "python": [
+    "tests/v3/test_web_search.py"
+  ],
+  "frontend": [
+    "ui/src/components/WebSearchRuntimeSettings.test.tsx",
+    "ui/src/components/WebSearchResults.test.tsx",
+    "ui/src/components/EngagementPolicyWebSearch.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
+    "ui/src/components/CompactSettingsList.test.tsx",
+    "ui/src/components/activityLedgerModel.test.ts",
+    "ui/src/api/workbenchBrowser.test.ts",
+    "ui/src/components/ScopeImportDialog.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx"
+  ],
+  "native": [],
+  "playwright": [
+    "area:critical-workspaces",
+    "area:settings-search",
+    "area:activity-ledger",
+    "area:tool-suggestions"
+  ]
 }
