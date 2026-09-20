@@ -159,7 +159,7 @@ import {
   shouldShowActivityItem,
   type HarnessActivityItem,
 } from "./harnessActivity";
-import { detachChatStream } from "./chatStreamLifecycle";
+import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
 import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
   reconcileCompletedAssistantMessage,
@@ -630,6 +630,7 @@ export function SessionsPage() {
   const [renamingSessionId, setRenamingSessionId] = useState<string>();
   const [renameDraft, setRenameDraft] = useState("");
   const [renameError, setRenameError] = useState<string>();
+  const [renamingBusy, setRenamingBusy] = useState(false);
   const [archivingSessionId, setArchivingSessionId] = useState<string>();
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
@@ -703,26 +704,35 @@ export function SessionsPage() {
   useEffect(() => setRecoveryNote(""), [interruptedRecovery?.turn.id]);
   useEffect(() => {
     if (!api || !sessionId || !waitingCallback) return;
-    const controller = new AbortController();
+    const pollController = new AbortController();
+    const selectionGeneration = sessionSelectionGenerationRef.current;
+    const request: ChatCompletionRequest = { backend: "provider", sessionId, messages: [], toolsEnabled: true };
     const timer = window.setInterval(() => {
-      void api.getPendingChatTurn(sessionId, controller.signal).then((pending) => {
-        if (!pending || pending.status === "waiting_callback") return;
+      void api.getPendingChatTurn(sessionId, pollController.signal).then((pending) => {
+        if (pollController.signal.aborted || !pending || pending.status === "waiting_callback") return;
         window.clearInterval(timer);
+        if (sessionSelectionGenerationRef.current !== selectionGeneration) return;
+        // The follow owns the viewer transport (not the poll controller, which
+        // this effect aborts as soon as the callback resolves), so switching
+        // conversations detaches it and its replayed events stay out of the
+        // next transcript.
+        const stream = beginGuardedStream({ generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef }, "provider");
         setSending(true);
-        void api.followChatTurn(waitingCallback.turnId, {
-          backend: "provider",
-          sessionId,
-          messages: [],
-          toolsEnabled: true,
-        }, (streamEvent) => applyChatEvent(streamEvent, waitingCallback.assistantId, "", {
-          backend: "provider",
-          sessionId,
-          messages: [],
-          toolsEnabled: true,
-        })).finally(() => setSending(false));
+        void api.followChatTurn(
+          waitingCallback.turnId,
+          request,
+          stream.guard((streamEvent) => applyChatEvent(streamEvent, waitingCallback.assistantId, "", request)),
+          stream.controller.signal,
+        ).catch((error) => {
+          void logCaughtDiagnostic("interface.sessions_page.callback_follow_failed", "The response could not be followed after the command posted its results.", error, "sessions_page");
+          if (stream.isCurrent() && !stream.controller.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not follow the resumed response.");
+        }).finally(() => {
+          stream.release();
+          if (stream.isCurrent()) setSending(false);
+        });
       }).catch(() => { /* diagnostic-expected: callback wait retries until Core resumes. */ });
     }, 1500);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    return () => { pollController.abort(); window.clearInterval(timer); };
   }, [api, sessionId, waitingCallback?.turnId]);
   const [approvalDecisionBusy, setApprovalDecisionBusy] = useState(false);
   const [resolvedApproval, setResolvedApproval] = useState<{ id: string; status: string; turnId: string; harnessTurnId?: string }>();
@@ -1536,6 +1546,7 @@ export function SessionsPage() {
     setHarnessActivityError(undefined);
     setHarnessProgress(undefined);
     setMessages([]);
+    setReplacedMessages([]);
     setChatError(undefined);
     setRunCandidate(undefined);
     setToolCards([]);
@@ -1688,7 +1699,7 @@ export function SessionsPage() {
     return () => { window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
   }, [conversationPanelOpen, mobileListOpen, refreshSessionActivity, view]);
 
-  const resetConversation = (open: boolean) => {
+  const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
     restoredScrollRef.current = undefined;
     setSessionReadReady(true);
@@ -1716,7 +1727,12 @@ export function SessionsPage() {
     setHarnessActivityError(undefined);
     setHarnessProgress(undefined);
     setMessages([]);
-    setDraft("");
+    setReplacedMessages([]);
+    // The draft-key effect flushes the outgoing composer text under the
+    // previous conversation's key when the key changes, so the composer is
+    // only cleared here when that conversation was deleted; a batched empty
+    // draft would otherwise erase the unsent text of the chat just left.
+    if (options.discardDraft) setDraft("");
     setChatError(undefined);
     setMobileListOpen(false);
     setToolCards([]);
@@ -1759,7 +1775,7 @@ export function SessionsPage() {
       }
       setSessions((current) => current.filter((item) => item.id !== session.id));
       if (sessionId === session.id) {
-        resetConversation(false);
+        resetConversation(false, { discardDraft: true });
         openUnattachedChatView();
       }
     } catch (error) {
@@ -1794,7 +1810,7 @@ export function SessionsPage() {
     const failures = results.filter((result) => result.status === "rejected");
     setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
     if (deletedIds.has(sessionId)) {
-      resetConversation(false);
+      resetConversation(false, { discardDraft: true });
       openUnattachedChatView();
     }
     if (failures.length) {
@@ -1857,7 +1873,9 @@ export function SessionsPage() {
 
   const renameConversation = async (event: FormEvent, session: ChatSessionSummary) => {
     event.preventDefault();
-    if (!api || renamingSessionId !== session.id) return;
+    // A second submit while the first is in flight would reuse the same
+    // expected revision and surface a false conflict.
+    if (!api || renamingBusy || renamingSessionId !== session.id) return;
     const title = renameDraft.trim();
     if (!title) return;
     if (title === session.title) {
@@ -1865,6 +1883,7 @@ export function SessionsPage() {
       return;
     }
     setRenameError(undefined);
+    setRenamingBusy(true);
     try {
       const updated = await api.renameChatSession(session.id, {
         title,
@@ -1876,6 +1895,8 @@ export function SessionsPage() {
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_07", "A handled interface operation failed.", error, "sessions_page");
       setRenameError(error instanceof Error ? error.message : "Could not rename the conversation.");
+    } finally {
+      setRenamingBusy(false);
     }
   };
 
@@ -2152,7 +2173,7 @@ export function SessionsPage() {
     setChatError(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
-    if (!preserveTranscript) setMessages(preview?.messages ?? []);
+    if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
     setToolCards(preview?.toolCards ?? []);
     setMobileListOpen(false);
     setActivityItems([]);
@@ -2574,40 +2595,30 @@ export function SessionsPage() {
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;
-    setLoadingHistory(true);
     setChatError(undefined);
-    setHarnessProgress(undefined);
-    setHarnessActivity(undefined);
+    let summary: ChatSessionSummary | undefined;
     try {
-      const [page, history] = await Promise.all([
-        api.listChatSessions(engagement.id),
-        api.listChatMessages(id),
-      ]);
+      // The attached conversation may be newer than the loaded list; refresh
+      // it first so the selection below can find its runtime.
+      const page = await api.listChatSessions(engagement.id);
       const ordered = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-      const summary = ordered.find((session) => session.id === id);
       setSessions(ordered);
-      setSessionId(id);
-      setConversationOpen(true);
-      setMessages(await recoverHarnessHistory(history.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
-      setActivityItems([]);
-      setHarnessInteractions([]);
-      setHistoricalActivityState({});
-      setHistoricalActivityErrors({});
-      if (summary) {
-        setRuntimeKind(summary.backend);
-        setProviderId(summary.providerId ?? "");
-        setHarnessId(summary.harnessProfileId ?? "");
-        setHarnessSessionId(summary.harnessSessionId ?? "");
-        setModel(summary.model ?? "");
-      }
-      openSessionChatView(id);
-      setMobileListOpen(false);
+      summary = ordered.find((session) => session.id === id);
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_11", "A handled interface operation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not open the execution conversation.");
-    } finally {
-      setLoadingHistory(false);
+      return;
     }
+    if (summary) {
+      setRuntimeKind(summary.backend);
+      setProviderId(summary.providerId ?? "");
+      setHarnessId(summary.harnessProfileId ?? "");
+      setHarnessSessionId(summary.harnessSessionId ?? "");
+      setModel(summary.model ?? "");
+    }
+    // Selecting through selectSession advances the selection generation and
+    // aborts any in-flight load, so an earlier selection cannot overwrite it.
+    await selectSession(id);
   };
 
   const applyChatEvent = (
@@ -3364,6 +3375,9 @@ export function SessionsPage() {
   const resumeInterruptedResponse = async () => {
     if (!api || !interruptedRecovery || interruptedRecovery.turn.recoveryBlocked) return;
     const recovery = interruptedRecovery;
+    // Own the viewer transport so a conversation switch detaches the resumed
+    // stream and its replayed ledger events cannot land in another transcript.
+    const stream = beginGuardedStream({ generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef }, recovery.request.backend);
     setInterruptedRecovery(undefined);
     setSending(true);
     setChatError(undefined);
@@ -3374,23 +3388,24 @@ export function SessionsPage() {
       const response = await api.resumeChatTurn(
         recovery.turn.id,
         recovery.request,
-        (streamEvent) => applyChatEvent(
-          streamEvent,
-          recovery.assistantId,
-          "",
-          recovery.request,
-        ),
+        stream.guard((streamEvent) => applyChatEvent(streamEvent, recovery.assistantId, "", recovery.request)),
+        stream.controller.signal,
       );
+      if (!stream.isCurrent()) return;
       if (response?.sessionId) await refreshSessions(response.sessionId);
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.recovery_resume_failed", "An interrupted provider response could not resume.", error, "sessions_page");
-      setInterruptedRecovery(recovery);
+      if (!stream.isCurrent()) return;
+      const cancelled = stream.controller.signal.aborted;
+      const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Could not resume the interrupted response.";
+      if (!cancelled) setInterruptedRecovery(recovery);
       setMessages((current) => current.map((message) => message.id === recovery.assistantId
-        ? { ...message, state: "error", detail: error instanceof Error ? error.message : "Could not resume the interrupted response." }
+        ? { ...message, state: cancelled ? "cancelled" : "error", detail }
         : message));
-      setChatError(error instanceof Error ? error.message : "Could not resume the interrupted response.");
+      setChatError(cancelled ? undefined : detail);
     } finally {
-      setSending(false);
+      stream.release();
+      if (stream.isCurrent()) setSending(false);
     }
   };
 
@@ -4270,7 +4285,7 @@ export function SessionsPage() {
               const activityState = sessionActivity[session.id] ?? "idle";
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={!renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"

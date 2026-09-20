@@ -11,6 +11,12 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
 import { PageHeaderAction } from "./PageHeader";
 
+/** `datetime-local` values are wall-clock times, so the earliest allowed start is built from local components, never from UTC. */
+export function localDateTimeInputValue(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 interface NewMissionButtonProps {
   className?: string;
   children?: ReactNode;
@@ -48,6 +54,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   const [runtimeConfigured, setRuntimeConfigured] = useState(false);
   const [maxToolCalls, setMaxToolCalls] = useState<number | null>(null);
   const [maxConcurrency, setMaxConcurrency] = useState(1);
+  const [maxConcurrencyTouched, setMaxConcurrencyTouched] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [validationError, setValidationError] = useState<string>();
@@ -157,7 +164,7 @@ export function NewMissionButton({ className = "button primary", children, showS
         setToolPreparationDetail(caughtError instanceof Error ? caughtError.message : "Command runtime is unavailable.");
       });
     return () => { active = false; };
-  }, [api, coreState]);
+  }, [api, coreState, engagement?.id]);
 
   const verification = providerModelVerification(provider, model);
   const providerSupportsTools = verification?.status === "verified";
@@ -207,14 +214,16 @@ export function NewMissionButton({ className = "button primary", children, showS
     setValidationError(undefined);
     setMaxToolCalls(null);
     setMaxConcurrency(automaticTools.length ? 2 : 1);
+    setMaxConcurrencyTouched(false);
     setOpen(true);
   };
 
+  // The concurrency default follows the runtime and tool selection only until
+  // the operator types a value; a typed limit never reverts under them.
   useEffect(() => {
-    if (!open) return;
-    setMaxToolCalls(null);
+    if (!open || maxConcurrencyTouched) return;
     setMaxConcurrency(runtimeKind === "native" && (automaticTools.length || selectedMcpIds.length) ? 2 : 1);
-  }, [automaticTools, open, runtimeKind, selectedMcpIds.length]);
+  }, [automaticTools, maxConcurrencyTouched, open, runtimeKind, selectedMcpIds.length]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -371,14 +380,16 @@ export function NewMissionButton({ className = "button primary", children, showS
     }
   };
 
+  const dialogBusy = saving || toolVerificationBusy || toolPreparation === "preparing";
+
   return <>
     {children ? <button className={className} type="button" disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission}>{children}</button> : <PageHeaderAction label="Automate task" icon={<Play size={16} />} className={className} disabled={previewMode || !engagement || (availableProviders.length === 0 && harnesses.length === 0)} title={availableProviders.length || harnesses.length ? undefined : "Add an enabled provider or agent harness before automating a task"} onClick={openMission} />}
     {showSetupGuidance && harnessesLoaded && availableProviders.length === 0 && harnesses.length === 0 && <span className="mission-runtime-setup" role="status"><span>Missions need an enabled model provider or agent harness with a verified model.</span><a href="/settings#models-settings">Configure runtime</a></span>}
     {open && createPortal(
-        <ModalSurface as="form" noValidate className="provider-dialog resource-dialog mission-dialog" labelledBy="mission-dialog-title" onClose={() => { if (!saving && !toolVerificationBusy && toolPreparation !== "preparing") setOpen(false); }} onSubmit={(event) => void submit(event)}>
+        <ModalSurface as="form" noValidate className="provider-dialog resource-dialog mission-dialog" labelledBy="mission-dialog-title" onClose={() => { if (!dialogBusy) setOpen(false); }} onSubmit={(event) => void submit(event)}>
           <header>
             <div><small>{runtimeCanExecute ? "Supervised security automation" : "Analysis-only automation"}</small><h2 id="mission-dialog-title">Automate task</h2></div>
-            <button className="icon-button subtle" type="button" aria-label="Close automation dialog" onClick={() => setOpen(false)}><X size={17} /></button>
+            <button className="icon-button subtle" type="button" aria-label="Close automation dialog" disabled={dialogBusy} onClick={() => setOpen(false)}><X size={17} /></button>
           </header>
           <label>Mission name<input required autoFocus maxLength={300} value={name} placeholder="Quarterly perimeter review" onChange={(event) => { setName(event.target.value); setError(undefined); }} /></label>
           <label>Objective<textarea required rows={5} value={objective} placeholder="Describe the outcome you want Nebula to produce…" onChange={(event) => { setObjective(event.target.value); setError(undefined); }} /></label>
@@ -393,7 +404,7 @@ export function NewMissionButton({ className = "button primary", children, showS
               <header><div><ListTodo size={15} /><span><strong id="mission-stages-title">Stages</strong><small>Optional checkpoints executed in order with a durable result per stage.</small></span></div><button className="button quiet" type="button" disabled={stages.length >= 12} onClick={() => setStages((current) => [...current, { title: `Stage ${current.length + 1}`, objective: "" }])}><Plus size={14} /> Add stage</button></header>
               {stages.map((stage, index) => <fieldset className="mission-stage" key={index}><legend>Stage {index + 1}</legend><label>Name<input value={stage.title} maxLength={300} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Objective<textarea rows={3} value={stage.objective} maxLength={10_000} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, objective: event.target.value } : item))} /></label><button className="icon-button subtle danger" type="button" aria-label={`Remove stage ${index + 1}`} onClick={() => setStages((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></fieldset>)}
             </section>
-            <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>Core owns the start time; scheduled work survives page closure and Core restarts.</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
+            <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>Core owns the start time; scheduled work survives page closure and Core restarts.</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} min={localDateTimeInputValue(new Date(Date.now() + 60_000))} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<small id="mission-duration-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Duration (minutes)" aria-describedby="mission-duration-unlimited-help" type="number" min={1} placeholder="Unlimited" value={durationMinutes ?? ""} onChange={(event) => setDurationMinutes(event.target.value === "" ? null : Number(event.target.value))} /></label>
@@ -406,13 +417,13 @@ export function NewMissionButton({ className = "button primary", children, showS
               {runtimeReady && automaticTools.length
                 ? <fieldset className="resource-checklist automatic-tool-list"><legend>Automatically enabled capabilities</legend>{automaticTools.map((name) => <div key={name}><ShieldCheck size={15} /><span><strong>{name}</strong><small>{name === "run_command" ? "session-scoped Bash · project networking optional" : "poll, stdin, and termination"}</small></span></div>)}</fieldset>
                 : <div className="mission-tool-empty" role="status"><ShieldCheck size={17} /><p>{toolPreparation === "unavailable" ? toolPreparationDetail : toolSelectionMessage}</p></div>}
-              {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<small id="mission-tool-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Maximum execution calls" aria-describedby="mission-tool-unlimited-help" type="number" min={1} max={100} placeholder="Unlimited" value={maxToolCalls ?? ""} onChange={(event) => setMaxToolCalls(event.target.value === "" ? null : Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label></div>}
+              {(automaticTools.length > 0 || selectedMcpIds.length > 0 || runtimeKind === "harness") && <div className="resource-form-grid"><label>Maximum execution calls<small id="mission-tool-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Maximum execution calls" aria-describedby="mission-tool-unlimited-help" type="number" min={1} max={100} placeholder="Unlimited" value={maxToolCalls ?? ""} onChange={(event) => setMaxToolCalls(event.target.value === "" ? null : Number(event.target.value))} /></label><label>Maximum concurrency<input type="number" min={1} max={2} value={maxConcurrency} onChange={(event) => { setMaxConcurrencyTouched(true); setMaxConcurrency(Number(event.target.value)); }} /></label></div>}
             </section>
             <p className="provider-dialog-note">{runtimeCanExecute ? "Core applies scope, budgets, capture, and approvals." : "Analysis only · no execution tools"}</p>
           </details>
           {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
           {validationError && <InlineValidationNotice message={validationError} />}
-          <footer><button className="button secondary" type="button" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || toolPreparation === "preparing" || toolVerificationBusy}>{toolPreparation === "preparing" ? "Checking runtime…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
+          <footer><button className="button secondary" type="button" disabled={dialogBusy} onClick={() => setOpen(false)}>Cancel</button><button className="button primary" type="submit" disabled={dialogBusy}>{toolPreparation === "preparing" ? "Checking runtime…" : toolVerificationBusy ? "Checking model…" : saving ? "Starting…" : "Automate task"}</button></footer>
         </ModalSurface>,
       document.body,
     )}

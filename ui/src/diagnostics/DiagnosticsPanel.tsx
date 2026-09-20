@@ -122,6 +122,7 @@ function FailureCard({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [sensitiveDetail, setSensitiveDetail] = useState<string>();
   const [sensitiveBusy, setSensitiveBusy] = useState(false);
+  const [sensitiveError, setSensitiveError] = useState<unknown>();
   const correlations = [
     ["Error reference", record.error_id],
     ["Request reference", record.request_id],
@@ -150,6 +151,7 @@ function FailureCard({
 
   const accessSensitiveDetail = async (action: "reveal" | "copy") => {
     setSensitiveBusy(true);
+    setSensitiveError(undefined);
     try {
       const detail = await onSensitiveDetail(incident, action);
       if (!detail) return;
@@ -161,6 +163,7 @@ function FailureCard({
       }
     } catch (error) {
       setCopyState("failed");
+      setSensitiveError(error);
       void logCaughtDiagnostic(
         "interface.diagnostics.sensitive_detail_failed",
         "Protected diagnostic detail could not be accessed.",
@@ -222,6 +225,7 @@ function FailureCard({
             <button className="button quiet" type="button" disabled={sensitiveBusy} onClick={() => void accessSensitiveDetail("reveal")}>Reveal sensitive detail</button>
             <button className="button quiet" type="button" disabled={sensitiveBusy} onClick={() => void accessSensitiveDetail("copy")}>Copy sensitive detail</button>
           </span>
+          {Boolean(sensitiveError) && <DiagnosticErrorNotice error={sensitiveError} fallback="Protected diagnostic detail could not be accessed." compact />}
           {sensitiveDetail && <pre aria-label="Sensitive diagnostic detail">{sensitiveDetail}</pre>}
         </div>
       ) : (
@@ -342,6 +346,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
   const [feature, setFeature] = useState("");
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<unknown>();
+  const refreshSequenceRef = useRef(0);
   const native = isNative();
   const targetReference = useMemo(
     () => new URLSearchParams(window.location.search).get("diagnostic") ?? "",
@@ -349,6 +354,11 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
   );
 
   const refresh = useCallback(async () => {
+    // Overlapping refreshes (a filter change while one is in flight) must not
+    // let the older response overwrite the newer one.
+    const sequence = refreshSequenceRef.current + 1;
+    refreshSequenceRef.current = sequence;
+    const stale = () => refreshSequenceRef.current !== sequence;
     setBusy(true);
     setFailure(undefined);
     setLoadFailures([]);
@@ -368,6 +378,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
           nativeDiagnosticFiles(),
           nativeRecentErrors(feature || undefined, undefined, 100),
         ]);
+        if (stale()) return;
         if (settingsResult.status === "fulfilled") {
           const normalized = normalizeDiagnosticSettings(settingsResult.value);
           setSettings(normalized);
@@ -390,6 +401,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
             api.health(),
             api.setupStatus(),
           ]);
+          if (stale()) return;
           if (coreFilesResult.status === "fulfilled") {
             const coreFiles = Array.isArray(coreFilesResult.value?.files) ? coreFilesResult.value.files : [];
             nextFiles = [...new Map([...nextFiles, ...coreFiles].map((file) => [file.name, file])).values()]
@@ -427,6 +439,7 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
           api.health(),
           api.setupStatus(),
         ]);
+        if (stale()) return;
         if (settingsResult.status === "fulfilled") {
           const normalized = normalizeDiagnosticSettings(settingsResult.value);
           setDiagnosticSettings(normalized);
@@ -451,21 +464,23 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
         setErrorsLoaded(true);
       }
     } finally {
-      setLoadFailures([...new Set(unavailable)]);
-      if (caught.length) {
-        void logDiagnostic({
-          level: "error",
-          eventCode: "interface.diagnostics.viewer_load_failed",
-          message: "Part of the Diagnostics viewer could not load local diagnostic state.",
-          outcome: "degraded",
-          stage: "viewer-read",
-          retryable: true,
-          safeFailureCause: "One or more independent diagnostic data sources were unavailable.",
-          exception: caught[0],
-          metadata: { count: caught.length },
-        });
+      if (!stale()) {
+        setLoadFailures([...new Set(unavailable)]);
+        if (caught.length) {
+          void logDiagnostic({
+            level: "error",
+            eventCode: "interface.diagnostics.viewer_load_failed",
+            message: "Part of the Diagnostics viewer could not load local diagnostic state.",
+            outcome: "degraded",
+            stage: "viewer-read",
+            retryable: true,
+            safeFailureCause: "One or more independent diagnostic data sources were unavailable.",
+            exception: caught[0],
+            metadata: { count: caught.length },
+          });
+        }
+        setBusy(false);
       }
-      setBusy(false);
     }
   }, [api, feature, native, workspaceState]);
 

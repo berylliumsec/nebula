@@ -18,7 +18,7 @@ interface CodeMirrorSurfaceProps {
   onCursorChange(line: number, column: number): void;
   onFocus?(): void;
   onSave(): void;
-  onSelectionChange?(text: string): void;
+  onSelectionChange?(text: string, from: number, to: number): void;
   completionSource?(context: CompletionContext): Promise<CompletionResult | null>;
   findRequest?: number;
   problemsRequest?: number;
@@ -205,7 +205,7 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
               const position = update.state.doc.lineAt(update.state.selection.main.head);
               onCursorChangeRef.current(position.number, update.state.selection.main.head - position.from + 1);
               const range = update.state.selection.main;
-              onSelectionChangeRef.current?.(update.state.sliceDoc(range.from, range.to));
+              onSelectionChangeRef.current?.(update.state.sliceDoc(range.from, range.to), range.from, range.to);
             }
           }),
         ],

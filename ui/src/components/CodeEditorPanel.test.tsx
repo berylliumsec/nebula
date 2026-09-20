@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type KeyboardEvent } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
+import type { ProviderHealth } from "../api/types";
 import { WorkbenchEditorProvider } from "../state/WorkbenchEditorContext";
 import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
@@ -15,8 +16,16 @@ beforeEach(() => {
   return clearEditorSessions();
 });
 
+vi.mock("./AIWritingDialog", () => ({
+  AIWritingDialog: ({ sourceText, onApply, onClose }: { sourceText: string; onApply(result: { content: string }): void; onClose(): void }) => <div role="dialog" aria-label="Suggest a code change">
+    <pre data-testid="suggestion-source">{sourceText}</pre>
+    <button type="button" onClick={() => onApply({ content: "print('patched')" })}>Apply mock suggestion</button>
+    <button type="button" onClick={onClose}>Close mock suggestion</button>
+  </div>,
+}));
+
 vi.mock("./CodeMirrorSurface", () => ({
-  CodeMirrorSurface: ({ ariaLabel = "Code editor", value, definitionRequest, findRequest, referencesRequest, fontSize, tabSize, wordWrap, onChange, onFocus, onSave }: { ariaLabel?: string; value: string; definitionRequest?: number; findRequest?: number; referencesRequest?: number; fontSize?: number; tabSize?: number; wordWrap?: boolean; onChange(value: string): void; onFocus?(): void; onSave(): void }) => <textarea
+  CodeMirrorSurface: ({ ariaLabel = "Code editor", value, definitionRequest, findRequest, referencesRequest, fontSize, tabSize, wordWrap, onChange, onFocus, onSave, onSelectionChange }: { ariaLabel?: string; value: string; definitionRequest?: number; findRequest?: number; referencesRequest?: number; fontSize?: number; tabSize?: number; wordWrap?: boolean; onChange(value: string): void; onFocus?(): void; onSave(): void; onSelectionChange?(text: string, from: number, to: number): void }) => <textarea
     aria-label={ariaLabel}
     data-find-request={findRequest}
     data-definition-request={definitionRequest}
@@ -27,6 +36,10 @@ vi.mock("./CodeMirrorSurface", () => ({
     value={value}
     onFocus={onFocus}
     onChange={(event) => onChange(event.target.value)}
+    onSelect={(event) => {
+      const target = event.currentTarget;
+      onSelectionChange?.(target.value.slice(target.selectionStart, target.selectionEnd), target.selectionStart, target.selectionEnd);
+    }}
     onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
@@ -49,19 +62,64 @@ function listing(entries = [pythonEntry]) {
   return { engagementId: "project-1", path: "", entries, offset: 0, total: entries.length };
 }
 
-function panel(api: Partial<ApiClient>, active = true) {
+function panel(api: Partial<ApiClient>, active = true, providers?: ProviderHealth[]) {
   return <DialogProvider><WorkbenchEditorProvider><CodeEditorPanel
     active={active}
     api={api as ApiClient}
     engagementId="project-1"
+    providers={providers}
   /></WorkbenchEditorProvider></DialogProvider>;
 }
 
-function renderPanel(api: Partial<ApiClient>) {
-  return render(panel(api));
+function renderPanel(api: Partial<ApiClient>, providers?: ProviderHealth[]) {
+  return render(panel(api, true, providers));
+}
+
+const codeProvider = {
+  id: "provider-1",
+  name: "Local coder",
+  kind: "local",
+  enabled: true,
+  state: "healthy",
+  models: ["local-coder"],
+  capabilities: ["code suggestions"],
+  permitsSensitiveData: true,
+  local: true,
+} as unknown as ProviderHealth;
+
+async function openDuplicateLineFile(user: ReturnType<typeof userEvent.setup>) {
+  renderPanel({
+    listWorkspace: vi.fn().mockResolvedValue(listing()),
+    downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('a')\nprint('b')\nprint('a')\n"])),
+  }, [codeProvider]);
+  await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+  const editor = await screen.findByRole("textbox", { name: "Code editor" }) as HTMLTextAreaElement;
+  await waitFor(() => expect(editor).toHaveValue("print('a')\nprint('b')\nprint('a')\n"));
+  const second = editor.value.lastIndexOf("print('a')");
+  editor.setSelectionRange(second, second + "print('a')".length);
+  fireEvent.select(editor);
+  await user.click(screen.getByRole("button", { name: "Suggest" }));
+  expect(await screen.findByTestId("suggestion-source")).toHaveTextContent("print('a')");
+  return editor;
 }
 
 describe("CodeEditorPanel", () => {
+  it("applies a suggestion to the selected range rather than the first identical text", async () => {
+    const user = userEvent.setup();
+    const editor = await openDuplicateLineFile(user);
+    await user.click(screen.getByRole("button", { name: "Apply mock suggestion" }));
+    expect(editor).toHaveValue("print('a')\nprint('b')\nprint('patched')\n");
+  });
+
+  it("refuses a suggestion when the selected range no longer holds the reviewed text", async () => {
+    const user = userEvent.setup();
+    const editor = await openDuplicateLineFile(user);
+    fireEvent.change(editor, { target: { value: "# header\nprint('a')\nprint('b')\nprint('a')\n" } });
+    await user.click(screen.getByRole("button", { name: "Apply mock suggestion" }));
+    expect(await screen.findByText("The selected code changed while the suggestion was being prepared. Select it again before applying.")).toBeVisible();
+    expect(editor).toHaveValue("# header\nprint('a')\nprint('b')\nprint('a')\n");
+  });
+
   it("opens, edits, and conditionally saves the shared workspace file", async () => {
     const user = userEvent.setup();
     const uploadWorkspaceFile = vi.fn().mockResolvedValue({
