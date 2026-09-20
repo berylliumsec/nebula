@@ -190,6 +190,15 @@ up to two have their schema preloaded, and the rest are named as hints
 alongside the servers most likely to hold what the request needs. A tool whose
 question rated "none of these" higher is never preloaded, only hinted.
 
+Jev is asked once per turn, and a ranking is reused when the request that
+produced it recurs: the cache key covers the operator's message, the selected
+skills, the tool list and the source descriptions, so a retried turn or a
+repeated question against an unchanged catalog costs nothing, while the next
+message, a new MCP server or a re-probed description asks again. The cache
+holds the newest 64 rankings in the Core process, records nothing on disk, and
+never stores a failed call; a turn answered from it is marked `cached` in its
+snapshot and reports no input tokens.
+
 A server profile carries no description of its own, so the text describing it
 is the `instructions` string the server returned at the MCP handshake, stored
 in its capability snapshot. A server that sent none is described to Jev by its

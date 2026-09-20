@@ -146,6 +146,7 @@ from .tool_catalog import (
 )
 from .tool_suggestions import (
     JevClient,
+    SuggestionCache,
     mcp_sources,
     public_suggestions,
     suggest_tools,
@@ -752,6 +753,9 @@ class ChatService:
         self.tool_suggestion_client = (
             tool_suggestion_client or JevClient.from_environment
         )
+        # Rankings answered earlier in this process, so a retried or repeated
+        # request against an unchanged catalog is not asked twice.
+        self.suggestion_cache = SuggestionCache()
         self.tool_platform = tool_platform
         self.automation_tool_platform = automation_tool_platform
         self.browser_tool_platform = BrowserToolPlatform(store)
@@ -2085,6 +2089,7 @@ class ChatService:
                         operator_messages=operator_messages,
                         skills=skill_snapshots,
                         sources=mcp_sources(mcp_profiles),
+                        cache=self.suggestion_cache,
                     )
                     tool_suggestions = receipt.model_dump(mode="json")
                     if receipt.status != "unavailable":

@@ -23,8 +23,11 @@ ranking, never an action.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import time
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -80,6 +83,12 @@ MAX_SOURCE_CRITERION_CHARS = 600
 MAX_SOURCE_TOOL_NAMES = 12
 
 NONE_OPTION = "none_of_these"
+
+# One ranking per distinct request. A conversation asks a new question every
+# turn, so hits come from work that repeats a request: a retry after a failed
+# turn, a regenerate, a queued message re-prepared, or a mission step that asks
+# the same thing again while the catalog stands still.
+MAX_CACHED_RANKINGS = 64
 
 # Appended to every question only when skills are in state, so Jev reads them as
 # part of the request rather than as background prose.
@@ -147,12 +156,65 @@ class ToolSuggestionReceipt(NebulaModel):
     model: str | None = None
     latency_ms: int | None = None
     input_tokens: int | None = None
+    # True when this ranking was served from SuggestionCache rather than asked.
+    cached: bool = False
     error: str | None = Field(default=None, max_length=500)
 
 
 def suggestions_enabled(scope: ScopePolicy) -> bool:
     # local_only forbids any remote model, including Jev.
     return scope.tool_suggestions and not scope.local_only
+
+
+def request_key(state: Mapping[str, Any], questions: Mapping[str, Any]) -> str:
+    """Identify a ranking request by the exact payload that would be sent."""
+
+    return hashlib.sha256(
+        json.dumps(
+            [JEV_MODEL, state, questions],
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+class SuggestionCache:
+    """Rankings already asked for, keyed by the request that produced them.
+
+    The catalog alone cannot be the key: a ranking answers one operator
+    request, so a cached answer is only reusable when the request, the selected
+    skills, the tools and the source descriptions are all unchanged. The key
+    covers the whole payload, so adding an MCP server, re-probing one into a
+    new description, or simply moving on to the next message all miss.
+
+    Entries live in this process, hold no operator text (the key is a digest),
+    and are bounded. Two identical requests in flight at once both miss; the
+    second overwrites the first's entry with the same answer.
+    """
+
+    def __init__(self, max_entries: int = MAX_CACHED_RANKINGS) -> None:
+        self.max_entries = max_entries
+        self._entries: OrderedDict[str, ToolSuggestionReceipt] = OrderedDict()
+
+    def get(self, key: str) -> ToolSuggestionReceipt | None:
+        receipt = self._entries.get(key)
+        if receipt is None:
+            return None
+        self._entries.move_to_end(key)
+        return receipt
+
+    def put(self, key: str, receipt: ToolSuggestionReceipt) -> None:
+        # An unavailable receipt records a transient failure, never an answer.
+        if receipt.status == "unavailable":
+            return
+        self._entries[key] = receipt
+        self._entries.move_to_end(key)
+        while len(self._entries) > self.max_entries:
+            self._entries.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._entries)
 
 
 Option = tuple[str, str]
@@ -434,8 +496,13 @@ async def suggest_tools(
     operator_messages: Sequence[str],
     skills: Sequence[SelectedSkill] = (),
     sources: Mapping[str, ToolSource] | None = None,
+    cache: SuggestionCache | None = None,
 ) -> ToolSuggestionReceipt:
-    """Ask Jev once; any failure yields an `unavailable` receipt, never an error."""
+    """Ask Jev once; any failure yields an `unavailable` receipt, never an error.
+
+    An identical request answered earlier in this process is served from
+    ``cache`` without calling out at all.
+    """
 
     names = sorted(deferred)
     if client is None:
@@ -453,14 +520,24 @@ async def suggest_tools(
         sent_skills = [
             str(item["name"]) for item in state.get("operator_selected_skills", [])
         ]
-        body = await client.system_one(
-            state,
-            build_questions(
-                list(deferred.values()),
-                sources=sources,
-                with_skills=bool(sent_skills),
-            ),
+        questions = build_questions(
+            list(deferred.values()),
+            sources=sources,
+            with_skills=bool(sent_skills),
         )
+        if cache is not None:
+            key = request_key(state, questions)
+            hit = cache.get(key)
+            if hit is not None:
+                # This turn spent no tokens upstream, so it reports none.
+                return hit.model_copy(
+                    update={
+                        "cached": True,
+                        "latency_ms": int((time.monotonic() - started) * 1000),
+                        "input_tokens": None,
+                    }
+                )
+        body = await client.system_one(state, questions)
         ranking = interpret_answers(
             body["answers"],
             names,
@@ -478,7 +555,7 @@ async def suggest_tools(
     preloaded, suggested = rank(ranking, deferred)
     raw_usage = body.get("usage")
     usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
-    return ToolSuggestionReceipt(
+    receipt = ToolSuggestionReceipt(
         status="suggested" if preloaded or suggested else "no_tool_needed",
         deferred=names,
         skills=sent_skills,
@@ -491,6 +568,9 @@ async def suggest_tools(
         latency_ms=int((time.monotonic() - started) * 1000),
         input_tokens=usage.get("input_tokens"),
     )
+    if cache is not None:
+        cache.put(key, receipt)
+    return receipt
 
 
 def load_settings(store: Any) -> ToolSuggestionSettings | None:

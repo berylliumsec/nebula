@@ -26,6 +26,7 @@ from nebula.v3.tool_catalog import (
 )
 from nebula.v3.tool_suggestions import (
     MAX_CHOICE_OPTIONS,
+    SuggestionCache,
     MAX_SKILL_INSTRUCTION_CHARS,
     MAX_STATE_SKILL_CHARS,
     NONE_OPTION,
@@ -432,6 +433,101 @@ def test_receipt_records_the_skills_that_were_sent():
     assert receipt.skills == ["triage"]
 
 
+def _counting_client(counter, probabilities=None, sources=None):
+    def handler(_):
+        counter.append(1)
+        return httpx.Response(
+            200, json=_jev_answers(probabilities or {MCP_TOOL: 0.8}, sources=sources)
+        )
+
+    return _client(handler)
+
+
+def _ask(cache, counter, *, deferred=None, message="find the login bug"):
+    return asyncio.run(
+        suggest_tools(
+            _counting_client(counter),
+            deferred=deferred or {MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+            operator_messages=[message],
+            cache=cache,
+        )
+    )
+
+
+def test_an_identical_request_is_answered_from_the_cache():
+    cache, counter = SuggestionCache(), []
+
+    first = _ask(cache, counter)
+    second = _ask(cache, counter)
+
+    assert len(counter) == 1
+    assert not first.cached and second.cached
+    assert second.preloaded == first.preloaded == [MCP_TOOL]
+    # The turn that reused the answer spent nothing upstream.
+    assert first.input_tokens == 321 and second.input_tokens is None
+
+
+def test_a_changed_catalog_or_message_asks_again():
+    cache, counter = SuggestionCache(), []
+    _ask(cache, counter)
+
+    _ask(cache, counter, message="rotate the database password")
+    assert len(counter) == 2
+
+    _ask(
+        cache,
+        counter,
+        deferred={
+            MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues."),
+            "mcp.vault.rotate": _spec(
+                "mcp.vault.rotate", "Rotate.", source="mcp:vault"
+            ),
+        },
+    )
+    assert len(counter) == 3
+
+    # A server re-probed into a new description changes the source criterion,
+    # so the ranking it produced is not reused either.
+    asyncio.run(
+        suggest_tools(
+            _counting_client(counter),
+            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+            operator_messages=["find the login bug"],
+            sources=mcp_sources(
+                [_mcp_profile("tracker", "issue-tracker", instructions="Issues.")]
+            ),
+            cache=cache,
+        )
+    )
+    assert len(counter) == 4
+
+
+def test_a_failed_call_is_never_cached():
+    cache, counter = SuggestionCache(), []
+    failing = asyncio.run(
+        suggest_tools(
+            _client(lambda _: httpx.Response(529, json={"error": "overloaded"})),
+            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+            operator_messages=["find the login bug"],
+            cache=cache,
+        )
+    )
+
+    assert failing.status == "unavailable" and len(cache) == 0
+    assert not _ask(cache, counter).cached and len(counter) == 1
+
+
+def test_the_cache_keeps_the_newest_entries_only():
+    cache, counter = SuggestionCache(max_entries=2), []
+    for index in range(3):
+        _ask(cache, counter, message=f"question {index}")
+
+    assert len(cache) == 2 and len(counter) == 3
+    # The oldest request was evicted, so asking it again calls out.
+    assert not _ask(cache, counter, message="question 0").cached
+    assert _ask(cache, counter, message="question 2").cached
+
+
 def test_local_only_scope_never_enables_suggestions():
     assert suggestions_enabled(ScopePolicy(engagement_id="e", tool_suggestions=True))
     assert not suggestions_enabled(
@@ -535,6 +631,8 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     instructions = catalog_instructions(catalog, prepared.tool_components.specs)
     assert "Already loaded" in instructions
     assert '"issue-tracker"' in instructions
+    # The ranking is kept, so a retry of this request would not ask again.
+    assert len(service.suggestion_cache) == 1
 
 
 def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):
