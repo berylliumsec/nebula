@@ -1,19 +1,22 @@
 {
-  "change_digest": "9b061f88871366ad8179c1f34d2ff7479f26dd4cdc37604f72752e3102fce23d",
-  "reviewed_by": "Claude review of the clone-independent test-selection digest",
-  "reason": "scripts/test_selection.py change_digest() hashes raw `git diff --binary` bytes, including the `index <old>..<new>` lines whose abbreviation git scales to the local object count (7 digits in a fresh CI clone, 8 in a long-lived working clone), so the digest bound clone geometry as well as the diff and a locally written receipt could never validate. The fix pins core.abbrev to the full object-name length. The selection is tests/test_test_selection.py, which owns change_digest()'s contract: the new test_digest_ignores_this_clone_s_hash_abbreviation_length computes the digest under core.abbrev 4 and 39, asserts git's own diff bytes really differ between them and that the digest does not, and the existing test_digest_binds_content_not_commit_id_and_excludes_receipt still proves the digest tracks content and ignores the receipt itself. python_node is true because that file shells out to `node` for the scope-guard checks.",
-  "exclusions": "No frontend unit tests: the change touches a CI helper script, its test, and docs/TEST_SELECTION.md, with no ui/src code or behavior involved. No native tests: no Tauri or Rust change. No Playwright: nothing the browser renders changes, no baselined surface moves, and no area in ui/playwright-impact.json covers selection tooling. tests/test_playwright_impact.py is excluded because scripts/playwright_impact.py is untouched and diffs with --name-status, which prints no object names; it was run locally anyway and passes. No full suites.",
+  "change_digest": "f6e4e098cf00dc2375929c6b8226ab523aa473e2d759e40bde06269dae3e739f",
+  "reviewed_by": "Claude review of ranking connected servers alongside tools in Jev suggestions",
+  "reason": "tool_suggestions.py stops asking Jev the two gate questions and instead ranks the selected MCP servers in the same call as the tools. build_questions now emits sources_<i> choice questions built by source_criteria() -- a server's label plus the instructions it returned at the MCP handshake, or its tool names when it returned none -- and interpret_answers returns a JevRanking carrying per-tool probabilities, per-source probabilities and the none_of_these probability of each tool's question. rank() multiplies a tool's probability by a bounded prior from its source (floor 0.5, so a source can halve a tool's score but never silence it, and a tool whose source was not ranked stays at full weight), keeps at most MAX_PICKS=3 tools, and preloads at most two of them -- only those that also beat their question's none option, which is what now stands in for the removed gate. chat.py passes mcp_sources(mcp_profiles) and copies the ranked source labels into CatalogReceipt.source_hints; catalog_instructions names them in the per-turn text. test_tool_suggestions covers the handshake-instruction and tool-name descriptions, a source rank deciding which of two equally rated tools is preloaded, the three-pick cap, the none option holding a schema back without hiding the hint, and the prepare path recording source_hints; test_tool_catalog re-runs because it shares that fixture and owns catalog_instructions.",
+  "exclusions": "No frontend unit tests and no UI change: ToolSuggestionChip reads status/preloaded/suggested, which keep their meaning, and the new sources key is ignored by the client type until a chip mockup is approved. No native tests: no Tauri or Rust change. No screenshot baselines: no rendered surface changes. Playwright is area:tool-suggestions only (its four catalogued entries, 7 tests). The impact rules would also pull area:assistant, area:chat-edit-in-place and area:provider-thinking for chat.py, but the change there is three lines inside the Jev-only block that neither the chat stream, message editing nor thinking rendering touches; area:core-api is excluded because no request or response schema changes -- the turn snapshot and the chip payload only gain optional keys. tests/v3/test_chat.py, test_chat_api.py and test_mcp_probe.py were run locally (76 passed) and are excluded as unaffected.",
+  "expected_tests": {
+    "python": 71,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 7
+  },
   "python": [
-    "tests/test_test_selection.py"
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_chat_tool_loop.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
-  "python_node": true,
-  "expected_tests": {
-    "python": 20,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  }
+  "playwright": [
+    "area:tool-suggestions"
+  ]
 }

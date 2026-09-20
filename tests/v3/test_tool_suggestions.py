@@ -25,13 +25,14 @@ from nebula.v3.tool_catalog import (
     catalog_instructions,
 )
 from nebula.v3.tool_suggestions import (
-    MAX_CHOICE_TOOLS,
+    MAX_CHOICE_OPTIONS,
     MAX_SKILL_INSTRUCTION_CHARS,
     MAX_STATE_SKILL_CHARS,
     NONE_OPTION,
     JevClient,
     build_questions,
     build_state,
+    mcp_sources,
     suggest_tools,
     suggestions_enabled,
 )
@@ -58,21 +59,37 @@ def _spec(name: str, description: str, *, source: str | None = "mcp:tracker"):
     )
 
 
-def _jev_answers(probabilities: dict[str, float], *, action=0.9, prose=0.1):
+def _choice(probabilities: dict[str, float]) -> dict:
+    return {
+        "type": "choice",
+        "choice": max(probabilities, key=probabilities.get),
+        "probabilities": probabilities,
+        "confidence": 0.8,
+    }
+
+
+def _jev_answers(
+    probabilities: dict[str, float], *, sources: dict[str, float] | None = None
+):
+    answers = {"tools_0": _choice(probabilities)}
+    if sources:
+        answers["sources_0"] = _choice(sources)
     return {
         "model": "jev-1.13.0",
-        "answers": {
-            "gate_action": {"type": "noul", "noul": action},
-            "gate_prose": {"type": "noul", "noul": prose},
-            "tools_0": {
-                "type": "choice",
-                "choice": max(probabilities, key=probabilities.get),
-                "probabilities": probabilities,
-                "confidence": 0.8,
-            },
-        },
+        "answers": answers,
         "usage": {"input_tokens": 321, "output_tokens": 0},
     }
+
+
+def _mcp_profile(identifier: str, name: str, *, instructions=None, tools=()):
+    return SimpleNamespace(
+        id=identifier,
+        name=name,
+        capabilities=SimpleNamespace(
+            instructions=instructions,
+            tools=[SimpleNamespace(name=item) for item in tools],
+        ),
+    )
 
 
 def _client(handler) -> JevClient:
@@ -116,6 +133,12 @@ def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
         MCP_TOOL: "Search tracker issues.",
         NONE_OPTION: "None of the listed tools is needed for operator_request.",
     }
+    # No source was described, so the source stands on its tool names alone.
+    assert body["questions"]["sources_0"]["criteria"] == {
+        "mcp:tracker": f"mcp:tracker. Tools: {MCP_TOOL}",
+        NONE_OPTION: "None of the listed sources can help with operator_request.",
+    }
+    assert not any(key.startswith("gate") for key in body["questions"])
     assert receipt.status == "suggested"
     assert receipt.preloaded == [MCP_TOOL]
     assert receipt.deferred == [MCP_TOOL]
@@ -123,13 +146,46 @@ def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
     assert receipt.input_tokens == 321
 
 
-def test_low_gate_suggests_nothing_even_with_a_confident_choice():
+def test_none_of_these_keeps_a_confident_tool_out_of_the_prompt():
+    """ "None of these" replaces the old "does this need a tool at all" gate."""
+
     receipt = asyncio.run(
         suggest_tools(
             _client(
                 lambda _: httpx.Response(
-                    200,
-                    json=_jev_answers({MCP_TOOL: 0.9}, action=0.1, prose=0.9),
+                    200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.45})
+                )
+            ),
+            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+            operator_messages=["find issues"],
+        )
+    )
+    # It cleared PRELOAD_THRESHOLD and beat the none option, so its schema rides
+    # along with the turn.
+    assert receipt.preloaded == [MCP_TOOL] and receipt.suggested == []
+
+    receipt = asyncio.run(
+        suggest_tools(
+            _client(
+                lambda _: httpx.Response(
+                    200, json=_jev_answers({MCP_TOOL: 0.55, NONE_OPTION: 0.6})
+                )
+            ),
+            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
+            operator_messages=["explain what an MCP server is"],
+        )
+    )
+    # Same probability, but Jev rated "none of these" higher: it stays a hint
+    # rather than spending prompt tokens on the schema.
+    assert receipt.preloaded == [] and receipt.suggested == [MCP_TOOL]
+
+
+def test_nothing_clearing_the_threshold_is_recorded_as_no_tool_needed():
+    receipt = asyncio.run(
+        suggest_tools(
+            _client(
+                lambda _: httpx.Response(
+                    200, json=_jev_answers({MCP_TOOL: 0.05, NONE_OPTION: 0.95})
                 )
             ),
             deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
@@ -159,6 +215,97 @@ def test_moderate_probability_is_a_hint_without_preloading():
     )
     assert receipt.preloaded == []
     assert receipt.suggested == [MCP_TOOL]
+
+
+def test_servers_are_described_by_their_handshake_instructions():
+    sources = mcp_sources(
+        [
+            _mcp_profile(
+                "tracker",
+                "issue-tracker",
+                instructions="  Issue tracker.\n  Search, file and close bugs. ",
+            ),
+            _mcp_profile("vault", "secrets", tools=["read_secret", "rotate"]),
+        ]
+    )
+
+    assert sources["mcp:tracker"].description == (
+        "Issue tracker. Search, file and close bugs."
+    )
+    # An McpServerProfile has no description field, so a server that sent no
+    # handshake instructions is described by the tools it exposes.
+    assert sources["mcp:vault"].description == ""
+
+    questions = build_questions(
+        [
+            _spec(MCP_TOOL, "Search tracker issues."),
+            _spec("mcp.vault.read_secret", "Read a secret.", source="mcp:vault"),
+        ],
+        sources=sources,
+    )
+
+    assert questions["sources_0"]["criteria"] == {
+        "mcp:tracker": "issue-tracker. Issue tracker. Search, file and close bugs.",
+        "mcp:vault": "secrets. Tools: mcp.vault.read_secret",
+        NONE_OPTION: "None of the listed sources can help with operator_request.",
+    }
+
+
+def test_the_server_ranking_decides_between_equally_rated_tools():
+    tracker_tool, vault_tool = MCP_TOOL, "mcp.vault.read_secret"
+    receipt = asyncio.run(
+        suggest_tools(
+            _client(
+                lambda _: httpx.Response(
+                    200,
+                    json=_jev_answers(
+                        {tracker_tool: 0.6, vault_tool: 0.6},
+                        sources={"mcp:tracker": 0.9, "mcp:vault": 0.05},
+                    ),
+                )
+            ),
+            deferred={
+                tracker_tool: _spec(tracker_tool, "Search issues."),
+                vault_tool: _spec(vault_tool, "Read a secret.", source="mcp:vault"),
+            },
+            operator_messages=["find the login bug"],
+            sources=mcp_sources(
+                [
+                    _mcp_profile("tracker", "issue-tracker", instructions="Issues."),
+                    _mcp_profile("vault", "secrets", instructions="Secrets."),
+                ]
+            ),
+        )
+    )
+
+    # Same tool probability: the source's rank is what preloads one schema and
+    # leaves the other as a hint.
+    assert receipt.preloaded == [tracker_tool]
+    assert receipt.suggested == [vault_tool]
+    assert receipt.sources == ["issue-tracker"]
+    assert receipt.source_probabilities == {"mcp:tracker": 0.9, "mcp:vault": 0.05}
+
+
+def test_only_the_top_three_tools_survive():
+    probabilities = {
+        f"mcp.tracker.tool_{index}": 0.6 - index / 20 for index in range(6)
+    }
+    receipt = asyncio.run(
+        suggest_tools(
+            _client(
+                lambda _: httpx.Response(200, json=_jev_answers(dict(probabilities)))
+            ),
+            deferred={name: _spec(name, "Does a thing.") for name in probabilities},
+            operator_messages=["work the queue"],
+        )
+    )
+
+    picks = [*receipt.preloaded, *receipt.suggested]
+    assert picks == sorted(probabilities, key=lambda name: -probabilities[name])[:3]
+    # Three picks at most, of which at most two carry their schema.
+    assert receipt.preloaded == ["mcp.tracker.tool_0", "mcp.tracker.tool_1"]
+    assert receipt.suggested == ["mcp.tracker.tool_2"]
+    assert len(receipt.probabilities) == len(probabilities)
 
 
 @pytest.mark.parametrize(
@@ -206,7 +353,7 @@ def test_large_catalogs_are_split_under_the_choice_option_limit():
     questions = build_questions(specs)
     chunks = [value for key, value in questions.items() if key.startswith("tools_")]
     assert len(chunks) == 2
-    assert all(len(item["criteria"]) <= MAX_CHOICE_TOOLS + 1 for item in chunks)
+    assert all(len(item["criteria"]) <= MAX_CHOICE_OPTIONS + 1 for item in chunks)
     assert sum(len(item["criteria"]) - 1 for item in chunks) == 300
 
 
@@ -324,12 +471,12 @@ def _mcp_service(tmp_path, monkeypatch, client_factory, skill: str | None = None
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    profile_stub = _mcp_profile(
+        "tracker", "issue-tracker", instructions="Issue tracker for this codebase."
+    )
+    profile_stub.model_dump = lambda **_: {"id": "tracker"}
     monkeypatch.setattr(
-        chat_module,
-        "resolve_mcp_profiles",
-        lambda store, ids: (
-            SimpleNamespace(id="tracker", model_dump=lambda **_: {"id": "tracker"}),
-        ),
+        chat_module, "resolve_mcp_profiles", lambda store, ids: (profile_stub,)
     )
     service = ChatService(
         store,
@@ -360,7 +507,10 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
 
     def handler(request):
         calls.append(json.loads(request.content))
-        return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
+        return httpx.Response(
+            200,
+            json=_jev_answers({MCP_TOOL: 0.8}, sources={"mcp:tracker": 0.9}),
+        )
 
     service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
 
@@ -368,17 +518,23 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
 
     assert len(calls) == 1
     assert calls[0]["state"]["operator_request"] == "find the login bug"
+    # The selected servers are described to Jev and ranked alongside the tools.
+    assert calls[0]["questions"]["sources_0"]["criteria"]["mcp:tracker"] == (
+        "issue-tracker. Issue tracker for this codebase."
+    )
     receipt = prepared.turn.request_snapshot["tool_suggestions"]
     assert receipt["status"] == "suggested"
     assert receipt["preloaded"] == [MCP_TOOL]
+    assert receipt["sources"] == ["issue-tracker"]
     catalog = prepared.turn.request_snapshot["tool_catalog"]
     assert catalog["ranker"] == "jev" and catalog["preloaded"] == [MCP_TOOL]
+    assert catalog["source_hints"] == ["issue-tracker"]
     assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL, MCP_TOOL} == set(
         prepared.tool_components.specs
     )
-    assert "Already loaded" in catalog_instructions(
-        catalog, prepared.tool_components.specs
-    )
+    instructions = catalog_instructions(catalog, prepared.tool_components.specs)
+    assert "Already loaded" in instructions
+    assert '"issue-tracker"' in instructions
 
 
 def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):

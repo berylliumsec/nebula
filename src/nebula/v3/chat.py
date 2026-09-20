@@ -146,6 +146,7 @@ from .tool_catalog import (
 )
 from .tool_suggestions import (
     JevClient,
+    mcp_sources,
     public_suggestions,
     suggest_tools,
     suggestions_enabled,
@@ -2083,6 +2084,7 @@ class ChatService:
                         deferred=deferred_specs,
                         operator_messages=operator_messages,
                         skills=skill_snapshots,
+                        sources=mcp_sources(mcp_profiles),
                     )
                     tool_suggestions = receipt.model_dump(mode="json")
                     if receipt.status != "unavailable":
@@ -2090,6 +2092,7 @@ class ChatService:
                             deferred=receipt.deferred,
                             preloaded=receipt.preloaded,
                             suggested=receipt.suggested,
+                            source_hints=receipt.sources,
                             ranker="jev",
                         )
                 if catalog_receipt is None:
