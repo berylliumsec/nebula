@@ -1360,6 +1360,150 @@ test("assistant context pack preserves the active conversation identity", async 
   await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
 });
 
+test("editing a sent message replaces its turns inside the same conversation", async ({ page }, testInfo) => {
+  const sessionId = "chat-edit-in-place";
+  const provider = {
+    ...entity,
+    id: "provider-edit-in-place",
+    name: "Edit test provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["edit-test-model"],
+    capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true },
+    metadata: { default_model: "edit-test-model" },
+  };
+  const session = {
+    ...entity,
+    id: sessionId,
+    engagement_id: "scratch-project",
+    title: "Legacy VPN audit",
+    backend: "provider",
+    provider_profile_id: provider.id,
+    harness_profile_id: null,
+    harness_session_id: null,
+    model: "edit-test-model",
+    metadata: {},
+  };
+  const message = (id: string, sequence: number, role: "user" | "assistant", content: string) => ({
+    ...entity, id, engagement_id: "scratch-project", session_id: sessionId, sequence, role, content, citations: [], metadata: {} as Record<string, unknown>,
+  });
+  let transcript = [
+    message("edit-message-1", 1, "user", "Summarize the open findings."),
+    message("edit-message-2", 2, "assistant", "Two findings remain open."),
+    message("edit-message-3", 3, "user", "Any update on the certificate?"),
+    message("edit-message-4", 4, "assistant", "The certificate expired on 12 August."),
+  ];
+  const sent: string[] = [];
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([provider]) });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && request.method() === "POST") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ provider_id: provider.id, healthy: true, models: ["edit-test-model"] }) });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([session]) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/rewind`) && request.method() === "POST") {
+      const boundary = transcript.find((item) => item.id === (request.postDataJSON() as {before_message_id: string}).before_message_id)!;
+      const replaced = transcript
+        .filter((item) => item.sequence >= boundary.sequence && !item.metadata.retracted_at)
+        .map((item) => ({ ...item, metadata: { retracted_at: "2026-07-14T12:30:00Z", retraction_id: "edit-retraction-1", retracted_reason: "operator_edit" } }));
+      transcript = transcript.map((item) => replaced.find((entry) => entry.id === item.id) ?? item);
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        session,
+        messages: transcript.filter((item) => !item.metadata.retracted_at),
+        replaced,
+      }) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      const visible = url.searchParams.get("include_replaced") === "true"
+        ? transcript
+        : transcript.filter((item) => !item.metadata.retracted_at);
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(visible) });
+      return;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
+      return;
+    }
+    if (path.endsWith("/chat/completions") && request.method() === "POST") {
+      const body = request.postDataJSON() as { session_id?: string; messages: Array<{content: string}> };
+      sent.push(JSON.stringify(body));
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: [
+        'event: started\ndata: {"type":"started","provider_id":"provider-1","model":"model-1","session_id":"' + sessionId + '"}\n\n',
+        'event: done\ndata: {"type":"done","turn_id":"edit-turn-1","session_id":"' + sessionId + '","provider_id":"provider-1","model":"model-1","message":{"role":"assistant","content":"IKEv1 aggressive mode is still enabled."},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"finish_reason":"stop","provider_request_id":"edit-request-1","citations":[]}\n\n',
+      ].join("") });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/projects/scratch-project/workbench?view=chat&session=${sessionId}`, "Workbench");
+  const edited = page.locator(".chat-message.operator", { hasText: "Any update on the certificate?" });
+  await expect(edited).toBeVisible();
+  await edited.hover();
+  await edited.getByRole("button", { name: "Edit message" }).click();
+
+  const editor = page.getByRole("textbox", { name: "Edit message" });
+  await expect(editor).toBeFocused();
+  await expect(editor).toHaveValue("Any update on the certificate?");
+  await expect(page.locator(".chat-message.assistant", { hasText: "The certificate expired on 12 August." })).toHaveCSS("opacity", "0.45");
+  const editorGeometry = await editor.evaluate((element) => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(editorGeometry.left).toBeGreaterThanOrEqual(0);
+  expect(editorGeometry.right).toBeLessThanOrEqual(editorGeometry.viewportWidth + 1);
+  expect(editorGeometry.scrollWidth).toBeLessThanOrEqual(editorGeometry.clientWidth + 1);
+  const editAccessibility = await new AxeBuilder({ page }).include(".chat-message.editing").analyze();
+  expect(editAccessibility.violations).toEqual([]);
+  if (testInfo.project.name.startsWith("mobile-")) {
+    const resendBounds = await page.getByRole("button", { name: "Resend", exact: true }).boundingBox();
+    expect(resendBounds?.height).toBeGreaterThanOrEqual(36);
+  }
+
+  await editor.press("Escape");
+  await expect(page.getByRole("textbox", { name: "Edit message" })).toHaveCount(0);
+  await expect(edited).toBeVisible();
+
+  await edited.hover();
+  await edited.getByRole("button", { name: "Edit message" }).click();
+  await page.getByRole("textbox", { name: "Edit message" }).fill("Any update on the certificate and IKEv1?");
+  await page.getByRole("button", { name: "Resend", exact: true }).click();
+
+  await expect(page.locator(".chat-message.assistant", { hasText: "IKEv1 aggressive mode is still enabled." })).toBeVisible();
+  await expect(page.locator(".chat-message.operator")).toHaveCount(2);
+  await expect(page.locator(".chat-message.operator").last()).toContainText("Any update on the certificate and IKEv1?");
+  await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionId);
+  expect(sent.map((body) => JSON.parse(body))).toMatchObject([{
+    session_id: sessionId,
+    messages: [{ role: "user", content: "Any update on the certificate and IKEv1?" }],
+  }]);
+  const replacedGroup = page.locator(".chat-replaced-group");
+  await expect(replacedGroup).toHaveCount(1);
+  await expect(replacedGroup).not.toHaveAttribute("open", "");
+  await expect(replacedGroup.locator("summary")).toContainText("2 replaced messages");
+  await replacedGroup.locator("summary").click();
+  await expect(replacedGroup).toHaveAttribute("open", "");
+  await expect(replacedGroup).toContainText("Any update on the certificate?");
+  await expect(replacedGroup).toContainText("They are not sent to the model.");
+});
+
 test("assistant context pack handoff recovery keeps unsent bytes on the originating device", async ({ page }) => {
   await openWorkspace(
     page,
@@ -4300,7 +4444,7 @@ test("assistant settings expose provider metadata and harness model options", as
 
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 
-  await openWorkspace(page, "/settings", "Settings");
+  await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Models" }).click();
   const sharedSkills = page.locator("#native-skill-settings");

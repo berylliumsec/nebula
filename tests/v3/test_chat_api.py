@@ -315,6 +315,103 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert copied[0]["source_message_id"] == boundary.id
 
 
+def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-rewind.db")
+    engagement = store.create(Engagement(id="eng-rewind", name="Rewind"))
+    profile = store.create(
+        ProviderProfile(
+            id="provider-rewind",
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            privacy={"local_only": True},
+            metadata={"default_model": "model-a"},
+        )
+    )
+    monkeypatch.setattr(
+        chat_module, "provider_from_profile", lambda _: ApiChatProvider(profile.id)
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    def send(content: str, session_id: str | None) -> str:
+        response = client.post(
+            "/api/v1/chat/completions",
+            headers=_auth(),
+            json={
+                "engagement_id": engagement.id,
+                "provider_id": profile.id,
+                "session_id": session_id,
+                "include_knowledge": False,
+                "messages": [{"role": "user", "content": content}],
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["session_id"]
+
+    session_id = send("Summarize the open findings.", None)
+    assert send("Any update on the certificate?", session_id) == session_id
+    messages = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    ).json()
+    assert len(messages) == 4
+
+    assert (
+        client.post(
+            f"/api/v1/chat/sessions/{session_id}/rewind",
+            headers=_auth(),
+            json={"before_message_id": messages[1]["id"]},
+        ).status_code
+        == 409
+    )
+
+    rewind = client.post(
+        f"/api/v1/chat/sessions/{session_id}/rewind",
+        headers=_auth(),
+        json={"before_message_id": messages[2]["id"]},
+    )
+    assert rewind.status_code == 200, rewind.text
+    body = rewind.json()
+    assert body["session"]["id"] == session_id
+    assert [item["id"] for item in body["messages"]] == [
+        item["id"] for item in messages[:2]
+    ]
+    assert [item["id"] for item in body["replaced"]] == [
+        item["id"] for item in messages[2:]
+    ]
+
+    retained = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    ).json()
+    assert [item["id"] for item in retained] == [item["id"] for item in messages[:2]]
+    everything = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true",
+        headers=_auth(),
+    ).json()
+    assert [item["id"] for item in everything] == [item["id"] for item in messages]
+    assert everything[2]["metadata"]["retracted_reason"] == "operator_edit"
+    assert (
+        everything[2]["metadata"]["retraction_id"]
+        == everything[3]["metadata"]["retraction_id"]
+    )
+
+    assert send("Any update on the certificate and IKEv1?", session_id) == session_id
+    after = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+    ).json()
+    assert [(item["sequence"], item["role"]) for item in after] == [
+        (1, "user"),
+        (2, "assistant"),
+        (5, "user"),
+        (6, "assistant"),
+    ]
+    assert after[2]["content"] == "Any update on the certificate and IKEv1?"
+    sessions = client.get(
+        f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
+    ).json()
+    assert [item["id"] for item in sessions] == [session_id]
+
+
 def test_device_pairing_is_single_use_cookie_authenticated_and_revocable(tmp_path):
     store = NebulaStore(tmp_path / "pairing.db")
     app = create_app(store, auth_token="test-token")

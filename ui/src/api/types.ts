@@ -2343,8 +2343,18 @@ export interface PersistedChatMessage extends ChatMessage {
   harnessTurnId?: Identifier;
   toolResults?: ChatToolResult[];
   toolSuggestions?: ToolSuggestionSummary;
+  /** Set when an in-place edit replaced this turn; it stays readable but leaves the conversation. */
+  replacedAt?: string;
+  /** Groups every message replaced by the same edit. */
+  replacedGroupId?: Identifier;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChatSessionRewind {
+  session: ChatSessionSummary;
+  messages: PersistedChatMessage[];
+  replaced: PersistedChatMessage[];
 }
 
 export interface ChatToolResult {
