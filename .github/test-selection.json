@@ -1,30 +1,24 @@
 {
-  "change_digest": "54ba39dd765d721c1e199935e3273cf364ddddd372f7a8950a429c44c814c058",
-  "reviewed_by": "Claude review of the Coding editor parity change (syntax tokens, minimap, sticky scroll, indent guides, bracket colours, breadcrumbs, auto save)",
-  "reason": "The change is confined to the Workbench Coding panel and the design tokens it reads. Selected component and state tests cover the new pure logic (bracket depth scanning, indent measurement, active scope, sticky scopes, language glyphs), the token-only highlight contract, preference migration for records written before these settings existed, and the panel behaviour that can lose operator work: auto save writing only existing workspace files, refusing untitled drafts, and the breadcrumb and status-bar controls. The Playwright areas exercise the Coding journeys whose markup this touches (Save and reviewed actions, sidebar file scrolling, caret and syntax layers) plus the theme journey, because the new --code-* tokens are declared in tokens.css and resolve per theme.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python, Rust or Core file changed, so python and native selections are empty and the desktop-macOS job stays off. Provider, harness, chat, browser and settings journeys are untouched: the diff adds CodeMirror view extensions, one panel's chrome, two device-local preference groups and CSS custom properties, and changes no API call, no persisted Core state and no shared component. No real-Core or physical-device journey is selected because nothing in this change crosses the Core boundary; saving still goes through the existing reviewed uploadWorkspaceFile path with its conditional sha256.",
+  "change_digest": "55aa34ad712880f43500fc4d0cc3ca00c3e00cf4354b3a4e8f2de6b1902661e6",
+  "reviewed_by": "Codex review of project goal-skill shared-rule persistence",
+  "reason": "Project-owned skills intentionally share instructions through the project's .agents/rules tree, but goal skill snapshots rejected every reference outside the individual skill directory. The resolver now derives a source-aware boundary from the discovered catalog entry: project skills may snapshot exact, digested resources within the same .agents tree, while installed skills remain confined to their own directory. Focused unit tests cover successful shared-rule reads, traversal rejection, and symlink rejection; API coverage proves durable goal mutation; provider chat tests cover snapshot use; the real-Core browser journey proves save and reload from the operator entry point on desktop and emulated Chromium/WebKit mobile profiles.",
+  "exclusions": "No frontend unit test is selected because UI request construction and local interaction are unchanged; the existing production real-Core Playwright journey exercises the exact Save skills control, API mutation, visible count, reload, retained source-loss state, and subsequent provider use. No native tests because Rust and the desktop shell are unchanged. Provider transport, unrelated chat lifecycle, harness-native goals, MCP, workspace mutation, and full suites are excluded. No CSS audit is selected because no styles or rendered copy changed.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 54,
+    "python": 12,
+    "frontend": 0,
     "native": 0,
-    "playwright": 19
+    "playwright": 3
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/components/CodeMirrorSurface.test.ts",
-    "ui/src/components/EditorPreferencesDialog.test.tsx",
-    "ui/src/components/editorDecorations.test.ts",
-    "ui/src/components/editorStickyScroll.test.ts",
-    "ui/src/components/editorTheme.test.ts",
-    "ui/src/components/fileIcons.test.ts",
-    "ui/src/components/useEditorSidebarWidth.test.tsx",
-    "ui/src/state/editorPreferences.test.ts"
+  "python": [
+    "tests/v3/test_skill_catalog.py",
+    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
+    "tests/v3/test_chat.py::test_provider_skill_is_snapshotted_on_turn_and_running_goal",
+    "tests/v3/test_chat.py::test_provider_skill_resources_are_exposed_only_through_bounded_reader",
+    "tests/v3/test_chat_goals.py::test_goal_skills_are_explicitly_replaced_only_at_safe_revision"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:coding-makeover",
-    "area:editor-files-scroll",
-    "area:themes"
+    "area:provider-goal-skills-core"
   ]
 }

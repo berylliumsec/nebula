@@ -288,8 +288,11 @@ test("assistant upgrade real Core retains editable goal skills through source lo
       createHash("sha256").update(projectId!).digest("hex"),
     );
     const skillPath = path.join(workspaceRoot, ".agents", "skills", "review", "SKILL.md");
+    const rulePath = path.join(workspaceRoot, ".agents", "rules", "accuracy.md");
     await mkdir(path.dirname(skillPath), { recursive: true });
-    await writeFile(skillPath, "Apply REAL_CORE_SKILL_SENTINEL before answering.\n", "utf8");
+    await mkdir(path.dirname(rulePath), { recursive: true });
+    await writeFile(rulePath, "Report only verified acceptance results.\n", "utf8");
+    await writeFile(skillPath, "Apply REAL_CORE_SKILL_SENTINEL before answering. Read [the shared rule](../../../.agents/rules/accuracy.md).\n", "utf8");
 
     const providerResponse = await api.post("providers", { data: {
       name: "Goal skill acceptance",
@@ -354,7 +357,11 @@ test("assistant upgrade real Core retains editable goal skills through source lo
     const savedSkillResponse = await skillSaveResponse;
     expect(savedSkillResponse.ok(), await savedSkillResponse.text()).toBe(true);
     expect(await savedSkillResponse.json()).toMatchObject({
-      skill_snapshots: [{ name: "review", path: skillPath }],
+      skill_snapshots: [{
+        name: "review",
+        path: skillPath,
+        resources: [{ path: rulePath, relative_path: "../../../.agents/rules/accuracy.md" }],
+      }],
     });
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
 
@@ -377,7 +384,11 @@ test("assistant upgrade real Core retains editable goal skills through source lo
     expect(persisted.ok(), await persisted.text()).toBe(true);
     expect(await persisted.json()).toMatchObject({
       status: "running",
-      skill_snapshots: [{ name: "review", path: skillPath }],
+      skill_snapshots: [{
+        name: "review",
+        path: skillPath,
+        resources: [{ path: rulePath, relative_path: "../../../.agents/rules/accuracy.md" }],
+      }],
     });
   } finally {
     await api.dispose();
