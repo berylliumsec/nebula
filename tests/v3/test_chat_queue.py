@@ -240,6 +240,7 @@ def test_pending_approval_failure_and_revocation_pause_dispatch(tmp_path):
     "status,expected",
     [
         ("routing", "needs_review"),
+        ("waiting_callback", "sending"),
         ("complete", "complete"),
         ("cancelled", "cancelled"),
         ("interrupted", "needs_review"),
@@ -270,6 +271,14 @@ def test_restart_after_durable_turn_creation_reconciles_without_replay(
         assert service.get("s").paused
         asyncio.run(service.step(service.get("s")))
         assert service.get("s").items[0]["status"] == "cancelled"
+    if status == "waiting_callback":
+        # The background command's results webhook finishes this same turn later.
+        assert not service.get("s").paused
+        store.update(
+            ChatTurn, turn.id, {"status": "complete"}, expected_revision=turn.revision
+        )
+        asyncio.run(service.step(service.get("s")))
+        assert service.get("s").items[0]["status"] == "complete"
     assert store.count(ChatTurn) == 1
 
 
@@ -361,3 +370,188 @@ def test_saved_cancelled_review_is_reconciled_without_replay(tmp_path):
     assert service.get("s").items[0]["status"] == "cancelled"
     assert service.get("s").paused
     assert store.count(ChatTurn) == 1
+
+
+def test_saved_uncertain_review_is_reconciled_when_its_turn_completes(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+    queue = enqueue(service, request)
+    turn = store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="s",
+            provider_profile_id="provider-a",
+            model="model-a",
+            status="waiting_callback",
+        )
+    )
+    items = queue.items
+    items[0].update(
+        status="needs_review",
+        turn_id=turn.id,
+        detail="Core restarted with a response in progress. Delivery is uncertain; inspect the conversation",
+    )
+    queue = store.update(
+        ChatQueue,
+        queue.id,
+        {"items": items, "paused": True},
+        expected_revision=queue.revision,
+    )
+    asyncio.run(service.step(queue))
+    assert service.get("s").items[0]["status"] == "needs_review"
+    store.update(
+        ChatTurn, turn.id, {"status": "complete"}, expected_revision=turn.revision
+    )
+    asyncio.run(service.step(service.get("s")))
+    item = service.get("s").items[0]
+    assert item["status"] == "complete", item
+    assert "uncertain" not in (item.get("detail") or "")
+    assert store.count(ChatTurn) == 1
+
+
+def test_follow_up_losing_a_race_to_a_direct_send_waits_instead_of_parking(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+
+    async def run():
+        queue = enqueue(service, request)
+        real_prepare = service.chat.prepare_async
+        direct = {}
+
+        async def prepare_after_direct_send(request):
+            # The operator's direct Send persists its turn while the drainer prepares.
+            if not direct:
+                direct["turn"] = store.create(
+                    ChatTurn(
+                        engagement_id="p",
+                        session_id="s",
+                        provider_profile_id="provider-a",
+                        model="model-a",
+                        status="routing",
+                    )
+                )
+            return await real_prepare(request)
+
+        service.chat.prepare_async = prepare_after_direct_send
+        await service.step(queue)
+        queue = service.get("s")
+        assert queue.items[0]["status"] == "queued", queue.items
+        assert not queue.paused
+        assert store.count(ChatTurn) == 1
+        await service.step(queue)
+        assert service.get("s").items[0]["status"] == "queued"
+        turn = direct["turn"]
+        store.update(
+            ChatTurn, turn.id, {"status": "complete"}, expected_revision=turn.revision
+        )
+        for _ in range(100):
+            await service.step(service.get("s"))
+            if service.get("s").items[0]["status"] == "complete":
+                break
+            await asyncio.sleep(0.01)
+        item = service.get("s").items[0]
+        assert item["status"] == "complete", item
+        assert item["turn_id"] != turn.id
+        assert store.count(ChatTurn) == 2
+        await service.chat.shutdown()
+
+    asyncio.run(run())
+
+
+def test_orphaned_claim_is_reviewed_on_the_next_poll_without_a_restart(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+
+    async def run():
+        queue = enqueue(service, request)
+
+        async def explode(request):
+            raise RuntimeError("provider unavailable")
+
+        service.chat.prepare_async = explode
+        real_review = service.review
+        lost = []
+
+        def review_losing_once(queue, item_id, detail):
+            if not lost:
+                lost.append(item_id)
+                raise ConflictError("Queue changed on another device")
+            return real_review(queue, item_id, detail)
+
+        service.review = review_losing_once
+        with pytest.raises(ConflictError):
+            await service.step(queue)
+        assert service.get("s").items[0]["status"] == "claiming"
+        for _ in range(3):
+            await service.step(service.get("s"))
+        queue = service.get("s")
+        assert queue.items[0]["status"] == "needs_review", queue.items
+        assert queue.paused
+        assert store.count(ChatTurn) == 0
+
+    asyncio.run(run())
+
+
+def test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching(tmp_path):
+    store, service, request = setup_queue(tmp_path)
+
+    async def run():
+        queue = enqueue(service, request)
+        items = queue.items
+        items[0]["status"] = "claiming"
+        queue = store.update(
+            ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+        )
+        queue = service.write(
+            "s",
+            QueueWrite(
+                action="remove",
+                item_id=items[0]["id"],
+                expected_revision=queue.revision,
+            ),
+        )
+        assert queue.items[0]["status"] == "cancelled"
+        queue = enqueue(service, request, queue.revision, "second")
+        items = queue.items
+        items[-1]["status"] = "claiming"
+        queue = store.update(
+            ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+        )
+        queue = service.write(
+            "s", QueueWrite(action="clear", expected_revision=queue.revision)
+        )
+        assert [item["status"] for item in queue.items] == ["cancelled", "cancelled"]
+
+        queue = enqueue(service, request, queue.revision, "third")
+        gate = asyncio.Event()
+        real_prepare = service.chat.prepare_async
+
+        async def prepare_when_released(request):
+            await gate.wait()
+            return await real_prepare(request)
+
+        service.chat.prepare_async = prepare_when_released
+        dispatch = asyncio.create_task(service.step(queue))
+        for _ in range(100):
+            await asyncio.sleep(0.01)
+            if service.get("s").items[-1]["status"] == "claiming":
+                break
+        queue = service.get("s")
+        assert queue.items[-1]["status"] == "claiming"
+        with pytest.raises(ConflictError):
+            service.write(
+                "s",
+                QueueWrite(
+                    action="remove",
+                    item_id=queue.items[-1]["id"],
+                    expected_revision=queue.revision,
+                ),
+            )
+        gate.set()
+        await dispatch
+        for _ in range(100):
+            await service.step(service.get("s"))
+            if service.get("s").items[-1]["status"] == "complete":
+                break
+            await asyncio.sleep(0.01)
+        assert service.get("s").items[-1]["status"] == "complete"
+        await service.chat.shutdown()
+
+    asyncio.run(run())

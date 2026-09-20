@@ -3617,9 +3617,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_handoffs(
-        project_id: str, limit: int = Query(default=100, ge=1, le=500)
+        project_id: str,
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
     ) -> list[HandoffEnvelope]:
-        return handoff_service.list(project_id, limit=limit)
+        return handoff_service.list(project_id, offset=offset, limit=limit)
 
     @app.get(
         f"{API_PREFIX}/handoffs/{{handoff_id}}",
