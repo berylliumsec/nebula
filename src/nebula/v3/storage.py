@@ -26,6 +26,7 @@ from .database import (
     SearchDocumentRow,
 )
 from .domain import (
+    Artifact,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Entity,
@@ -348,6 +349,56 @@ class NebulaStore:
         with self.transaction() as transaction:
             transaction.add(entity)
         return entity
+
+    def list_session_entities(
+        self,
+        model: type[EntityT],
+        session_id: str,
+        *,
+        statuses: Sequence[str] | None = None,
+    ) -> list[EntityT]:
+        """Return one conversation's records of ``model``, oldest first, filtered in SQL.
+
+        ``list_entities`` pages a whole kind oldest first, so a lookup that reads
+        its first 1,000-row page and filters by ``session_id`` in Python stops
+        seeing newer conversations once Core holds that many records of the
+        kind. Per-conversation lookups must filter in the database instead.
+        """
+
+        statement = select(EntityRow).where(
+            EntityRow.kind == model.entity_kind,
+            EntityRow.payload["session_id"].as_string() == session_id,
+        )
+        if statuses is not None:
+            statement = statement.where(
+                EntityRow.payload["status"].as_string().in_(list(statuses))
+            )
+        statement = statement.order_by(EntityRow.created_at, EntityRow.id)
+        with self.database.session() as session:
+            return [
+                model.model_validate(row.payload) for row in session.scalars(statement)
+            ]
+
+    def list_tool_call_artifacts(
+        self, engagement_id: str, tool_call_id: str
+    ) -> list[Artifact]:
+        """Return the artifacts one tool call recorded, oldest first."""
+
+        statement = (
+            select(EntityRow)
+            .where(
+                EntityRow.kind == Artifact.entity_kind,
+                EntityRow.engagement_id == engagement_id,
+                EntityRow.payload["metadata"]["tool_call_id"].as_string()
+                == tool_call_id,
+            )
+            .order_by(EntityRow.created_at, EntityRow.id)
+        )
+        with self.database.session() as session:
+            return [
+                Artifact.model_validate(row.payload)
+                for row in session.scalars(statement)
+            ]
 
     def create_many(self, entities: list[Entity]) -> list[Entity]:
         with self.transaction() as transaction:
