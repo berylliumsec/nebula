@@ -280,34 +280,31 @@ class ApiEntityValidator:
 
         if isinstance(target, Report) and target.status == ReportStatus.FINAL:
             raise ConflictError("a signed final report cannot be deleted")
+        # Rows that no longer validate are skipped (and recorded) rather than
+        # failing the delete: one corrupt record of any kind used to turn every
+        # generic DELETE into an internal error.
         for model in ENTITY_MODELS:
-            offset = 0
-            while True:
-                page = self.store.list_entities(model, offset=offset, limit=1_000)
-                for candidate in page:
-                    if type(candidate) is type(target) and candidate.id == target.id:
+            for candidate in self.store.iter_readable_entities(model):
+                if type(candidate) is type(target) and candidate.id == target.id:
+                    continue
+                if (
+                    isinstance(target, Engagement)
+                    and entity_engagement_id(candidate) == target.id
+                ):
+                    self._delete_conflict(target, candidate, "engagement_id")
+                if (
+                    isinstance(target, Advisory)
+                    and isinstance(candidate, Correlation)
+                    and candidate.advisory_id == target.advisory_id
+                ):
+                    self._delete_conflict(target, candidate, "advisory_id")
+                for rule in _REFERENCE_RULES.get(type(candidate), ()):
+                    if rule.target is not type(target):
                         continue
-                    if (
-                        isinstance(target, Engagement)
-                        and entity_engagement_id(candidate) == target.id
-                    ):
-                        self._delete_conflict(target, candidate, "engagement_id")
-                    if (
-                        isinstance(target, Advisory)
-                        and isinstance(candidate, Correlation)
-                        and candidate.advisory_id == target.advisory_id
-                    ):
-                        self._delete_conflict(target, candidate, "advisory_id")
-                    for rule in _REFERENCE_RULES.get(type(candidate), ()):
-                        if rule.target is not type(target):
-                            continue
-                        raw = getattr(candidate, rule.field)
-                        values = raw if rule.many else [raw]
-                        if target.id in values:
-                            self._delete_conflict(target, candidate, rule.field)
-                if len(page) < 1_000:
-                    break
-                offset += len(page)
+                    raw = getattr(candidate, rule.field)
+                    values = raw if rule.many else [raw]
+                    if target.id in values:
+                        self._delete_conflict(target, candidate, rule.field)
 
     def _validate(self, entity: Entity) -> None:
         owner_id = entity_engagement_id(entity)

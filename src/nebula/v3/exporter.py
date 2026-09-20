@@ -160,6 +160,10 @@ def _all_entities(
             engagement_id=engagement_id,
             offset=offset,
             limit=1000,
+            # Temporary "Ask Nebula" sessions are hidden from listings, but
+            # their messages, turns, and snapshots are exported by project, so
+            # the owning session has to travel with them.
+            include_temporary=True,
         )
         result.extend(page)
         if len(page) < 1000:

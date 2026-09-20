@@ -443,3 +443,44 @@ def test_export_keeps_recorded_browser_headers_with_credentials_redacted(tmp_pat
         ["authorization", "[redacted]"],
         ["cookie", "[redacted]"],
     ]
+
+
+def test_export_includes_temporary_assistant_sessions_with_their_messages(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Popup export"))
+    provider = store.create(
+        ProviderProfile(name="Local", provider_type="vllm", is_local=True)
+    )
+    popup = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Ask Nebula",
+            provider_profile_id=provider.id,
+            model="model-a",
+            metadata={"temporary_assistant": True},
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=popup.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="What does this mean?",
+        )
+    )
+    destination = tmp_path / "popup.nebula.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.entity_counts["chat_messages"] == 1
+    assert manifest.entity_counts["chat_sessions"] == 1
+    with zipfile.ZipFile(destination) as archive:
+        sessions = json.loads(archive.read("entities/chat_sessions.json"))
+    assert [item["id"] for item in sessions] == [popup.id]

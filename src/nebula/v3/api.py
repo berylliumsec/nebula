@@ -243,6 +243,7 @@ from .domain import (
     Artifact,
     BrowserAction,
     BrowserAssessment,
+    BrowserAssessmentStatus,
     BrowserCommand,
     BrowserProxyRule,
     BrowserHandoff,
@@ -339,6 +340,7 @@ from .executions import (
     ExecutionService,
     ExecutionServiceError,
     ExecutionStartRequest,
+    TERMINAL_EXECUTION_STATUSES,
 )
 from .execution_ai import (
     DraftEditRequest,
@@ -357,6 +359,8 @@ from .knowledge import (
     FetchedUrlDocument,
     InvalidDocumentError,
     InvalidSourceUrlError,
+    KnowledgeSourceIndexError,
+    LibraryItemIndexError,
     SourceFetchError,
     UnsupportedDocumentError,
     fetch_url_document,
@@ -1250,6 +1254,35 @@ class DiagnosticSensitiveDetailRequest(NebulaModel):
     confirmed: bool = False
     action: Literal["reveal", "copy"] = "reveal"
     operator_id: str = Field(default="local-operator", min_length=1, max_length=128)
+
+
+_TERMINAL_RUN_STATUSES = frozenset(
+    {
+        RunStatus.COMPLETE,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.INTERRUPTED,
+    }
+)
+_TERMINAL_ASSESSMENT_STATUSES = frozenset(
+    {
+        BrowserAssessmentStatus.STOPPED,
+        BrowserAssessmentStatus.COMPLETE,
+        BrowserAssessmentStatus.FAILED,
+        BrowserAssessmentStatus.REVOKED,
+    }
+)
+
+
+def prune_expired_pairings(pending: dict[str, dict[str, Any]], now: datetime) -> None:
+    """Drop pairing offers that can no longer be redeemed.
+
+    Offers were removed only by a successful redeem, so every abandoned QR flow
+    stayed in memory for the life of the process.
+    """
+
+    for digest in [key for key, offer in pending.items() if offer["expires_at"] <= now]:
+        del pending[digest]
 
 
 def create_app(
@@ -2370,6 +2403,7 @@ def create_app(
 
     bearer = HTTPBearer(auto_error=False)
     pending_pairings: dict[str, dict[str, Any]] = {}
+    app.state.pending_pairings = pending_pairings
 
     def _device_for_token(raw_token: str | None) -> PairedDeviceSession | None:
         if not raw_token:
@@ -2531,10 +2565,12 @@ def create_app(
                 status_code=403,
                 detail="new device pairings may be created only from the local machine",
             )
+        now = utc_now()
+        prune_expired_pairings(pending_pairings, now)
         secret = secrets.token_urlsafe(32)
         digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
         code = f"{secrets.randbelow(1_000_000):06d}"
-        expires_at = utc_now() + timedelta(minutes=5)
+        expires_at = now + timedelta(minutes=5)
         pending_pairings[digest] = {
             "name": body.name,
             "confirmation_code": code,
@@ -2557,6 +2593,7 @@ def create_app(
         if request.url.scheme != "https" and not allow_insecure_device_pairing:
             raise HTTPException(status_code=400, detail="device pairing requires HTTPS")
         digest = hashlib.sha256(body.secret.encode("utf-8")).hexdigest()
+        prune_expired_pairings(pending_pairings, utc_now())
         pending = pending_pairings.pop(digest, None)
         if (
             pending is None
@@ -5321,6 +5358,7 @@ def create_app(
                 )
                 break
             idle_ticks = 0
+            finished = False
             while True:
                 await asyncio.sleep(0.25)
                 events = store.replay_operation_events(
@@ -5359,7 +5397,23 @@ def create_app(
                             }
                         )
                         cursor = event.sequence
+                elif finished:
+                    # The execution is over and its last events were drained,
+                    # so tell the viewer and close instead of polling forever.
+                    await websocket.send_json(
+                        {"kind": "complete", "after_sequence": cursor}
+                    )
+                    await websocket.close(code=1000)
+                    return
                 else:
+                    finished = (
+                        store.get(OperatorExecution, execution_id).status
+                        in TERMINAL_EXECUTION_STATUSES
+                    )
+                    if finished:
+                        # Poll once more so events written with the terminal
+                        # transition go out before the complete frame.
+                        continue
                     idle_ticks += 1
                     if idle_ticks >= 20:
                         await websocket.send_json(
@@ -7740,6 +7794,19 @@ def create_app(
                 stage="api",
             )
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except KnowledgeSourceIndexError as exc:
+            record_diagnostic(
+                "warning",
+                "knowledge",
+                "knowledge.index.ingest_degraded",
+                "A knowledge source was recorded but could not be indexed; reindex it to retry.",
+                outcome="degraded",
+                stage="knowledge-ingest",
+                retryable=True,
+                safe_failure_cause="The local Chroma index was unavailable.",
+                exception=exc,
+            )
+            return knowledge_summary(exc.source)
         except KnowledgeIndexError as exc:
             raise HTTPException(
                 status_code=503,
@@ -7794,6 +7861,19 @@ def create_app(
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except SourceFetchError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except KnowledgeSourceIndexError as exc:
+            record_diagnostic(
+                "warning",
+                "knowledge",
+                "knowledge.index.ingest_degraded",
+                "A knowledge source was recorded but could not be indexed; reindex it to retry.",
+                outcome="degraded",
+                stage="knowledge-ingest",
+                retryable=True,
+                safe_failure_cause="The local Chroma index was unavailable.",
+                exception=exc,
+            )
+            return knowledge_summary(exc.source)
         except KnowledgeIndexError as exc:
             raise HTTPException(
                 status_code=503,
@@ -7956,6 +8036,19 @@ def create_app(
             raise HTTPException(status_code=415, detail=str(exc)) from exc
         except InvalidDocumentError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except LibraryItemIndexError as exc:
+            record_diagnostic(
+                "warning",
+                "knowledge",
+                "knowledge.index.library_ingest_degraded",
+                "A Library item was recorded but could not be indexed; reindex it to retry.",
+                outcome="degraded",
+                stage="library-ingest",
+                retryable=True,
+                safe_failure_cause="The local Chroma index was unavailable.",
+                exception=exc,
+            )
+            return library_item_summary(exc.item)
         except KnowledgeIndexError as exc:
             raise HTTPException(
                 status_code=503,
@@ -9508,7 +9601,26 @@ def create_app(
         session_id: str,
         if_match: int | None = Header(default=None, alias="If-Match"),
     ) -> Response:
-        store.get(ChatSession, session_id)
+        chat = store.get(ChatSession, session_id)
+        if if_match is not None and chat.revision != if_match:
+            raise ConflictError(
+                f"revision conflict: expected {if_match}, found {chat.revision}"
+            )
+        if chat.backend == ChatBackend.HARNESS and chat.harness_session_id:
+            # Release the vendor process and its MCP gateway before the rows
+            # go; otherwise they stay alive until Core restarts. An active turn
+            # raises HarnessStateError, which surfaces as 409 like elsewhere.
+            # A mission continued from this chat keeps using the same vendor
+            # session, so one a run references is left open.
+            shared_with_run = store.find_entity(
+                AgentRun, "harness_session_id", chat.harness_session_id
+            )
+            if shared_with_run is None:
+                try:
+                    await harness_runtime.close_session(chat.harness_session_id)
+                except NotFoundError:
+                    # diagnostic-expected: the vendor session row is already gone, so nothing is live.
+                    pass
         store.delete_chat_session(session_id, expected_revision=if_match)
         return Response(status_code=204)
 
@@ -9845,6 +9957,7 @@ def create_app(
             )
 
             idle_ticks = 0
+            finished = False
             while True:
                 await asyncio.sleep(0.25)
                 events = store.replay_events(run_id, after_sequence=cursor, limit=1000)
@@ -9878,7 +9991,22 @@ def create_app(
                             {"kind": "event", "event": event.model_dump(mode="json")}
                         )
                         cursor = event.sequence
+                elif finished:
+                    # The mission is over and its last events were drained,
+                    # so tell the viewer and close instead of polling forever.
+                    await websocket.send_json(
+                        {"kind": "complete", "after_sequence": cursor}
+                    )
+                    await websocket.close(code=1000)
+                    return
                 else:
+                    finished = (
+                        store.get(AgentRun, run_id).status in _TERMINAL_RUN_STATUSES
+                    )
+                    if finished:
+                        # Poll once more so events written with the terminal
+                        # transition go out before the complete frame.
+                        continue
                     idle_ticks += 1
                     if idle_ticks >= 20:
                         await websocket.send_json(
@@ -10215,6 +10343,7 @@ def create_app(
                     )
                     break
             idle_ticks = 0
+            finished = False
             while True:
                 await asyncio.sleep(0.25)
                 events = store.replay_operation_events(
@@ -10227,6 +10356,22 @@ def create_app(
                             {"kind": "event", "event": event.model_dump(mode="json")}
                         )
                         cursor = event.sequence
+                    continue
+                if finished:
+                    # The assessment is over and its last events were drained,
+                    # so tell the viewer and close instead of polling forever.
+                    await websocket.send_json(
+                        {"kind": "complete", "after_sequence": cursor}
+                    )
+                    await websocket.close(code=1000)
+                    return
+                finished = (
+                    store.get(BrowserAssessment, assessment_id).status
+                    in _TERMINAL_ASSESSMENT_STATUSES
+                )
+                if finished:
+                    # Poll once more so events written with the terminal
+                    # transition go out before the complete frame.
                     continue
                 idle_ticks += 1
                 if idle_ticks >= 80:
@@ -12114,7 +12259,8 @@ def _register_crud_routes(
                             f"Remove this note from report {names} before deleting it."
                         )
                     raise StructuredConflictError("note_referenced_by_report", detail)
-            entity_validator.validate_delete(current)
+            # The scan reads every kind, so keep it off the event loop.
+            await asyncio.to_thread(entity_validator.validate_delete, current)
             # Always guard the final delete with the revision we validated so a
             # concurrent update cannot be removed using stale relationship data.
             store.delete(model, entity_id, expected_revision=current.revision)

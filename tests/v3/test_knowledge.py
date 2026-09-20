@@ -617,3 +617,90 @@ def test_pdf_extraction_stops_when_the_text_budget_is_exceeded(monkeypatch):
         extract_document(b"%PDF-1.7\n", filename="oversized.pdf")
 
     assert extracted_pages == [1]
+
+
+class _UnavailableIndex:
+    """A knowledge index whose collection writes always fail."""
+
+    descriptor = {"backend": "test", "collection": "knowledge"}
+    library_descriptor = {"backend": "test", "collection": "library"}
+
+    @property
+    def status(self):
+        from nebula.v3.knowledge_index import KnowledgeIndexStatus
+
+        return KnowledgeIndexStatus(state="ready")
+
+    def upsert_source(self, source, chunks):
+        from nebula.v3.knowledge_index import KnowledgeIndexError
+
+        raise KnowledgeIndexError("collection is locked")
+
+    def upsert_library_item(self, item, chunks):
+        from nebula.v3.knowledge_index import KnowledgeIndexError
+
+        raise KnowledgeIndexError("collection is locked")
+
+    def delete_source(self, source_id):
+        return None
+
+    def delete_library_item(self, item_id):
+        return None
+
+    def query_library(self, queries, *, limit):
+        return []
+
+    def query(self, engagement_id, queries, *, limit):
+        return []
+
+
+def test_ingest_returns_the_recorded_source_when_the_index_write_fails(tmp_path):
+    from nebula.v3.domain import LibraryItem
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Index outage"))
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_index=_UnavailableIndex(),
+        )
+    )
+    payload = {
+        "engagement_id": engagement.id,
+        "filename": "notes.txt",
+        "content_base64": base64.b64encode(b"notes about the target").decode(),
+    }
+
+    response = client.post("/api/v1/knowledge/ingest", headers=_auth(), json=payload)
+
+    # The source and its artifact were committed before the index write failed,
+    # so the client gets the recorded source back and can reindex it by id
+    # instead of uploading the document again.
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "error"
+    assert [item.id for item in store.list_entities(KnowledgeSource)] == [
+        response.json()["id"]
+    ]
+    assert store.count(Artifact) == 1
+    reindex = client.post(
+        f"/api/v1/knowledge/{response.json()['id']}/reindex", headers=_auth()
+    )
+    assert reindex.status_code == 503
+    assert store.count(KnowledgeSource) == 1
+
+    library = client.post(
+        "/api/v1/library/items/ingest",
+        headers=_auth(),
+        json={
+            "filename": "playbook.txt",
+            "content_base64": base64.b64encode(b"reusable playbook").decode(),
+        },
+    )
+    assert library.status_code == 201, library.text
+    assert library.json()["status"] == "error"
+    assert [item.id for item in store.list_entities(LibraryItem)] == [
+        library.json()["id"]
+    ]
