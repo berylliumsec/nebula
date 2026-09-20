@@ -1,3 +1,4 @@
+import hashlib
 import base64
 from datetime import datetime, timedelta
 import json
@@ -1678,3 +1679,41 @@ def test_companion_stream_closes_with_4404_for_a_missing_session(api):
         ):
             pass
     assert exc_info.value.code == 4404
+
+
+def test_paired_device_is_recognised_beyond_the_first_thousand_sessions(api):
+    from datetime import timedelta
+
+    from nebula.v3.domain import PairedDeviceSession, utc_now
+
+    client, store, _ = api
+    expiry = utc_now() + timedelta(hours=1)
+    store.create_many(
+        [
+            PairedDeviceSession(
+                id=f"old-{index}",
+                name="Older device",
+                token_sha256=hashlib.sha256(f"old-{index}".encode()).hexdigest(),
+                csrf_sha256="0" * 64,
+                idle_expires_at=expiry,
+                absolute_expires_at=expiry,
+            )
+            for index in range(1_000)
+        ]
+    )
+    store.create(
+        PairedDeviceSession(
+            id="newest",
+            name="Newest phone",
+            token_sha256=hashlib.sha256(b"newest-token").hexdigest(),
+            csrf_sha256="0" * 64,
+            idle_expires_at=expiry,
+            absolute_expires_at=expiry,
+        )
+    )
+
+    response = client.get(
+        "/api/v1/engagements", cookies={"nebula_device": "newest-token"}
+    )
+
+    assert response.status_code == 200, response.text

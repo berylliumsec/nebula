@@ -2375,17 +2375,19 @@ def create_app(
         if not raw_token:
             return None
         digest = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-        for device in store.list_entities(PairedDeviceSession, limit=1_000):
-            if hmac.compare_digest(device.token_sha256, digest):
-                now = utc_now()
-                if (
-                    device.revoked_at is not None
-                    or now >= device.idle_expires_at
-                    or now >= device.absolute_expires_at
-                ):
-                    return None
-                return device
-        return None
+        # Look the hash up in the database: scanning the oldest 1,000 sessions
+        # stopped recognising any device paired after that many pairings.
+        device = store.find_entity(PairedDeviceSession, "token_sha256", digest)
+        if device is None:
+            return None
+        now = utc_now()
+        if (
+            device.revoked_at is not None
+            or now >= device.idle_expires_at
+            or now >= device.absolute_expires_at
+        ):
+            return None
+        return device
 
     def _cookie_websocket_authenticated(websocket: WebSocket) -> bool:
         device = _device_for_token(websocket.cookies.get("nebula_device"))

@@ -388,7 +388,7 @@ def format_document(document: _OpenDocument) -> list[dict[str, Any]]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         record_caught_exception(
-            "language_server",
+            "workspace",
             "language_server.format.unavailable",
             "Ruff could not format a bounded editor document.",
             exc,
@@ -401,7 +401,7 @@ def format_document(document: _OpenDocument) -> list[dict[str, Any]]:
         formatted = completed.stdout.decode("utf-8")
     except UnicodeDecodeError as exc:
         record_caught_exception(
-            "language_server",
+            "workspace",
             "language_server.format.invalid_output",
             "Ruff returned formatting output that was not UTF-8.",
             exc,
@@ -474,7 +474,7 @@ def _ruff_diagnostics(document: _OpenDocument) -> list[dict[str, Any]]:
         )
     except (OSError, subprocess.SubprocessError) as exc:
         record_caught_exception(
-            "language_server",
+            "workspace",
             "language_server.ruff.failed",
             "Ruff could not analyze editor-supplied source.",
             exc,
@@ -487,7 +487,7 @@ def _ruff_diagnostics(document: _OpenDocument) -> list[dict[str, Any]]:
         records = json.loads(completed.stdout or b"[]")
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         record_caught_exception(
-            "language_server",
+            "workspace",
             "language_server.ruff.invalid_output",
             "Ruff returned invalid bounded diagnostics.",
             exc,
@@ -775,7 +775,7 @@ class LanguageServerSession:
             )
         except Exception as exc:
             record_caught_exception(
-                "language_server",
+                "workspace",
                 "language_server.request.failed",
                 "A bounded language-server request failed.",
                 exc,
