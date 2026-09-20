@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import json
 from pathlib import Path
 
@@ -8,7 +9,7 @@ from pydantic import ValidationError
 
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3 import automation_runtime
+from nebula.v3 import automation_runtime, tool_results
 from nebula.v3.automation_runtime import (
     AutomationRuntimeManager,
     AutomationPolicyDenied,
@@ -1162,7 +1163,7 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
                 tool_call_id=call.id,
                 query="unique-needle",
             )
-        with pytest.raises(ToolOutputQueryError, match="deadline"):
+        with pytest.raises(ToolOutputQueryError, match="regular-expression"):
             ToolOutputService(store, artifacts, regex_deadline_seconds=0).search(
                 engagement_id=engagement.id,
                 owner_id="mission-owner",
@@ -1172,6 +1173,160 @@ def test_runtime_output_artifacts_are_owner_scoped_searchable_and_bounded(tmp_pa
             )
 
     asyncio.run(scenario())
+
+
+def _searchable_tool_call(store, artifacts, engagement, *, call_id, body):
+    call = store.create(
+        ToolCall(
+            id=call_id,
+            engagement_id=engagement.id,
+            run_id="mission-owner",
+            origin=ToolCallOrigin.MISSION,
+            tool_name="run_command",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+        )
+    )
+    store.create(
+        artifacts.put_bytes(
+            body,
+            engagement_id=engagement.id,
+            filename=f"{call_id}.stdout",
+            media_type="text/plain",
+            metadata={"tool_call_id": call.id, "kind": "stdout", "searchable": True},
+        )
+    )
+    return call
+
+
+def test_tool_output_search_budget_is_separate_from_the_regex_guard(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Large output"))
+    # About 3 MB of scan output with the needle on the last line: a literal
+    # search must finish instead of tripping over the 0.25 s regex guard.
+    body = b"ordinary scan output line with some padding text\n" * 60_000
+    call = _searchable_tool_call(
+        store,
+        artifacts,
+        engagement,
+        call_id="scan-call",
+        body=body + b"admin found here\n",
+    )
+
+    result = ToolOutputService(store, artifacts).search(
+        engagement_id=engagement.id,
+        owner_id="mission-owner",
+        tool_call_id=call.id,
+        query="admin",
+    )
+
+    assert [item["line"] for item in result["matches"]] == [60_001]
+    assert result["truncated"] is False
+    assert result["continuation_cursor"] is None
+    assert result["reason"] is None
+
+
+def test_tool_output_search_reports_budget_exhaustion_with_a_resumable_cursor(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Paged output"))
+    call = _searchable_tool_call(
+        store,
+        artifacts,
+        engagement,
+        call_id="paged-call",
+        body=b"".join(f"needle {number}\n".encode() for number in range(1, 401)),
+    )
+    # Every clock read advances one millisecond, so each page examines about
+    # twenty lines before the budget fires with matches still pending context.
+    ticks = itertools.count()
+    monkeypatch.setattr(tool_results, "monotonic", lambda: next(ticks) * 0.001)
+    service = ToolOutputService(store, artifacts, search_seconds=0.02)
+
+    pages = []
+    cursor = None
+    for _ in range(200):
+        page = service.search(
+            engagement_id=engagement.id,
+            owner_id="mission-owner",
+            tool_call_id=call.id,
+            query="needle",
+            context_lines=2,
+            match_limit=100,
+            cursor=cursor,
+        )
+        pages.append(page)
+        if not page["truncated"]:
+            break
+        assert "time budget" in page["reason"]
+        assert page["continuation_cursor"]
+        cursor = page["continuation_cursor"]
+    else:
+        pytest.fail("the search never completed")
+
+    assert len(pages) > 1
+    assert pages[-1]["reason"] is None
+    reported = [item["line"] for page in pages for item in page["matches"]]
+    assert reported == list(range(1, 401))
+    for page in pages:
+        for item in page["matches"]:
+            if 3 <= item["line"] <= 398:
+                assert [line["line"] for line in item["context"]] == list(
+                    range(item["line"] - 2, item["line"] + 3)
+                )
+
+
+def test_tool_output_search_rejects_a_cursor_that_no_longer_resolves(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Cursor reuse"))
+    first = _searchable_tool_call(
+        store, artifacts, engagement, call_id="first-call", body=b"needle\nneedle\n"
+    )
+    second = _searchable_tool_call(
+        store, artifacts, engagement, call_id="second-call", body=b"needle\n"
+    )
+    service = ToolOutputService(store, artifacts)
+    page = service.search(
+        engagement_id=engagement.id,
+        owner_id="mission-owner",
+        tool_call_id=first.id,
+        query="needle",
+        match_limit=1,
+    )
+    assert page["truncated"] is True
+
+    with pytest.raises(ToolOutputQueryError, match="continuation cursor"):
+        service.search(
+            engagement_id=engagement.id,
+            owner_id="mission-owner",
+            tool_call_id=second.id,
+            query="needle",
+            cursor=page["continuation_cursor"],
+        )
+
+
+def test_legacy_results_without_a_recorded_status_are_not_replayed_as_failed():
+    for payload in ({}, {"detail": "connection refused"}):
+        result = sanitize_model_history_result(
+            payload, tool_call_id="legacy-call", tool_name="run_command"
+        )
+        assert result["schema"] == "nebula.tool-result/v2"
+        assert result["status"] == "completed"
+        assert result["incomplete"] is True
+    denied = sanitize_model_history_result(
+        {"status": "denied", "detail": "blocked by scope", "rule": "scope"},
+        tool_call_id="legacy-call",
+        tool_name="run_command",
+    )
+    assert denied == {
+        "status": "denied",
+        "detail": "blocked by scope",
+        "rule": "scope",
+    }
 
 
 def test_workspace_retrieval_is_bounded_and_rejects_symlink_escape(tmp_path):

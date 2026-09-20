@@ -34,6 +34,7 @@ MAX_EXCERPT_BYTES = 8 * 1024
 MAX_READ_LINES = 200
 MAX_REGEX_PATTERN = 512
 DEFAULT_REGEX_DEADLINE_SECONDS = 0.25
+DEFAULT_TOOL_OUTPUT_SEARCH_SECONDS = 5.0
 DEFAULT_WORKSPACE_SEARCH_SECONDS = 5.0
 DEFAULT_WORKSPACE_SEARCH_BYTES = 64 * 1024 * 1024
 WORKSPACE_SEARCH_EXCLUDES = frozenset(
@@ -258,6 +259,18 @@ class ToolOutputQueryError(ValueError):
     pass
 
 
+class _SearchBudgetExhausted(ToolOutputQueryError):
+    """The whole-search time budget ran out before the scan finished.
+
+    ``resume_line`` is the first line whose match the interrupted scan had not
+    reported yet, so a continuation from it neither skips nor repeats a match.
+    """
+
+    def __init__(self, *, resume_line: int | None = None) -> None:
+        super().__init__("search deadline exceeded")
+        self.resume_line = resume_line
+
+
 class ToolOutputService:
     """Ownership-checked, streaming access to action output artifacts."""
 
@@ -266,10 +279,12 @@ class ToolOutputService:
         store: NebulaStore,
         artifact_store: ArtifactStore,
         *,
+        search_seconds: float = DEFAULT_TOOL_OUTPUT_SEARCH_SECONDS,
         regex_deadline_seconds: float = DEFAULT_REGEX_DEADLINE_SECONDS,
     ) -> None:
         self.store = store
         self.artifact_store = artifact_store
+        self.search_seconds = search_seconds
         self.regex_deadline_seconds = regex_deadline_seconds
 
     def search(
@@ -298,16 +313,19 @@ class ToolOutputService:
         )
         artifacts = self._call_artifacts(call)
         start_artifact, start_line = _decode_cursor(cursor)
+        # The regex guard bounds one line; the search budget bounds the scan.
         matcher = _Matcher(
             query,
             mode=mode,
             case_sensitive=case_sensitive,
-            deadline=monotonic() + self.regex_deadline_seconds,
+            deadline=monotonic() + self.search_seconds,
+            regex_seconds=self.regex_deadline_seconds,
         )
         matches: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         encoded_size = 0
         next_cursor: str | None = None
+        reason: str | None = None
         started = start_artifact is None
         for artifact in artifacts:
             if not started:
@@ -320,45 +338,62 @@ class ToolOutputService:
                 )
                 continue
             line_floor = start_line if artifact.id == start_artifact else 1
-            with self.artifact_store.open(artifact) as stream:
-                for line_no, context in _matching_lines(
-                    stream,
-                    matcher=matcher,
-                    context_lines=context_lines,
-                    line_floor=line_floor,
-                ):
-                    bounded_context = []
-                    for line in context:
-                        text = str(line["text"])
-                        visible = _utf8_prefix(text, 384)
-                        bounded_context.append(
-                            {
-                                **line,
-                                "text": visible,
-                                **({"line_truncated": True} if visible != text else {}),
-                            }
-                        )
-                    item = {
-                        "artifact_id": artifact.id,
-                        "filename": artifact.filename,
-                        "line": line_no,
-                        "context": bounded_context,
-                    }
-                    item_size = len(
-                        json.dumps(
-                            item, ensure_ascii=False, separators=(",", ":")
-                        ).encode()
-                    )
-                    if matches and (
-                        len(matches) >= match_limit
-                        or encoded_size + item_size > MAX_EXCERPT_BYTES - 2048
+            try:
+                with self.artifact_store.open(artifact) as stream:
+                    for line_no, context in _matching_lines(
+                        stream,
+                        matcher=matcher,
+                        context_lines=context_lines,
+                        line_floor=line_floor,
                     ):
-                        next_cursor = _encode_cursor(artifact.id, line_no)
-                        break
-                    matches.append(item)
-                    encoded_size += item_size
+                        bounded_context = []
+                        for line in context:
+                            text = str(line["text"])
+                            visible = _utf8_prefix(text, 384)
+                            bounded_context.append(
+                                {
+                                    **line,
+                                    "text": visible,
+                                    **(
+                                        {"line_truncated": True}
+                                        if visible != text
+                                        else {}
+                                    ),
+                                }
+                            )
+                        item = {
+                            "artifact_id": artifact.id,
+                            "filename": artifact.filename,
+                            "line": line_no,
+                            "context": bounded_context,
+                        }
+                        item_size = len(
+                            json.dumps(
+                                item, ensure_ascii=False, separators=(",", ":")
+                            ).encode()
+                        )
+                        if matches and (
+                            len(matches) >= match_limit
+                            or encoded_size + item_size > MAX_EXCERPT_BYTES - 2048
+                        ):
+                            next_cursor = _encode_cursor(artifact.id, line_no)
+                            break
+                        matches.append(item)
+                        encoded_size += item_size
+            except _SearchBudgetExhausted as exc:
+                # diagnostic-expected: an exhausted search budget is an explicit partial page with a resume cursor.
+                if exc.resume_line is None:
+                    raise
+                next_cursor = _encode_cursor(artifact.id, exc.resume_line)
+                reason = (
+                    "search time budget exhausted; continue with continuation_cursor"
+                )
             if next_cursor is not None:
                 break
+        if not started:
+            raise ToolOutputQueryError(
+                "continuation cursor is no longer available; restart the search"
+            )
         return {
             "schema": "nebula.tool-output.search/v1",
             "tool_call_id": call.id,
@@ -368,6 +403,7 @@ class ToolOutputService:
             "skipped": skipped[:20],
             "truncated": next_cursor is not None,
             "continuation_cursor": next_cursor,
+            "reason": reason,
         }
 
     def read(
@@ -831,16 +867,15 @@ class _Matcher:
     def matches(self, value: str) -> bool:
         remaining = self.deadline - monotonic()
         if remaining <= 0:
-            raise ToolOutputQueryError("search deadline exceeded")
+            raise _SearchBudgetExhausted()
         if self.pattern is not None:
+            granted = min(remaining, self.regex_seconds)
             try:
-                return (
-                    self.pattern.search(
-                        value, timeout=min(remaining, self.regex_seconds)
-                    )
-                    is not None
-                )
+                return self.pattern.search(value, timeout=granted) is not None
             except TimeoutError as exc:
+                if granted < self.regex_seconds:
+                    # The search budget cut the regex short; its own guard did not.
+                    raise _SearchBudgetExhausted() from exc
                 raise ToolOutputQueryError(
                     "regular-expression search timed out"
                 ) from exc
@@ -890,7 +925,17 @@ def _matching_lines(
         for match in completed:
             pending.remove(match)
             yield int(match["line"]), list(match["context"])
-        if line_no >= line_floor and matcher.matches(text):
+        matched = False
+        if line_no >= line_floor:
+            try:
+                matched = matcher.matches(text)
+            except _SearchBudgetExhausted as exc:
+                # diagnostic-expected: the interrupted position travels with the error so the caller can resume.
+                exc.resume_line = min(
+                    [line_no, *(int(match["line"]) for match in pending)]
+                )
+                raise
+        if matched:
             context = [{"line": number, "text": value} for number, value in before]
             context.append({"line": line_no, "text": text})
             if context_lines == 0:
@@ -1000,9 +1045,17 @@ def sanitize_model_history_result(
     if decoded is not None and decoded.get("schema") in _HISTORY_RESULT_SCHEMAS:
         bounded = json.loads(serialize_model_result(decoded))
         return bounded if isinstance(bounded, dict) else {}
-    if decoded is not None and set(decoded).issubset({"status", "detail", "rule"}):
+    if (
+        decoded is not None
+        and isinstance(decoded.get("status"), str)
+        and decoded["status"]
+        and set(decoded).issubset({"status", "detail", "rule"})
+    ):
+        # Only a recorded status envelope is replayed as one; a bare ``{}`` or
+        # ``{"detail": ...}`` did not necessarily fail and falls through to the
+        # bounded legacy receipt below.
         safe_status = {
-            "status": str(decoded.get("status") or "failed")[:100],
+            "status": decoded["status"][:100],
             "detail": redacted_display(str(decoded.get("detail") or ""))[:1_000],
         }
         if decoded.get("rule") is not None:
