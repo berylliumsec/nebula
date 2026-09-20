@@ -13,6 +13,9 @@ class ModelDescriptor(BaseModel):
     canonical_slug: str | None = None
     context_window: int | None = None
     max_output_tokens: int | None = None
+    # OpenRouter's `top_provider.context_length`: the window the primary route
+    # serves, where `context_window` is the maximum across every endpoint.
+    primary_route_context_window: int | None = None
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
     supported_parameters: list[str] = Field(default_factory=list)
@@ -165,6 +168,7 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
                 ),
                 context_window=_positive_int(item.get("context_length")),
                 max_output_tokens=_positive_int(top.get("max_completion_tokens")),
+                primary_route_context_window=_positive_int(top.get("context_length")),
                 input_modalities=_strings(architecture.get("input_modalities")),
                 output_modalities=_strings(architecture.get("output_modalities")),
                 supported_parameters=_strings(item.get("supported_parameters")),

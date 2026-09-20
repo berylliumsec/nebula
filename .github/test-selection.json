@@ -1,23 +1,19 @@
 {
-  "change_digest": "e79b669e9b4444f70562c099f9e791c550f101c3417638fd4e8eaf799d3b1987",
-  "reviewed_by": "Claude review of switching to an unverified model inside a conversation",
-  "reason": "In an existing provider conversation the Assistant settings model picker runs runtime_switch_preflight before it moves the selection. Core refuses a model it has no `required-tool-v1` verification for whenever the conversation has tools on -- which is the default -- and proposeProviderRuntime returned on that refusal without calling setModel, so the <select> snapped back to the conversation's saved model and nothing else happened. The verification that would have unblocked it runs from an effect keyed on `model`, so it never fired for a model the operator could not select: the refusal was self-sustaining and the only ways out were the provider card in Settings or starting a new conversation, where proposeProviderRuntime takes its no-session branch, sets the model immediately and lets that effect verify it. A fresh OpenRouter profile verifies models one at a time as they are used, so on the live Core only 5 of the catalogue's models were verified and every other model was unselectable inside an existing chat. ChatRuntimeSwitchPreflight now carries `reason_code` naming each refusal (provider_disabled, model_unavailable, model_not_tool_verified, context_or_privacy) so a caller can act on one without matching prose, and on model_not_tool_verified the picker verifies the model and re-runs the preflight once, exactly as a new conversation does, before reporting any remaining refusal. A verification failure is reported and the selection stays put. test_api pins the new reason_code; interface.spec.ts covers the switch landing after one verification call, and fails without the retry. Rebased onto #405, #413 and #415; the selected suites were re-run on that base and the python count moved from 135 to 137 as those merges added cases to the same files.",
-  "exclusions": "No frontend unit tests: the changed code is inside SessionsPage's proposeProviderRuntime, which has no unit suite; the client/type change is one mapped field that the new e2e exercises end to end. No native tests: no Tauri or Rust change. No screenshot baselines: no rendered surface changes. Playwright is area:provider-runtime-switch only, on the three profiles that catalogue it (desktop, Android Chromium, iPhone WebKit); the pre-existing compaction-confirmation journey in that area re-runs because it shares proposeProviderRuntime. area:assistant is excluded because it carries the whole assistant-real-desktop real-Core project for a change that does not touch the chat stream, and area:core-api is excluded because the preflight response only gains one optional field. tests/test_playwright_impact.py and tests/test_test_selection.py are included for the manifest edit. No full suites.",
+  "change_digest": "269a12347c9d5179f89cf9c68487b35ffb69dfa0290b5f5818ea098c1a344a37",
+  "reviewed_by": "Claude review of the unverified-OpenRouter context ceiling and silent prompt compression",
+  "reason": "Two independent OpenRouter context-sizing defects. (1) Until a model's endpoints are verified, resolve_context_limits held every OpenRouter model to the flat 8,192-token floor, because the catalog's `context_length` is the maximum across endpoints and automatic routing may land on a smaller one. OpenRouter also publishes `top_provider.context_length` -- the window the primary route actually serves -- which the catalog parser was discarding. ModelDescriptor now keeps it as `primary_route_context_window`, and the unverified branch caps against that instead of the floor, so the first turn on a model is sized from OpenRouter's own primary-route figure rather than a number no model serves; the floor still applies when the field is absent. The same route publishes `max_completion_tokens`, already stored as max_output_tokens, so the companion 2,048-token output floor lifts with it. Verified route limits still win, and a configured ceiling still narrows. (2) OpenRouter enables context compression by default on endpoints of 8K or less, which silently drops the middle of an oversized prompt; Nebula sizes its own context and already recovers from a rejected request, so the chat payload now sends plugins:[{id:context-compression,enabled:false}] and takes the error instead. test_context pins the primary-route ceiling, the configured-ceiling narrowing and the verified-route precedence; test_providers pins the parsed field and that the plugin is disabled for OpenRouter and absent elsewhere.",
+  "exclusions": "No frontend unit tests and no Playwright: nothing rendered changes. The Assistant context meter already reads capacitySource/routeLimitsRequired from the API and keeps showing an unverified OpenRouter model as estimated -- only the number it prints moves -- so no screenshot baseline or area selector applies. Its 'safe N-token ceiling' wording is now the primary-route figure rather than the floor; a copy change is left for the follow-up that pins routing, which is where the number stops being an estimate. No native tests: no Tauri or Rust change. tests/test_playwright_impact.py and tests/test_test_selection.py are not selected because neither the impact manifest nor the selection script changed. test_api and test_chat are excluded: the descriptor field is additive and both the capability-verify and chat recovery paths already round-trip descriptors opaquely. Two test_orchestration compaction tests fail on origin/main at f6f42a9 and are unrelated to this diff. No full suites.",
   "expected_tests": {
-    "python": 137,
+    "python": 97,
     "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_chat.py",
-    "tests/test_playwright_impact.py",
-    "tests/test_test_selection.py"
+    "tests/v3/test_context.py",
+    "tests/v3/test_providers.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:provider-runtime-switch"
-  ]
+  "playwright": []
 }

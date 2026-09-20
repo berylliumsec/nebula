@@ -294,6 +294,10 @@ def test_openai_compatible_keeps_reasoning_out_of_the_reply():
         )
     )
     assert observed["payload"]["reasoning"] == {"exclude": False}
+    # Oversized prompts must fail loudly instead of losing their middle.
+    assert observed["payload"]["plugins"] == [
+        {"id": "context-compression", "enabled": False}
+    ]
     assert result.text == "FLASH_OK"
     assert result.reasoning == "Private chain of thought."
 
@@ -714,7 +718,10 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
                             "output_modalities": ["text"],
                         },
                         "supported_parameters": ["tools", "max_tokens"],
-                        "top_provider": {"max_completion_tokens": 32_000},
+                        "top_provider": {
+                            "max_completion_tokens": 32_000,
+                            "context_length": 131_072,
+                        },
                         "pricing": {"prompt": "0.000003", "completion": "0.000015"},
                         "expiration_date": "2027-06-30",
                     }
@@ -745,6 +752,7 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
     assert descriptor.name == "Claude Sonnet 4.5"
     assert descriptor.context_window == 200_000
     assert descriptor.max_output_tokens == 32_000
+    assert descriptor.primary_route_context_window == 131_072
     assert descriptor.pricing["prompt"] == "0.000003"
     assert descriptor.expiration_date == "2027-06-30"
 
@@ -917,6 +925,26 @@ def test_openrouter_tool_payload_requires_compatible_route():
     assert "parallel_tool_calls" not in payload
     # Unknown model parameters: drop optional ones rather than fail routing.
     assert "reasoning" not in payload
+
+
+def test_context_compression_is_disabled_only_for_openrouter():
+    def payload(flavor: ProviderFlavor) -> dict:
+        provider = OpenAICompatibleProvider(
+            config_from_catalog(
+                provider_id=f"payload-{flavor.value}",
+                flavor=flavor,
+                api_key_value="test-key",
+                default_model="test/model",
+            )
+        )
+        request = ModelRequest(messages=[ModelMessage(role="user", content="Hi")])
+        return provider._payload(request, provider.require(request))
+
+    assert payload(ProviderFlavor.OPENROUTER)["plugins"] == [
+        {"id": "context-compression", "enabled": False}
+    ]
+    # The plugin is an OpenRouter concept; other wire-compatible hosts reject it.
+    assert "plugins" not in payload(ProviderFlavor.OPENAI)
 
 
 def test_openrouter_tool_payload_sends_only_parameters_the_model_advertises():
