@@ -29,6 +29,7 @@ export function displayHost(url: string): string {
   try {
     return new URL(url).host.replace(/^www\./, "");
   } catch {
+    // diagnostic-expected: an unparseable URL is shown as written, not reported
     return url.slice(0, 60);
   }
 }
