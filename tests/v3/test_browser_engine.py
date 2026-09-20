@@ -149,3 +149,52 @@ def test_companion_navigation_outlives_the_health_check_deadline():
             await server.wait_closed()
 
     asyncio.run(exercise())
+
+
+def test_action_client_deadline_covers_playwright_operation_timeout():
+    from nebula.v3.browser_engine import (
+        BROWSER_ACTION_TIMEOUT_SECONDS,
+        BrowserEngineReceipt,
+    )
+
+    deadlines: dict[str, dict[str, float | None]] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        deadlines[request.url.path] = request.extensions["timeout"]
+        if request.url.path == "/v1/actions":
+            return httpx.Response(
+                200,
+                json=BrowserEngineReceipt(
+                    action_token="action-slow", state="complete"
+                ).model_dump(mode="json"),
+            )
+        return httpx.Response(500)
+
+    action = BrowserEngineAction(
+        action_token="action-slow",
+        assessment_id="assessment-1",
+        session_id="session-1",
+        identity_id="identity-1",
+        tab_id="tab-1",
+        kind="wait",
+        locator={"role": "status", "name": "Done"},
+        side_effect="none",
+    )
+
+    async def exercise():
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            adapter = LocalBrowserdAdapter(
+                "http://127.0.0.1:4711", "token", client=client
+            )
+            receipt = await adapter.execute(action)
+            await adapter.readiness()
+        finally:
+            await client.aclose()
+        return receipt
+
+    receipt = asyncio.run(exercise())
+    assert receipt.state == "complete"
+    assert BROWSER_ACTION_TIMEOUT_SECONDS >= 30.0  # Playwright's default budget
+    assert deadlines["/v1/actions"]["read"] >= BROWSER_ACTION_TIMEOUT_SECONDS
+    assert deadlines["/v1/readiness"]["read"] == 5.0

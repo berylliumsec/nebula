@@ -122,9 +122,21 @@ async def operate(
             )
         from uuid import uuid4
 
-        selected = str(uuid4())
         first = await manager.page_for_screencast(identity_id, receipt.tab_ids[0])
-        manager._tabs[(identity_id, selected)] = await first.context.new_page()
+        opened = await first.context.new_page()
+        # browserd registers pages as the context reports them; only assign an
+        # id here when the manager has not already done so.
+        selected = next(
+            (
+                tab_id
+                for (owner, tab_id), page in manager._tabs.items()
+                if owner == identity_id and page is opened
+            ),
+            None,
+        )
+        if selected is None:
+            selected = str(uuid4())
+            manager._tabs[(identity_id, selected)] = opened
         receipt = await manager.ensure_identity(identity_id)
     elif request.operation == "close_tab":
         page = await manager.page_for_screencast(identity_id, request.tab_id)
@@ -140,6 +152,8 @@ async def operate(
         tabs = []
         for tab_id in receipt.tab_ids:
             page = await manager.page_for_screencast(identity_id, tab_id)
+            if page.is_closed():
+                continue
             tabs.append(
                 {"id": tab_id, "url": page.url, "title": (await page.title())[:500]}
             )

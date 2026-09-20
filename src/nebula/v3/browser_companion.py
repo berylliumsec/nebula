@@ -10,7 +10,7 @@ import base64
 import hashlib
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, ClassVar
 from weakref import WeakKeyDictionary, ref
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -19,7 +19,11 @@ from uuid import uuid4
 import httpx
 from pydantic import Field, SecretStr
 
-from .browser_engine import BrowserEngineRegistry, LocalBrowserdAdapter
+from .browser_engine import (
+    BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS,
+    BrowserEngineRegistry,
+    LocalBrowserdAdapter,
+)
 from .browser_security import BrowserSecurityService
 from .domain import (
     Artifact,
@@ -63,6 +67,13 @@ class CompanionFileCreate(NebulaModel):
         pattern=r"^[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+$",
     )
     content_base64: SecretStr = Field(max_length=5592408)
+
+
+# A ``running`` action older than its approval window plus this grace lost the
+# decider that would have finished it (Core restart or interrupted turn).
+STALE_RUNNING_ACTION_GRACE = timedelta(
+    seconds=2 * BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS
+)
 
 
 class BrowserCompanion:
@@ -519,18 +530,11 @@ class BrowserCompanion:
                 )
             adapter = await self.adapter()
             if request.operation not in {"tabs", "navigate", "new_tab", "close_tab"}:
-                tabs = await adapter._request(
-                    "POST",
-                    "/v1/companion/" + quote(session.identity_id, safe=""),
-                    {"operation": "tabs"},
+                tabs = await self._companion_call(
+                    adapter, session.identity_id, {"operation": "tabs"}
                 )
-                tabs.raise_for_status()
                 tab = next(
-                    (
-                        item
-                        for item in tabs.json()["tabs"]
-                        if item["id"] == request.tab_id
-                    ),
+                    (item for item in tabs["tabs"] if item["id"] == request.tab_id),
                     None,
                 )
                 if not tab:
@@ -574,29 +578,7 @@ class BrowserCompanion:
                         "Select an available credential attached to this browser; protected fills cannot contain plain text."
                     )
                 payload["text"] = protected[request.credential_ref]
-            try:
-                response = await adapter._request(
-                    "POST",
-                    "/v1/companion/" + quote(session.identity_id, safe=""),
-                    payload,
-                )
-            except httpx.TimeoutException as exc:
-                raise ValueError(
-                    "The host browser did not respond in time. Reconnect to check its current page before retrying; no action was replayed."
-                ) from exc
-            except httpx.TransportError as exc:
-                raise ValueError(
-                    "The host browser connection ended. Reconnect to restore the view; your conversation is saved."
-                ) from exc
-            if response.is_error and response.status_code == 504:
-                raise ValueError(
-                    "The host browser timed out loading or reading the page. Check the page and retry; no action was replayed."
-                )
-            if response.is_error:
-                raise ValueError(
-                    "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
-                )
-            result = response.json()
+            result = await self._companion_call(adapter, session.identity_id, payload)
             self._record_interaction(
                 session,
                 request,
@@ -651,6 +633,38 @@ class BrowserCompanion:
                         expected_revision=latest.revision,
                     )
             return result
+
+    async def _companion_call(
+        self, adapter: Any, identity_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Call browserd's companion endpoint, mapping failures to operator guidance.
+
+        Every companion request, including the pre-flight ``tabs`` check, goes
+        through here so a slow or wedged browserd never surfaces as a raw
+        transport error or an unhandled 500.
+        """
+        try:
+            response = await adapter._request(
+                "POST", "/v1/companion/" + quote(identity_id, safe=""), payload
+            )
+        except httpx.TimeoutException as exc:
+            raise ValueError(
+                "The host browser did not respond in time. Reconnect to check its current page before retrying; no action was replayed."
+            ) from exc
+        except httpx.TransportError as exc:
+            raise ValueError(
+                "The host browser connection ended. Reconnect to restore the view; your conversation is saved."
+            ) from exc
+        if response.is_error and response.status_code == 504:
+            raise ValueError(
+                "The host browser timed out loading or reading the page. Check the page and retry; no action was replayed."
+            )
+        if response.is_error:
+            raise ValueError(
+                "The browser operation could not complete. Refresh the page context and retry; no action is replayed automatically."
+            )
+        result: dict[str, Any] = response.json()
+        return result
 
     def actions(self, session_id: str) -> list[CompanionAction]:
         session = self.session(session_id)
@@ -712,15 +726,32 @@ class BrowserCompanion:
             self.invalidate_pending_actions(session_id)
 
     def invalidate_pending_actions(self, session_id: str) -> None:
-        """Invalidate approvals without changing the operator's control grant."""
+        """Invalidate approvals without changing the operator's control grant.
+
+        ``running`` rows left behind by an interrupted turn or a Core restart
+        are moved to ``failed`` so they read as terminal instead of in flight.
+        """
+        now = datetime.now(timezone.utc)
         for action in self.actions(session_id):
             if action.status == "pending":
-                self.store.update(
-                    CompanionAction,
-                    action.id,
-                    {"status": "revoked"},
-                    expected_revision=action.revision,
-                )
+                status = "revoked"
+            elif action.status == "running" and self._running_is_stale(action, now):
+                status = "failed"
+            else:
+                continue
+            self.store.update(
+                CompanionAction,
+                action.id,
+                {"status": status},
+                expected_revision=action.revision,
+            )
+
+    def _running_is_stale(self, action: CompanionAction, now: datetime) -> bool:
+        if not self.turn_active(action.chat_turn_id):
+            return True
+        # A live action cannot outlast its approval window by more than two
+        # companion operation budgets; anything older lost its decider.
+        return action.expires_at + STALE_RUNNING_ACTION_GRACE <= now
 
     async def decide(
         self, session_id: str, action_id: str, decision: str
@@ -765,7 +796,9 @@ class BrowserCompanion:
                 approved=True,
                 chat_turn_id=action.chat_turn_id,
             )
-        except Exception:
+        except BaseException:
+            # diagnostic-expected: cancellation of the chat turn must leave a
+            # terminal state too; the exception is re-raised unchanged.
             self.store.update(
                 CompanionAction,
                 action.id,

@@ -438,12 +438,50 @@ class BrowserdManager:
                                 self._tabs.pop(key, None)
 
                 context.on("close", forget_closed_context)
-                pages = list(context.pages) or [await context.new_page()]
-                for page in pages:
-                    tab_id = str(uuid4())
-                    self._tabs[(identity_id, tab_id)] = page
-            tab_ids = [tab_id for (owner, tab_id) in self._tabs if owner == identity_id]
+
+                def register_opened_page(page: Any) -> None:
+                    # Popups and ``context.new_page`` both arrive here, so every
+                    # page the site or an operator opens becomes a tracked tab.
+                    if self._contexts.get(identity_id) is context:
+                        self._register_tab(identity_id, page)
+
+                context.on("page", register_opened_page)
+                for page in list(context.pages) or [await context.new_page()]:
+                    self._register_tab(identity_id, page)
+            tab_ids = self._live_tab_ids(identity_id)
+            if not tab_ids:
+                tab_ids = [self._register_tab(identity_id, await context.new_page())]
         return BrowserdIdentityReceipt(identity_id=identity_id, tab_ids=tab_ids)
+
+    def _register_tab(self, identity_id: str, page: Any) -> str:
+        """Track ``page`` under one tab id; re-registering returns the same id."""
+        for (owner, tab_id), known in self._tabs.items():
+            if owner == identity_id and known is page:
+                return tab_id
+        tab_id = str(uuid4())
+        self._tabs[(identity_id, tab_id)] = page
+
+        def forget_closed_page(_: Any) -> None:
+            # Ctrl+W in the headed window or ``window.close()`` must not leave a
+            # dead page behind: ``page.title()`` on it raises and wedges listing.
+            for key, known in list(self._tabs.items()):
+                if key[0] == identity_id and known is page:
+                    self._tabs.pop(key, None)
+
+        page.on("close", forget_closed_page)
+        return tab_id
+
+    def _live_tab_ids(self, identity_id: str) -> list[str]:
+        tab_ids: list[str] = []
+        for (owner, tab_id), page in list(self._tabs.items()):
+            if owner != identity_id:
+                continue
+            if page.is_closed():
+                # The close event may not have been delivered yet.
+                self._tabs.pop((owner, tab_id), None)
+                continue
+            tab_ids.append(tab_id)
+        return tab_ids
 
     async def _page(self, action: BrowserEngineAction) -> Any:
         await self.ensure_identity(action.identity_id)

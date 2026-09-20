@@ -327,3 +327,93 @@ def test_validation_authority_is_frozen_idempotent_and_revocable(tmp_path):
         == BrowserIssueValidationStatus.INCONCLUSIVE
     )
     assert service.revoke_validation(candidate.id, revoke, "operator").id == grant.id
+
+
+class SwitchableManagedChromium(ReadyManagedChromium):
+    def __init__(self) -> None:
+        self.available = True
+        self.stopped: list[str] = []
+
+    async def readiness(self) -> BrowserEngineCapability:
+        if self.available:
+            return await super().readiness()
+        return BrowserEngineCapability(
+            adapter="managed-chromium",
+            display_name="Managed Chromium",
+            state=BrowserEngineState.UNAVAILABLE,
+            unavailability_reason="browserd exited",
+            recovery_action="Prepare the managed browser runtime.",
+        )
+
+    async def stop(self, assessment_id: str) -> None:
+        assert self.available, "stop reached an engine that is not ready"
+        self.stopped.append(assessment_id)
+
+
+def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(create_app(store, auth_token="test-token"))
+    engagement, _ = project(client, store)
+    browser = BrowserSecurityService(store).workspace(engagement.id)
+    engine = SwitchableManagedChromium()
+    service = BrowserAssessmentService(store, BrowserEngineRegistry([engine]))
+    request = BrowserAssessmentCreateRequest(
+        name="Explore",
+        objective="Explore the authorized target.",
+        profile=BrowserAssessmentProfile.EXPLORE,
+        session_id=browser.sessions[0].id,
+        identity_ids=[browser.identities[0].id],
+        primary_identity_id=browser.identities[0].id,
+        target_urls=["https://app.example.test/"],
+    )
+
+    def transition(assessment, action, **extra):
+        return asyncio.run(
+            service.transition(
+                assessment.id,
+                BrowserAssessmentTransitionRequest(
+                    expected_revision=assessment.revision,
+                    action=action,
+                    idempotency_key=f"{action}-{assessment.id}",
+                    **extra,
+                ),
+                "operator",
+            )
+        )
+
+    # A draft created while Chromium was missing can be revoked without it.
+    engine.available = False
+    draft = asyncio.run(service.create(engagement.id, request, "operator"))
+    assert draft.status == BrowserAssessmentStatus.DRAFT
+    revoked = transition(draft, "revoke", reason="Wrong target")
+    assert revoked.status == BrowserAssessmentStatus.REVOKED
+    assert revoked.completed_at is not None
+
+    # A running assessment whose browserd died can still be stopped.
+    engine.available = True
+    running = transition(
+        asyncio.run(service.create(engagement.id, request, "operator")), "start"
+    )
+    assert running.status == BrowserAssessmentStatus.RUNNING
+    engine.available = False
+    assert transition(running, "stop").status == BrowserAssessmentStatus.STOPPED
+
+    # Never-started assessments do not ask the engine to stop anything, while
+    # starting still requires a ready engine and running ones are stopped through it.
+    engine.available = True
+    ready = asyncio.run(service.create(engagement.id, request, "operator"))
+    assert ready.status == BrowserAssessmentStatus.READY
+    assert transition(ready, "revoke", reason="Not needed").status == (
+        BrowserAssessmentStatus.REVOKED
+    )
+    assert engine.stopped == []
+    second = asyncio.run(service.create(engagement.id, request, "operator"))
+    engine.available = False
+    with pytest.raises(BrowserWorkflowError, match="unavailable"):
+        transition(second, "start")
+    engine.available = True
+    started = transition(second, "start")
+    assert transition(started, "revoke", reason="Done").status == (
+        BrowserAssessmentStatus.REVOKED
+    )
+    assert engine.stopped == [second.id]
