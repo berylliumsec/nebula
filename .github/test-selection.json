@@ -1,19 +1,19 @@
 {
-  "change_digest": "aefe4db1b7bbdf6cc6cf3cad120f8b82e86c5fd1a6ee960b6b341530ddc3ab1b",
-  "reviewed_by": "Claude review of alias targets missing from the account model catalog",
-  "reason": "#380 resolves an OpenRouter alias through `alias_target` before endpoint discovery, but the deploy showed the field never arrives: Nebula discovers models from `/v1/models/user` (catalog_source `openrouter:/models/user`), and that payload has no `alias_target` key at all - the live account catalog returned all 17 `~author/family-latest` entries with `alias_target: null`, while the public `/v1/models` catalog carries `{\"alias_target\": {\"slug\": \"deepseek/deepseek-v4.1-flash\"}}` for the same id. Without the field, discovery still queried the alias, still got an empty endpoint set, and the 8,192-token ceiling stayed. A health refresh now fills that one field from the public catalog when the account catalog contains an alias, reusing the existing paged fetch (extracted as `_openrouter_public_catalog`, which `_openrouter_models_served_by` now shares). The selection runs test_providers for the new health behaviour and the paging refactor, and the other three descriptor suites because they consume the descriptors this path produces.",
-  "exclusions": "No frontend unit tests: ui/src is untouched and no new field reaches the wire types the UI maps. No native tests: no Tauri or catalog-code change. No screenshot baselines: no rendered surface changes. No Playwright: the behaviour depends on the live OpenRouter account and public catalogs, which the Playwright stubs do not model; the mocked and real-Core journeys assert provider selection, not catalog enrichment. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites.",
+  "change_digest": "f9b1d3343d2662e9275c430c66a18dfc73704595d022adafd3bf0a16f95b6dd3",
+  "reviewed_by": "Claude review of batched chat tool calls",
+  "reason": "The chat routing loop accepted exactly one tool call per provider response: OpenRouter batches were truncated to the first call and every other shape failed the turn with \"provider must return exactly one sequential tool call\" (live failure err_6c33d2be, 2026-09-19). A routing response may now carry several calls; Core validates the whole batch first, then executes it one call at a time, in order, so each call keeps its own durable step, budget, approval and event pair. The routing request stops disabling provider parallelism, and a required routing step that comes back with no call now answers from the results already gathered instead of failing. tests/v3/test_chat_tool_loop.py covers the batch contract end to end (order, steps, replay, finish_response inside a batch, mid-batch approval pause, mid-batch budget exhaustion, duplicate ids, empty response); tests/v3/test_provider_contracts.py pins the wire contract for a batched request on the Chat Completions and Anthropic adapters; tests/v3/test_tool_catalog.py and tests/v3/test_chat_subagents.py are the other suites that drive this loop, including the tool_catalog.call unwrapping that moved into the new batch validator.",
+  "exclusions": "No frontend or native change: the loop still emits one tool_started/tool_completed pair per call, in order, so the transcript is unchanged and no ui/src file is touched. No Playwright area is selected. The only catalogued journey that drives a real model through this loop is provider-live-openrouter-gui, which skips in CI because no workflow provides OPENROUTER_API_KEY; selecting it would spend a real-Core job on a skip. That coverage was taken locally instead: a Core built from this branch, with a live OpenRouter profile on deepseek/deepseek-v4-flash-vision-exp, answered a three-file read with one batched routing response and three durable steps 35 ms apart, where the same prompt on origin/main took three routing round trips. The mission/specialist loop in agent_tooling.py keeps its own one-call-per-step contract and is not changed here.",
   "expected_tests": {
-    "python": 163,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_context.py",
-    "tests/v3/test_providers.py"
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_chat_subagents.py"
   ],
   "frontend": [],
   "native": [],

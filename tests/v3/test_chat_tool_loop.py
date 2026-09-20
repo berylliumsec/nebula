@@ -5,6 +5,7 @@ import pytest
 
 from nebula.v3.chat import ChatError, ChatService, PreparedChat
 from nebula.v3.domain import (
+    Approval,
     ChatGoal,
     ChatGoalStatus,
     ChatMessage,
@@ -32,7 +33,12 @@ from nebula.v3.providers import (
 )
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tools import PolicyDenied, ToolExecutionResult, ToolSpec
+from nebula.v3.tools import (
+    ApprovalRequired,
+    PolicyDenied,
+    ToolExecutionResult,
+    ToolSpec,
+)
 
 
 class ScriptedProvider(ModelProvider):
@@ -97,7 +103,14 @@ def _response(*, calls: list[ToolCall] | None = None, text: str = "") -> ModelRe
     )
 
 
-def _prepared(tmp_path: Path, responses: list[ModelResponse], broker: RecordingBroker):
+def _prepared(
+    tmp_path: Path,
+    responses: list[ModelResponse],
+    broker: RecordingBroker,
+    *,
+    max_tool_calls: int = 5,
+    extra_specs: list[ToolSpec] | None = None,
+):
     store = NebulaStore(tmp_path / "tool-loop.db")
     project = store.create(Engagement(id="project", name="Tool loop"))
     profile = store.create(
@@ -142,7 +155,7 @@ def _prepared(tmp_path: Path, responses: list[ModelResponse], broker: RecordingB
             provider_profile_id=profile.id,
             model="model-a",
             tools_enabled=True,
-            max_tool_calls=5,
+            max_tool_calls=max_tool_calls,
         )
     )
     spec = ToolSpec(
@@ -157,6 +170,7 @@ def _prepared(tmp_path: Path, responses: list[ModelResponse], broker: RecordingB
         output_schema={"type": "object", "additionalProperties": True},
         risk_class=RiskClass.LOCAL_READ,
     )
+    specs = {item.name: item for item in [spec, *(extra_specs or [])]}
     provider = ScriptedProvider(responses)
     prepared = PreparedChat(
         provider=provider,
@@ -177,7 +191,7 @@ def _prepared(tmp_path: Path, responses: list[ModelResponse], broker: RecordingB
             broker=broker,
             scope=ScopePolicy(engagement_id=project.id),
             workspace=tmp_path,
-            specs={spec.name: spec},
+            specs=specs,
             runtime_digest="test-runtime",
         ),
         turn=turn,
@@ -202,10 +216,10 @@ def _prepared(tmp_path: Path, responses: list[ModelResponse], broker: RecordingB
             _response(
                 calls=[
                     ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
-                    ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
+                    ToolCall(id="call-1", name="safe_read", arguments={"value": "b"}),
                 ]
             ),
-            "exactly one sequential",
+            "refusing duplicate execution",
         ),
         (
             _response(calls=[ToolCall(id="call-1", name="other_tool", arguments={})]),
@@ -336,9 +350,7 @@ def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
     asyncio.run(scenario())
 
 
-def test_openrouter_batched_calls_run_one_step_at_a_time(tmp_path):
-    from nebula.v3.providers import ProviderFlavor
-
+def test_batched_calls_all_run_one_step_at_a_time(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(
@@ -348,27 +360,178 @@ def test_openrouter_batched_calls_run_one_step_at_a_time(tmp_path):
             ]
         ),
         _response(
-            calls=[ToolCall(id="call-3", name="safe_read", arguments={"value": "b"})]
-        ),
-        _response(
             calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
         ),
         _response(text="Read a and b."),
     ]
     store, service, prepared, provider = _prepared(tmp_path, responses, broker)
-    provider.config = provider.config.model_copy(
-        update={"flavor": ProviderFlavor.OPENROUTER}
+
+    asyncio.run(service.complete(prepared))
+
+    # One routing response, both calls executed, in the requested order.
+    assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert [entry["step"] for entry in turn.tool_history] == [0, 1]
+    assert [entry["model_call_id"] for entry in turn.tool_history] == [
+        "call-1",
+        "call-2",
+    ]
+    assert turn.execution_tool_calls == 2
+    assert len(turn.tool_call_ids) == len(set(turn.tool_call_ids)) == 2
+    # The batch costs one routing round trip, and both results are replayed.
+    assert provider.requests[0].parallel_tool_calls is True
+    assert [item.call_id for item in provider.requests[1].tool_results] == [
+        "call-1",
+        "call-2",
+    ]
+
+
+def test_batch_queued_behind_finish_response_never_runs(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[
+                ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
+                ToolCall(id="finish-1", name="finish_response", arguments={}),
+                ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
+            ]
+        ),
+        _response(text="Read a."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+
+    asyncio.run(service.complete(prepared))
+
+    assert [call.arguments["value"] for call in broker.calls] == ["a"]
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
+
+
+def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
+    tmp_path,
+):
+    broker = RecordingBroker()
+    query_spec = ToolSpec(
+        name="artifact_probe",
+        description="Read a stored result.",
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+        budget_class="artifact_query",
+    )
+    responses = [
+        _response(
+            calls=[
+                ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
+                ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
+                ToolCall(id="call-3", name="artifact_probe", arguments={"value": "c"}),
+            ]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Read a."),
+    ]
+    store, service, prepared, provider = _prepared(
+        tmp_path, responses, broker, max_tool_calls=1, extra_specs=[query_spec]
     )
 
     asyncio.run(service.complete(prepared))
 
-    assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
+    # The second execution call exhausts the turn budget, so the rest of the
+    # batch is dropped rather than spent, and routing runs again.
+    assert [call.arguments["value"] for call in broker.calls] == ["a"]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
-    assert [entry["model_call_id"] for entry in turn.tool_history] == [
-        "call-1",
-        "call-3",
+    assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
+    assert [tool.name for tool in provider.requests[1].tools] == [
+        "artifact_probe",
+        "finish_response",
     ]
-    # The dropped call never reaches replayed history.
-    replay = provider.requests[2].tool_results
-    assert [item.call_id for item in replay] == ["call-1", "call-3"]
+
+
+def test_routing_response_without_a_tool_call_answers_from_existing_results(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        # A required tool choice the provider ignored: no call and no prose.
+        _response(),
+        _response(text="Read a."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "Read a."
+    assert [call.arguments["value"] for call in broker.calls] == ["a"]
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
+
+
+def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
+    class ApprovingBroker(RecordingBroker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.approval: Approval | None = None
+
+        async def execute(self, invocation, scope, *, approval=None):
+            del scope
+            self.calls.append(invocation)
+            if invocation.arguments["value"] == "b" and approval is None:
+                assert self.approval is not None
+                raise ApprovalRequired(self.approval)
+            return ToolExecutionResult(output={"value": invocation.arguments["value"]})
+
+    broker = ApprovingBroker()
+    responses = [
+        _response(
+            calls=[
+                ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
+                ToolCall(id="call-2", name="safe_read", arguments={"value": "b"}),
+                ToolCall(id="call-3", name="safe_read", arguments={"value": "c"}),
+            ]
+        )
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    broker.approval = store.create(
+        Approval(
+            id="approval-1",
+            engagement_id="project",
+            run_id="turn",
+            risk_class=RiskClass.LOCAL_READ,
+            exact_request={"tool_name": "safe_read", "arguments": {"value": "b"}},
+            policy_rationale="the operator approves this read",
+            requested_by="chat-assistant",
+        )
+    )
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    assert [name for name, _ in events][-1] == "approval_required"
+    assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
+    paused = store.get(ChatTurn, "turn")
+    assert paused.status == ChatTurnStatus.WAITING_APPROVAL
+    assert paused.approval_id == "approval-1"
+    # The checkpoint the resume path reads is the last entry, and the call the
+    # model queued behind it was dropped rather than run past the approval.
+    assert [entry["status"] for entry in paused.tool_history] == [
+        "complete",
+        "waiting_approval",
+    ]
+    assert [entry["model_call_id"] for entry in paused.tool_history] == [
+        "call-1",
+        "call-2",
+    ]
