@@ -51,6 +51,7 @@ from nebula.v3.providers import (
     ProviderError,
     ProviderHealth,
     ProviderKind,
+    ProviderOverloadedError,
     StreamEventType,
 )
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
@@ -2752,3 +2753,39 @@ def test_context_metadata_refresh_merges_onto_a_concurrent_profile_save(tmp_path
     assert descriptors[0]["max_output_tokens"] == 4_000
     assert refreshed.metadata["route_catalog_revision"]
     assert store.get(ProviderProfile, profile.id).revision == refreshed.revision
+
+
+def test_retryable_stream_error_surfaces_as_a_provider_overload(tmp_path):
+    class OverloadedProvider(FakeProvider):
+        async def stream(self, request: ModelRequest):
+            del request
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(
+                type=StreamEventType.ERROR,
+                error="provider reported an error while streaming: overloaded",
+                retryable=True,
+            )
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "chat-stream-overload.db")
+        engagement = store.create(
+            Engagement(id="eng-stream-overload", name="Stream overload")
+        )
+        profile = store.create(_profile(local=True))
+        provider = OverloadedProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "hello"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        # The API labels a ProviderError retryable and attributes it to the
+        # provider; a ChatError would blame chat and forbid a retry.
+        with pytest.raises(ProviderOverloadedError, match="overloaded"):
+            [event async for event in service.stream(prepared)]
+
+    asyncio.run(scenario())

@@ -1701,7 +1701,7 @@ def test_openrouter_null_prompt_limit_uses_the_context_window():
     assert route.provider_slug == "anthropic"
 
 
-def _openrouter_discovery(allowed, *, filtered_status=200):
+def _openrouter_discovery(allowed, *, filtered_status=200, directory_status=200):
     observed = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1709,6 +1709,8 @@ def _openrouter_discovery(allowed, *, filtered_status=200):
         if request.url.path == "/api/v1/key":
             return httpx.Response(200, json={"data": {}})
         if request.url.path == "/api/v1/providers":
+            if directory_status != 200:
+                return httpx.Response(directory_status, json={})
             return httpx.Response(
                 200,
                 json={
@@ -2252,3 +2254,482 @@ def test_stream_fallback_reports_thinking_before_the_reply():
     ]
     assert events[1].delta == "Private chain of thought."
     assert events[-1].response.reasoning == "Private chain of thought."
+
+
+def _sse_provider(provider_id: str, body: str, calls: list[int] | None = None):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(len(calls))
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    return OpenAICompatibleProvider(
+        _retrying_config(provider_id), transport=httpx.MockTransport(handler)
+    )
+
+
+def _collect_stream(provider, request: ModelRequest | None = None):
+    async def collect():
+        return [event async for event in provider.stream(request or _chat_request())]
+
+    return asyncio.run(collect())
+
+
+def test_stream_frames_are_split_only_on_sse_line_endings():
+    # U+2028, U+2029 and U+0085 are str.splitlines() breaks but not SSE ones;
+    # gateways that serialise with ensure_ascii=False send them raw inside JSON
+    # strings. Comments, CRLF and multi-line data events are SSE grammar too.
+    text = "line sep nelend"
+    body = (
+        ": OPENROUTER PROCESSING\r\n\r\n"
+        'data: {"id":"chat-1","model":"served","choices":[{"delta":{"content":'
+        + json.dumps(text, ensure_ascii=False)
+        + "}}]}\r\n\r\n"
+        'data: {"id":"chat-1",\n'
+        'data: "choices":[{"delta":{"content":"!"},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    events = _collect_stream(_sse_provider("stream-unicode", body))
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.COMPLETED,
+    ]
+    assert events[1].delta == text
+    assert events[-1].response.text == text + "!"
+    assert events[-1].response.model == "served"
+
+
+def test_openrouter_discovery_reports_a_failed_provider_directory():
+    # With an allowlist, an empty directory would filter out every model and
+    # blame the operator's allowlist; the outage has to be named instead.
+    health, observed = _openrouter_discovery(["together"], directory_status=503)
+
+    assert health.healthy is False
+    assert health.models == []
+    assert "provider directory" in (health.detail or "")
+    assert "503" in (health.detail or "")
+    assert all(path != "/api/v1/models" for path, _params in observed)
+
+    # Without an allowlist the directory is informational only.
+    health, _observed = _openrouter_discovery([], directory_status=503)
+
+    assert health.healthy is True
+    assert health.models == ["us/served", "offshore/only", "us/paged"]
+
+
+def test_stream_error_frame_maps_transient_codes_to_overload():
+    overloaded = providers._stream_error_frame(
+        {"error": {"message": "model is overloaded", "code": 503}}
+    )
+    assert isinstance(overloaded, ProviderOverloadedError)
+    assert overloaded.status_code == 503
+
+    rejected = providers._stream_error_frame(
+        {"error": {"message": "bad request", "code": "invalid_request_error"}}
+    )
+    assert isinstance(rejected, ProviderError)
+    assert not isinstance(rejected, ProviderOverloadedError)
+
+
+def test_a_retryable_error_frame_before_any_token_is_replayed():
+    calls: list[int] = []
+    overload = (
+        'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n'
+        "data: " + json.dumps(OVERLOADED_BODY) + "\n\n"
+    )
+    answer = (
+        'data: {"id":"chat-2","model":"test-model","choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(len(calls))
+        return httpx.Response(
+            200,
+            text=overload if len(calls) == 1 else answer,
+            headers={"content-type": "text/event-stream"},
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("stream-frame-retry"), transport=httpx.MockTransport(handler)
+    )
+
+    events = _collect_stream(provider)
+
+    assert len(calls) == 2
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.COMPLETED,
+    ]
+    assert events[-1].response.text == "hi"
+    assert events[-1].response.provider_request_id == "chat-2"
+
+
+def test_an_exhausted_error_frame_is_labelled_retryable():
+    calls: list[int] = []
+    body = 'data: {"error":{"message":"model is overloaded","code":503}}\n\ndata: [DONE]\n\n'
+
+    events = _collect_stream(_sse_provider("stream-frame-exhausted", body, calls))
+
+    assert len(calls) == 3
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].retryable is True
+    assert events[-1].error == (
+        "provider reported an error while streaming: model is overloaded "
+        "after 3 attempts"
+    )
+
+    # After output began the frame is reported, never replayed.
+    late_calls: list[int] = []
+    late = (
+        'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'
+        'data: {"error":{"message":"model is overloaded","code":503}}\n\n'
+    )
+
+    events = _collect_stream(_sse_provider("stream-frame-late", late, late_calls))
+
+    assert len(late_calls) == 1
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].retryable is True
+    assert "attempts" not in (events[-1].error or "")
+
+
+def test_gemini_context_window_rejection_is_typed(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "code": 400,
+                    "message": (
+                        "The input token count (1234567) exceeds the maximum "
+                        "number of tokens allowed (1048576)."
+                    ),
+                    "status": "INVALID_ARGUMENT",
+                }
+            },
+        )
+
+    provider = GeminiProvider(
+        ProviderConfig(
+            **_config(ProviderKind.GEMINI).model_dump(exclude={"api_key_env"}),
+            api_key_env="NEBULA_TEST_PROVIDER_KEY",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderContextLengthError):
+        asyncio.run(provider.complete(_chat_request()))
+
+
+def test_bedrock_context_window_rejection_is_typed(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    class FailingClient:
+        def converse(self, **kwargs):
+            del kwargs
+            raise ClientError(
+                {
+                    "Error": {
+                        "Code": "ValidationException",
+                        "Message": "Input is too long for requested model.",
+                    }
+                },
+                "Converse",
+            )
+
+    monkeypatch.setattr(
+        providers.boto3, "client", lambda *args, **kwargs: FailingClient()
+    )
+    provider = BedrockProvider(_config(ProviderKind.BEDROCK))
+
+    with pytest.raises(ProviderContextLengthError) as failure:
+        asyncio.run(
+            provider.complete(
+                ModelRequest(
+                    model="test-model",
+                    messages=[ModelMessage(role="user", content="hi")],
+                )
+            )
+        )
+    assert str(failure.value) == (
+        "Bedrock request failed: ValidationException: "
+        "Input is too long for requested model."
+    )
+
+
+def test_stream_null_model_and_id_frames_keep_the_known_values():
+    body = (
+        'data: {"id":"chat-1","model":"served-model","choices":[{"delta":{"content":"hi"}}]}\n\n'
+        'data: {"id":null,"model":null,"choices":[{"delta":{},"finish_reason":"stop"}],'
+        '"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    events = _collect_stream(_sse_provider("stream-null-model", body))
+
+    assert events[-1].type == StreamEventType.COMPLETED
+    assert events[-1].response.model == "served-model"
+    assert events[-1].response.provider_request_id == "chat-1"
+    assert events[-1].response.text == "hi"
+
+
+def test_usage_without_total_tokens_is_summed_from_its_parts():
+    body = (
+        'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\n'
+        'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7}}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    events = _collect_stream(_sse_provider("stream-usage", body))
+
+    assert events[-1].response.usage.total_tokens == 107
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "test-model",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 7},
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("complete-usage"), transport=httpx.MockTransport(handler)
+    )
+
+    result = asyncio.run(provider.complete(_chat_request()))
+
+    assert result.usage.total_tokens == 107
+
+
+def test_stream_without_a_terminal_frame_is_not_a_clean_completion():
+    # A proxy idle-timeout closes the body cleanly: no finish reason, no [DONE].
+    cut = 'data: {"choices":[{"delta":{"content":"half"}}]}\n\n'
+
+    events = _collect_stream(_sse_provider("stream-cut", cut))
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+    assert "ended before" in (events[-1].error or "")
+    assert events[-1].retryable is False
+
+    # Either terminal marker makes a complete reply; truncation is reported.
+    truncated = (
+        'data: {"choices":[{"delta":{"content":"half"},"finish_reason":"length"}]}\n\n'
+    )
+
+    events = _collect_stream(_sse_provider("stream-length", truncated))
+
+    assert events[-1].type == StreamEventType.COMPLETED
+    assert events[-1].response.finish_reason == "length"
+
+    done_only = 'data: {"choices":[{"delta":{"content":"all"}}]}\n\ndata: [DONE]\n\n'
+
+    events = _collect_stream(_sse_provider("stream-done-only", done_only))
+
+    assert events[-1].type == StreamEventType.COMPLETED
+    assert events[-1].response.text == "all"
+
+
+def test_quota_exhaustion_is_not_retried_or_called_an_overload():
+    attempts: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts.append(429)
+        return httpx.Response(
+            429,
+            json={
+                "error": {
+                    "message": (
+                        "You exceeded your current quota, please check your plan "
+                        "and billing details."
+                    ),
+                    "type": "insufficient_quota",
+                    "code": "insufficient_quota",
+                }
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("quota-exhausted"), transport=httpx.MockTransport(handler)
+    )
+
+    with pytest.raises(providers.ProviderQuotaError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+
+    assert attempts == [429]
+    assert not isinstance(failure.value, ProviderOverloadedError)
+    assert str(failure.value) == (
+        "provider quota or billing limit reached (HTTP 429): You exceeded your "
+        "current quota, please check your plan and billing details."
+    )
+
+    # A rate limit without a permanent marker is still a transient overload.
+    limited: list[int] = []
+
+    def limit(_request: httpx.Request) -> httpx.Response:
+        limited.append(429)
+        return httpx.Response(
+            429,
+            json={"error": {"message": "Rate limit reached", "code": "rate_limit"}},
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("rate-limited"), transport=httpx.MockTransport(limit)
+    )
+
+    with pytest.raises(ProviderOverloadedError):
+        asyncio.run(provider.complete(_chat_request()))
+
+    assert len(limited) == 3
+
+
+def test_transport_failures_become_provider_errors_with_a_reason():
+    def timeout(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("")
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("read-timeout"), transport=httpx.MockTransport(timeout)
+    )
+
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+    assert not isinstance(failure.value, ProviderOverloadedError)
+    assert str(failure.value) == "provider request timed out (ReadTimeout)"
+
+    events = _collect_stream(provider)
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].error == "provider request timed out (ReadTimeout)"
+
+    refused: list[int] = []
+
+    def refuse(_request: httpx.Request) -> httpx.Response:
+        refused.append(1)
+        raise httpx.ConnectError("connection refused")
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("refused"), transport=httpx.MockTransport(refuse)
+    )
+
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(_chat_request()))
+    assert len(refused) == 3
+    assert str(failure.value) == (
+        "provider request failed (ConnectError): connection refused"
+    )
+
+    class TornStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+            raise httpx.RemoteProtocolError(
+                "peer closed connection without sending complete message body"
+            )
+
+    def tear(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, stream=TornStream(), headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("torn"), transport=httpx.MockTransport(tear)
+    )
+
+    events = _collect_stream(provider)
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].error == (
+        "provider request failed (RemoteProtocolError): peer closed connection "
+        "without sending complete message body"
+    )
+
+
+def test_streaming_tool_calls_are_keyed_by_index_or_arrival_order():
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="inspect")], tools=[TOOL]
+    )
+    config = ProviderConfig(
+        id="stream-tools",
+        kind=ProviderKind.OPENAI_COMPATIBLE,
+        base_url="https://provider.invalid",
+        default_model="test-model",
+        capabilities=ModelCapabilities(tools=True, strict_tools=True, streaming=True),
+        options={"retry_backoff_seconds": 0},
+    )
+
+    def stream(body: str):
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, text=body, headers={"content-type": "text/event-stream"}
+            )
+
+        provider = OpenAICompatibleProvider(
+            config, transport=httpx.MockTransport(handler)
+        )
+        return _collect_stream(provider, request)
+
+    # Two complete calls in one chunk without an index stay two calls.
+    unindexed = (
+        'data: {"choices":[{"delta":{"tool_calls":['
+        '{"id":"call_a","type":"function","function":{"name":"lookup_asset","arguments":"{\\"address\\":\\"a\\"}"}},'
+        '{"id":"call_b","type":"function","function":{"name":"lookup_asset","arguments":"{\\"address\\":\\"b\\"}"}}'
+        "]}}]}\n\n"
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    events = stream(unindexed)
+
+    calls = [
+        event.tool_call for event in events if event.type == StreamEventType.TOOL_CALL
+    ]
+    assert [(call.id, call.arguments["address"]) for call in calls] == [
+        ("call_a", "a"),
+        ("call_b", "b"),
+    ]
+    assert events[-1].type == StreamEventType.COMPLETED
+    assert events[-1].response.finish_reason == "tool_calls"
+
+    # A vendor that resends id and name on every indexed delta yields one call.
+    indexed = (
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup_asset","arguments":"{\\"addr"}}]}}]}\n\n'
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"lookup_asset","arguments":"ess\\":\\"x\\"}"}}]}}]}\n\n'
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+
+    events = stream(indexed)
+
+    calls = [
+        event.tool_call for event in events if event.type == StreamEventType.TOOL_CALL
+    ]
+    assert [(call.id, call.name, call.arguments) for call in calls] == [
+        ("call_1", "lookup_asset", {"address": "x"})
+    ]
