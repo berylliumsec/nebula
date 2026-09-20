@@ -9762,7 +9762,11 @@ def create_app(
         ]
 
     app.include_router(
-        goals_router(store, skill_snapshot_resolver=resolve_goal_skill_snapshots),
+        goals_router(
+            store,
+            goal_dispatcher=provider_chat.dispatch_running_goal,
+            skill_snapshot_resolver=resolve_goal_skill_snapshots,
+        ),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )

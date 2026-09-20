@@ -54,7 +54,7 @@ export interface ProviderGoalDraft {
   childBudget?: number;
 }
 
-export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, onCreate, onChange }: {
+export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, onCreate, onChange, onWorkDispatched }: {
   api: ApiClient;
   sessionId?: string;
   goal?: ChatGoal;
@@ -62,6 +62,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   liveTokenEstimate?: number;
   onCreate?(draft: ProviderGoalDraft): Promise<ChatGoal>;
   onChange(goal: ChatGoal): void;
+  onWorkDispatched?(): Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [objective, setObjective] = useState("");
@@ -102,6 +103,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     });
     const settle = (updated: ChatGoal) => {
       onChange(updated);
+      if ((action === "start" || action === "resume") && onWorkDispatched) {
+        void onWorkDispatched().catch((caught) => {
+          void logCaughtDiagnostic("interface.goal.dispatch_follow_failed", "The dispatched goal turn could not be followed immediately.", caught, "goal");
+        });
+      }
       setTransition(undefined); setReason(""); setSummary(""); setEvidence("");
     };
     try {

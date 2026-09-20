@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable, Literal
+from typing import Awaitable, Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -428,6 +428,7 @@ class ChatGoalService:
 def goals_router(
     store: NebulaStore,
     *,
+    goal_dispatcher: Callable[[str, str], Awaitable[str | None]] | None = None,
     skill_snapshot_resolver: Callable[
         [str, list[SkillSelection], list[SkillSnapshot]], list[SkillSnapshot]
     ]
@@ -455,8 +456,21 @@ def goals_router(
         return service.create(session_id, body)
 
     @router.post("/chat/sessions/{session_id}/goal/actions", response_model=ChatGoal)
-    def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:
-        return service.write(session_id, body)
+    async def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:
+        updated = service.write(session_id, body)
+        if goal_dispatcher is not None and body.action in {"start", "resume"}:
+            instruction = (
+                "Begin work on the active conversation goal now. Review the goal "
+                "objective and completion criteria provided by Core, then make "
+                "concrete progress without waiting for another operator message."
+                if body.action == "start"
+                else "Resume work on the active conversation goal now. Review the "
+                "latest durable progress and continue without waiting for another "
+                "operator message."
+            )
+            await goal_dispatcher(session_id, instruction)
+            return service.read(session_id)
+        return updated
 
     @router.get(
         "/chat/sessions/{session_id}/goal/children", response_model=list[ChatGoal]

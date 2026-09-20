@@ -1,10 +1,10 @@
 {
-  "change_digest": "0509ee9e4f4ed775f316978b3e91456ac87912fa52a7d3a57855f34b682a968c",
-  "reviewed_by": "Codex review of provider-goal creation, stop, failure, refresh, and resume lifecycle",
-  "reason": "Provider goals could only be created after the first message persisted a conversation, and cancelling a turn could leave the conversation's goal running because the turn had no goal_id or had already reached cancelled before the stop handler ran. The browser could also discard the final cancelled stream event while Stop aborted its viewer, leaving a terminal conversation visibly stuck on Waiting for provider. The selected backend tests cover atomic empty-conversation plus goal creation, explicit lifecycle revisions, live elapsed reads, and both linked and late-created goal cancellation. Focused frontend tests cover goal creation before a session exists, revision refresh behavior, and deterministic settlement of a live assistant bubble. The real-Core production LAN journey covers the operator path before the first message, first-turn linkage, stop-to-pause, authoritative idle state, removal of the stale provider wait, durable paired-browser reload, resume, accessibility, desktop, emulated mobile Chromium, and emulated mobile WebKit.",
-  "exclusions": "No native tests because Rust and the desktop shell are unchanged. Harness goals, schedules, child-agent execution, unrelated provider transports, MCP execution, workspace behavior, and full suites are excluded. The selected real-Core journey uses the permanent desktop and 390 px Chromium/WebKit projects; 320 and 430 px profiles are excluded because this change reuses the existing responsive goal panel without CSS changes. A focused production build is performed separately from the test selection.",
+  "change_digest": "06407ad5b0724f93b6115b50d880c4f62cb157563a0bc93a06279980863773ed",
+  "reviewed_by": "Codex review of provider-goal creation, stop, failure, refresh, resume, and autonomous continuation lifecycle",
+  "reason": "Provider goals could only be created after the first message persisted a conversation, and Start or Resume changed status without dispatching work, forcing the operator to send a bootstrap message. Cancelling a turn could then leave the conversation's goal running because the turn had no goal_id or had already reached cancelled before the stop handler ran. A successful goal-linked turn also released its worker and left the goal marked running without dispatching the next turn. The browser could discard the final cancelled stream event while Stop aborted its viewer, leaving a terminal conversation visibly stuck on Waiting for provider. The selected backend tests cover atomic empty-conversation plus goal creation, explicit lifecycle revisions, live elapsed reads, linked and late-created cancellation, initial dispatch without a composer message, and successful-turn auto-continuation through the step-budget boundary. Focused frontend tests cover goal creation before a session exists, revision refresh behavior, and deterministic settlement of a live assistant bubble. The real-Core production LAN journey covers the operator path before the first message, Start and Resume dispatch, first-turn linkage, stop-to-pause, authoritative idle state, removal of the stale provider wait, durable paired-browser reload, automatic next-turn dispatch, budget pause, accessibility, desktop, emulated mobile Chromium, and emulated mobile WebKit.",
+  "exclusions": "No native tests because Rust and the desktop shell are unchanged. Harness-native goals, schedules as independent triggers, child-agent execution internals, unrelated provider transports, MCP execution, workspace behavior, and full suites are excluded. The selected real-Core journey uses the permanent desktop and 390 px Chromium/WebKit projects; 320 and 430 px profiles are excluded because this change reuses the existing responsive goal panel without CSS changes. A focused production build is performed separately from the test selection.",
   "expected_tests": {
-    "python": 6,
+    "python": 7,
     "frontend": 17,
     "native": 0,
     "playwright": 3
@@ -14,7 +14,8 @@
     "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
     "tests/v3/test_chat.py::test_cancelled_turn_pauses_the_session_goal_even_when_created_late",
     "tests/v3/test_chat_goals.py::test_goal_requires_explicit_start_and_revision_safe_lifecycle",
-    "tests/v3/test_chat_goals.py::test_running_goal_read_reports_live_elapsed_without_changing_revision"
+    "tests/v3/test_chat_goals.py::test_running_goal_read_reports_live_elapsed_without_changing_revision",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
   ],
   "frontend": [
     "ui/src/components/ProviderGoalPanel.test.tsx",

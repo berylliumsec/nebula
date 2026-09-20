@@ -398,7 +398,7 @@ test("assistant upgrade real Core retains editable goal skills through source lo
 });
 
 test("assistant upgrade real Core creates a goal before the first turn and pauses it on stop", async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(150_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const modelStub = await startLocalModelStub({ streamDelayMs: 30_000 });
   const api = await playwrightRequest.newContext({
@@ -448,6 +448,8 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await page.getByRole("button", { name: "Add goal" }).click();
     await page.getByRole("textbox", { name: "Objective" }).fill("Prove goal-first conversation lifecycle");
     await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nStopping pauses the goal");
+    await page.getByText("Limits", { exact: true }).click();
+    await page.getByRole("spinbutton", { name: "Step budget" }).fill("3");
     await page.getByRole("button", { name: "Save draft" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
@@ -460,8 +462,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await page.getByRole("button", { name: "Start" }).click();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
-    await composer.fill("Begin the goal-linked work and keep working until stopped.");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(composer).toHaveValue("");
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Stop response" }).click();
     const goalPanel = page.getByRole("region", { name: "Conversation goal" });
@@ -482,6 +483,14 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
     await page.getByRole("button", { name: "Resume" }).click();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
+    await expect(composer).toHaveValue("");
+    await expect(goalPanel).toContainText("paused", { timeout: 90_000 });
+    await expect(goalPanel).toContainText("step 3/3");
+    await expect(goalPanel).toContainText("Goal step budget is exhausted");
+    const messagesAfterContinuation = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>;
+    expect(messagesAfterContinuation.filter(message => message.role === "user")).toHaveLength(3);
+    expect(messagesAfterContinuation.some(message => message.content.includes("without waiting for another operator message"))).toBe(true);
+    expect(messagesAfterContinuation.some(message => message.content.includes("Is the goal complete?") && message.content.includes("continue making concrete progress"))).toBe(true);
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
   } finally {

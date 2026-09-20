@@ -1588,6 +1588,8 @@ class ChatService:
                         exc,
                         stage="subagent-settle",
                     )
+                if not stopped and runtime.error is None:
+                    await self._continue_running_goal_after_turn(prepared)
             if runtime.followers == 0:
                 runtime.cleanup_task = create_diagnostic_task(
                     self._expire_provider_turn(turn.id if turn else "", runtime),
@@ -1596,6 +1598,170 @@ class ChatService:
                     failure_message="A completed provider turn could not be expired.",
                     name=f"nebula-provider-chat-cleanup-{turn.id if turn else 'unknown'}",
                 )
+
+    async def _continue_running_goal_after_turn(
+        self, prepared: PreparedChat
+    ) -> str | None:
+        """Dispatch the next turn while a successfully settled goal still runs.
+
+        A running goal is an execution lifecycle, not merely a label attached to
+        future operator messages.  The durable goal and turn claims are reread
+        after settlement so pause, completion, cancellation, budget exhaustion,
+        and a concurrently submitted operator turn all win before another turn
+        is created.
+        """
+
+        turn = prepared.turn
+        source = prepared.source_request
+        if turn is None or not turn.goal_id or source is None:
+            return None
+        latest = self.store.get(ChatTurn, turn.id)
+        if latest.status != ChatTurnStatus.COMPLETE:
+            return None
+        goal = self.store.get(ChatGoal, turn.goal_id)
+        if (
+            goal.status != ChatGoalStatus.RUNNING
+            or goal.execution_claim_id is not None
+            or self.pending_turn(turn.session_id) is not None
+        ):
+            return None
+        try:
+            continued = await self.prepare_async(
+                ChatCompletionRequest(
+                    provider_id=turn.provider_profile_id,
+                    engagement_id=turn.engagement_id,
+                    session_id=turn.session_id,
+                    goal_id=goal.id,
+                    model=turn.model,
+                    messages=[
+                        ChatRequestMessage(
+                            role=ChatRole.USER,
+                            content=(
+                                "Review the active conversation goal and its completion "
+                                "criteria. Is the goal complete? If it is complete, "
+                                "provide a final completion summary with evidence. If it "
+                                "is not complete, continue making concrete progress toward "
+                                "the goal now. Do not stop merely to report status."
+                            ),
+                        )
+                    ],
+                    include_knowledge=False,
+                    tools_enabled=source.tools_enabled,
+                    mcp_server_ids=list(source.mcp_server_ids),
+                    ssh_environment_ids=(
+                        list(source.ssh_environment_ids)
+                        if source.ssh_environment_ids is not None
+                        else None
+                    ),
+                    hook_ids=list(source.hook_ids),
+                    allow_subagents=source.allow_subagents,
+                    max_artifact_queries=source.max_artifact_queries,
+                    allow_cloud_tool_results=source.allow_cloud_tool_results,
+                    max_output_tokens=source.max_output_tokens,
+                    temperature=source.temperature,
+                    stream=True,
+                )
+            )
+            return self.start_provider_turn(continued)
+        except ChatHistoryConflict:
+            # An operator message or another valid continuation won the race.
+            return None
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.goal.auto_continue_failed",
+                "A running conversation goal could not start its next turn.",
+                exc,
+                stage="goal-auto-continue",
+            )
+            # Budget checks in prepare_async already pause with a precise reason.
+            # Other failures must not leave an idle goal claiming to be running.
+            try:
+                current = self.store.get(ChatGoal, goal.id)
+                if current.status == ChatGoalStatus.RUNNING:
+                    self._pause_running_session_goal(
+                        turn.session_id,
+                        "Automatic goal continuation could not start. Review the latest "
+                        "response and error, then resume the goal to retry.",
+                    )
+            except NotFoundError:  # diagnostic-expected: the goal was removed concurrently
+                pass
+            return None
+
+    async def dispatch_running_goal(
+        self, session_id: str, instruction: str
+    ) -> str | None:
+        """Create the initial/resumed turn for an idle running goal."""
+
+        from .chat_goals import ChatGoalService
+        from .chat_schedules import ChatScheduleService
+
+        goals = ChatGoalService(self.store)
+        try:
+            goal = goals.get(session_id)
+            if (
+                goal.status != ChatGoalStatus.RUNNING
+                or goal.execution_claim_id is not None
+                or self.pending_turn(session_id) is not None
+            ):
+                return None
+            session = self.store.get(ChatSession, session_id)
+            settings = ChatScheduleService(self.store).turn_settings(session_id)
+            hook_ids = [
+                item
+                for item in session.metadata.get("hook_ids", [])
+                if isinstance(item, str)
+            ]
+            mcp_server_ids = settings.mcp_server_ids
+            if not self.store.list_session_entities(ChatTurn, session_id):
+                mcp_server_ids = [
+                    item
+                    for item in session.metadata.get("mcp_server_ids", [])
+                    if isinstance(item, str)
+                ]
+            prepared = await self.prepare_async(
+                ChatCompletionRequest(
+                    provider_id=session.provider_profile_id,
+                    engagement_id=session.engagement_id,
+                    session_id=session.id,
+                    goal_id=goal.id,
+                    model=session.model,
+                    messages=[
+                        ChatRequestMessage(role=ChatRole.USER, content=instruction)
+                    ],
+                    include_knowledge=False,
+                    tools_enabled=settings.tools_enabled,
+                    mcp_server_ids=mcp_server_ids,
+                    ssh_environment_ids=settings.ssh_environment_ids,
+                    hook_ids=hook_ids,
+                    allow_subagents=settings.allow_subagents,
+                    allow_cloud_tool_results=settings.allow_cloud_tool_results,
+                    stream=True,
+                )
+            )
+            return self.start_provider_turn(prepared)
+        except ChatHistoryConflict:
+            # A user message or another lifecycle trigger won the idle check.
+            return None
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.goal.dispatch_failed",
+                "A started or resumed conversation goal could not dispatch work.",
+                exc,
+                stage="goal-dispatch",
+            )
+            try:
+                current = goals.get(session_id)
+                if current.status == ChatGoalStatus.RUNNING:
+                    self._pause_running_session_goal(
+                        session_id,
+                        "Goal work could not start. Review the provider or runtime "
+                        "error, then resume the goal to retry.",
+                    )
+            except NotFoundError:  # diagnostic-expected: goal removed concurrently
+                pass
+            return None
 
     async def _expire_provider_turn(
         self, turn_id: str, runtime: _ActiveProviderTurn

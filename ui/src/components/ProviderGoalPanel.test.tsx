@@ -81,7 +81,10 @@ it("records explicit blocked and completed outcomes", async () => {
     revision: 4,
   });
   const onChange = vi.fn();
-  const api = { writeChatGoal } as unknown as ApiClient;
+  const getChatGoal = vi.fn()
+    .mockResolvedValueOnce(running)
+    .mockResolvedValueOnce({ ...running, revision: 3 });
+  const api = { getChatGoal, writeChatGoal } as unknown as ApiClient;
   const view = render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
 
   fireEvent.click(screen.getByRole("button", { name: "Block" }));
@@ -108,14 +111,16 @@ it("requires an explicit Start and uses the latest revision", async () => {
   const running = { ...draft, status: "running" as const, revision: 2 };
   const writeChatGoal = vi.fn().mockResolvedValue(running);
   const onChange = vi.fn();
-  const api = { writeChatGoal } as unknown as ApiClient;
-  render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={draft} onChange={onChange} /></DialogProvider>);
+  const onWorkDispatched = vi.fn().mockResolvedValue(undefined);
+  const api = { getChatGoal: vi.fn().mockResolvedValue(draft), writeChatGoal } as unknown as ApiClient;
+  render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={draft} onChange={onChange} onWorkDispatched={onWorkDispatched} /></DialogProvider>);
   expect(screen.getByText(/draft · step 0/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Start" }));
   await waitFor(() => expect(writeChatGoal).toHaveBeenCalledWith("session", {
     expectedRevision: 1, action: "start",
   }));
   expect(onChange).toHaveBeenCalledWith(running);
+  expect(onWorkDispatched).toHaveBeenCalledOnce();
 });
 
 it("explicitly replaces immutable goal skills by exact source path", async () => {
@@ -133,7 +138,7 @@ it("explicitly replaces immutable goal skills by exact source path", async () =>
   const updated = { ...running, revision: 4, skillSnapshots: [] };
   const replaceChatGoalSkills = vi.fn().mockResolvedValue(updated);
   const onChange = vi.fn();
-  const api = { replaceChatGoalSkills } as unknown as ApiClient;
+  const api = { getChatGoal: vi.fn().mockResolvedValue(running), replaceChatGoalSkills } as unknown as ApiClient;
   const view = render(<DialogProvider><form aria-label="Chat composer"><ProviderGoalPanel
       api={api}
       sessionId="session"
@@ -164,7 +169,7 @@ it("confirms before cancelling a goal because cancellation is final", async () =
   const running: ChatGoal = { ...draft, status: "running", revision: 2 };
   const writeChatGoal = vi.fn().mockResolvedValue({ ...running, status: "cancelled", revision: 3 });
   const onChange = vi.fn();
-  render(<DialogProvider><ProviderGoalPanel api={{ writeChatGoal } as unknown as ApiClient} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
+  render(<DialogProvider><ProviderGoalPanel api={{ getChatGoal: vi.fn().mockResolvedValue(running), writeChatGoal } as unknown as ApiClient} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
 
   fireEvent.click(screen.getByRole("button", { name: "Cancel goal" }));
   const dialog = await screen.findByRole("dialog", { name: "Cancel this goal?" });

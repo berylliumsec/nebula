@@ -106,18 +106,11 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     goal = created.json()
     assert goal["status"] == ChatGoalStatus.DRAFT.value
 
-    started = client.post(
-        "/api/v1/chat/sessions/goal-session/goal/actions",
-        headers=_auth(),
-        json={"expected_revision": goal["revision"], "action": "start"},
-    )
-    assert started.status_code == 200, started.text
-    assert started.json()["status"] == ChatGoalStatus.RUNNING.value
     attached = client.put(
         "/api/v1/chat/sessions/goal-session/goal/skills",
         headers=_auth(),
         json={
-            "expected_revision": started.json()["revision"],
+            "expected_revision": goal["revision"],
             "skills": [{"name": "review", "path": str(skill.resolve())}],
         },
     )
@@ -152,6 +145,15 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     )
     assert removed.status_code == 200, removed.text
     assert removed.json()["skill_snapshots"] == []
+
+    started = client.post(
+        "/api/v1/chat/sessions/goal-session/goal/actions",
+        headers=_auth(),
+        json={"expected_revision": removed.json()["revision"], "action": "start"},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == ChatGoalStatus.RUNNING.value
+    assert started.json()["current_step"] == 1
 
 
 def test_goal_conversation_exists_before_its_first_message(api):
@@ -213,14 +215,6 @@ def test_goal_conversation_exists_before_its_first_message(api):
     assert goal["session_id"] == session["id"]
     assert goal["status"] == ChatGoalStatus.DRAFT.value
     assert store.list_session_entities(ChatTurn, session["id"]) == []
-
-    started = client.post(
-        f"/api/v1/chat/sessions/{session['id']}/goal/actions",
-        headers=_auth(),
-        json={"expected_revision": goal["revision"], "action": "start"},
-    )
-    assert started.status_code == 200, started.text
-    assert started.json()["status"] == ChatGoalStatus.RUNNING.value
 
 
 def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp_path):

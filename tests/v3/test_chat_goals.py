@@ -230,6 +230,59 @@ def test_running_goal_is_injected_linked_and_charged_by_provider_turn(tmp_path):
         chat.prepare(request.model_copy(update={"goal_id": paused.id}))
 
 
+def test_successful_provider_turn_automatically_continues_running_goal(tmp_path):
+    async def scenario() -> None:
+        store, goals = setup_goal(tmp_path)
+        draft = goals.create(
+            "session",
+            GoalCreate(
+                objective="Finish two bounded steps",
+                completion_criteria=["Both steps are evidenced"],
+                step_budget=2,
+            ),
+        )
+        running = goals.write(
+            "session", GoalWrite(expected_revision=draft.revision, action="start")
+        )
+        provider = FakeProvider("provider", local=False)
+        provider.config.model_allowlist.append("model")
+        chat = ChatService(store, provider_factory=lambda _: provider)
+        await chat.dispatch_running_goal(
+            "session",
+            "Begin work on the active conversation goal without another operator message.",
+        )
+
+        for _ in range(200):
+            turns = store.list_entities(ChatTurn, engagement_id="project")
+            goal = goals.get("session")
+            if len(turns) == 2 and all(
+                turn.status.value == "complete" for turn in turns
+            ) and goal.status == ChatGoalStatus.PAUSED:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("the automatic goal continuation did not settle")
+
+        messages = chat.session_messages("session")
+        assert [turn.goal_id for turn in turns] == [running.id, running.id]
+        assert goal.current_step == 2
+        assert goal.blocked_reason == "Goal step budget is exhausted."
+        assert any(
+            message.role.value == "user"
+            and "without another operator message" in message.content
+            for message in messages
+        )
+        assert any(
+            message.role.value == "user"
+            and "Is the goal complete?" in message.content
+            and "continue making concrete progress" in message.content
+            for message in messages
+        )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_goal_budget_caps_output_and_nonstream_turn_remains_durable(tmp_path):
     store, goals = setup_goal(tmp_path)
     draft = goals.create(
