@@ -1460,6 +1460,10 @@ kbd { font-size: 11px; }
 .chat-action-status { display: flex; min-height: 28px; align-items: center; justify-content: center; gap: 5px; margin: 4px 12px 0; color: var(--green); font-size: 11px; }
 .chat-recovery-notice { display: grid; gap: 6px; margin: 6px 12px 0; }
 .chat-recovery-notice > .button { justify-self: start; }
+/* An unfinished reply is not a fault: quiet surface, no alarm colour. */
+.chat-recovery-notice.unfinished { padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
+.chat-recovery-notice.unfinished p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.chat-recovery-notice.unfinished strong { color: var(--text); }
 .chat-composer-send-now { flex: 0 0 auto; gap: 5px; white-space: nowrap; }
 .chat-composer footer .chat-composer-send-now-label { flex: 0 0 auto; color: inherit; font-size: inherit; }
 

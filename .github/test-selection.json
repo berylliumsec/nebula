@@ -1,40 +1,28 @@
 {
-  "change_digest": "c8cfb149e1c5687c52fd7d84418e054890c5b94d27ad553b82d41d638b1fc4eb",
-  "reviewed_by": "Claude review of goal-mode structured results and the goal revision-sync fix",
-  "reason": "Publishing is now tied strictly to goal mode: dashboard.publish is offered only to a turn dispatched under a running goal, Core owns that goal's snapshot series, and a running goal is asked in its instructions to show where the work stands whenever its series has been quiet for more than ten minutes. The same change fixes two operator-reported goal defects: the panel read the goal once at open, so its step, usage and revision went stale as soon as the model worked, which both froze the numbers and made Pause/Cancel fail on a stale revision; and a running goal reported the active time it had at its last pause, usually zero. The Python selection covers the goal binding, the interval ask, the strict gate on a real chat turn (test_structured_results.py) and the goal lifecycle and turn accounting it rides on (test_chat_goals.py, test_chat.py, test_chat_api.py); test_tool_catalog.py and test_tool_suggestions.py prove the tool stays absent outside goal mode. The frontend selection covers every layer of the explorer, the goal panel's revision recovery and live active time, and the API mapping. The Playwright selection proves the operator journeys end to end on desktop, narrow, mobile Chromium and mobile WebKit, including the goal panel following Core's revision \u2014 that test fails without the fix.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. The broad area:assistant selection is excluded: the conversation change is one composer control, one drawer tab and the goal panel's own refresh, all exercised by the selected journeys, while streaming, queueing, harness and provider journeys are untouched. No native tests are selected because no Rust code changed. No real-Core or live provider entry is selected: goal transitions and published results are read and written through ordinary Core routes covered by the Python tests, and no provider, harness or container behaviour changed. The real-Core goal journeys (area:provider-goal-skills-core) remain unrun.",
+  "change_digest": "c33543e68087aefb1649b82ca656fc0296ef9d2a45de3352a9d3f1a16d2e4244",
+  "reviewed_by": "Claude review of reasoning-aware final-answer recovery and the operator's reasoning level",
+  "reason": "A reasoning model that spends its output budget thinking returned no prose, and the recovery answered by doubling that budget. The recovery now constrains reasoning instead, the normalized request carries a reasoning level the OpenAI-compatible adapter translates, the operator chooses that level per conversation, the retry budget belongs to a running goal, and an unfinished but resumable turn degrades quietly. The new test_reasoning_recovery.py covers the payload translation and its route gating, the recovery asking for the answer alone, the retry budget in and out of goal mode including a stalled goal being blocked, and the level being sent and remembered. test_chat.py, test_chat_goals.py and test_chat_api.py cover the recovery paths and goal accounting the change rewrote; test_providers.py and test_context.py cover the adapter and the route-parameter catalog it reads. The frontend selection covers the request mapping and the goal panel. The Playwright selection proves both operator journeys \u2014 the quiet unfinished reply and choosing a level \u2014 on desktop, mobile Chromium and mobile WebKit.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. Harness runtimes are untouched: their own reasoning-effort plumbing is separate and unchanged. No native tests are selected because no Rust code changed. No real-Core or live provider entry is selected: the change is request shaping and recovery control flow, exercised by provider doubles that reproduce the exact incident, and no container, workspace or persistence behaviour changed. A live OpenRouter turn against a reasoning model remains the one gate that cannot be run here.",
   "expected_tests": {
-    "python": 175,
-    "frontend": 149,
+    "python": 231,
+    "frontend": 81,
     "native": 0,
-    "playwright": 32
+    "playwright": 6
   },
   "python": [
-    "tests/v3/test_structured_results.py",
-    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_reasoning_recovery.py",
     "tests/v3/test_chat.py",
+    "tests/v3/test_chat_goals.py",
     "tests/v3/test_chat_api.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py"
+    "tests/v3/test_providers.py",
+    "tests/v3/test_context.py"
   ],
   "frontend": [
-    "ui/src/components/structured-result/normalize.test.ts",
-    "ui/src/components/structured-result/analyze.test.ts",
-    "ui/src/components/structured-result/format.test.ts",
-    "ui/src/components/structured-result/hints.test.ts",
-    "ui/src/components/structured-result/rawText.test.ts",
-    "ui/src/components/structured-result/StructuredResultDashboard.test.tsx",
-    "ui/src/components/structured-result/ViewBoundary.test.tsx",
-    "ui/src/components/structured-result/ChatResultStream.test.tsx",
-    "ui/src/pages/ResultsPage.test.tsx",
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/api/client.test.ts"
+    "ui/src/api/client.test.ts",
+    "ui/src/components/ProviderGoalPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:structured-results",
-    "entry:phone-shell/mobile-chromium",
-    "entry:phone-shell/mobile-webkit",
-    "entry:workbench-view-authority/desktop"
+    "area:provider-reasoning"
   ]
 }

@@ -175,7 +175,9 @@ import type {
   StructuredResultRecord,
   StructuredResultStats,
   StructuredResultSummary,
+  ReasoningEffort,
 } from "./types";
+import { REASONING_EFFORTS } from "./types";
 import { websocketAuthProtocol } from "./events";
 import {
   logDiagnostic,
@@ -3288,6 +3290,7 @@ export function chatRequestBody(
     // Omit optional newer fields when unused so a desktop app stays compatible
     // with a slightly older remote Core, whose request models forbid extras.
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
+    ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
@@ -3352,6 +3355,9 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     toolsEnabled: value.metadata?.tools_enabled === true,
     mcpServerIds: Array.isArray(value.metadata?.mcp_server_ids) ? value.metadata.mcp_server_ids.map(String) : [],
     hookIds: Array.isArray(value.metadata?.hook_ids) ? value.metadata.hook_ids.map(String) : [],
+    reasoningEffort: REASONING_EFFORTS.includes(value.metadata?.reasoning_effort as ReasoningEffort)
+      ? (value.metadata?.reasoning_effort as ReasoningEffort)
+      : undefined,
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,

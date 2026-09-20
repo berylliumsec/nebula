@@ -275,6 +275,20 @@ describe("ApiClient", () => {
     }, true)).not.toHaveProperty("hook_ids");
   });
 
+  it("carries an operator's reasoning level and reads back the saved one", () => {
+    expect(chatRequestBody({
+      providerId: "provider",
+      reasoningEffort: "none",
+      messages: [{ role: "user", content: "Answer" }],
+    }, true).reasoning_effort).toBe("none");
+    // Absent means the model's own default; an older remote Core forbids
+    // unknown request fields, so the key is left out rather than sent null.
+    expect(chatRequestBody({
+      providerId: "provider",
+      messages: [{ role: "user", content: "Answer" }],
+    }, true)).not.toHaveProperty("reasoning_effort");
+  });
+
   it("reads and writes Core-owned guide progress and guide probes", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([{

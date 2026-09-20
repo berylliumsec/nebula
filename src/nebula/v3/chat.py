@@ -111,6 +111,7 @@ from .native_hooks import NativeHookError, NativeHookRunner, NativeHookSnapshot
 from .operator_help import CORPUS_ID, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .providers import (
+    ReasoningEffort,
     ModelMessage,
     ModelProvider,
     ModelRequest,
@@ -356,6 +357,10 @@ class ChatCompletionRequest(NebulaModel):
     # the negotiated profile in HarnessRuntime.prepare_chat.
     harness_mode: str | None = Field(default=None, min_length=1, max_length=100)
     harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    # Provider-side reasoning level. Absent leaves the model's own default,
+    # which is what an ordinary turn wants; the operator chooses otherwise per
+    # conversation and Core remembers the choice.
+    reasoning_effort: ReasoningEffort | None = None
     harness_service_tier: str | None = Field(default=None, max_length=100)
     harness_skill: dict[str, str] | None = None
     runtime_switch_confirmation: str | None = Field(
@@ -661,6 +666,16 @@ instead of emitting a tool call, control frame, or protocol markup."""
 
 _OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 
+# Outside goal mode one re-synthesis is the whole automatic budget; the
+# operator decides whether to ask again.
+_FINAL_ANSWER_RETRY_LIMIT = 1
+# A running goal keeps trying: the operator asked for that, and the goal's own
+# token and time budgets are what stop it. A goal carrying neither would retry
+# a provider that can never answer forever, so this many consecutive failures
+# blocks the goal with a readable reason the operator can resume from.
+_GOAL_FINAL_ANSWER_STALL_LIMIT = 6
+_FINAL_ANSWER_BACKOFF_CEILING_SECONDS = 30.0
+
 _RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array containing one
 to four searches for the operator's request."""
 
@@ -729,6 +744,12 @@ def _final_answer_response_record(
         "reasoning_characters": len(response.reasoning.strip()),
         "provider_request_id": response.provider_request_id,
     }
+
+
+def _final_answer_backoff_seconds(attempts: int) -> float:
+    """Wait before asking a provider that just failed to answer, once more."""
+
+    return min(_FINAL_ANSWER_BACKOFF_CEILING_SECONDS, float(2 ** max(0, attempts - 1)))
 
 
 def _next_final_answer_recovery_state(
@@ -2066,6 +2087,7 @@ class ChatService:
             ],
             max_output_tokens=request_limits.max_output_tokens,
             temperature=request.temperature,
+            reasoning_effort=request.reasoning_effort,
             metadata={
                 key: value
                 for key, value in {
@@ -2625,44 +2647,28 @@ class ChatService:
         request: ModelRequest,
         response: ModelResponse,
     ) -> ModelResponse:
-        """Recover one completed response without repeating prior model or tool work."""
+        """Ask again for a missing answer without repeating model or tool work.
+
+        Each attempt is recorded on the turn, charged to the turn's usage, and
+        constrained rather than merely enlarged. How many attempts there are is
+        the caller's budget: one outside goal mode, and as many as a running
+        goal's own budgets allow inside one.
+        """
 
         problem = _final_answer_problem(response)
         if problem is None:
             return response
 
-        turn = prepared.turn
-        if turn is not None:
-            self._assert_execution_owner(prepared)
-            turn = self._add_usage(self._refresh_turn(turn), response)
-            turn = self.store.update(
-                ChatTurn,
-                turn.id,
-                {
-                    "request_snapshot": {
-                        **turn.request_snapshot,
-                        "final_answer_recovery": _next_final_answer_recovery_state(
-                            turn.request_snapshot, response, problem
-                        ),
-                    }
-                },
-                expected_revision=turn.revision,
-            )
-            prepared.turn = turn
-
-        retry_request = self._final_answer_recovery_request(prepared, request, problem)
-        retry_response = await self._complete_with_context_recovery(
-            prepared, retry_request
-        )
-        retry_problem = _final_answer_problem(retry_response)
-        if turn is not None:
-            self._assert_execution_owner(prepared)
-            turn = self._add_usage(
-                self._refresh_turn(prepared.turn or turn), retry_response
-            )
-            prepared.turn = turn
-        if retry_problem is not None:
+        reasoning = response.reasoning
+        usage = response.usage
+        attempts = 0
+        current = response
+        current_problem: str | None = problem
+        while current_problem is not None:
+            turn = prepared.turn
             if turn is not None:
+                self._assert_execution_owner(prepared)
+                turn = self._add_usage(self._refresh_turn(turn), current)
                 turn = self.store.update(
                     ChatTurn,
                     turn.id,
@@ -2670,37 +2676,38 @@ class ChatService:
                         "request_snapshot": {
                             **turn.request_snapshot,
                             "final_answer_recovery": _next_final_answer_recovery_state(
-                                turn.request_snapshot,
-                                retry_response,
-                                retry_problem,
+                                turn.request_snapshot, current, current_problem
                             ),
                         }
                     },
                     expected_revision=turn.revision,
                 )
                 prepared.turn = turn
-            raise ProviderResponseError(
-                "provider returned no operator-facing answer after bounded recovery"
+            attempts += 1
+            allowed, delay = self._may_retry_final_answer(prepared, attempts)
+            if not allowed:
+                raise ProviderResponseError(
+                    "provider returned no operator-facing answer after bounded recovery"
+                )
+            if delay:
+                await asyncio.sleep(delay)
+            retry_request = self._final_answer_recovery_request(
+                prepared, request, current_problem
             )
-        return retry_response.model_copy(
-            update={
-                "reasoning": _joined_reasoning(
-                    response.reasoning, retry_response.reasoning
-                ),
-                "usage": ModelUsage(
-                    input_tokens=(
-                        response.usage.input_tokens + retry_response.usage.input_tokens
-                    ),
-                    output_tokens=(
-                        response.usage.output_tokens
-                        + retry_response.usage.output_tokens
-                    ),
-                    total_tokens=(
-                        response.usage.total_tokens + retry_response.usage.total_tokens
-                    ),
-                ),
-            }
-        )
+            current = await self._complete_with_context_recovery(
+                prepared, retry_request
+            )
+            reasoning = _joined_reasoning(reasoning, current.reasoning)
+            usage = ModelUsage(
+                input_tokens=usage.input_tokens + current.usage.input_tokens,
+                output_tokens=usage.output_tokens + current.usage.output_tokens,
+                total_tokens=usage.total_tokens + current.usage.total_tokens,
+            )
+            current_problem = _final_answer_problem(current)
+        if prepared.turn is not None:
+            self._assert_execution_owner(prepared)
+            prepared.turn = self._add_usage(self._refresh_turn(prepared.turn), current)
+        return current.model_copy(update={"reasoning": reasoning, "usage": usage})
 
     async def _stream_with_context_recovery(
         self, prepared: PreparedChat, request: ModelRequest
@@ -3563,7 +3570,7 @@ class ChatService:
             self._ensure_request_capacity(prepared.provider_profile, final_request)
             completed = False
             routing_thoughts = turn.reasoning
-            recovery_attempted = False
+            recovery_attempts = 0
             while not completed:
                 attempt_completed = False
                 attempted_tool_call = False
@@ -3619,26 +3626,6 @@ class ChatService:
                             else _final_answer_problem(event.response)
                         )
                         if problem is not None:
-                            if recovery_attempted:
-                                turn = self.store.update(
-                                    ChatTurn,
-                                    turn.id,
-                                    {
-                                        "request_snapshot": {
-                                            **turn.request_snapshot,
-                                            "final_answer_recovery": _next_final_answer_recovery_state(
-                                                turn.request_snapshot,
-                                                event.response,
-                                                problem,
-                                            ),
-                                        }
-                                    },
-                                    expected_revision=turn.revision,
-                                )
-                                prepared.turn = turn
-                                raise ProviderResponseError(
-                                    "provider returned no operator-facing answer after bounded recovery"
-                                )
                             turn = self.store.update(
                                 ChatTurn,
                                 turn.id,
@@ -3655,10 +3642,22 @@ class ChatService:
                                 expected_revision=turn.revision,
                             )
                             prepared.turn = turn
+                            recovery_attempts += 1
+                            allowed, delay = self._may_retry_final_answer(
+                                prepared, recovery_attempts
+                            )
+                            if not allowed:
+                                raise ProviderResponseError(
+                                    "provider returned no operator-facing answer after bounded recovery"
+                                )
+                            if delay:
+                                # A provider that just failed to answer is not
+                                # asked again immediately; the turn stays open
+                                # and the operator keeps its partial state.
+                                await asyncio.sleep(delay)
                             final_request = self._final_answer_recovery_request(
                                 prepared, final_request, problem
                             )
-                            recovery_attempted = True
                             break
                         completion = self._completion(prepared, event.response)
                         if completion.message.content:
@@ -3802,6 +3801,78 @@ class ChatService:
         goal_id = prepared.turn.goal_id if prepared.turn is not None else None
         return self._fit_goal_request_budget(goal_id, request) if goal_id else request
 
+    def _may_retry_final_answer(
+        self, prepared: PreparedChat, attempts: int
+    ) -> tuple[bool, float]:
+        """Whether to ask once more for the missing answer, and how long to wait.
+
+        Outside goal mode one re-synthesis is the automatic budget and the
+        operator decides from there. A running goal keeps trying, because that
+        is what a goal is: its own token and time budgets are the bound, and
+        charging each attempt is what makes them bite. A goal carrying neither
+        budget is stopped by the stall limit instead of running forever.
+        """
+
+        if attempts <= _FINAL_ANSWER_RETRY_LIMIT:
+            return True, 0.0
+        turn = prepared.turn
+        if turn is None or not turn.goal_id:
+            return False, 0.0
+        try:
+            goal = self.store.get(ChatGoal, turn.goal_id)
+        except NotFoundError as exc:
+            # diagnostic-expected: a deleted goal simply stops the retries.
+            record_caught_exception(
+                "chat",
+                "chat.chat.goal_absent_for_retry",
+                "A goal turn's goal was unavailable while deciding to retry.",
+                exc,
+                stage="chat",
+            )
+            return False, 0.0
+        if goal.status != ChatGoalStatus.RUNNING:
+            return False, 0.0
+        if (
+            goal.time_budget_seconds is not None
+            and goal.active_elapsed_seconds() >= goal.time_budget_seconds
+        ):
+            return False, 0.0
+        if attempts - _FINAL_ANSWER_RETRY_LIMIT >= _GOAL_FINAL_ANSWER_STALL_LIMIT:
+            self._block_stalled_goal(goal, attempts)
+            return False, 0.0
+        return True, _final_answer_backoff_seconds(attempts)
+
+    def _block_stalled_goal(self, goal: ChatGoal, attempts: int) -> None:
+        """Stop a goal whose provider will not answer, saying so in its own terms."""
+
+        reason = (
+            f"The model returned no answer {attempts} times in a row. The goal is "
+            "blocked rather than retrying indefinitely; resume it to try again, "
+            "or choose another model."
+        )
+        try:
+            self.store.update(
+                ChatGoal,
+                goal.id,
+                {
+                    "status": ChatGoalStatus.BLOCKED,
+                    "blocked_reason": reason,
+                    "active_since": None,
+                    "elapsed_seconds": goal.active_elapsed_seconds(),
+                    "consecutive_stalls": max(3, goal.consecutive_stalls),
+                },
+                expected_revision=goal.revision,
+            )
+        except (ConflictError, NotFoundError) as exc:
+            # diagnostic-expected: the operator moved the goal first; theirs wins.
+            record_caught_exception(
+                "chat",
+                "chat.chat.goal_block_superseded",
+                "A stalled goal changed before Core could block it.",
+                exc,
+                stage="chat",
+            )
+
     def _final_answer_recovery_request(
         self,
         prepared: PreparedChat,
@@ -3831,6 +3902,13 @@ class ChatService:
                 },
             }
         )
+        if problem in {"output_limit", "reasoning_only"}:
+            # The model spent this turn's budget thinking. Asking again with
+            # twice the room and no constraint buys more thinking, which is
+            # how a reasoning-only answer becomes an output-limit one. Ask for
+            # the answer alone instead; a route that does not take the control
+            # ignores it, and the enlarged budget below still applies.
+            retry = retry.model_copy(update={"reasoning_effort": "none"})
         if problem in {"output_limit", "reasoning_only"} and max_output_tokens:
             desired = (
                 max_output_tokens
@@ -6564,12 +6642,15 @@ class ChatService:
         return redact_text(value)
 
     @staticmethod
-    def _assistant_settings(prepared: PreparedChat) -> dict[str, list[str]]:
+    def _assistant_settings(prepared: PreparedChat) -> dict[str, Any]:
         if prepared.source_request is None:
             return {}
         return {
             "mcp_server_ids": list(prepared.source_request.mcp_server_ids),
             "hook_ids": list(prepared.source_request.hook_ids),
+            # Absent means the model's own default, which is a real choice and
+            # must survive a reload as one.
+            "reasoning_effort": prepared.source_request.reasoning_effort,
         }
 
     @staticmethod

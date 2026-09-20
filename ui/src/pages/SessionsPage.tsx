@@ -119,7 +119,9 @@ import type {
   ToolArtifactReference,
   ToolOutputReadResult,
   ToolOutputSearchResult,
+  ReasoningEffort,
 } from "../api/types";
+import { REASONING_EFFORTS } from "../api/types";
 import { AssistantMarkdown, type FencedRunCandidate } from "../components/AssistantMarkdown";
 import { ToolSuggestionChip } from "../components/ToolSuggestionChip";
 import { ActivityLedger } from "../components/ActivityLedger";
@@ -688,6 +690,9 @@ export function SessionsPage() {
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [harnessMode, setHarnessMode] = useState("");
   const [harnessReasoningEffort, setHarnessReasoningEffort] = useState("");
+  // Provider-side reasoning level. "" means the model's own default, which is
+  // what most turns want; Core remembers whatever the operator chose here.
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
   const [harnessServiceTier, setHarnessServiceTier] = useState("");
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkillSummary[]>([]);
   const [harnessSkillPath, setHarnessSkillPath] = useState("");
@@ -1053,6 +1058,7 @@ export function SessionsPage() {
     if (!activeChatSession || activeChatSession.backend !== "provider") return;
     setSelectedMcpIds(activeChatSession.mcpServerIds);
     setSelectedHookIds(activeChatSession.hookIds);
+    setReasoningEffort(activeChatSession.reasoningEffort ?? "");
   }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
@@ -3300,6 +3306,9 @@ export function SessionsPage() {
       harnessReasoningEffort: runtimeKind === "harness"
         ? harnessReasoningEffort
         : undefined,
+      reasoningEffort: runtimeKind === "provider" && reasoningEffort
+        ? reasoningEffort
+        : undefined,
       harnessServiceTier: runtimeKind === "harness"
         ? harnessServiceTier
         : undefined,
@@ -4223,7 +4232,7 @@ export function SessionsPage() {
                 {runtimeKind === "provider" ? <>{(selectedProvider?.models.length ?? 0) + unlistedProviderModels.length > 8 && <label><span>Find model</span><input type="search" value={providerModelQuery} placeholder="Search name or model ID" onChange={(event) => setProviderModelQuery(event.target.value)} /></label>}<label title={selectedProvider?.message}><span>Model</span><select aria-label="Chat model" aria-busy={modelDiscoveryInProgress} value={model} disabled={composerBusy || modelDiscoveryInProgress || (!selectedProvider?.models.length && !unlistedProviderModels.length)} onChange={(event) => void chooseProviderModel(event.target.value)}><option value="">{modelPlaceholder}</option>{selectedModelIsUnavailable && <option value={model}>{model} · saved model</option>}{filteredUnlistedProviderModels.length > 0
                   ? <><optgroup label="Allowed models">{filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup><optgroup label={`More ${selectedProvider?.name ?? "provider"} models · adds to allowed`}>{filteredUnlistedProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</optgroup></>
                   : filteredProviderModels.map((item) => <option value={item} key={item}>{modelOptionLabel(item, selectedProvider?.modelDescriptors)}</option>)}</select>{selectedModelSummary && <small>{selectedModelSummary}</small>}</label></> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={composerBusy || !harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
-                {runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={composerBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+                {runtimeKind === "provider" && <label><span>Effort</span><select aria-label="Reasoning effort" value={reasoningEffort} disabled={composerBusy} onChange={(event) => { setReasoningEffort(event.target.value as ReasoningEffort | ""); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option value={item} key={item}>{item === "none" ? "None · answer only" : item}</option>)}</select></label>}{runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} disabled={composerBusy} onChange={(event) => { setHarnessReasoningEffort(event.target.value); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} disabled={composerBusy} onChange={(event) => { setHarnessServiceTier(event.target.value); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
                 </div>
@@ -4441,7 +4450,13 @@ export function SessionsPage() {
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
-              {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{failedProviderRecovery && <button className="button quiet" type="button" disabled={sending} onClick={() => void retryProviderFinalAnswer()}>Retry final answer</button>}{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
+              {chatError && (failedProviderRecovery
+                ? // The turn is resumable and needs nothing decided: its tool
+                  // results, reasoning and partial state are all preserved and
+                  // only the prose is missing. That is not an error to alarm
+                  // an operator with, and the conversation stays usable.
+                  <div className="chat-recovery-notice unfinished" role="status"><p><strong>The model stopped without finishing this reply.</strong> Everything it did is saved — only the written answer is missing.</p><button className="button quiet" type="button" disabled={sending} onClick={() => void retryProviderFinalAnswer()}>Finish the answer</button></div>
+                : <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>)}
               {activeArchivedSession && <div className="chat-archived-notice" role="status"><Archive size={14} aria-hidden="true" /><span>This conversation is archived. Sending a message moves it back to your conversations.</span><button className="button quiet" type="button" disabled={Boolean(archivingSessionId)} onClick={() => void setConversationArchived(activeArchivedSession, false)}>Unarchive</button></div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}
