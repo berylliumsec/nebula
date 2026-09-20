@@ -3623,6 +3623,10 @@ class ChatGoalStatus(StringEnum):
     CANCELLED = "cancelled"
 
 
+CHAT_GOAL_CHILD_LIMIT = 32
+"""Most child conversations one goal may list, and so the largest child budget."""
+
+
 class ChatGoal(Entity):
     """One Core-owned provider-chat objective with explicit lifecycle and limits."""
 
@@ -3654,7 +3658,9 @@ class ChatGoal(Entity):
     consecutive_stalls: int = Field(default=0, ge=0)
     skill_snapshots: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
     parent_goal_id: str | None = Field(default=None, max_length=200)
-    child_session_ids: list[str] = Field(default_factory=list, max_length=32)
+    child_session_ids: list[str] = Field(
+        default_factory=list, max_length=CHAT_GOAL_CHILD_LIMIT
+    )
     execution_owner_id: str | None = Field(default=None, max_length=200)
     execution_claim_id: str | None = Field(default=None, max_length=200)
     execution_claimed_at: datetime | None = None
@@ -3662,8 +3668,8 @@ class ChatGoal(Entity):
 
     @model_validator(mode="after")
     def progress_is_coherent(self) -> "ChatGoal":
-        if self.plan and self.current_step > len(self.plan):
-            raise ValueError("current goal step exceeds the plan")
+        # ``current_step`` counts the turns taken under the goal and is bounded
+        # by ``step_budget``; the plan is guidance and may be shorter than that.
         if self.status == ChatGoalStatus.BLOCKED and not self.blocked_reason:
             raise ValueError("blocked goals require a reason")
         if self.status == ChatGoalStatus.COMPLETED and (

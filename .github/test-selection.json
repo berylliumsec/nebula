@@ -1,33 +1,21 @@
 {
-  "change_digest": "f0c1560a14a86a87b5ee04fbaa5e69ad7188d4f97803724135e1bda0a1cbb9a7",
-  "reviewed_by": "Claude review of the native web.search tool, its local metasearch runtime, and its two project opt-ins",
-  "reason": "New capability: web.search answers from a SearXNG container Nebula runs on loopback. tests/v3/test_web_search.py is the feature's own suite and proves the parts that carry the security contract: the spec declares LOCAL_READ + cloud_transfer with no target_argument (a network risk class would force a scope-checked target and deny every search), the policy engine allows it normally and denies it for a local_only or prohibiting project, the scope-disclosure guard names the in-scope domain, wildcard domain, subdomain or CIDR member a query would leak while leaving near-misses alone, and the tool refuses such a query with zero calls to the runtime. It also covers result normalization (dedupe, scheme filter, redaction, count bound), the new web_result receipt observations alongside the unchanged nmap ones, the receipt summary that carries a refusal into the transcript, loopback-only container arguments, the generated settings.yml enabling JSON and disabling the bot limiter, the integration status and scope round-trip through the API, registration in RuntimePlatform.chat_components for an opted-in project only, and ChatService._web_search_selected so the turn actually builds components when web search is the sole tool source. Frontend: the three new suites cover the runtime card's states (ready, stopped, not installed, no container runtime, failed test, failed action), the engine checkboxes including the last-engine guard, the transcript results list with its provenance line and link rel, and the project toggles including the nested disclosure option, the local-only explanation, saving both fields, and never leaving disclosure armed once web search is off. The six existing frontend files are selected because this change edited them: the EngagementScopePolicy type gained two fields (workbenchBrowser, ScopeImportDialog, WorkbenchBrowser fixtures), the policy panel now reads the runtime status (loading fixture), the settings catalog gained an entry and an Integrations category (CompactSettingsList), and the ledger model now labels and files web.search under research (activityLedgerModel).",
-  "exclusions": "No native tests: no Tauri or Rust change. No new screenshot baselines: the settings card and policy toggles are new nodes inside already-baselined routes, so area:critical-workspaces re-renders them at desktop and narrow widths; if CI reports a diff the CI actuals become the baselines rather than being regenerated locally, because local antialiasing differs. src/nebula/v3/chat.py matches area:assistant, area:chat-edit-in-place and area:provider-thinking, but the change there only adds a store read that decides whether to ask the tool platform for components; those three are mock-runtime browser tests whose stub provider exposes no web search and whose projects never opt in, so their behaviour is identical. src/nebula/v3/api.py matches area:core-api; the new endpoints are additive and no existing request or response schema changed, and tests/v3/test_web_search.py exercises them directly through TestClient. ui/src/pages/SessionsPage.tsx matches area:assistant and area:mobile-layout; the only change is one conditional branch that renders WebSearchResults when a tool entry's capability is web.search, which no existing transcript fixture produces. tests/v3/test_policy.py, test_tool_catalog.py, test_tool_suggestions.py, test_ssh_environments.py, test_storage.py and test_chat_tool_loop.py were run locally against this branch and pass (171 tests); they cover the seams this change touches (policy evaluation, catalog deferral, the chat_components signature, entity persistence) but none asserts anything web-search specific, so they are not selected.",
+  "change_digest": "10094658da9ec9e97b055fef0a01f6264bfaee3ec5b89752f5c8d20d7e554730",
+  "reviewed_by": "Claude review of chat-goals",
+  "reason": "Four defects in the provider-chat goal family. (2) ChatGoal.progress_is_coherent raised 'current goal step exceeds the plan' once a goal had taken more turns than its plan had lines, but _persist_turn_inputs increments current_step on every goal turn and the dispatch gate bounds it by step_budget, not the plan; a two-line plan with a step budget of eight therefore failed the third send with a raw 422 inside _persist_turn_inputs, persisted nothing, and left the goal RUNNING so every later send failed identically. current_step now counts turns (the plan is guidance), so the goal runs until its step, token or time budget pauses it cleanly. (3) ChatService._charge_goal wrote status PAUSED whenever accumulated usage crossed token_budget with no check of the current status, so a goal cancelled or completed while a response was in flight came back as PAUSED (with completed_at still set) and could be resumed; usage is still always recorded but only a RUNNING goal transitions. (18) ChatGoalService.write ran _propagate_parent_stop before and outside the parent's guarded update and paused every non-terminal child including DRAFT ones, which then resumed to RUNNING without ever passing Start; now children are read first, the parent update and the child updates run in one store transaction (a revision conflict rolls everything back), and pause skips drafts while cancel still retires them. (20) GoalCreate.child_budget had no upper bound while ChatGoal.child_session_ids caps at 32, so the 33rd start_child failed validation after its child session and goal were already committed; a shared CHAT_GOAL_CHILD_LIMIT now bounds child_budget (le=32) and reserve_child refuses when the list is already full, before anything is created. tests/v3/test_chat_goals.py gains four tests that each fail on main: test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget (four turns under a two-line plan, then the step budget pauses the goal), test_charging_a_terminal_goal_records_usage_without_resurrecting_it (cancelled and completed stay put, running still pauses), test_parent_pause_skips_draft_children_and_commits_with_the_parent (draft untouched, started child paused, a lost parent revision race changes nothing), and test_child_budget_is_bounded_by_the_child_list_cap (33 refused at GoalCreate, full list refused before any create). test_paused_wall_time_does_not_consume_active_goal_budget's fake clock is trimmed to one read per action because a pause now stamps the parent and its children with the same instant. tests/v3/test_chat.py, test_chat_tool_loop.py and test_chat_schedules.py are selected as regression coverage for the changed ChatGoal validator and _charge_goal callers along every goal-charging path (turn completion, routing steps, compaction, context recovery, schedule-fired goal turns).",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: src/nebula/v3/chat.py matches area:assistant, area:chat-edit-in-place and area:provider-thinking and domain.py/chat.py match area:core-api, but those browser journeys run against a mock runtime or a stub provider with no conversation goal, and the only chat.py change is a status guard inside _charge_goal that is reached solely on goal turns; the Python tests drive every changed path directly. No full suites.",
   "expected_tests": {
-    "python": 40,
-    "frontend": 87,
+    "python": 84,
+    "frontend": 0,
     "native": 0,
-    "playwright": 34
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_web_search.py"
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_chat_schedules.py"
   ],
-  "frontend": [
-    "ui/src/components/WebSearchRuntimeSettings.test.tsx",
-    "ui/src/components/WebSearchResults.test.tsx",
-    "ui/src/components/EngagementPolicyWebSearch.test.tsx",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx",
-    "ui/src/components/CompactSettingsList.test.tsx",
-    "ui/src/components/activityLedgerModel.test.ts",
-    "ui/src/api/workbenchBrowser.test.ts",
-    "ui/src/components/ScopeImportDialog.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:critical-workspaces",
-    "area:settings-search",
-    "area:activity-ledger",
-    "area:tool-suggestions"
-  ]
+  "playwright": []
 }
