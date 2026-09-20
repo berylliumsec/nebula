@@ -4288,6 +4288,7 @@ test("assistant settings expose provider metadata and harness model options", as
     privacy: { local_only: false, permits_sensitive_data: false, residency: [] },
     metadata: {},
   };
+  let providerProfileReads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/skills/catalog") && route.request().method() === "GET") {
@@ -4306,6 +4307,24 @@ test("assistant settings expose provider metadata and harness model options", as
     }
     if (path.endsWith("/providers") && route.request().method() === "GET") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([openRouterProvider]) });
+      return;
+    }
+    if (path.endsWith(`/providers/${openRouterProvider.id}/capabilities/verify`) && route.request().method() === "POST") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        provider_id: openRouterProvider.id,
+        provider_revision: openRouterProvider.revision + 1,
+        verification: { model: "anthropic/claude-sonnet-4.5", status: "verified", checked_at: entity.updated_at, contract_version: "1" },
+      }) });
+      return;
+    }
+    // The profile read that follows verification carries allowed models only.
+    if (path.endsWith(`/providers/${openRouterProvider.id}`) && route.request().method() === "GET") {
+      providerProfileReads += 1;
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ...openRouterProvider,
+        revision: openRouterProvider.revision + 1,
+        capability_verifications: { "anthropic/claude-sonnet-4.5": { model: "anthropic/claude-sonnet-4.5", status: "verified", checked_at: entity.updated_at, contract_version: "1" } },
+      }) });
       return;
     }
     if (path.endsWith(`/providers/${openRouterProvider.id}/health`) && route.request().method() === "POST") {
@@ -4403,6 +4422,11 @@ test("assistant settings expose provider metadata and harness model options", as
     "Select model",
     "Claude Sonnet 4.5 (anthropic/claude-sonnet-4.5) · 200,000 context",
   ]);
+  // Capability verification re-reads the profile; discovered models must survive it.
+  await expect.poll(() => providerProfileReads).toBeGreaterThan(0);
+  await expect(providerModel).toBeEnabled();
+  await expect(providerModel).toHaveValue("anthropic/claude-sonnet-4.5");
+  await expect(providerModel.locator("option")).toHaveCount(2);
   await expect(settingsDialog.getByText("text + image · tools advertised · 32,000 max output")).toBeVisible();
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
   expect(harnessSessionsCompleted).toBe(false);
