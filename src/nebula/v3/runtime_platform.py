@@ -56,6 +56,7 @@ from .tools import (
     ToolSpec,
     register_artifact_retrieval_tools,
 )
+from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
 
 
 LOGGER = logging.getLogger(__name__)
@@ -164,6 +165,7 @@ class RuntimePlatform:
         self.kali_source_image = kali_source_image
         self.kali_repository = kali_repository
         self.runtime_metadata_path = self.data_root / "kali-runtime.json"
+        self.search_runtime = SearchRuntime(store=store, data_root=self.data_root)
         self._prepared_images: dict[tuple[str, int], PreparedContainerImage] = {}
         self._image_locks: dict[tuple[str, int], asyncio.Lock] = {}
         self.mcp_service: McpProbeService | None = None
@@ -199,9 +201,17 @@ class RuntimePlatform:
             if engagement.scope_policy_id
             else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
         )
-        if not mcp_profiles and not ssh_environments and not allow_empty:
-            raise RuntimePlatformError("no MCP server was selected")
+        search_enabled = web_search_enabled(scope)
+        if (
+            not mcp_profiles
+            and not ssh_environments
+            and not search_enabled
+            and not allow_empty
+        ):
+            raise RuntimePlatformError("no tool source was selected")
         registry = ToolRegistry()
+        if search_enabled:
+            registry.register(WebSearchTool(self.search_runtime, scope))
         if mcp_profiles:
             if self.mcp_service is None:
                 raise RuntimePlatformError("Core MCP execution service is unavailable")

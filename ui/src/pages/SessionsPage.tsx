@@ -150,6 +150,7 @@ import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
 import { settingCatalogEntry } from "../settingsCatalog";
+import { WebSearchResults } from "../components/WebSearchResults";
 import { AgentsPage } from "./AgentsPage";
 import {
   harnessCostLabel,
@@ -354,6 +355,7 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
   const tool = entry.sourceTool;
   if (tool) return <div className="activity-ledger-entry-body">
     {tool.summary && <p>{tool.summary}</p>}
+    {tool.capability === "web.search" && <WebSearchResults receipt={tool.receipt} />}
     {tool.evidenceIds.length > 0 && <div className="scope-chip-list">{tool.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>}
     {Object.keys(tool.receipt ?? {}).length > 0 && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(tool.receipt, null, 2)}</pre></details>}
   </div>;

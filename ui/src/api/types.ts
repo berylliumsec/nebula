@@ -329,6 +329,10 @@ export interface EngagementScopePolicy {
   localOnly: boolean;
   /** Opt-in: send redacted operator messages, selected skills and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
+  /** Opt-in: let the agent research the public web through the local search runtime. */
+  webSearch: boolean;
+  /** Opt-in: permit search queries that name an in-scope host, address or range. */
+  webSearchDisclosesScope: boolean;
   /** Runtime names of connected-source tools kept in every request. */
   alwaysLoadedTools: string[];
   maxConcurrency: number;
@@ -357,13 +361,68 @@ export interface MissionGrant {
 export interface EngagementScopeUpdateRequest
   extends Omit<
     EngagementScopePolicy,
-    "engagementId" | "revision" | "toolSuggestions" | "alwaysLoadedTools"
+    | "engagementId"
+    | "revision"
+    | "toolSuggestions"
+    | "webSearch"
+    | "webSearchDisclosesScope"
+    | "alwaysLoadedTools"
   > {
   expectedRevision: number;
   /** Omitted keeps the stored value. */
   toolSuggestions?: boolean;
   /** Omitted keeps the stored value. */
+  webSearch?: boolean;
+  /** Omitted keeps the stored value. */
+  webSearchDisclosesScope?: boolean;
+  /** Omitted keeps the stored value. */
   alwaysLoadedTools?: string[];
+}
+
+export type WebSearchEngine =
+  | "duckduckgo"
+  | "brave"
+  | "wikipedia"
+  | "stackexchange"
+  | "github";
+
+export type WebSearchRuntimeState =
+  | "absent"
+  | "stopped"
+  | "starting"
+  | "ready"
+  | "failed";
+
+export interface WebSearchTest {
+  testedAt: string;
+  ok: boolean;
+  latencyMs?: number;
+  enginesAnswered: string[];
+  error?: string;
+}
+
+/** The local metasearch runtime. It holds no account and no key. */
+export interface WebSearchRuntime {
+  runtimeAvailable: boolean;
+  runtimeDetail: string;
+  containerState: WebSearchRuntimeState;
+  imageDigest?: string;
+  port?: number;
+  engines: WebSearchEngine[];
+  lastTest?: WebSearchTest;
+  lastDetail?: string;
+  projectsUsing: number;
+}
+
+/** One ranked public-web hit lifted into a tool receipt. */
+export interface WebResultObservation {
+  kind: "web_result";
+  rank: number;
+  title: string;
+  url: string;
+  snippet: string;
+  engine?: string;
+  publishedAt?: string;
 }
 
 export interface TypeSafeKeyTest {

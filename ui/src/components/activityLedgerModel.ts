@@ -259,10 +259,13 @@ export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedg
   return items.map((item, index) => ({
     id: `native:${item.toolCallId}`,
     source: "native" as const,
-    phase: "execution" as const,
+    // Research reads next to harness web search, which already files here.
+    phase: item.capability === "web.search" ? "research" : "execution",
     status: normalizeActivityStatus(item.status),
     statusLabel: sourceStatusLabel(item.status),
-    label: item.displayName?.trim() || meaningfulLabel(item.capability, item.summary, "execution"),
+    label: item.capability === "web.search"
+      ? "Web search"
+      : item.displayName?.trim() || meaningfulLabel(item.capability, item.summary, "execution"),
     summary: item.summary,
     brief: firstSentence(item.summary),
     sequence: index,

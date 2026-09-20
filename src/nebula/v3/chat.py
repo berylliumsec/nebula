@@ -68,6 +68,7 @@ from .domain import (
     ContextSnapshotStatus,
     ContextSourceReference,
     Engagement,
+    ScopePolicy,
     KnowledgeSource,
     LibraryItem,
     McpServerProfile,
@@ -144,6 +145,7 @@ from .tool_catalog import (
     rank_for_request,
     unwrap_call,
 )
+from .web_search import web_search_enabled
 from .tool_suggestions import (
     JevClient,
     SuggestionCache,
@@ -1930,10 +1932,14 @@ class ChatService:
             for item in request.context_attachments
         )
         skill_resources_selected = any(item.resources for item in skill_snapshots)
+        # A project can opt into the local search runtime alone, with no MCP
+        # server, SSH environment or command runtime selected.
+        web_search_selected = self._web_search_selected(engagement_id)
         tools_enabled = (
             request.tools_enabled
             or bool(mcp_profiles)
             or bool(ssh_environments)
+            or web_search_selected
             or bool(browser_session_id)
             or model_context
             or skill_resources_selected
@@ -1955,7 +1961,7 @@ class ChatService:
                 )
             if (
                 not request.tools_enabled
-                and (mcp_profiles or ssh_environments)
+                and (mcp_profiles or ssh_environments or web_search_selected)
                 and self.tool_platform is None
             ):
                 raise ChatConfigurationError("MCP runtime is unavailable")
@@ -1982,7 +1988,7 @@ class ChatService:
                         include_oci=False,
                         allow_empty=True,
                     )
-                    if (mcp_profiles or ssh_environments)
+                    if (mcp_profiles or ssh_environments or web_search_selected)
                     and self.tool_platform is not None
                     else None
                 )
@@ -3635,6 +3641,32 @@ class ChatService:
             )
         return history
 
+    def _web_search_selected(self, engagement_id: str | None) -> bool:
+        """Whether this project opted into the local search runtime.
+
+        Read from the store rather than asked of the tool platform: whether a
+        project wants web search is a scope question, and the platform may be
+        any of several runtimes.
+        """
+
+        if engagement_id is None or self.tool_platform is None:
+            return False
+        try:
+            engagement = self.store.get(Engagement, engagement_id)
+            if not engagement.scope_policy_id:
+                return False
+            scope = self.store.get(ScopePolicy, engagement.scope_policy_id)
+        except NotFoundError as exc:  # diagnostic-expected: absent project scope
+            record_caught_exception(
+                "chat",
+                "chat.chat.web_search_scope_absent",
+                "A project scope could not be read while checking web search.",
+                exc,
+                stage="chat",
+            )
+            return False
+        return web_search_enabled(scope)
+
     def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
         return self.store.get(ChatTurn, turn.id)
 
@@ -4278,7 +4310,12 @@ class ChatService:
                     include_oci=False,
                     allow_empty=True,
                 )
-                if (mcp_profiles or ssh_environments) and self.tool_platform is not None
+                if (
+                    mcp_profiles
+                    or ssh_environments
+                    or self._web_search_selected(turn.engagement_id)
+                )
+                and self.tool_platform is not None
                 else None
             )
             components: RuntimeToolComponents | AutomationToolComponents | None

@@ -212,6 +212,8 @@ export function buildBrowserScopeAddition(urlValue: string, scope: EngagementSco
       prohibitedActions: scope.prohibitedActions,
       localOnly: scope.localOnly,
       toolSuggestions: scope.toolSuggestions,
+      webSearch: scope.webSearch,
+      webSearchDisclosesScope: scope.webSearchDisclosesScope,
       maxConcurrency: scope.maxConcurrency,
       grants: scope.grants,
     },

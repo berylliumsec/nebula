@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Save, ShieldCheck, TerminalSquare } from "lucide-react";
-import type { AutomationProjectPolicy, EngagementScopePolicy, ScopeToolCandidate, TypeSafeIntegration, VpnProfile } from "../api/types";
+import type { AutomationProjectPolicy, EngagementScopePolicy, ScopeToolCandidate, TypeSafeIntegration, VpnProfile, WebSearchRuntime } from "../api/types";
 import { ApiError } from "../api/client";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -8,6 +8,7 @@ import { announceSettingsSaved } from "./SettingsSaveFeedback";
 import { InlineValidationNotice } from "./InlineValidationNotice";
 import { useConfirmation } from "./DialogSystem";
 import { TYPESAFE_CHANGED_EVENT } from "./TypeSafeIntegrationSettings";
+import { WEB_SEARCH_CHANGED_EVENT, runtimeHealth } from "./WebSearchRuntimeSettings";
 
 function lines(value: string): string[] {
   return [...new Set(value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean))];
@@ -98,6 +99,9 @@ export function EngagementPolicySettings() {
   const [prohibitedActions, setProhibitedActions] = useState("");
   const [localOnly, setLocalOnly] = useState(true);
   const [toolSuggestions, setToolSuggestions] = useState(false);
+  const [webSearch, setWebSearch] = useState(false);
+  const [webSearchDisclosesScope, setWebSearchDisclosesScope] = useState(false);
+  const [webSearchRuntime, setWebSearchRuntime] = useState<WebSearchRuntime>();
   const [alwaysLoadedTools, setAlwaysLoadedTools] = useState<string[]>([]);
   const [toolCandidates, setToolCandidates] = useState<ScopeToolCandidate[]>([]);
   const [typesafe, setTypesafe] = useState<TypeSafeIntegration>();
@@ -133,6 +137,8 @@ export function EngagementPolicySettings() {
     setProhibitedActions(next.prohibitedActions.join("\n"));
     setLocalOnly(next.localOnly);
     setToolSuggestions(next.toolSuggestions);
+    setWebSearch(next.webSearch);
+    setWebSearchDisclosesScope(next.webSearchDisclosesScope);
     setAlwaysLoadedTools(next.alwaysLoadedTools);
     setMaxConcurrency(String(next.maxConcurrency));
   };
@@ -198,6 +204,24 @@ export function EngagementPolicySettings() {
     return () => window.removeEventListener(TYPESAFE_CHANGED_EVENT, follow);
   }, []);
 
+  useEffect(() => {
+    const follow = (event: Event) => setWebSearchRuntime((event as CustomEvent<WebSearchRuntime>).detail);
+    window.addEventListener(WEB_SEARCH_CHANGED_EVENT, follow);
+    return () => window.removeEventListener(WEB_SEARCH_CHANGED_EVENT, follow);
+  }, []);
+
+  useEffect(() => {
+    if (!api || coreState !== "online") return;
+    // The panel's own settings must render even when this optional read fails.
+    void (async () => {
+      try {
+        setWebSearchRuntime(await api.getWebSearchRuntime());
+      } catch (loadError) {
+        void logCaughtDiagnostic("interface.engagement_policy.web_search_status_failed", "The web search runtime status could not be read.", loadError, "engagement_policy");
+      }
+    })();
+  }, [api, coreState]);
+
   const pinTool = (name: string, pinned: boolean) => setAlwaysLoadedTools((current) => pinned
     ? [...new Set([...current, name])].sort()
     : current.filter((item) => item !== name));
@@ -249,6 +273,9 @@ export function EngagementPolicySettings() {
         prohibitedActions: lines(prohibitedActions),
         localOnly,
         toolSuggestions,
+        webSearch,
+        // A project that never opted in cannot leave disclosure armed.
+        webSearchDisclosesScope: webSearch && webSearchDisclosesScope,
         alwaysLoadedTools,
         maxConcurrency: concurrency,
         grants: scope.grants,
@@ -331,6 +358,10 @@ export function EngagementPolicySettings() {
           <label className="provider-consent" id="tool-suggestions-option"><input type="checkbox" aria-describedby="tool-suggestions-detail" checked={toolSuggestions && !localOnly} disabled={localOnly || (!toolSuggestions && !typesafeUsable(typesafe))} onChange={(event) => setToolSuggestions(event.target.checked)} /><span><strong>Suggest tools with TypeSafe Jev</strong><small id="tool-suggestions-detail">{localOnly ? "Unavailable while Local only is on." : "Before each turn, send redacted operator messages, the instructions of any skill selected for the turn, and MCP tool names to TypeSafe. The model then loads only the tools it needs. Tool output is never sent."}</small></span></label>
           {!localOnly && !typesafeUsable(typesafe) && <a className="tool-suggestions-key-link" href="#typesafe-integration-settings">Add a key in Settings › Integrations →</a>}
           {toolSuggestions && !localOnly && typesafe && !typesafeUsable(typesafe) && <InlineValidationNotice message="Tool suggestions are on, but no working TypeSafe key is available. Turns run without suggestions until a key works." />}
+          <label className="provider-consent" id="web-search-option"><input type="checkbox" aria-describedby="web-search-detail" checked={webSearch && !localOnly} disabled={localOnly} onChange={(event) => setWebSearch(event.target.checked)} /><span><strong>Web search</strong><small id="web-search-detail">{localOnly ? "Unavailable while Local only is on: every search query leaves this machine." : "Let the assistant research the public web through the metasearch runtime on this host. It cannot reach a target, and it cannot open the pages it finds."}</small></span></label>
+          {webSearch && !localOnly && <label className="provider-consent nested-consent" id="web-search-disclosure-option"><input type="checkbox" aria-describedby="web-search-disclosure-detail" checked={webSearchDisclosesScope} onChange={(event) => setWebSearchDisclosesScope(event.target.checked)} /><span><strong>Allow queries naming in-scope targets</strong><small id="web-search-disclosure-detail">{webSearchDisclosesScope ? "A query may name this project's hosts, addresses and ranges. Upstream engines will see them." : "Off: a query naming an in-scope host or address is refused before it leaves this machine."}</small></span></label>}
+          {webSearch && !localOnly && webSearchRuntime && runtimeHealth(webSearchRuntime).tone !== "good" && <InlineValidationNotice message={`Web search is on, but the search runtime is not ready (${runtimeHealth(webSearchRuntime).label.toLowerCase()}). Turns run without it until it starts.`} />}
+          {webSearch && !localOnly && webSearchRuntime && !webSearchRuntime.imageDigest && <a className="tool-suggestions-key-link" href="#web-search-runtime-settings">Install the search runtime in Settings › Integrations →</a>}
           <fieldset className="resource-checklist always-loaded-tools" aria-describedby="always-loaded-tools-detail">
             <legend>Always loaded tools</legend>
             {toolCandidates.map((candidate) => <label key={candidate.name}><input type="checkbox" checked={alwaysLoadedTools.includes(candidate.name)} onChange={(event) => pinTool(candidate.name, event.target.checked)} /><span><strong>{candidate.toolName}</strong><small>{candidate.serverName}{candidate.description ? ` \u00b7 ${candidate.description}` : ""}</small></span></label>)}

@@ -2824,6 +2824,35 @@ export function mapVaultState(value: unknown): import("./types").VaultState {
   return value === "available" || value === "locked" ? value : "unavailable";
 }
 
+function mapWebSearchRuntime(value: Record<string, unknown>): import("./types").WebSearchRuntime {
+  const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
+  const states = ["absent", "stopped", "starting", "ready", "failed"];
+  const engines = Array.isArray(value.engines) ? value.engines.filter((item): item is string => typeof item === "string") : [];
+  return {
+    runtimeAvailable: value.runtime_available === true,
+    runtimeDetail: typeof value.runtime_detail === "string" ? value.runtime_detail : "",
+    containerState: (typeof value.container_state === "string" && states.includes(value.container_state)
+      ? value.container_state
+      : "absent") as import("./types").WebSearchRuntimeState,
+    imageDigest: stringField(value.image_digest),
+    port: typeof value.port === "number" ? value.port : undefined,
+    engines: engines as import("./types").WebSearchEngine[],
+    lastDetail: stringField(value.last_detail),
+    projectsUsing: numberField(value.projects_using),
+    lastTest: test && typeof test.tested_at === "string"
+      ? {
+          testedAt: test.tested_at,
+          ok: test.ok === true,
+          latencyMs: typeof test.latency_ms === "number" ? test.latency_ms : undefined,
+          enginesAnswered: Array.isArray(test.engines_answered)
+            ? test.engines_answered.filter((item): item is string => typeof item === "string")
+            : [],
+          error: stringField(test.error),
+        }
+      : undefined,
+  };
+}
+
 function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types").TypeSafeIntegration {
   const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
   const source = value.source === "vault" || value.source === "session" || value.source === "environment" ? value.source : undefined;
@@ -4034,6 +4063,8 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
     toolSuggestions: value.tool_suggestions === true,
+    webSearch: value.web_search === true,
+    webSearchDisclosesScope: value.web_search_discloses_scope === true,
     alwaysLoadedTools: value.always_loaded_tools ?? [],
     maxConcurrency: numberField(value.max_concurrency) || 1,
     grants: (value.grants ?? []).map((grant) => ({
@@ -6046,6 +6077,37 @@ export class ApiClient {
       .then(() => this.getAutomationRuntime());
   }
 
+  getWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search").then(mapWebSearchRuntime);
+  }
+
+  installWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search/install", { method: "POST" }).then(mapWebSearchRuntime);
+  }
+
+  startWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search/start", { method: "POST" }).then(mapWebSearchRuntime);
+  }
+
+  stopWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search/stop", { method: "POST" }).then(mapWebSearchRuntime);
+  }
+
+  testWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search/test", { method: "POST" }).then(mapWebSearchRuntime);
+  }
+
+  setWebSearchEngines(engines: import("./types").WebSearchEngine[]): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search/engines", {
+      method: "PUT",
+      body: JSON.stringify({ engines }),
+    }).then(mapWebSearchRuntime);
+  }
+
+  removeWebSearchRuntime(): Promise<import("./types").WebSearchRuntime> {
+    return this.request<Record<string, unknown>>("integrations/web-search", { method: "DELETE" }).then(mapWebSearchRuntime);
+  }
+
   getTypeSafeIntegration(): Promise<import("./types").TypeSafeIntegration> {
     return this.request<Record<string, unknown>>("integrations/typesafe").then(mapTypeSafeIntegration);
   }
@@ -6520,6 +6582,8 @@ export class ApiClient {
           prohibited_actions: body.prohibitedActions,
           local_only: body.localOnly,
           tool_suggestions: body.toolSuggestions,
+          web_search: body.webSearch,
+          web_search_discloses_scope: body.webSearchDisclosesScope,
           always_loaded_tools: body.alwaysLoadedTools,
           max_concurrency: body.maxConcurrency,
           grants: body.grants.map((grant) => ({
