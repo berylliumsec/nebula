@@ -3676,6 +3676,9 @@ class ChatTurn(Entity):
     scope_revision: int | None = Field(default=None, ge=1)
     request_snapshot: dict[str, Any] = Field(default_factory=dict)
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
+    # Every thought the turn produced, in order: a reasoning model thinks once
+    # per routing step, so the final response carries only the last of them.
+    reasoning: str = Field(default="", max_length=200_000)
     final_message_id: str | None = None
     error: str | None = Field(default=None, max_length=1_000)
     execution_owner_id: str | None = Field(default=None, max_length=200)

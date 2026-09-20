@@ -579,6 +579,10 @@ class ModelProvider(ABC):
                 context_length_exceeded=isinstance(exc, ProviderContextLengthError),
             )
             return
+        if response.reasoning:
+            yield ModelStreamEvent(
+                type=StreamEventType.REASONING_DELTA, delta=response.reasoning
+            )
         if response.text:
             yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta=response.text)
         for call in response.tool_calls:

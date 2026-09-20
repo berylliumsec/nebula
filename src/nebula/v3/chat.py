@@ -620,6 +620,28 @@ _RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array containing one
 to four searches for the operator's request."""
 
 
+# A turn's thinking is bounded by what ChatMessage.reasoning can hold.
+_REASONING_LIMIT = 200_000
+
+
+def _reasoning_step_delta(collected: str, addition: str) -> str:
+    """The text one more thought adds to a turn's episode, blank line and all."""
+
+    thought = addition.strip()
+    if not thought:
+        return ""
+    return f"\n\n{thought}" if collected else thought
+
+
+def _joined_reasoning(collected: str, addition: str) -> str:
+    """A turn's thoughts in the order it had them, within the stored bound."""
+
+    joined = collected + _reasoning_step_delta(collected, addition)
+    # The closing thoughts are the ones that explain the answer, so an episode
+    # past the bound loses its opening rather than its end.
+    return joined[-_REASONING_LIMIT:]
+
+
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
     """Constrain Core-owned routing arguments instead of asking the model to guess."""
 
@@ -2863,7 +2885,22 @@ class ChatService:
                     )
                     self._assert_execution_owner(prepared)
                     turn = self._refresh_turn(turn)
+                    thought = _reasoning_step_delta(turn.reasoning, response.reasoning)
                     turn = self._add_usage(turn, response)
+                    if thought:
+                        # The model explains each tool it reaches for. Without
+                        # this the transcript shows thinking only for the
+                        # closing synthesis, which is often wordless.
+                        yield (
+                            "reasoning_delta",
+                            {
+                                "type": "reasoning_delta",
+                                "turn_id": turn.id,
+                                "provider_id": prepared.provider_profile.id,
+                                "model": prepared.resolved_model,
+                                "delta": thought,
+                            },
+                        )
                     if (
                         turn.goal_id is not None
                         and self.store.get(ChatGoal, turn.goal_id).status
@@ -3157,10 +3194,15 @@ class ChatService:
             final_request = self._fit_turn_goal_request(prepared, final_request)
             self._ensure_request_capacity(prepared.provider_profile, final_request)
             completed = False
+            routing_thoughts = turn.reasoning
             async for event in prepared.provider.stream(final_request):
                 if event.type == StreamEventType.STARTED:
                     continue
                 if event.type == StreamEventType.REASONING_DELTA:
+                    delta = event.delta or ""
+                    if routing_thoughts and delta.strip():
+                        delta = f"\n\n{delta.lstrip()}"
+                        routing_thoughts = ""
                     yield (
                         "reasoning_delta",
                         {
@@ -3168,7 +3210,7 @@ class ChatService:
                             "turn_id": turn.id,
                             "provider_id": prepared.provider_profile.id,
                             "model": prepared.resolved_model,
-                            "delta": event.delta or "",
+                            "delta": delta,
                         },
                     )
                     continue
@@ -3573,7 +3615,10 @@ class ChatService:
         updated = self.store.update(
             ChatTurn,
             turn.id,
-            {"usage": usage},
+            {
+                "usage": usage,
+                "reasoning": _joined_reasoning(turn.reasoning, response.reasoning),
+            },
             expected_revision=turn.revision,
         )
         if turn.goal_id:
@@ -5996,6 +6041,10 @@ class ChatService:
         reasoning = response.reasoning.strip()
         if not content and not reasoning:
             raise ChatError("provider returned an empty chat response")
+        # A tool turn thinks once per routing step and again while it answers.
+        # The turn collected all of it; the final response holds only the last.
+        if prepared.turn is not None and prepared.turn.reasoning:
+            reasoning = prepared.turn.reasoning
         return ChatCompletionResponse(
             turn_id=prepared.turn.id if prepared.turn is not None else None,
             session_id=ChatService._session_id(prepared),
