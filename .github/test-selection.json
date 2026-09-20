@@ -1,19 +1,22 @@
 {
-  "change_digest": "13540a0a0be2e81c4fcdc7aba95fc51cbd031033a7c6ad36c737cf0e7e5f3668",
-  "reviewed_by": "Codex review of provider health retry coverage",
-  "reason": "Provider inference already uses the shared bounded retry mechanism, but OpenAI-compatible and OpenRouter health discovery bypassed it. The selected tests prove that refused connections are retried and can recover on both paths, that exhausted OpenRouter attempts return an actionable unhealthy result, and that an exhausted httpx ConnectError is classified as a retryable dependency outage instead of an unknown internal fault.",
-  "exclusions": "No frontend tests or Playwright journeys: the ProviderHealth response shape and existing Settings Check interaction are unchanged. No native tests: no Rust code changed. No live OpenRouter request: the retry contract is deterministic at the provider adapter boundary and must not depend on external service availability. Other provider tests and full suites are unrelated and explicitly excluded.",
+  "change_digest": "d070775d4a69610ca5f96bc9da0d6f8677f98e2517d5791ca3516284e81cb678",
+  "reviewed_by": "Codex review of OpenRouter final-answer recovery coverage",
+  "reason": "The change adds OpenRouter routing-session affinity and hardens the final-answer boundary for both ordinary provider turns and tool-turn synthesis. The selected tests prove that the OpenRouter payload receives the existing Core chat session ID, a leaked DSML control frame is never streamed or persisted and is recovered exactly once, a reasoning-only tool synthesis is charged then retried with bounded additional output capacity, and an ordinary reasoning-only turn recovers while preserving an explicit operator output cap.",
+  "exclusions": "No frontend or Playwright tests: the wire events and persisted ChatCompletionResponse schema are unchanged, while the selected Core streaming test verifies the operator-visible delta excludes the invalid control frame and the completed transcript contains the recovery answer. No native tests: no Rust code changed. No live OpenRouter call: session routing and malformed-response handling are deterministic adapter/Core contracts, and external route behavior is nondeterministic. Full suites and unrelated provider/chat journeys are explicitly excluded.",
   "expected_tests": {
-    "python": 4,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_providers.py::test_openrouter_health_retries_a_refused_connection_before_recovering",
-    "tests/v3/test_providers.py::test_openai_compatible_health_retries_a_refused_connection_before_recovering",
-    "tests/v3/test_providers.py::test_openrouter_health_reports_exhausted_connection_retries",
-    "tests/v3/test_diagnostic_guidance.py::test_reason_classification_is_semantic_and_unknown_is_honest"
+    "tests/v3/test_chat.py::test_provider_chat_persists_reasoning_apart_from_the_reply",
+    "tests/v3/test_chat.py::test_provider_chat_recovers_from_reasoning_only_output_exhaustion",
+    "tests/v3/test_chat_tool_loop.py::test_tool_turn_prompts_never_claim_the_turn_has_no_tools",
+    "tests/v3/test_chat_tool_loop.py::test_routing_thoughts_reach_the_transcript",
+    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_recovers_from_a_provider_control_frame",
+    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_retries_reasoning_exhaustion_with_more_room",
+    "tests/v3/test_providers.py::test_openrouter_payload_keeps_chat_requests_on_one_routing_session"
   ],
   "frontend": [],
   "native": [],
