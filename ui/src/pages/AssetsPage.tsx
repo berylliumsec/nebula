@@ -21,7 +21,7 @@ export function AssetsPage() {
   const [kind, setKind] = useState<"all" | AssetSummary["kind"]>("all");
   const [exposure, setExposure] = useState<"all" | AssetSummary["exposure"]>("all");
   const [selected, setSelected] = useState<AssetSummary>();
-  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("asset", assets, selected, setSelected);
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("asset", assets, selected, setSelected, { followUpdates: true });
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [assetKind, setAssetKind] = useState<AssetSummary["kind"]>("host");

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Archive, BadgeCheck, Download, FileText, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Sparkles, X } from "lucide-react";
 import type { AIWritingProvenance, ReportNoteTransform } from "../api/types";
 import { AIWritingDialog } from "../components/AIWritingDialog";
@@ -11,6 +11,13 @@ import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { useNavigate, useParams } from "react-router-dom";
 import { resourcePath } from "../resourceRoutes";
 import { ResourceRelationsPanel } from "../components/ResourceRelationsPanel";
+
+const discardPrompt = {
+  title: "Discard unsaved changes?",
+  message: "Changes to this report have not been persisted and cannot be recovered.",
+  confirmLabel: "Discard changes",
+  tone: "danger" as const,
+};
 
 function safeFilename(value: string): string {
   return value.trim().replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "nebula-report";
@@ -54,6 +61,13 @@ export function ReportsPage() {
   const [summaryProvenance, setSummaryProvenance] = useState<AIWritingProvenance>();
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Which persisted record the form currently presents, so a same-report
+  // refresh (the save's own response, a poll) does not overwrite the fields.
+  const loadedRef = useRef<{ id: string; revision: number } | undefined>(undefined);
+  const savingRef = useRef(false);
+  // Counts edits so a save can tell whether anything was typed while it was in flight.
+  const editSequence = useRef(0);
+  const routePromptRef = useRef<string | undefined>(undefined);
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -74,18 +88,34 @@ export function ReportsPage() {
   useEffect(() => {
     if (!resourceId) {
       if (reports.length) {
-        const first = reports[0];
-        setSelectedId(first.id);
-        navigate(resourcePath(engagement?.id, "report", first.id), { replace: true });
+        const target = reports.find((report) => report.id === selectedId) ?? reports[0];
+        setSelectedId(target.id);
+        navigate(resourcePath(engagement?.id, "report", target.id), { replace: true });
       } else if (selectedId) setSelectedId("");
       return;
     }
-    if (reports.some((report) => report.id === resourceId) && selectedId !== resourceId) setSelectedId(resourceId);
-  }, [engagement?.id, navigate, reports, resourceId, selectedId]);
+    if (!reports.some((report) => report.id === resourceId) || selectedId === resourceId) return;
+    if (!dirty || !reports.some((report) => report.id === selectedId)) {
+      setSelectedId(resourceId);
+      return;
+    }
+    // A route-driven switch (Back/Forward, a link from another page) asks the
+    // same question as the in-page list before unsaved edits are discarded.
+    if (routePromptRef.current === resourceId) return;
+    routePromptRef.current = resourceId;
+    const previousId = selectedId;
+    void confirm(discardPrompt).then((discard) => {
+      if (routePromptRef.current !== resourceId) return;
+      routePromptRef.current = undefined;
+      if (discard) setSelectedId(resourceId);
+      else navigate(resourcePath(engagement?.id, "report", previousId), { replace: true });
+    });
+  }, [confirm, dirty, engagement?.id, navigate, reports, resourceId, selectedId]);
   const missingResourceId = resourceId && !reports.some((report) => report.id === resourceId) ? resourceId : undefined;
 
   useEffect(() => {
     if (!selected) {
+      loadedRef.current = undefined;
       setTitle("");
       setSummary("");
       setFindingIds([]);
@@ -95,6 +125,15 @@ export function ReportsPage() {
       setDirty(false);
       return;
     }
+    if (loadedRef.current?.id === selected.id) {
+      if (loadedRef.current.revision === selected.revision) return;
+      if (savingRef.current) {
+        // The save's own refresh: keystrokes typed while it was in flight stay in the form.
+        loadedRef.current = { id: selected.id, revision: selected.revision };
+        return;
+      }
+    }
+    loadedRef.current = { id: selected.id, revision: selected.revision };
     setTitle(selected.title);
     setStatus(selected.status);
     setSummary(selected.executiveSummary);
@@ -157,12 +196,19 @@ export function ReportsPage() {
     }
   };
 
+  const markDirty = () => {
+    editSequence.current += 1;
+    setDirty(true);
+  };
+
   const save = async () => {
     if (!selected || selected.status === "final" || !title.trim()) return;
+    const editsAtSave = editSequence.current;
     setSaving(true);
+    savingRef.current = true;
     setError(undefined);
     try {
-      await updateReport(selected.id, {
+      const updated = await updateReport(selected.id, {
         title: title.trim(),
         status,
         executiveSummary: summary,
@@ -172,11 +218,14 @@ export function ReportsPage() {
         executiveSummaryProvenance: summaryProvenance ?? null,
         expectedRevision: selected.revision,
       });
-      setDirty(false);
+      loadedRef.current = { id: updated.id, revision: updated.revision };
+      // Anything typed while the request was in flight is still unsaved.
+      setDirty(editSequence.current !== editsAtSave);
     } catch (saveError) {
       void logCaughtDiagnostic("interface.reports_page.caught_failure_02", "A handled interface operation failed.", saveError, "reports_page");
       setError(saveError instanceof Error ? saveError.message : "Could not save the report.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -184,7 +233,7 @@ export function ReportsPage() {
   const setField = <T,>(setter: (value: T) => void, value: T) => {
     if (readOnly) return;
     setter(value);
-    setDirty(true);
+    markDirty();
   };
 
   const setIncludedObservation = (observationId: string, included: boolean) => {
@@ -195,15 +244,10 @@ export function ReportsPage() {
     if (!included) {
       setNoteTransforms((current) => current.filter((item) => item.observationId !== observationId));
     }
-    setDirty(true);
+    markDirty();
   };
 
-  const allowDiscard = async () => !dirty || confirm({
-    title: "Discard unsaved changes?",
-    message: "Changes to this report have not been persisted and cannot be recovered.",
-    confirmLabel: "Discard changes",
-    tone: "danger",
-  });
+  const allowDiscard = async () => !dirty || confirm(discardPrompt);
   const selectReport = async (id: string) => {
     if (id !== selectedId && await allowDiscard()) {
       setSelectedId(id);
@@ -310,7 +354,7 @@ export function ReportsPage() {
                 if (readOnly) return;
                 setSummary(event.target.value);
                 setSummaryProvenance(undefined);
-                setDirty(true);
+                markDirty();
               }} />
               {summaryProvenance && <small>AI-assisted draft · {summaryProvenance.model} · operator editable</small>}
             </label>
@@ -320,7 +364,7 @@ export function ReportsPage() {
               const transform = noteTransforms.find((item) => item.observationId === observation.id);
               return <div key={observation.id}>
                 <label className="report-note-option"><input type="checkbox" checked={included} onChange={(event) => setIncludedObservation(observation.id, event.target.checked)} /><span><strong>{observation.title}</strong><small>{observation.observationType.replaceAll("_", " ")} · {observation.evidenceIds.length} evidence link{observation.evidenceIds.length === 1 ? "" : "s"}</small></span>{included && !readOnly && <button className="button quiet" type="button" onClick={(event) => { event.preventDefault(); setWritingTarget({ kind: "note", observationId: observation.id }); }}><Sparkles size={13} /> {transform ? "Transform again" : "Transform with AI"}</button>}</label>
-                {included && transform && <section className="report-note-transform"><header><span>AI-assisted section · source revision {transform.sourceRevision}{transform.sourceRevision !== observation.revision ? " · source note changed" : ""}</span>{!readOnly && <button className="button quiet" type="button" onClick={() => { setNoteTransforms((current) => current.filter((item) => item.observationId !== observation.id)); setDirty(true); }}><RotateCcw size={13} /> Use original note</button>}</header><textarea aria-label={`Report section for ${observation.title}`} readOnly={readOnly} value={transform.body} onChange={(event) => { setNoteTransforms((current) => current.map((item) => item.observationId === observation.id ? { ...item, body: event.target.value } : item)); setDirty(true); }} /></section>}
+                {included && transform && <section className="report-note-transform"><header><span>AI-assisted section · source revision {transform.sourceRevision}{transform.sourceRevision !== observation.revision ? " · source note changed" : ""}</span>{!readOnly && <button className="button quiet" type="button" onClick={() => { setNoteTransforms((current) => current.filter((item) => item.observationId !== observation.id)); markDirty(); }}><RotateCcw size={13} /> Use original note</button>}</header><textarea aria-label={`Report section for ${observation.title}`} readOnly={readOnly} value={transform.body} onChange={(event) => { setNoteTransforms((current) => current.map((item) => item.observationId === observation.id ? { ...item, body: event.target.value } : item)); markDirty(); }} /></section>}
               </div>;
             }) : <p>No project notes are available. Capture notes from selected text or create one in Workbench.</p>}</fieldset>
             <footer><span>{linkedFindings.length} finding{linkedFindings.length === 1 ? "" : "s"} · {linkedObservations.length} note section{linkedObservations.length === 1 ? "" : "s"}</span><button className="button primary" type="button" disabled={readOnly || !dirty || saving || !title.trim()} onClick={() => void save()}><Save size={15} /> {readOnly ? "Final report" : saving ? "Saving…" : "Save report"}</button></footer>
@@ -365,7 +409,7 @@ export function ReportsPage() {
             };
             setNoteTransforms((current) => [next, ...current.filter((item) => item.observationId !== writingObservation.id)]);
           }
-          setDirty(true);
+          markDirty();
           setWritingTarget(undefined);
         }}
       />}

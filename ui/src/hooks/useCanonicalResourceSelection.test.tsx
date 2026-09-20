@@ -8,9 +8,9 @@ import {useCanonicalResourceSelection} from "./useCanonicalResourceSelection";
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({engagement: {id: "project"}})}));
 const initialItems = [{id: "a", label: "Saved revision one"}];
 
-function Inspector({items = initialItems}: {items?: typeof initialItems}) {
+function Inspector({items = initialItems, follow = false}: {items?: typeof initialItems; follow?: boolean}) {
   const [selected, setSelected] = useState<(typeof items)[number]>();
-  const {closeResource, missingResourceId, openResource} = useCanonicalResourceSelection("library_item", items, selected, setSelected);
+  const {closeResource, missingResourceId, openResource} = useCanonicalResourceSelection("library_item", items, selected, setSelected, {followUpdates: follow});
   const navigate = useNavigate();
   return <>
     <output data-testid="selected">{selected?.label ?? "none"}</output>
@@ -23,9 +23,9 @@ function Inspector({items = initialItems}: {items?: typeof initialItems}) {
   </>;
 }
 
-function Harness({items = initialItems}: {items?: typeof initialItems}) {
+function Harness({items = initialItems, follow = false}: {items?: typeof initialItems; follow?: boolean}) {
   return <MemoryRouter initialEntries={["/library", "/library/a"]} initialIndex={1}>
-    <Routes><Route path="/library/:resourceId?" element={<Inspector items={items} />} /></Routes>
+    <Routes><Route path="/library/:resourceId?" element={<Inspector items={items} follow={follow} />} /></Routes>
   </MemoryRouter>;
 }
 
@@ -61,5 +61,14 @@ describe("canonical resource selection", () => {
     const {rerender} = render(<Harness />);
     rerender(<Harness items={[{id: "a", label: "Another operator saved revision two"}]} />);
     expect(screen.getByTestId("selected")).toHaveTextContent("Saved revision one");
+  });
+  it("presents same-item refreshes and closes on removal when the page follows updates", () => {
+    const {rerender} = render(<Harness follow />);
+    expect(screen.getByTestId("selected")).toHaveTextContent("Saved revision one");
+    rerender(<Harness follow items={[{id: "a", label: "Reindexed revision two"}]} />);
+    expect(screen.getByTestId("selected")).toHaveTextContent("Reindexed revision two");
+    rerender(<Harness follow items={[]} />);
+    expect(screen.getByTestId("selected")).toHaveTextContent("none");
+    expect(screen.getByTestId("missing")).toHaveTextContent("a");
   });
 });

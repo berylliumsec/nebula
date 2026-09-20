@@ -61,3 +61,23 @@ test("search disables duplicate submission while busy and selects the returned h
   expect(screen.getByRole("searchbox")).toHaveValue("retained query");
   expect(screen.getByRole("searchbox")).toHaveFocus();
 });
+
+test("More matches extends the result list and keeps the current match", async () => {
+  const hit = (sequence: number) => ({message_id: `m${sequence}`, session_id: "s1", title: `Hit ${sequence}`, role: "assistant", excerpt: `Excerpt ${sequence}`, sequence});
+  const search = vi.fn()
+    .mockResolvedValueOnce({items: [hit(1), hit(2)], next_offset: 2})
+    .mockResolvedValueOnce({items: [hit(3), hit(4)], next_offset: null});
+  const select = vi.fn();
+  render(<ChatSearchPanel open onClose={vi.fn()} search={search} onSelect={select} />);
+  await openSearch();
+  await userEvent.type(screen.getByRole("searchbox", {name: "Search transcript"}), "hit{Enter}");
+  await userEvent.click(await screen.findByRole("button", {name: "Next match"}));
+  expect(select).toHaveBeenLastCalledWith(hit(2));
+
+  await userEvent.click(screen.getByRole("button", {name: "More matches"}));
+  await waitFor(() => expect(search).toHaveBeenLastCalledWith("hit", false, true, 2));
+  expect(await screen.findByRole("button", {name: /Hit 4/})).toBeVisible();
+  expect(screen.getAllByRole("listitem")).toHaveLength(4);
+  expect(screen.getByRole("button", {name: /Hit 2/})).toHaveAttribute("aria-current", "true");
+  expect(screen.queryByRole("button", {name: "More matches"})).not.toBeInTheDocument();
+});

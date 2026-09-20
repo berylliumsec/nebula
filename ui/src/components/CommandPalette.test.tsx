@@ -77,4 +77,34 @@ describe("CommandPalette federated search", () => {
     await waitFor(() => expect(screen.getByText(/Core search is offline/)).toBeVisible());
     expect(screen.getByRole("option", { name: /Go to Settings/i })).toBeVisible();
   });
+
+  it("drops the previous query's Core results while a new query is searching", async () => {
+    let resolveSecond!: (value: SearchResponse) => void;
+    const searchResources = vi.fn()
+      .mockResolvedValueOnce(response)
+      .mockImplementationOnce(() => new Promise<SearchResponse>((resolve) => { resolveSecond = resolve; }));
+    renderPalette({ searchResources } as unknown as ApiClient);
+    const input = screen.getByLabelText("Search pages, actions, and settings");
+    fireEvent.change(input, { target: { value: "gateway" } });
+    expect(await screen.findByRole("option", { name: /Gateway/ })).toBeVisible();
+
+    fireEvent.change(input, { target: { value: "report" } });
+    expect(await screen.findByText("Searching Nebula…")).toBeVisible();
+    expect(screen.queryByRole("option", { name: /Gateway/ })).not.toBeInTheDocument();
+    resolveSecond({ items: [], partialIndex: false });
+    await waitFor(() => expect(screen.queryByText("Searching Nebula…")).not.toBeInTheDocument());
+  });
+
+  it("clears stale Core results when the new search fails", async () => {
+    const searchResources = vi.fn().mockResolvedValueOnce(response).mockRejectedValueOnce(new Error("offline"));
+    renderPalette({ searchResources } as unknown as ApiClient);
+    const input = screen.getByLabelText("Search pages, actions, and settings");
+    fireEvent.change(input, { target: { value: "gateway" } });
+    expect(await screen.findByRole("option", { name: /Gateway/ })).toBeVisible();
+
+    fireEvent.change(input, { target: { value: "settings" } });
+    await waitFor(() => expect(screen.getByText(/Core search is offline/)).toBeVisible());
+    expect(screen.queryByRole("option", { name: /Gateway/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Go to Settings/i })).toBeVisible();
+  });
 });

@@ -17,7 +17,13 @@ export function ChatSearchPanel({search, onSelect, open, onClose}: {open: boolea
   const run = async (offset = 0) => {
     const request = ++generation.current;
     setBusy(true); setError(undefined);
-    try { const result = await search(query, bookmarked, currentOnly, offset); if (generation.current === request) {setPage(result); setIndex(0);} }
+    try {
+      const result = await search(query, bookmarked, currentOnly, offset);
+      if (generation.current !== request) return;
+      // "More matches" extends the list: earlier hits and the current match stay where they are.
+      if (offset > 0) setPage(current => current ? {items: [...current.items, ...result.items], next_offset: result.next_offset} : result);
+      else { setPage(result); setIndex(0); }
+    }
     catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat"); if (generation.current === request) setError(e instanceof Error ? e.message : "Search failed. Try again."); }
     finally { if (generation.current === request) setBusy(false); }
   };

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "./DialogSystem";
@@ -59,5 +59,26 @@ describe("MissionPromotionDialog", () => {
       status: "draft",
       sourceRunId: "run-1",
     }));
+  });
+
+  it("keeps the dialog open until the promotion settles and shows a late failure", async () => {
+    let reject!: (error: Error) => void;
+    createFinding.mockImplementationOnce(() => new Promise((_resolve, rejectCreate) => { reject = rejectCreate; }));
+    const user = userEvent.setup();
+    render(<DialogProvider><MissionPromotionDialog run={run} summary="Verified one bounded observation." /></DialogProvider>);
+    await user.click(screen.getByRole("button", { name: "Create reviewed draft" }));
+    const dialog = screen.getByRole("dialog", { name: "Create from Mission result" });
+    await user.click(within(dialog).getByRole("button", { name: "Create candidate" }));
+
+    expect(within(dialog).getByRole("button", { name: "Creating…" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Close promotion dialog" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Create from Mission result" })).toBe(dialog);
+
+    reject(new Error("Core rejected the candidate."));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Core rejected the candidate.");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(createFinding).toHaveBeenCalledTimes(1);
   });
 });

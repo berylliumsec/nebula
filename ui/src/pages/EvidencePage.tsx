@@ -49,7 +49,7 @@ export function EvidencePage() {
   const [message, setMessage] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
   const [selected, setSelected] = useState<EvidenceSummary>();
-  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("evidence", evidence, selected, setSelected);
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("evidence", evidence, selected, setSelected, { followUpdates: true });
   const items = evidence;
   const operatorLabel = (value?: string) => value
     ? operatorProfiles.find((profile) => profile.id === value)?.displayName ?? value

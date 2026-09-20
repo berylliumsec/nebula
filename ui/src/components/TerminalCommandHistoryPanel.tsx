@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, ChevronDown, ChevronRight, Copy, Download, History, LoaderCircle, Plus, RotateCcw, Save, ShieldCheck, Trash2, Wrench } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { TerminalCommandHistoryStatus, TerminalCommandRecord, TerminalRecordingTools } from "../api/types";
@@ -61,7 +61,12 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
     setDisabledTools(next.disabledTools);
   };
 
+  // Every load owns the list until the next one starts: a "Load more" page that
+  // lands after a new search (or project) replaced the records is ignored
+  // instead of being appended below results it does not belong to.
+  const loadSequence = useRef(0);
   const load = useCallback(async (offset = 0, signal?: AbortSignal) => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setError(undefined);
     try {
@@ -70,15 +75,16 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
         api.listTerminalCommands(engagementId, search, offset, 100, signal),
         api.terminalRecordingTools(engagementId, signal),
       ]);
+      if (sequence !== loadSequence.current) return;
       setStatus(nextStatus);
       if (offset === 0) applyTools(nextTools);
       setRecords((current) => offset ? [...current, ...page.records] : page.records);
       setNextOffset(page.nextOffset);
     } catch (loadError) {
       void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_01", "A handled interface operation failed.", loadError, "terminal_command_history_panel");
-      if (!signal?.aborted) setError(loadError instanceof Error ? loadError.message : "Could not load terminal audit records.");
+      if (!signal?.aborted && sequence === loadSequence.current) setError(loadError instanceof Error ? loadError.message : "Could not load terminal audit records.");
     } finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted && sequence === loadSequence.current) setLoading(false);
     }
   }, [api, engagementId, search]);
 

@@ -119,3 +119,29 @@ describe("SideNav project switcher", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 });
+
+describe("SideNav new project form", () => {
+  it("keeps the form open until creation settles and shows a late failure", async () => {
+    let reject!: (error: Error) => void;
+    workspace.createEngagement.mockImplementationOnce(() => new Promise((_resolve, rejectCreate) => { reject = rejectCreate; }));
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench"]}><DialogProvider><SwitcherHarness /></DialogProvider></MemoryRouter>);
+    await user.click(screen.getByRole("button", { name: "Switch project" }));
+    const switcher = screen.getByRole("dialog", { name: "Project switcher" });
+    await user.click(within(switcher).getByRole("button", { name: "New project" }));
+    await user.type(within(switcher).getByLabelText("Name"), "Quarterly review");
+    await user.click(within(switcher).getByRole("button", { name: "Create" }));
+
+    expect(within(switcher).getByRole("button", { name: "Creating…" })).toBeDisabled();
+    expect(within(switcher).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(within(switcher).getByRole("button", { name: "Close project switcher" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Switch project" }));
+    expect(screen.getByRole("dialog", { name: "Project switcher" })).toBe(switcher);
+
+    reject(new Error("Core rejected the project."));
+    expect(await within(switcher).findByRole("alert")).toHaveTextContent("Core rejected the project.");
+    expect(within(switcher).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(workspace.createEngagement).toHaveBeenCalledTimes(1);
+  });
+});

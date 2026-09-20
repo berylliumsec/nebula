@@ -9,6 +9,7 @@ export function useCanonicalResourceSelection<T extends { id: string }>(
   items: T[],
   selected: T | undefined,
   setSelected: (value: T | undefined) => void,
+  { followUpdates = false }: { followUpdates?: boolean } = {},
 ) {
   const navigate = useNavigate();
   const { resourceId } = useParams();
@@ -33,8 +34,14 @@ export function useCanonicalResourceSelection<T extends { id: string }>(
     if (!resourceId) {
       return;
     }
+    if (followUpdates) {
+      // Pages that hold no edit draft present the live record: a reindex or
+      // status change reaches the open inspector, and a removed record closes it.
+      if (selected !== requested) setSelected(requested);
+      return;
+    }
     if (requested && (!selected || changedInHistory) && selected?.id !== requested.id) setSelected(requested);
-  }, [requested, resourceId, selected, setSelected]);
+  }, [followUpdates, requested, resourceId, selected, setSelected]);
 
   return {
     missingResourceId: resourceId && !requested ? resourceId : undefined,
