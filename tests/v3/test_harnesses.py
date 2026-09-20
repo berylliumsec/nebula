@@ -91,6 +91,7 @@ from nebula.v3.harnesses import (
     HarnessTransportError,
     _harness_developer_instructions,
 )
+from nebula.v3 import harnesses as harness_module
 from nebula.v3.exporter import export_engagement
 from nebula.v3.mcp import (
     GATEWAY_STARTUP_TIMEOUT_SECONDS,
@@ -2823,6 +2824,203 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
         await restarted.startup()
         assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
         assert second_adapter.opens == []
+
+    asyncio.run(scenario())
+
+
+def test_transport_loss_discards_the_dead_connection_before_the_next_turn(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path, fail=True)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Lose the transport",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        events = [event async for event in runtime.stream_turn(turn.id)]
+        assert events[-1].type == "error"
+        failed = store.get(HarnessTurn, turn.id)
+        assert failed.status == HarnessTurnStatus.INTERRUPTED
+        dead = adapter.connections[0]
+        assert dead.closed is True
+        assert failed.harness_session_id not in runtime._connections
+
+        # The vendor process is gone. The retry must open a fresh connection
+        # instead of writing to the dead one forever.
+        adapter.fail = False
+        _, follow_up_owner, follow_up = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Retry after the transport loss",
+            chat_session_id=chat.id,
+            harness_session_id=failed.harness_session_id,
+            mcp_server_ids=[],
+        )
+        await runtime.start_chat_turn(follow_up.id)
+
+        assert store.get(HarnessTurn, follow_up.id).status == HarnessTurnStatus.COMPLETE
+        assert store.get(ChatTurn, follow_up_owner.id).status.value == "complete"
+        assert len(adapter.connections) == 2
+        assert adapter.connections[1] is not dead
+        assert len(dead.prompts) == 1
+        assert len(adapter.connections[1].prompts) == 1
+        assert "Retry after the transport loss" in adapter.connections[1].prompts[0]
+
+    asyncio.run(scenario())
+
+
+def test_next_turn_reopens_a_connection_that_reports_disconnected(tmp_path):
+    class ObservedConnection(FakeConnection):
+        state = "connected"
+
+        @property
+        def connection_state(self):
+            return self.state
+
+    class ObservedAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            self.opens.append(request)
+            connection = ObservedConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = ObservedAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="First turn",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        await runtime.start_chat_turn(turn.id)
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        first = adapter.connections[0]
+
+        # The vendor process died while the session was idle.
+        first.state = "disconnected"
+        _, _, follow_up = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Second turn",
+            chat_session_id=chat.id,
+            harness_session_id=turn.harness_session_id,
+            mcp_server_ids=[],
+        )
+        await runtime.start_chat_turn(follow_up.id)
+
+        assert store.get(HarnessTurn, follow_up.id).status == HarnessTurnStatus.COMPLETE
+        assert first.closed is True
+        assert len(adapter.connections) == 2
+        assert len(first.prompts) == 1
+        assert "Second turn" in adapter.connections[1].prompts[0]
+        assert runtime._connections[turn.harness_session_id] is adapter.connections[1]
+
+    asyncio.run(scenario())
+
+
+def test_stop_closes_a_connection_that_never_acknowledges_interrupt(
+    tmp_path, monkeypatch
+):
+    class HungConnection(FakeConnection):
+        async def run_turn(
+            self, prompt: str, *, model: str
+        ) -> AsyncIterator[HarnessEvent]:
+            self.prompts.append(prompt)
+            yield HarnessEvent(type="started")
+            await asyncio.Event().wait()
+
+        async def interrupt(self) -> None:
+            # A wedged vendor process never answers the interrupt request.
+            await asyncio.Event().wait()
+
+    class HungAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            connection = HungConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        monkeypatch.setattr(harness_module, "HARNESS_INTERRUPT_TIMEOUT_SECONDS", 0.05)
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = HungAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        _, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Block until stopped",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        task = runtime.start_chat_turn(turn.id)
+        for _ in range(100):
+            if store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.RUNNING:
+                break
+            await asyncio.sleep(0.01)
+
+        stopped = await asyncio.wait_for(
+            runtime.cancel_turn(turn.id, reason="Operator stop"), timeout=2
+        )
+        try:
+            await asyncio.wait_for(task, timeout=2)
+        except asyncio.CancelledError:
+            pass
+
+        assert stopped.status == HarnessTurnStatus.CANCELLED
+        assert store.get(ChatTurn, chat_turn.id).status.value == "cancelled"
+        connection = adapter.connections[0]
+        assert connection.closed is True
+        assert turn.harness_session_id not in runtime._connections
+        assert turn.harness_session_id not in runtime._active
+        assert runtime.session_activity(turn.harness_session_id).busy is False
+
+    asyncio.run(scenario())
+
+
+def test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        original = runtime._persist_activity
+
+        def failing_persist(turn, session, event):
+            if event.type == "message_delta":
+                raise RuntimeError("activity store unavailable")
+            return original(turn, session, event)
+
+        monkeypatch.setattr(runtime, "_persist_activity", failing_persist)
+        _, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Fail on the Nebula side",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+
+        events = [event async for event in runtime.stream_turn(turn.id)]
+
+        assert events[-1].type == "error"
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
+        assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
+        # The vendor was still executing with no consumer; it must be told to stop.
+        assert adapter.connections[0].interrupted is True
+        # A Nebula-side failure does not condemn a healthy vendor connection.
+        assert runtime._connections[turn.harness_session_id] is adapter.connections[0]
+        assert adapter.connections[0].closed is False
 
     asyncio.run(scenario())
 
