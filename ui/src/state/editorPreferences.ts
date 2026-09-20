@@ -4,6 +4,7 @@ import { logCaughtDiagnostic } from "../diagnostics";
 export type EditorAction =
   | "closeEditor"
   | "commandPalette"
+  | "gotoLine"
   | "debug"
   | "find"
   | "format"
@@ -18,20 +19,36 @@ export type EditorAction =
   | "tasks"
   | "workspaceSearch";
 
+/** Off, or written back automatically once editing settles or focus leaves. */
+export type AutoSaveMode = "off" | "afterDelay" | "onFocusChange";
+
+export const AUTO_SAVE_MODES: AutoSaveMode[] = ["off", "afterDelay", "onFocusChange"];
+
 export interface EditorPreferences {
+  autoSave: AutoSaveMode;
+  bracketPairColors: boolean;
   fontSize: 12 | 13 | 14 | 16;
+  indentGuides: boolean;
   keybindings: Record<EditorAction, string>;
+  minimap: boolean;
+  stickyScroll: boolean;
   tabSize: 2 | 4;
   wordWrap: boolean;
 }
 
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
+  autoSave: "off",
+  bracketPairColors: true,
   fontSize: 13,
+  indentGuides: true,
+  minimap: true,
+  stickyScroll: true,
   keybindings: {
     closeEditor: "Mod+W",
     commandPalette: "Mod+Shift+P",
     debug: "F5",
     find: "Mod+F",
+    gotoLine: "Mod+G",
     format: "Alt+Shift+F",
     definition: "F12",
     references: "Shift+F12",
@@ -50,7 +67,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
 
 const STORAGE_KEY = "nebula.editor.preferences.v1";
 const CHANGE_EVENT = "nebula-editor-preferences";
-const ACTIONS: EditorAction[] = ["closeEditor", "commandPalette", "debug", "definition", "find", "format", "nextEditor", "problems", "quickOpen", "references", "rename", "save", "splitEditor", "tasks", "workspaceSearch"];
+const ACTIONS: EditorAction[] = ["closeEditor", "commandPalette", "debug", "definition", "find", "format", "gotoLine", "nextEditor", "problems", "quickOpen", "references", "rename", "save", "splitEditor", "tasks", "workspaceSearch"];
 const SHORTCUT = /^(?:(?:Mod|Alt|Shift)\+)*(?:[A-Z0-9]|Tab|\\|F(?:[1-9]|1[0-2]))$/;
 
 function validShortcut(shortcut: string): boolean {
@@ -67,9 +84,17 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
       if (typeof shortcut === "string" && validShortcut(shortcut)) keybindings[action] = shortcut;
     }
   }
+  // A missing flag means "this record predates the setting", so each one falls
+  // back to its default rather than to false.
+  const flag = (value: unknown, fallback: boolean): boolean => typeof value === "boolean" ? value : fallback;
   return {
+    autoSave: AUTO_SAVE_MODES.includes(candidate.autoSave as AutoSaveMode) ? candidate.autoSave as AutoSaveMode : DEFAULT_EDITOR_PREFERENCES.autoSave,
+    bracketPairColors: flag(candidate.bracketPairColors, DEFAULT_EDITOR_PREFERENCES.bracketPairColors),
     fontSize: [12, 13, 14, 16].includes(Number(candidate.fontSize)) ? candidate.fontSize as EditorPreferences["fontSize"] : DEFAULT_EDITOR_PREFERENCES.fontSize,
+    indentGuides: flag(candidate.indentGuides, DEFAULT_EDITOR_PREFERENCES.indentGuides),
     keybindings,
+    minimap: flag(candidate.minimap, DEFAULT_EDITOR_PREFERENCES.minimap),
+    stickyScroll: flag(candidate.stickyScroll, DEFAULT_EDITOR_PREFERENCES.stickyScroll),
     tabSize: candidate.tabSize === 4 ? 4 : 2,
     wordWrap: candidate.wordWrap === true,
   };

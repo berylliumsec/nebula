@@ -27,6 +27,35 @@ describe("editorPreferences", () => {
     expect(eventMatchesShortcut({ altKey: false, ctrlKey: false, key: "F5", metaKey: false, shiftKey: false }, "F5")).toBe(true);
   });
 
+  it("keeps rendering defaults on a record written before those settings existed", () => {
+    const preferences = normalizeEditorPreferences({ fontSize: 14, tabSize: 4, wordWrap: true });
+    expect(preferences).toMatchObject({
+      autoSave: "off",
+      bracketPairColors: true,
+      indentGuides: true,
+      minimap: true,
+      stickyScroll: true,
+    });
+  });
+
+  it("honours an explicit rendering opt-out and rejects an unknown auto-save mode", () => {
+    const preferences = normalizeEditorPreferences({
+      autoSave: "whenever",
+      bracketPairColors: false,
+      indentGuides: false,
+      minimap: false,
+      stickyScroll: false,
+    });
+    expect(preferences).toMatchObject({
+      autoSave: "off",
+      bracketPairColors: false,
+      indentGuides: false,
+      minimap: false,
+      stickyScroll: false,
+    });
+    expect(normalizeEditorPreferences({ autoSave: "onFocusChange" }).autoSave).toBe("onFocusChange");
+  });
+
   it("fills newly introduced actions when loading an older preference record", () => {
     const preferences = normalizeEditorPreferences({
       fontSize: 14,
@@ -38,6 +67,7 @@ describe("editorPreferences", () => {
       debug: "F5",
       find: "Mod+F",
       format: "Alt+Shift+F",
+      gotoLine: "Mod+G",
       problems: "Mod+Shift+M",
       rename: "F2",
       tasks: "Mod+Shift+B",

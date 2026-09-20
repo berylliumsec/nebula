@@ -34,6 +34,9 @@ export function useEditorSidebarWidth() {
   };
   return {
     panelRef, width, maxWidth, resize,
+    // Below the Coding panel's own stacking breakpoint the editor has no room
+    // for a minimap, whatever the browser viewport happens to be.
+    compact: availableWidth < 760,
     style: {"--editor-sidebar-width": `${width}px`} as CSSProperties,
     onPointerDown: (event: PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
