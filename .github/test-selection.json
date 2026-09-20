@@ -1,9 +1,14 @@
 {
-  "change_digest": "a2a84a71ddb6131368cd669b76d6df9055ddb8c25295c9802dd261de5abaad27",
+  "change_digest": "e919b18d24e270af2dbced5034b8e5191d918fe5233f680f7c3747f461ac2fad",
   "reviewed_by": "Claude review of platform-services",
   "reason": "Seven platform-service defects from the workbench/platform audit. (5) run_remote_command guarded process.wait only against TimeoutError, so cancelling a chat turn left the ssh child and its remote command running; it now terminates the process group on CancelledError (SIGTERM, then SIGKILL after a grace period) before re-raising. (10) the diagnostics settings watcher only reassigned _settings, so a capture preference the desktop shell wrote to diagnostics-settings.json never reached Core's SensitiveDiagnosticStore; the watcher now reconfigures the store on reload and on settings loss. (13) every update_settings rebuilt the store, dropping all session-memory detail; the store is kept and toggled through a new set_enabled. (15) redact_text missed Google AIza keys, URL ?key=/?token= values, Basic auth headers, AWS secret keys, Slack xox tokens and github_pat_ tokens; the patterns now cover them without re-redacting already redacted text. (17) OpenVPN 'remote <host> <port> <proto>' lines were rejected; the transport is now admitted and sets the protocol, overriding a global proto line as OpenVPN does. (20) list/create VPN profile and provider_credential_status called credentials.status (D-Bus) on the event loop; they run it through asyncio.to_thread. (22) keyring's ChainerBackend was reported as 'vault unavailable'; vault_probe.resolve_vault_backend now selects its first trusted member for both the credential and sensitive-detail stores. Tests: test_ssh_environments::test_cancelled_remote_command_stops_the_process, test_diagnostics::test_live_reload_reconfigures_protected_detail_capture and ::test_settings_save_keeps_session_memory_protected_detail, test_redaction (new file), test_vpn::test_remote_transport_argument_is_admitted_and_sets_the_protocol, test_credentials::test_chained_keyring_backend_uses_its_first_trusted_member and ::test_credential_status_endpoints_run_off_the_event_loop, test_diagnostic_sensitive::test_chained_keyring_selects_its_trusted_member_for_the_detail_key and ::test_capture_preference_change_keeps_memory_only_detail; each fails on main and passes here, alongside the rest of those files.",
   "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through api.py) does not exercise SSH cancellation, diagnostics settings reloads, redaction patterns, OpenVPN parsing or keyring backend selection; the Python tests drive them directly. No full suites.",
-  "expected_tests": {"python": 114, "frontend": 0, "native": 0, "playwright": 0},
+  "expected_tests": {
+    "python": 114,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
   "python": [
     "tests/v3/test_ssh_environments.py",
     "tests/v3/test_vpn.py",
@@ -12,5 +17,7 @@
     "tests/v3/test_credentials.py",
     "tests/v3/test_diagnostics.py"
   ],
-  "frontend": [], "native": [], "playwright": []
+  "frontend": [],
+  "native": [],
+  "playwright": []
 }
