@@ -744,3 +744,122 @@ def test_schema_is_served_by_api_and_cli(tmp_path):
     printed = CliRunner().invoke(cli_module.app, ["mcp", "schema"])
     assert printed.exit_code == 0
     assert json.loads(printed.output) == mcp_config_json_schema()
+
+
+@pytest.mark.parametrize("on_conflict", ["update", "replace"])
+def test_apply_refuses_a_server_edited_while_importing(tmp_path, on_conflict):
+    class EditedWhileImporting(NebulaStore):
+        """A teammate changes the server between the plan and its apply."""
+
+        edited = False
+
+        def get(self, model, entity_id):
+            current = super().get(model, entity_id)
+            if model is McpServerProfile and not self.edited:
+                self.edited = True
+                super().update(
+                    model,
+                    entity_id,
+                    {"default_approval": McpApprovalMode.DENY},
+                    expected_revision=current.revision,
+                )
+                return super().get(model, entity_id)
+            return current
+
+    store = EditedWhileImporting(tmp_path / "nebula.db")
+    credentials = CredentialStore(MemoryKeyring())
+    config = {"mcpServers": {"local": {"command": "npx", "args": ["local-mcp"]}}}
+    _import(store, credentials, config, dry_run=False)
+    profile = store.list_entities(McpServerProfile)[0]
+    config["mcpServers"]["local"]["args"] = ["local-mcp@2"]
+
+    report = _import(store, credentials, config, dry_run=False, on_conflict=on_conflict)
+
+    entry = report.entries[0]
+    assert (report.updated, report.replaced, report.invalid) == (0, 0, 1)
+    assert "changed while importing" in entry.error
+    current = store.get(McpServerProfile, profile.id)
+    assert current.arguments == ["local-mcp"]
+    assert current.default_approval == McpApprovalMode.DENY
+
+
+def test_export_pages_through_every_server(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
+    monkeypatch.setattr(
+        cli_module, "CredentialStore", lambda: CredentialStore(MemoryKeyring())
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    store = NebulaStore(data_dir / "nebula.db")
+    store.create_many(
+        [
+            McpServerProfile(
+                name=f"server-{index:04d}",
+                transport=McpTransport.STREAMABLE_HTTP,
+                url=f"https://mcp.example.test/{index}",
+            )
+            for index in range(1001)
+        ]
+    )
+    client = TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            credential_store=CredentialStore(MemoryKeyring()),
+        )
+    )
+
+    with client:
+        exported = client.get(
+            "/api/v1/mcp-servers/export",
+            headers={"Authorization": "Bearer test-token"},
+        )
+    assert exported.status_code == 200, exported.text
+    assert len(exported.json()["config"]["mcpServers"]) == 1001
+
+    destination = tmp_path / "export.json"
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["mcp", "export", str(destination), "--data-dir", str(data_dir)],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(json.loads(destination.read_text())["mcpServers"]) == 1001
+
+
+def test_server_names_match_case_insensitively(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    keyring = MemoryKeyring()
+    credentials = CredentialStore(keyring)
+    github = {
+        "command": "npx",
+        "args": ["-y", "github-mcp"],
+        "env": {"GITHUB_TOKEN": "literal-github-secret"},
+    }
+
+    same_file = _import(
+        store, credentials, {"mcpServers": {"github": github, "GitHub": github}}
+    )
+    assert [entry.action for entry in same_file.entries] == ["create", "invalid"]
+    assert "also named" in same_file.entries[1].error
+
+    first = _import(
+        store, credentials, {"mcpServers": {"github": github}}, dry_run=False
+    )
+    assert first.created == 1
+    profile = store.list_entities(McpServerProfile)[0]
+    vault_entries = dict(keyring.values)
+
+    recased = {"mcpServers": {"GitHub": copy.deepcopy(github)}}
+    again = _import(store, credentials, recased, dry_run=False)
+    assert (again.created, again.unchanged) == (0, 1)
+    assert again.entries[0].profile_id == profile.id
+    assert [item.name for item in store.list_entities(McpServerProfile)] == ["github"]
+    assert keyring.values == vault_entries
+
+    replaced = _import(
+        store, credentials, recased, dry_run=False, on_conflict="replace"
+    )
+    assert (replaced.created, replaced.replaced) == (0, 1)
+    profiles = store.list_entities(McpServerProfile)
+    assert [(item.id, item.name) for item in profiles] == [(profile.id, "GitHub")]
+    assert len(keyring.values) == len(vault_entries)

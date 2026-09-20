@@ -416,6 +416,7 @@ from .mcp_import import (
     McpExportReport,
     McpImportReport,
     McpImportRequest,
+    all_mcp_profiles,
     export_mcp_config,
     import_mcp_config,
     mcp_config_json_schema,
@@ -4057,7 +4058,7 @@ def create_app(
         profiles = (
             [store.get(McpServerProfile, item) for item in dict.fromkeys(profile_id)]
             if profile_id
-            else store.list_entities(McpServerProfile, limit=1000)
+            else all_mcp_profiles(store)
         )
         return export_mcp_config(profiles)
 

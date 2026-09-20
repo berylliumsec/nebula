@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -16,15 +17,24 @@ from nebula.v3.database import (
 from nebula.v3.domain import (
     AgentRun,
     Asset,
+    BrowserAutomationLease,
+    BrowserCommand,
+    BrowserProxyRule,
     ChatBackend,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    ContextOwnerType,
+    ContextSnapshot,
+    ContextSnapshotStatus,
     Engagement,
+    EngagementStatus,
     HarnessSession,
     HarnessTurn,
     HarnessTurnOrigin,
     HarnessTurnStatus,
+    NativeCheckpoint,
+    NativeHookExecution,
     ProviderProfile,
     RiskClass,
     RunBackend,
@@ -599,3 +609,221 @@ def test_delete_chat_session_removes_its_harness_session_unless_a_mission_shares
 
     assert store.get(HarnessSession, shared_vendor.id).id == shared_vendor.id
     assert store.get(AgentRun, mission.id).harness_session_id == shared_vendor.id
+
+
+def test_delete_chat_session_removes_native_checkpoints_and_hook_executions(store):
+    engagement = store.create(Engagement(name="Native chat cleanup"))
+    chat = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Edited workspace files",
+            provider_profile_id="provider-1",
+            model="test-model",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=chat.id,
+            provider_profile_id="provider-1",
+            model="test-model",
+            status=ChatTurnStatus.COMPLETE,
+        )
+    )
+    checkpoint = store.create(
+        NativeCheckpoint(
+            engagement_id=engagement.id,
+            chat_session_id=chat.id,
+            label="before edit",
+        )
+    )
+    started = utc_now()
+    hook = store.create(
+        NativeHookExecution(
+            engagement_id=engagement.id,
+            chat_session_id=chat.id,
+            chat_turn_id=turn.id,
+            hook_id="hook-1",
+            hook_snapshot={"command": "lint"},
+            event_name="after_tool",
+            status="complete",
+            started_at=started,
+            completed_at=started,
+        )
+    )
+
+    store.delete_chat_session(chat.id)
+
+    with pytest.raises(NotFoundError):
+        store.get(NativeCheckpoint, checkpoint.id)
+    with pytest.raises(NotFoundError):
+        store.get(NativeHookExecution, hook.id)
+    # Nothing invisible is left to block deleting the project directly.
+    assert store.engagement_has_dependents(engagement.id) is False
+
+
+def test_delete_run_removes_browser_automation_records_and_context_snapshots(store):
+    engagement = store.create(Engagement(name="Browser mission cleanup"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Browse the target",
+            status=RunStatus.COMPLETE,
+        )
+    )
+    other_run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Keep browsing",
+            status=RunStatus.RUNNING,
+        )
+    )
+    expires_at = utc_now() + timedelta(hours=1)
+
+    def lease_for(run_id: str) -> BrowserAutomationLease:
+        return BrowserAutomationLease(
+            engagement_id=engagement.id,
+            run_id=run_id,
+            session_id="browser-session-1",
+            identity_id="identity-1",
+            scope_policy_id="scope-1",
+            scope_policy_revision=1,
+            target_urls=["https://target.example.test/"],
+            allowed_risk_classes=[RiskClass.LOCAL_READ],
+            expires_at=expires_at,
+        )
+
+    lease = store.create(lease_for(run.id))
+    other_lease = store.create(lease_for(other_run.id))
+    command = store.create(
+        BrowserCommand(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            lease_id=lease.id,
+            session_id="browser-session-1",
+            tab_id="tab-1",
+            kind="navigate",
+            expires_at=expires_at,
+        )
+    )
+    rule = store.create(
+        BrowserProxyRule(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            lease_id=lease.id,
+            session_id="browser-session-1",
+            expires_at=expires_at,
+        )
+    )
+    snapshot = store.create(
+        ContextSnapshot(
+            engagement_id=engagement.id,
+            owner_type=ContextOwnerType.AGENT_RUN,
+            owner_id=run.id,
+            status=ContextSnapshotStatus.FAILED,
+            provider_profile_id="provider-1",
+            model="test-model",
+            prompt_version="v1",
+            source_sha256="0" * 64,
+            error="provider unavailable",
+        )
+    )
+
+    store.delete_run(run.id)
+
+    for model, entity in (
+        (BrowserAutomationLease, lease),
+        (BrowserCommand, command),
+        (BrowserProxyRule, rule),
+        (ContextSnapshot, snapshot),
+    ):
+        with pytest.raises(NotFoundError):
+            store.get(model, entity.id)
+    # Another mission's lease on the same browser session is untouched.
+    assert store.get(BrowserAutomationLease, other_lease.id).run_id == other_run.id
+    assert (
+        store.engagement_has_dependents(
+            engagement.id, exclude_entity_ids=[other_run.id, other_lease.id]
+        )
+        is False
+    )
+
+
+def test_deleting_a_chat_run_or_archive_removes_budget_counters(store):
+    engagement = store.create(Engagement(name="Budget counter cleanup"))
+
+    def chat_with_tool_call(title: str) -> tuple[ChatSession, ChatTurn]:
+        chat = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title=title,
+                provider_profile_id="provider-1",
+                model="test-model",
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=chat.id,
+                provider_profile_id="provider-1",
+                model="test-model",
+                status=ChatTurnStatus.COMPLETE,
+                tools_enabled=True,
+            )
+        )
+        store.reserve_tool_call(
+            ToolCall(
+                id=f"{title}-call",
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=chat.id,
+                chat_turn_id=turn.id,
+                tool_name="nmap.scan",
+                risk_class=RiskClass.LOCAL_READ,
+            )
+        )
+        return chat, turn
+
+    chat, turn = chat_with_tool_call("deleted-chat")
+    kept_chat, kept_turn = chat_with_tool_call("archived-chat")
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Scan the target",
+            status=RunStatus.COMPLETE,
+        )
+    )
+    store.reserve_tool_call(
+        ToolCall(
+            id="run-call",
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="nmap.scan",
+            risk_class=RiskClass.LOCAL_READ,
+        )
+    )
+    with store.database.session() as session:
+        for owner_id in (turn.id, kept_turn.id, run.id):
+            assert session.get(RunBudgetCounterRow, owner_id) is not None
+
+    store.delete_chat_session(chat.id)
+    store.delete_run(run.id)
+
+    with store.database.session() as session:
+        assert session.get(RunBudgetCounterRow, turn.id) is None
+        assert session.get(RunBudgetCounterRow, run.id) is None
+        assert session.get(RunBudgetCounterRow, kept_turn.id) is not None
+
+    archived = store.update(
+        Engagement,
+        engagement.id,
+        {"status": EngagementStatus.ARCHIVED},
+        expected_revision=engagement.revision,
+    )
+    store.delete_archived_engagement(engagement.id, expected_revision=archived.revision)
+
+    with store.database.session() as session:
+        assert session.get(RunBudgetCounterRow, kept_turn.id) is None
+    with pytest.raises(NotFoundError):
+        store.get(ChatSession, kept_chat.id)

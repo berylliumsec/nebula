@@ -46,7 +46,6 @@ from .domain import (
     Artifact,
     Engagement,
     McpApprovalMode,
-    McpServerProfile,
     ProviderProfile,
     RunBudget,
 )
@@ -55,6 +54,7 @@ from .mcp_gateway import serve as serve_mcp_gateway
 from .mcp_import import (
     McpImportDefaults,
     McpImportRequest,
+    all_mcp_profiles,
     export_mcp_config,
     import_mcp_config,
     mcp_config_json_schema,
@@ -289,7 +289,7 @@ def mcp_export(
     """Export MCP servers as mcpServers JSON; stored credentials become ${NAME}."""
 
     _, store, _ = _services(data_dir)
-    report = export_mcp_config(store.list_entities(McpServerProfile, limit=1000))
+    report = export_mcp_config(all_mcp_profiles(store))
     for warning in report.warnings:
         typer.echo(warning, err=True)
     text = json.dumps(report.config, indent=2, sort_keys=True) + "\n"
