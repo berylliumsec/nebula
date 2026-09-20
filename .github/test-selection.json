@@ -1,28 +1,20 @@
 {
-  "change_digest": "c33543e68087aefb1649b82ca656fc0296ef9d2a45de3352a9d3f1a16d2e4244",
-  "reviewed_by": "Claude review of reasoning-aware final-answer recovery and the operator's reasoning level",
-  "reason": "A reasoning model that spends its output budget thinking returned no prose, and the recovery answered by doubling that budget. The recovery now constrains reasoning instead, the normalized request carries a reasoning level the OpenAI-compatible adapter translates, the operator chooses that level per conversation, the retry budget belongs to a running goal, and an unfinished but resumable turn degrades quietly. The new test_reasoning_recovery.py covers the payload translation and its route gating, the recovery asking for the answer alone, the retry budget in and out of goal mode including a stalled goal being blocked, and the level being sent and remembered. test_chat.py, test_chat_goals.py and test_chat_api.py cover the recovery paths and goal accounting the change rewrote; test_providers.py and test_context.py cover the adapter and the route-parameter catalog it reads. The frontend selection covers the request mapping and the goal panel. The Playwright selection proves both operator journeys \u2014 the quiet unfinished reply and choosing a level \u2014 on desktop, mobile Chromium and mobile WebKit.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. Harness runtimes are untouched: their own reasoning-effort plumbing is separate and unchanged. No native tests are selected because no Rust code changed. No real-Core or live provider entry is selected: the change is request shaping and recovery control flow, exercised by provider doubles that reproduce the exact incident, and no container, workspace or persistence behaviour changed. A live OpenRouter turn against a reasoning model remains the one gate that cannot be run here.",
+  "change_digest": "1bcf7425a04dfb4b42ed82702e5919457b247a9cdf31ce33196aa26fb804646a",
+  "reviewed_by": "Codex review of the Goal-mode live token counter journey",
+  "reason": "Goal usage stayed at zero throughout an active provider stream because the panel rendered only Core's settled usage. The UI now adds an explicitly approximate, turn-local token estimate while text and reasoning stream, then refreshes Core's exact persisted goal after the turn settles. The focused component file covers estimated versus authoritative presentation and existing Goal lifecycle behavior. The selected Playwright entry proves that a healthy running goal becomes nonzero before the delayed provider completion and reconciles afterward on desktop Chromium, mobile Chromium, and mobile WebKit.",
+  "exclusions": "Full frontend and Playwright suites are excluded. Python and native tests are excluded because no Core, API, persistence, provider adapter, or Rust code changed. Real-Core and LAN-origin gates are not selected because this is transient React presentation over an unchanged API contract and does not touch origin-sensitive browser capabilities. Physical-device testing is unavailable; permanent mobile profiles provide emulated Chromium and WebKit coverage.",
   "expected_tests": {
-    "python": 231,
-    "frontend": 81,
+    "python": 0,
+    "frontend": 9,
     "native": 0,
-    "playwright": 6
+    "playwright": 3
   },
-  "python": [
-    "tests/v3/test_reasoning_recovery.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_providers.py",
-    "tests/v3/test_context.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/api/client.test.ts",
     "ui/src/components/ProviderGoalPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:provider-reasoning"
+    "area:goal-live-tokens"
   ]
 }

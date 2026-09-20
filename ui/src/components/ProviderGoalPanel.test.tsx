@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal } from "../api/types";
 import { DialogProvider } from "./DialogSystem";
-import { activeSeconds, ProviderGoalPanel } from "./ProviderGoalPanel";
+import { activeSeconds, estimateLiveTokens, ProviderGoalPanel } from "./ProviderGoalPanel";
 
 const draft: ChatGoal = {
   id: "goal", engagementId: "project", sessionId: "session",
@@ -13,6 +13,26 @@ const draft: ChatGoal = {
   elapsedSeconds: 0, childrenStarted: 0,
   linkedTurnIds: [], completionEvidence: [], skillSnapshots: [], revision: 1,
 };
+
+it("shows an explicitly estimated token total while a goal turn streams", () => {
+  const running: ChatGoal = {
+    ...draft,
+    status: "running",
+    usage: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+  };
+  const view = render(<DialogProvider><ProviderGoalPanel
+    api={{} as ApiClient}
+    sessionId="session"
+    goal={running}
+    liveTokenEstimate={25}
+    onChange={vi.fn()}
+  /></DialogProvider>);
+
+  expect(screen.getByText("~125 tokens")).toHaveAttribute("title", expect.stringContaining("Estimated while this turn streams"));
+  view.rerender(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={running} onChange={vi.fn()} /></DialogProvider>);
+  expect(screen.getByText("100 tokens")).not.toHaveAttribute("title");
+  expect(estimateLiveTokens("streaming response")).toBeGreaterThan(0);
+});
 
 it("creates a durable draft from explicit objective and criteria", async () => {
   const createChatGoal = vi.fn().mockResolvedValue(draft);

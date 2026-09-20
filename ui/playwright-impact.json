@@ -54,6 +54,11 @@
       {"area":"provider-goal-skills-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"},
       {"area":"provider-goal-skills-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"}
     ],
+    "goal-live-tokens": [
+      {"area":"goal-live-tokens","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"},
+      {"area":"goal-live-tokens","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"},
+      {"area":"goal-live-tokens","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization goal mode shows token progress before provider usage settles","runtime":"mock","shard":"1/1"}
+    ],
     "provider-thinking": [
       {"area":"provider-thinking","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply|assistant upgrade names a provider turn that thinks without answering","runtime":"mock","shard":"1/1"},
       {"area":"provider-thinking","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply|assistant upgrade names a provider turn that thinks without answering","runtime":"mock","shard":"1/1"},

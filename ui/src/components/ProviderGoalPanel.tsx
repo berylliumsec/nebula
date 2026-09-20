@@ -19,6 +19,12 @@ export function activeSeconds(goal: ChatGoal, now = Date.now()): number {
   return goal.elapsedSeconds + Math.max(0, (now - since) / 1_000);
 }
 
+/** Lightweight display estimate used only until Core reports exact usage. */
+export function estimateLiveTokens(text: string): number {
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(new TextEncoder().encode(text).length / 4));
+}
+
 /** Which goal states each transition is allowed from, as Core enforces them. */
 const ALLOWED_FROM: Record<GoalAction, ChatGoal["status"][]> = {
   start: ["draft"],
@@ -38,11 +44,12 @@ const STATE_NAMES: Record<ChatGoal["status"], string> = {
   cancelled: "cancelled",
 };
 
-export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
+export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, onChange }: {
   api: ApiClient;
   sessionId: string;
   goal?: ChatGoal;
   skills?: HarnessSkillSummary[];
+  liveTokenEstimate?: number;
   onChange(goal: ChatGoal): void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -210,8 +217,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
     ...(skills ?? []).map(skill => [skill.path, skill] as const),
     ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),
   ]).values()];
+  const liveTokens = Math.max(0, Math.floor(liveTokenEstimate ?? 0));
+  const displayedTokens = goal.usage.totalTokens + liveTokens;
+  const tokenLabel = liveTokens > 0 ? `~${displayedTokens.toLocaleString()} tokens` : `${displayedTokens.toLocaleString()} tokens`;
   return <section className="chat-goal-panel" aria-label="Conversation goal" data-guide="goal-panel">
-    <header><span><Flag size={14} /><strong>{goal.objective}</strong></span><small>{goal.status.replaceAll("_", " ")} · step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""} · {goal.usage.totalTokens.toLocaleString()} tokens · {Math.floor(activeSeconds(goal, tick))}s active{goal.childBudget !== undefined ? ` · ${goal.childrenStarted}/${goal.childBudget} children` : ""} · {goal.skillSnapshots.length} skills</small></header>
+    <header><span><Flag size={14} /><strong>{goal.objective}</strong></span><small>{goal.status.replaceAll("_", " ")} · step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""} · <span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with exact provider usage when the turn settles." : undefined}>{tokenLabel}</span> · {Math.floor(activeSeconds(goal, tick))}s active{goal.childBudget !== undefined ? ` · ${goal.childrenStarted}/${goal.childBudget} children` : ""} · {goal.skillSnapshots.length} skills</small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
