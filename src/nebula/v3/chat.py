@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -566,6 +566,20 @@ class _ActiveProviderTurn:
     error: BaseException | None = None
 
 
+# Session markers that describe the source conversation's own lifecycle, not
+# its transcript: a branch is neither archived, a subagent child, nor a
+# temporary popup the sweeper deletes.
+_FORK_PRIVATE_METADATA_KEYS = frozenset(
+    {
+        "archived_at",
+        "subagent_id",
+        "subagent_parent_session_id",
+        "subagent_parent_turn_id",
+        "temporary_assistant",
+    }
+)
+
+
 def _content_with_selected_context(
     content: str, attachments: list[ChatContextAttachment]
 ) -> str:
@@ -882,78 +896,9 @@ class ChatService:
             hook_executions.extend(hook_page)
             offset += len(hook_page)
         for turn in turns:
-            unknown = [
-                call.id
-                for call in calls
-                if call.chat_turn_id == turn.id
-                and call.status == ToolCallStatus.RUNNING
-            ]
-            unknown_hooks = [
-                execution.id
-                for execution in hook_executions
-                if execution.chat_turn_id == turn.id
-                and execution.status == "running"
-                and execution.side_effects != "none"
-            ]
-            for execution in hook_executions:
-                if execution.chat_turn_id == turn.id and execution.status == "running":
-                    self.store.update(
-                        NativeHookExecution,
-                        execution.id,
-                        {
-                            "status": "interrupted",
-                            "completed_at": utc_now(),
-                            "error": "Core restarted before the hook outcome was known.",
-                        },
-                        expected_revision=execution.revision,
-                    )
-            detail = (
-                "Core restarted while an effect outcome was unknown. Reconcile the "
-                "listed tool or hook execution before resuming."
-                if unknown or unknown_hooks
-                else "Core restarted before this response completed. Review and resume it."
+            self._interrupt_orphaned_turn(
+                turn, calls, hook_executions, cause="Core restarted"
             )
-            snapshot = {
-                **turn.request_snapshot,
-                "recovery": {
-                    "required": True,
-                    "unknown_tool_call_ids": unknown,
-                    "unknown_hook_execution_ids": unknown_hooks,
-                    "interrupted_at": utc_now().isoformat(),
-                },
-            }
-            self.store.update(
-                ChatTurn,
-                turn.id,
-                {
-                    "status": ChatTurnStatus.INTERRUPTED,
-                    "error": detail,
-                    "request_snapshot": snapshot,
-                    "execution_owner_id": None,
-                    "execution_claim_id": None,
-                    "execution_claimed_at": None,
-                },
-                expected_revision=turn.revision,
-            )
-            if turn.goal_id:
-                goal = self.store.get(ChatGoal, turn.goal_id)
-                if goal.status == ChatGoalStatus.RUNNING:
-                    paused_at = utc_now()
-                    self.store.update(
-                        ChatGoal,
-                        goal.id,
-                        {
-                            "status": ChatGoalStatus.PAUSED,
-                            "paused_at": paused_at,
-                            "active_since": None,
-                            "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                            "blocked_reason": detail,
-                            "execution_owner_id": None,
-                            "execution_claim_id": None,
-                            "execution_claimed_at": None,
-                        },
-                        expected_revision=goal.revision,
-                    )
         offset = 0
         while goal_page := self.store.list_entities(
             ChatGoal, offset=offset, limit=1_000
@@ -984,6 +929,132 @@ class ChatService:
                     )
             offset += len(goal_page)
         await self.subagents.reconcile_after_restart()
+
+    def _interrupt_orphaned_turn(
+        self,
+        turn: ChatTurn,
+        calls: Iterable[ToolCall],
+        hook_executions: Iterable[NativeHookExecution],
+        *,
+        cause: str,
+    ) -> ChatTurn:
+        """Park a turn Core can no longer drive so the operator can resume it.
+
+        ``cause`` names what stopped the work ("Core restarted", "Core
+        stopped"); a graceful stop and a crash leave the same recoverable
+        state, with unknown tool and hook outcomes flagged for reconciliation.
+        """
+
+        unknown = [
+            call.id
+            for call in calls
+            if call.chat_turn_id == turn.id and call.status == ToolCallStatus.RUNNING
+        ]
+        unknown_hooks = [
+            execution.id
+            for execution in hook_executions
+            if execution.chat_turn_id == turn.id
+            and execution.status == "running"
+            and execution.side_effects != "none"
+        ]
+        for execution in hook_executions:
+            if execution.chat_turn_id == turn.id and execution.status == "running":
+                self.store.update(
+                    NativeHookExecution,
+                    execution.id,
+                    {
+                        "status": "interrupted",
+                        "completed_at": utc_now(),
+                        "error": f"{cause} before the hook outcome was known.",
+                    },
+                    expected_revision=execution.revision,
+                )
+        detail = (
+            f"{cause} while an effect outcome was unknown. Reconcile the "
+            "listed tool or hook execution before resuming."
+            if unknown or unknown_hooks
+            else f"{cause} before this response completed. Review and resume it."
+        )
+        snapshot = {
+            **turn.request_snapshot,
+            "recovery": {
+                "required": True,
+                "unknown_tool_call_ids": unknown,
+                "unknown_hook_execution_ids": unknown_hooks,
+                "interrupted_at": utc_now().isoformat(),
+            },
+        }
+        interrupted = self.store.update(
+            ChatTurn,
+            turn.id,
+            {
+                "status": ChatTurnStatus.INTERRUPTED,
+                "error": detail,
+                "request_snapshot": snapshot,
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
+            },
+            expected_revision=turn.revision,
+        )
+        if turn.goal_id:
+            goal = self.store.get(ChatGoal, turn.goal_id)
+            if goal.status == ChatGoalStatus.RUNNING:
+                paused_at = utc_now()
+                self.store.update(
+                    ChatGoal,
+                    goal.id,
+                    {
+                        "status": ChatGoalStatus.PAUSED,
+                        "paused_at": paused_at,
+                        "active_since": None,
+                        "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                        "blocked_reason": detail,
+                        "execution_owner_id": None,
+                        "execution_claim_id": None,
+                        "execution_claimed_at": None,
+                    },
+                    expected_revision=goal.revision,
+                )
+        return interrupted
+
+    def _interrupt_turn_for_shutdown(self, prepared: PreparedChat) -> ChatTurn | None:
+        """Leave an in-flight turn recoverable when Core itself is stopping.
+
+        An operator Stop cancels a response; Core stopping is not a decision
+        about it. The turn takes the INTERRUPTED state ``startup()`` gives an
+        orphaned turn after a crash, so the next boot offers Resume instead
+        of a cancelled dead end. Returns the interrupted turn, or None when
+        the turn is not this worker's in-flight work.
+        """
+
+        turn = prepared.turn
+        if turn is None:
+            return None
+        latest = self.store.get(ChatTurn, turn.id)
+        if latest.status == ChatTurnStatus.INTERRUPTED:
+            return latest
+        if latest.status not in {ChatTurnStatus.ROUTING, ChatTurnStatus.FINALIZING}:
+            return None
+        if latest.execution_claim_id != prepared.execution_claim_id:
+            return None
+        calls: list[ToolCall] = []
+        for call_id in latest.tool_call_ids:
+            try:
+                calls.append(self.store.get(ToolCall, call_id))
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: a missing tool call has no outcome to reconcile
+                continue
+        interrupted = self._interrupt_orphaned_turn(
+            latest,
+            calls,
+            self.list_turn_hook_executions(latest.id),
+            cause="Core stopped",
+        )
+        prepared.turn = interrupted
+        prepared.execution_claim_id = None
+        return interrupted
 
     def _claim_execution(self, prepared: PreparedChat) -> None:
         """Atomically fence one Core worker around a provider turn and its goal."""
@@ -1190,6 +1261,10 @@ class ChatService:
                 )
         cancelled = self.cancel_turn(turn_id)
         await self.subagents.stop_for_parent_turn(turn_id)
+        # Reports that finished while the turn was parked (waiting for
+        # approval, interrupted, or a wait that could not resume) were held
+        # back for it; the conversation is idle now, so post them in order.
+        await self.subagents.deliver_pending(cancelled.session_id)
         return cancelled
 
     async def fire_due_schedules(self) -> None:
@@ -1341,25 +1416,43 @@ class ChatService:
                 exc,
                 stage="provider-turn-stream",
             )
-            stopped = True
-            await self._run_terminal_native_hooks(
-                prepared, "chat.turn.cancelled", "response stopped"
-            )
+            turn_id = prepared.turn.id if prepared.turn else None
+            if self.shutting_down:
+                # Core is stopping, not the operator: keep the turn recoverable
+                # for the next boot instead of recording an operator stop.
+                interrupted = self._interrupt_turn_for_shutdown(prepared)
+                frame: tuple[str, dict[str, Any]] = (
+                    "error",
+                    {
+                        "type": "error",
+                        "turn_id": turn_id,
+                        "detail": (
+                            interrupted.error
+                            if interrupted is not None and interrupted.error
+                            else "Core stopped before this response completed. "
+                            "Review and resume it."
+                        ),
+                    },
+                )
+            else:
+                stopped = True
+                await self._run_terminal_native_hooks(
+                    prepared, "chat.turn.cancelled", "response stopped"
+                )
+                frame = (
+                    "cancelled",
+                    {
+                        "type": "cancelled",
+                        "turn_id": turn_id,
+                        "detail": "response stopped",
+                    },
+                )
             # Only this producer task was cancelled. Followers run in their own
             # tasks and get the stop as a terminal frame they can forward, not
             # as a CancelledError re-raised inside a task nobody cancelled;
             # runtime.error stays reserved for real failures.
             async with runtime.condition:
-                runtime.events.append(
-                    (
-                        "cancelled",
-                        {
-                            "type": "cancelled",
-                            "turn_id": prepared.turn.id if prepared.turn else None,
-                            "detail": "response stopped",
-                        },
-                    )
-                )
+                runtime.events.append(frame)
                 runtime.condition.notify_all()
         except BaseException as exc:
             record_caught_exception(
@@ -3504,6 +3597,11 @@ class ChatService:
                 caught_error,
                 stage="chat",
             )
+            if self.shutting_down:
+                # Core is stopping, not the operator: park the turn for the
+                # next boot instead of recording an operator stop.
+                self._interrupt_turn_for_shutdown(prepared)
+                raise
             latest = self._refresh_turn(turn)
             if (
                 latest.status
@@ -5259,7 +5357,7 @@ class ChatService:
                     **{
                         key: value
                         for key, value in source.metadata.items()
-                        if key != "archived_at"
+                        if key not in _FORK_PRIVATE_METADATA_KEYS
                     },
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
@@ -6437,12 +6535,36 @@ class ChatService:
         )
 
     def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
+        """Persist the new turn and its inputs against the session as it is now.
+
+        ``prepare_async`` read the session before provider verification,
+        retrieval planning and tool ranking; the naming task, a subagent
+        report or a popup keepalive can bump its revision meanwhile. The
+        guarded write must use the current revision, so the session is
+        re-read before each attempt and a conflict retries against the newer
+        row. A conflict that survives three attempts is a real one.
+        """
+
+        last_error: ConflictError | None = None
+        for _ in range(3):
+            if prepared.session is not None:
+                prepared.session = self.store.get(ChatSession, prepared.session.id)
+            try:
+                self._write_turn_inputs(prepared)
+                return
+            except ConflictError as exc:  # diagnostic-expected: another writer moved the session; retry against its newer revision
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
+    def _write_turn_inputs(self, prepared: PreparedChat) -> None:
         turn = prepared.turn
         if turn is None or not prepared.engagement_id:
             return
         active_statuses = {
             ChatTurnStatus.ROUTING,
             ChatTurnStatus.WAITING_APPROVAL,
+            ChatTurnStatus.WAITING_CALLBACK,
             ChatTurnStatus.FINALIZING,
             ChatTurnStatus.INTERRUPTED,
         }

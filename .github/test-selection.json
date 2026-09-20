@@ -1,28 +1,16 @@
 {
-  "change_digest": "bc7df20aafb556fc6483c603b6e004112c00c483ecb6044cf85c981a16fd9ecb",
-  "reviewed_by": "Claude review of api-row-caps",
-  "reason": "Several API routes read one fixed page of entities (the 100 or 1,000 oldest rows) and filtered it in Python, so anything past that page was invisible: /chat/session-activity never flagged the newest conversations of a project with more than 100, harness-turn interactions, tool-call artifacts and live paired devices vanished once a project or Core held more than 1,000 rows of the kind, DELETE /vpn-profiles no longer saw the active session or policy using a profile, and a retried POST /action-intents no longer found its prior idempotency key and queued a second device action. The intents/handoffs lists were oldest-first with no offset, the terminal output pager could return an empty page whose X-Nebula-Output-Next equalled offset, PUT/PATCH /engagements skipped the workspace_path resolution that POST enforces, and /search reported any internal ValueError as an invalid cursor and accepted negative cursor offsets. storage.py gains find_entities (SQL JSON-payload filters, engagement scope, offset/limit, newest-first ordering) and list_entities gains newest_first; every scan above now filters in SQL, session activity pages through all conversations with one query for the project's pending turns (ChatService.pending_turns), intents/handoffs are paged newest first with offset, both output pagers share _output_page_end with the forward fallback, create/replace/patch share _resolve_engagement_workspace_path, and search decodes its cursor in _decode_search_cursor raising SearchCursorError. The new tests in test_storage.py (find_entities semantics, newest-first paging), test_api.py (101-conversation activity, 1,000-row interaction/artifact/device/VPN fixtures, newest-first intents and handoffs, multibyte output page, workspace_path on PUT/PATCH), test_action_broker.py (device routing and idempotency past 1,000 rows) and test_federated_search.py (negative/garbage cursors, stale projection kind) each fail on main; the other listed files cover the shared pagers, VPN delete, handoff listing, chat pending turns and engagement CRUD paths. Rebased onto main after #426, #431, #433 and #436: the handoff paging in handoffs.py now defers to the equivalent implementation #433 merged (its validation and tests are already on main), while list_entities keeps the newest_first option this change adds for its other call sites; the conflicting test files keep both sides' new tests.",
-  "exclusions": "No frontend tests: no ui/ change (response shapes of every touched route are unchanged and the UI callers in ui/src/api/client.ts pass no new parameters). No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through tests/v3/test_api.py) does not exercise thousand-row projects, output paging by byte offset or engagement PUT/PATCH; the Python tests drive them directly. No full suites.",
-  "expected_tests": {
-    "python": 274,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
+  "change_digest": "4aa18f8c16306539af0ba6c1021093ca07411ed4680da8e4ce093393ac68d6b4",
+  "reviewed_by": "Claude review of chat-turn-lifecycle",
+  "reason": "Eight provider-chat turn lifecycle and subagent defects from the round-4 chat audit (findings 4, 5, 6, 7, 13, 15, 16, 17). A parent turn parked on wait_subagents whose automatic resume failed stayed WAITING_CALLBACK forever: _resume_waiting_parent now fails the turn visibly with the resume error and posts the finished reports so the operator can resend. A graceful Core stop recorded every in-flight provider turn as CANCELLED 'response stopped', so startup() recovery was unreachable after a deploy: both CancelledError handlers now honour shutting_down and park the turn INTERRUPTED with the same recovery snapshot startup() writes after a crash (unknown tool and hook outcomes flagged), skip the chat.turn.cancelled hook, and give followers an error frame instead of a cancelled one; _child_settled maps that to the existing 'Core shut down' subagent state. _persist_turn_inputs used the session revision read at the top of prepare_async, so any session write during preparation (naming task, subagent report, popup keepalive) failed the send with a raw 409; it now re-reads the session before each attempt and retries the guarded write up to three times, and its active-turn guard includes WAITING_CALLBACK like pending_turn. stop_provider_turn now delivers subagent reports that finished while the parent was parked instead of after the next reply. fork_session strips subagent_id, subagent_parent_* and temporary_assistant so a branch is neither a permanent subagent nor a hidden popup the sweeper deletes. follow_chat_turn.events() catches non-ChatError producer failures and emits the durable error frame instead of tearing the SSE stream. A subagent that fails to start now removes its never-run child conversation and record and returns the error inline, so no empty 'Subagent · …' chat is listed and no duplicate failure message is posted. Tests: test_core_shutdown_leaves_an_inflight_provider_turn_recoverable, test_persist_turn_inputs_retries_against_a_session_written_during_prepare, test_fork_drops_subagent_and_temporary_markers and test_persist_turn_inputs_refuses_a_waiting_callback_turn in test_chat.py; test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame in test_chat_api.py; test_failed_parent_resume_fails_the_turn_and_posts_reports, test_stopping_an_interrupted_parent_posts_finished_reports, test_core_shutdown_interrupts_an_inflight_parent_tool_turn and test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report in test_chat_subagents.py. All nine fail on origin/main. test_chat_tool_loop.py, test_chat_reconnection.py and test_temporary_chat.py are included as regression coverage for the tool-loop cancel handler, the follow endpoint and the fork/temporary markers.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through tests/v3/test_chat.py, tests/v3/test_chat_api.py, tests/v3/test_chat_subagents.py, tests/v3/test_chat_tool_loop.py, tests/v3/test_chat_reconnection.py and tests/v3/test_temporary_chat.py) does not exercise Core shutdown, subagent resume failure, stale-session persistence or torn follower streams; the Python tests drive them directly. No full suites.",
+  "expected_tests": {"python": 114, "frontend": 0, "native": 0, "playwright": 0},
   "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_action_broker.py",
-    "tests/v3/test_federated_search.py",
-    "tests/v3/test_handoffs.py",
-    "tests/v3/test_terminal_history.py",
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_chat.py",
     "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_temporary_chat.py"
   ],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "frontend": [], "native": [], "playwright": []
 }

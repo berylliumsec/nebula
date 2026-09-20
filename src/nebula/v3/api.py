@@ -9279,6 +9279,11 @@ def create_app(
                             "error", {"type": "error", "detail": str(exc)}
                         )
                         return
+                except Exception:
+                    # diagnostic-expected: the producer already recorded this
+                    # failure on the turn; the follower gets its durable error
+                    # frame below instead of a torn stream.
+                    pass
             completed = store.get(ChatTurn, turn_id)
             if not completed.final_message_id:
                 yield _server_sent_event(
