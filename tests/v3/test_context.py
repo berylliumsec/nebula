@@ -5,6 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from nebula.v3.context import (
+    ContextCapacityError,
     ContextCompactionError,
     ContextCompactor,
     ContextSource,
@@ -900,3 +901,50 @@ def test_concurrent_identical_compaction_reuses_one_snapshot_and_provider_call(
     assert {result.snapshot.id for result in results} == {results[0].snapshot.id}
     assert sorted(result.created for result in results) == [False, True]
     assert len(provider.requests) == 1
+
+
+def test_capacity_failures_keep_their_type_and_persist_a_failed_snapshot(tmp_path):
+    store = NebulaStore(tmp_path / "capacity-context.db")
+    # A 600-token window cannot hold a faithful compaction summary.
+    profile = _profile(context_window=600, max_output_tokens=200)
+    session = _owner(store, profile)
+    _message(
+        store,
+        session,
+        message_id="message-1",
+        sequence=1,
+        content="Canonical fact",
+    )
+    provider = MemoryProvider(profile.id, [])
+    compactor = ContextCompactor(store)
+
+    with pytest.raises(ContextCapacityError, match="too little room"):
+        asyncio.run(
+            compactor.compact(
+                owner_type=ContextOwnerType.CHAT_SESSION,
+                owner_id=session.id,
+                engagement_id=session.engagement_id,
+                provider_profile=profile,
+                provider=provider,
+                model="model-a",
+                sources=[
+                    ContextSource(
+                        ContextSourceReference(
+                            source_kind="chat_message",
+                            source_id="message-1",
+                            sequence=1,
+                        ),
+                        "Canonical fact",
+                    )
+                ],
+                compacted_through=1,
+            )
+        )
+
+    assert provider.requests == []
+    latest = compactor.latest(
+        ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+    )
+    assert latest
+    assert latest.status == ContextSnapshotStatus.FAILED
+    assert "too little room" in (latest.error or "")
