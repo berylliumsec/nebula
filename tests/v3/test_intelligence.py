@@ -9,6 +9,8 @@ from nebula.v3.domain import (
 from nebula.v3.intelligence import (
     CorrelationEngine,
     VersionRange,
+    normalize_cve_v5,
+    normalize_nvd,
     parse_cpe,
     parse_purl,
     version_in_range,
@@ -208,3 +210,139 @@ def test_unsupported_ecosystem_version_semantics_stay_candidate():
     assert match is not None
     assert match.method == CorrelationMethod.PURL
     assert match.status == CorrelationStatus.CANDIDATE
+
+
+def _nvd_exact_version_record():
+    return {
+        "cve": {
+            "id": "CVE-2021-41773",
+            "published": "2021-10-05T09:15:00.000",
+            "lastModified": "2021-10-05T09:15:00.000",
+            "descriptions": [{"lang": "en", "value": "Path traversal in 2.4.49"}],
+            "configurations": [
+                {
+                    "nodes": [
+                        {
+                            "cpeMatch": [
+                                {
+                                    "vulnerable": True,
+                                    "criteria": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+        }
+    }
+
+
+def test_nvd_exact_version_cpe_normalizes_to_a_version_not_an_open_range():
+    advisory = normalize_nvd(_nvd_exact_version_record())
+    assert advisory.affected == [
+        {
+            "cpe": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*",
+            "versions": ["2.4.49"],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "observed,expected_status",
+    [
+        ("2.4.49", CorrelationStatus.CONFIRMED),
+        ("2.4.62", CorrelationStatus.NOT_AFFECTED),
+    ],
+)
+def test_exact_version_cpe_confirms_only_that_version(observed, expected_status):
+    advisory = normalize_nvd(_nvd_exact_version_record())
+    component = SoftwareComponent(
+        engagement_id="eng-1",
+        name="http_server",
+        vendor="apache",
+        version=observed,
+        cpes=[f"cpe:2.3:a:apache:http_server:{observed}:*:*:*:*:*:*:*"],
+    )
+
+    match = CorrelationEngine().correlate(component, advisory)
+    assert match is not None
+    assert match.method == CorrelationMethod.CPE
+    assert match.status == expected_status
+
+
+@pytest.mark.parametrize(
+    "observed,expected_status",
+    [
+        ("2.4.49", CorrelationStatus.CONFIRMED),
+        ("2.4.62", CorrelationStatus.NOT_AFFECTED),
+    ],
+)
+def test_exact_version_advisory_cpe_requires_equality_without_range_data(
+    observed, expected_status
+):
+    # A feed that hands over only the exact-version CPE (no versions/ranges)
+    # must still be applied as "this version only".
+    advisory = _advisory([{"cpe": "cpe:2.3:a:apache:http_server:2.4.49:*:*:*:*:*:*:*"}])
+    component = SoftwareComponent(
+        engagement_id="eng-1",
+        name="http_server",
+        vendor="apache",
+        version=observed,
+        cpes=[f"cpe:2.3:a:apache:http_server:{observed}:*:*:*:*:*:*:*"],
+    )
+
+    match = CorrelationEngine().correlate(component, advisory)
+    assert match is not None
+    assert match.method == CorrelationMethod.CPE
+    assert match.status == expected_status
+
+
+def test_unbounded_range_is_not_version_data():
+    assert version_in_range("2.4.62", VersionRange()) is False
+    advisory = _advisory(
+        [
+            {
+                "cpe": "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*",
+                "ranges": [{}],
+            }
+        ]
+    )
+    component = SoftwareComponent(
+        engagement_id="eng-1",
+        name="http_server",
+        vendor="apache",
+        version="2.4.62",
+        cpes=["cpe:2.3:a:apache:http_server:2.4.62:*:*:*:*:*:*:*"],
+    )
+
+    match = CorrelationEngine().correlate(component, advisory)
+    assert match is not None
+    assert match.status == CorrelationStatus.CANDIDATE
+
+
+def test_cve_v5_problem_types_read_descriptions_for_cwe_ids():
+    record = {
+        "cveMetadata": {"cveId": "CVE-2024-0001"},
+        "containers": {
+            "cna": {
+                "descriptions": [{"lang": "en", "value": "Example"}],
+                "problemTypes": [
+                    {
+                        "descriptions": [
+                            {
+                                "lang": "en",
+                                "type": "CWE",
+                                "cweId": "CWE-79",
+                                "description": "Cross-site scripting",
+                            }
+                        ]
+                    },
+                    {"descriptions": [{"lang": "en", "description": "No CWE id"}]},
+                    {"description": [{"lang": "en", "cweId": "CWE-89"}]},
+                ],
+            }
+        },
+    }
+
+    advisory = normalize_cve_v5(record)
+    assert advisory.cwes == ["CWE-79", "CWE-89"]

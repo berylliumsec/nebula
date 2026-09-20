@@ -1,18 +1,17 @@
 {
-  "change_digest": "fc4209c973037e3b88f63e90abc555b7406905ba43bc125643e2ee71c6703445",
-  "reviewed_by": "Claude review of device lookup and language-server diagnostics",
-  "reason": "_device_for_token in api.py scanned the first 1,000 PairedDeviceSession rows (list_entities orders oldest first) for the presented cookie's token hash, so once a Core had recorded that many pairings over its lifetime every newer device got 401 on every request and was missing from the device list. NebulaStore.find_entity now looks the hash up in SQL; the revocation and expiry checks are unchanged. Separately, every record_caught_exception call in language_server.py named the feature 'language_server', which diagnostics._normalize_feature rejects because it is not in FEATURE_FILES; with a diagnostics manager configured (production, not pytest) the except blocks themselves raised, turning a ruff timeout into a JSON-RPC error for formatting, suppressing published diagnostics, and closing the LSP socket with 1011 from the catch-all handler. The calls now use the registered 'workspace' feature. test_api gains a request authenticated by a device paired after 1,000 older sessions (401 on main, 200 now); the new test_language_server_diagnostics asserts every feature named in language_server.py is registered (fails on main); test_language_server covers the handler paths that record those diagnostics.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py and storage.py) is the real-Core journey suite and pairs at most one device; the Python tests create the thousand sessions directly and exercise the language-server handlers in process. No full suites.",
+  "change_digest": "5708420644989959ed212cfe16558671f49332c95ed89b02f4003f5023050f14",
+  "reviewed_by": "Claude review of goal block and intelligence",
+  "reason": "Three small defects. (1) ChatGoalService.write folded the block action's status check and reason check into one condition, so blocking a paused goal with a reason raised HTTP 422 'blocking a running goal requires a reason', pointing the caller at a reason they had already supplied; the two checks are now separate: a non-running goal raises ConflictError (409, 'only a running goal can be blocked') and a missing reason raises 422. (2) normalize_nvd emitted a VersionRange with every bound None for each cpeMatch, and CorrelationEngine._cpe discarded the advisory CPE's version component, so an advisory whose CPE names one exact version (cpe:2.3:a:apache:http_server:2.4.49:... with no versionStart/End) confirmed ANY observed version at confidence 0.99 because version_in_range passes every check on an unbounded range. normalize_nvd now emits ranges only when NVD set a bound and otherwise versions=[<cpe version>] for a concrete CPE version (nothing for a wildcard); _cpe keeps the advisory CPE's version and requires equality when it is concrete; _range_is_comparable treats an all-None range as no version data, which makes both version_in_range and _has_comparable_version_data refuse to confirm or clear on it. (3) normalize_cve_v5 read problemTypes[].description but the CVE 5 schema key is descriptions, so cwes came back as [''] for every record; it now reads descriptions (falling back to description for older exports), drops entries without a cweId, and de-duplicates. test_chat_goals gains test_block_reports_wrong_status_and_missing_reason_distinctly (fails on main with the 422). test_intelligence gains test_nvd_exact_version_cpe_normalizes_to_a_version_not_an_open_range, test_exact_version_cpe_confirms_only_that_version (2.4.62 is confirmed on main, not_affected now; 2.4.49 stays confirmed), test_exact_version_advisory_cpe_requires_equality_without_range_data, test_unbounded_range_is_not_version_data (version_in_range on VersionRange() is True on main), and test_cve_v5_problem_types_read_descriptions_for_cwe_ids (cwes == ['', '', 'CWE-89'] on main). Both files run in full.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through chat_goals.py and intelligence.py) does not exercise goal blocking from a paused state, NVD/CVE 5 feed normalization, or CPE version correlation; the Python tests drive ChatGoalService, normalize_nvd, normalize_cve_v5 and CorrelationEngine directly. No full suites.",
   "expected_tests": {
-    "python": 44,
+    "python": 28,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_language_server.py",
-    "tests/v3/test_language_server_diagnostics.py"
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_intelligence.py"
   ],
   "frontend": [],
   "native": [],
