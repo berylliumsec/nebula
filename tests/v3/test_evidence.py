@@ -17,6 +17,7 @@ from nebula.v3.evidence import (
     upload_evidence,
 )
 from nebula.v3.operators import OperatorProfileService
+from nebula.v3.relations import ResourceRelationService
 from nebula.v3.storage import NebulaStore, StoreTransaction
 
 PNG_1X1 = base64.b64decode(
@@ -650,3 +651,69 @@ def test_decoded_size_limit_and_missing_artifact_store(tmp_path, monkeypatch):
     )
     assert response.status_code == 503
     assert response.json()["detail"] == "evidence upload requires an artifact store"
+
+
+def test_upload_linked_to_a_finding_is_visible_on_every_read_path(
+    evidence_api, monkeypatch
+):
+    client, store, artifacts, engagement, asset, finding = evidence_api
+    payload = {
+        "engagement_id": engagement.id,
+        "filename": "proof.txt",
+        "title": "Proof",
+        "evidence_type": "manual",
+        "content_base64": base64.b64encode(b"linked proof").decode("ascii"),
+        "finding_id": finding.id,
+    }
+    response = client.post("/api/v1/evidence/upload", headers=_auth(), json=payload)
+    assert response.status_code == 201
+    evidence_id = response.json()["id"]
+
+    # The link is an authoritative edge, so every projected read path shows it.
+    edges = client.get(
+        f"/api/v1/projects/{engagement.id}/relations",
+        headers=_auth(),
+        params={"resource_kind": "evidence", "resource_id": evidence_id},
+    )
+    assert edges.status_code == 200
+    assert [
+        (item["source"]["id"], item["predicate"], item["target"]["id"])
+        for item in edges.json()
+    ] == [(evidence_id, "supports", finding.id)]
+    loaded_finding = client.get(f"/api/v1/findings/{finding.id}", headers=_auth())
+    assert loaded_finding.json()["evidence_ids"] == [evidence_id]
+    listed_findings = client.get(
+        f"/api/v1/findings?engagement_id={engagement.id}", headers=_auth()
+    )
+    assert [item["evidence_ids"] for item in listed_findings.json()] == [[evidence_id]]
+    loaded_evidence = client.get(f"/api/v1/evidence/{evidence_id}", headers=_auth())
+    assert loaded_evidence.json()["finding_id"] == finding.id
+    listed_evidence = client.get(
+        f"/api/v1/evidence?engagement_id={engagement.id}", headers=_auth()
+    )
+    assert [item["finding_id"] for item in listed_evidence.json()] == [finding.id]
+
+    # A later analyst edit of the finding keeps the uploaded link.
+    renamed = client.patch(
+        f"/api/v1/findings/{finding.id}",
+        headers=_auth(),
+        json={"changes": {"title": "TLS issue (triaged)"}},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["evidence_ids"] == [evidence_id]
+
+    # The edge is written in the upload's unit of work: if it fails nothing lands.
+    def fail_sync(self, session, entity):
+        del self, session, entity
+        raise RuntimeError("edge write failed")
+
+    monkeypatch.setattr(ResourceRelationService, "sync_legacy_edges", fail_sync)
+    failed = client.post(
+        "/api/v1/evidence/upload",
+        headers=_auth(),
+        json={**payload, "content_base64": base64.b64encode(b"second").decode()},
+    )
+    assert failed.status_code == 500
+    assert store.count(Evidence) == 1
+    assert store.count(Artifact) == 1
+    assert store.get(Finding, finding.id).evidence_ids == [evidence_id]

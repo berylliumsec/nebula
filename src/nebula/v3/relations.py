@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from .database import EntityRow, ResourceRelationRow
 from .domain import (
@@ -94,6 +95,20 @@ INVERSE_LABELS: dict[RelationPredicate, str] = {
 }
 
 LEGACY_RELATION_MODELS = (Observation, Evidence, Finding, Report)
+LEGACY_EDGE_PAGE = 500
+
+LegacyEdge = tuple[ResourceKind, str, RelationPredicate, ResourceKind, str]
+EdgeKey = tuple[str, str, str, str, str]
+
+
+def _edge_key(row: ResourceRelationRow) -> EdgeKey:
+    return (
+        row.source_kind,
+        row.source_id,
+        row.predicate,
+        row.target_kind,
+        row.target_id,
+    )
 
 
 def _relation(row: ResourceRelationRow) -> ResourceRelation:
@@ -317,43 +332,62 @@ class ResourceRelationService:
 
     @staticmethod
     def _controlled_relation_filter(entity: Entity):
+        """Match exactly the edges the entity's compatibility arrays project.
+
+        Edges outside this set (for example a note referencing a knowledge
+        source) are owned by the relations API alone and must survive edits
+        of the legacy arrays.
+        """
+
         project_id = getattr(entity, "engagement_id")
         if isinstance(entity, Finding):
             return or_(
                 (ResourceRelationRow.project_id == project_id)
                 & (ResourceRelationRow.source_kind == ResourceKind.FINDING.value)
                 & (ResourceRelationRow.source_id == entity.id)
-                & (ResourceRelationRow.predicate == RelationPredicate.AFFECTS.value),
+                & (ResourceRelationRow.predicate == RelationPredicate.AFFECTS.value)
+                & (ResourceRelationRow.target_kind == ResourceKind.ASSET.value),
                 (ResourceRelationRow.project_id == project_id)
                 & (ResourceRelationRow.target_kind == ResourceKind.FINDING.value)
                 & (ResourceRelationRow.target_id == entity.id)
-                & (ResourceRelationRow.predicate == RelationPredicate.SUPPORTS.value),
+                & (ResourceRelationRow.predicate == RelationPredicate.SUPPORTS.value)
+                & (ResourceRelationRow.source_kind == ResourceKind.EVIDENCE.value),
             )
-        kind = (
-            ResourceKind.NOTE
-            if isinstance(entity, Observation)
-            else ResourceKind.EVIDENCE
-            if isinstance(entity, Evidence)
-            else ResourceKind.REPORT
-        )
-        predicates = (
-            [RelationPredicate.REFERENCES.value]
-            if isinstance(entity, Observation)
-            else [RelationPredicate.SUPPORTS.value]
-            if isinstance(entity, Evidence)
-            else [RelationPredicate.INCLUDES.value]
-        )
+        if isinstance(entity, Observation):
+            kind, predicate, target_kinds = (
+                ResourceKind.NOTE,
+                RelationPredicate.REFERENCES,
+                [ResourceKind.EVIDENCE.value],
+            )
+        elif isinstance(entity, Evidence):
+            kind, predicate, target_kinds = (
+                ResourceKind.EVIDENCE,
+                RelationPredicate.SUPPORTS,
+                [ResourceKind.FINDING.value],
+            )
+        else:
+            kind, predicate, target_kinds = (
+                ResourceKind.REPORT,
+                RelationPredicate.INCLUDES,
+                [ResourceKind.FINDING.value, ResourceKind.NOTE.value],
+            )
         return (
             (ResourceRelationRow.project_id == project_id)
             & (ResourceRelationRow.source_kind == kind.value)
             & (ResourceRelationRow.source_id == entity.id)
-            & (ResourceRelationRow.predicate.in_(predicates))
+            & (ResourceRelationRow.predicate == predicate.value)
+            & (ResourceRelationRow.target_kind.in_(target_kinds))
         )
 
     @staticmethod
-    def _desired_legacy_edges(
-        entity: Entity,
-    ) -> list[tuple[ResourceKind, str, RelationPredicate, ResourceKind, str]]:
+    def _unique_ids(field: str, values: list[str]) -> list[str]:
+        repeated = sorted({value for value in values if values.count(value) > 1})
+        if repeated:
+            raise ValueError(f"{field} must not repeat ids: {', '.join(repeated)}")
+        return values
+
+    @classmethod
+    def _desired_legacy_edges(cls, entity: Entity) -> list[LegacyEdge]:
         if isinstance(entity, Finding):
             return [
                 (
@@ -363,7 +397,7 @@ class ResourceRelationService:
                     ResourceKind.ASSET,
                     item,
                 )
-                for item in entity.asset_ids
+                for item in cls._unique_ids("asset_ids", entity.asset_ids)
             ] + [
                 (
                     ResourceKind.EVIDENCE,
@@ -372,7 +406,7 @@ class ResourceRelationService:
                     ResourceKind.FINDING,
                     entity.id,
                 )
-                for item in entity.evidence_ids
+                for item in cls._unique_ids("evidence_ids", entity.evidence_ids)
             ]
         if isinstance(entity, Evidence):
             return (
@@ -397,7 +431,7 @@ class ResourceRelationService:
                     ResourceKind.EVIDENCE,
                     item,
                 )
-                for item in entity.evidence_ids
+                for item in cls._unique_ids("evidence_ids", entity.evidence_ids)
             ]
         if isinstance(entity, Report):
             return [
@@ -408,7 +442,7 @@ class ResourceRelationService:
                     ResourceKind.FINDING,
                     item,
                 )
-                for item in entity.finding_ids
+                for item in cls._unique_ids("finding_ids", entity.finding_ids)
             ] + [
                 (
                     ResourceKind.REPORT,
@@ -417,14 +451,106 @@ class ResourceRelationService:
                     ResourceKind.NOTE,
                     item,
                 )
-                for item in entity.observation_ids
+                for item in cls._unique_ids("observation_ids", entity.observation_ids)
             ]
         return []
 
-    def _sync_legacy_edges(self, session, entity: Entity) -> None:
-        session.execute(
-            delete(ResourceRelationRow).where(self._controlled_relation_filter(entity))
+    def _controlled_edge_rows(
+        self, session: Session, entity: Entity
+    ) -> list[ResourceRelationRow]:
+        """Page through every controlled edge; the public list cap must not apply."""
+
+        statement = (
+            select(ResourceRelationRow)
+            .where(self._controlled_relation_filter(entity))
+            .order_by(ResourceRelationRow.created_at, ResourceRelationRow.id)
         )
+        rows: list[ResourceRelationRow] = []
+        offset = 0
+        while True:
+            page = list(
+                session.scalars(statement.offset(offset).limit(LEGACY_EDGE_PAGE))
+            )
+            rows.extend(page)
+            if len(page) < LEGACY_EDGE_PAGE:
+                return rows
+            offset += len(page)
+
+    @staticmethod
+    def _legacy_projection(
+        entity: Entity, rows: list[ResourceRelationRow]
+    ) -> dict[str, object]:
+        def targets(predicate: RelationPredicate, kind: ResourceKind) -> list[str]:
+            return [
+                row.target_id
+                for row in rows
+                if row.source_id == entity.id
+                and row.predicate == predicate.value
+                and row.target_kind == kind.value
+            ]
+
+        if isinstance(entity, Finding):
+            return {
+                "asset_ids": targets(RelationPredicate.AFFECTS, ResourceKind.ASSET),
+                "evidence_ids": [
+                    row.source_id
+                    for row in rows
+                    if row.target_id == entity.id
+                    and row.predicate == RelationPredicate.SUPPORTS.value
+                    and row.source_kind == ResourceKind.EVIDENCE.value
+                ],
+            }
+        if isinstance(entity, Evidence):
+            return {
+                "finding_id": next(
+                    iter(targets(RelationPredicate.SUPPORTS, ResourceKind.FINDING)),
+                    None,
+                )
+            }
+        if isinstance(entity, Observation):
+            return {
+                "evidence_ids": targets(
+                    RelationPredicate.REFERENCES, ResourceKind.EVIDENCE
+                )
+            }
+        if isinstance(entity, Report):
+            return {
+                "finding_ids": targets(
+                    RelationPredicate.INCLUDES, ResourceKind.FINDING
+                ),
+                "observation_ids": targets(
+                    RelationPredicate.INCLUDES, ResourceKind.NOTE
+                ),
+            }
+        return {}
+
+    def sync_legacy_edges(self, session: Session, entity: Entity) -> None:
+        """Reconcile the controlled edges to the entity's arrays as a delta.
+
+        Edges already present keep their rows and ids; only edges the arrays no
+        longer name are deleted and only edges they newly name are added. Callers
+        pass an entity whose untouched arrays reflect the current edges, so an
+        edit of one field cannot drop or resurrect edges written through the
+        relations API.
+        """
+
+        desired = self._desired_legacy_edges(entity)
+        existing = {
+            _edge_key(row): row for row in self._controlled_edge_rows(session, entity)
+        }
+        wanted = {
+            (
+                source_kind.value,
+                source_id,
+                predicate.value,
+                target_kind.value,
+                target_id,
+            )
+            for source_kind, source_id, predicate, target_kind, target_id in desired
+        }
+        for key, row in existing.items():
+            if key not in wanted:
+                session.delete(row)
         project_id = getattr(entity, "engagement_id")
         now = utc_now()
         for (
@@ -433,7 +559,16 @@ class ResourceRelationService:
             predicate,
             target_kind,
             target_id,
-        ) in self._desired_legacy_edges(entity):
+        ) in desired:
+            key = (
+                source_kind.value,
+                source_id,
+                predicate.value,
+                target_kind.value,
+                target_id,
+            )
+            if key in existing:
+                continue
             source = self._validate_endpoint(
                 session,
                 ResourceRef(project_id=project_id, kind=source_kind, id=source_id),
@@ -467,6 +602,7 @@ class ResourceRelationService:
     def create_legacy_entity(self, entity: Entity) -> Entity:
         """Atomically create a compatibility entity and its authoritative edges."""
 
+        self._desired_legacy_edges(entity)
         with self.store.database.session() as session:
             row = EntityRow(
                 id=entity.id,
@@ -480,7 +616,7 @@ class ResourceRelationService:
             session.add(row)
             try:
                 session.flush()
-                self._sync_legacy_edges(session, entity)
+                self.sync_legacy_edges(session, entity)
             except IntegrityError as exc:
                 # diagnostic-expected: legacy create is one atomic conflict domain.
                 raise ConflictError(f"entity already exists: {entity.id}") from exc
@@ -491,6 +627,7 @@ class ResourceRelationService:
     ) -> Entity:
         """Atomically replace legacy fields and reconcile their edge projection."""
 
+        self._desired_legacy_edges(candidate)
         with self.store.database.session() as session:
             row = session.get(EntityRow, current.id)
             if row is None or row.kind != current.entity_kind:
@@ -513,7 +650,14 @@ class ResourceRelationService:
             row.revision = updated.revision
             row.updated_at = updated.updated_at
             row.engagement_id = getattr(updated, "engagement_id")
-            self._sync_legacy_edges(session, updated)
+            try:
+                self.sync_legacy_edges(session, updated)
+            except IntegrityError as exc:
+                # diagnostic-expected: a relations-API write raced this edit; the
+                # unique edge constraint reports it as a revision-style conflict.
+                raise ConflictError(
+                    f"relations of {current.id} changed while the update was in progress"
+                ) from exc
             return updated
 
     def project_legacy(self, entity: Entity) -> Entity:
@@ -521,67 +665,6 @@ class ResourceRelationService:
 
         if not isinstance(entity, LEGACY_RELATION_MODELS):
             return entity
-        project_id = getattr(entity, "engagement_id")
-        relations = self.list_relations(
-            project_id,
-            resource=ResourceRef(
-                project_id=project_id,
-                kind=ResourceKind.NOTE
-                if isinstance(entity, Observation)
-                else ResourceKind.EVIDENCE
-                if isinstance(entity, Evidence)
-                else ResourceKind.FINDING
-                if isinstance(entity, Finding)
-                else ResourceKind.REPORT,
-                id=entity.id,
-            ),
-            limit=500,
-        )
-        changes: dict[str, object] = {}
-        if isinstance(entity, Finding):
-            changes["asset_ids"] = [
-                item.target.id
-                for item in relations
-                if item.predicate == RelationPredicate.AFFECTS
-                and item.source.id == entity.id
-            ]
-            changes["evidence_ids"] = [
-                item.source.id
-                for item in relations
-                if item.predicate == RelationPredicate.SUPPORTS
-                and item.target.id == entity.id
-            ]
-        elif isinstance(entity, Evidence):
-            changes["finding_id"] = next(
-                (
-                    item.target.id
-                    for item in relations
-                    if item.predicate == RelationPredicate.SUPPORTS
-                    and item.source.id == entity.id
-                ),
-                None,
-            )
-        elif isinstance(entity, Observation):
-            changes["evidence_ids"] = [
-                item.target.id
-                for item in relations
-                if item.predicate == RelationPredicate.REFERENCES
-                and item.source.id == entity.id
-                and item.target.kind == ResourceKind.EVIDENCE
-            ]
-        elif isinstance(entity, Report):
-            changes["finding_ids"] = [
-                item.target.id
-                for item in relations
-                if item.predicate == RelationPredicate.INCLUDES
-                and item.source.id == entity.id
-                and item.target.kind == ResourceKind.FINDING
-            ]
-            changes["observation_ids"] = [
-                item.target.id
-                for item in relations
-                if item.predicate == RelationPredicate.INCLUDES
-                and item.source.id == entity.id
-                and item.target.kind == ResourceKind.NOTE
-            ]
-        return entity.model_copy(update=changes)
+        with self.store.database.session() as session:
+            rows = self._controlled_edge_rows(session, entity)
+        return entity.model_copy(update=self._legacy_projection(entity, rows))

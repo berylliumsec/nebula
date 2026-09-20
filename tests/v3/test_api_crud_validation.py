@@ -697,3 +697,64 @@ def test_route_operations_are_unique_after_parameter_normalization(api):
 
     with pytest.raises(RuntimeError, match="duplicate API operation"):
         _assert_unique_api_operations(duplicate)
+
+
+def test_finding_patch_starts_from_the_projected_relation_arrays(api):
+    client, store = api
+    engagement = store.create(Engagement(name="Projected patch"))
+    evidence = store.create(
+        Evidence(
+            engagement_id=engagement.id,
+            evidence_type="operator_upload",
+            title="proof.txt",
+        )
+    )
+    finding = client.post(
+        "/api/v1/findings",
+        headers=_auth(),
+        json={"engagement_id": engagement.id, "title": "Linked later"},
+    ).json()
+    linked = client.post(
+        f"/api/v1/projects/{engagement.id}/relations",
+        headers=_auth(),
+        json={
+            "source": {
+                "project_id": engagement.id,
+                "kind": "evidence",
+                "id": evidence.id,
+            },
+            "predicate": "supports",
+            "target": {
+                "project_id": engagement.id,
+                "kind": "finding",
+                "id": finding["id"],
+            },
+        },
+    )
+    assert linked.status_code == 201
+    assert store.get(Finding, finding["id"]).evidence_ids == []
+    operator = client.post(
+        "/api/v1/operator-profiles",
+        headers=_auth(),
+        json={"display_name": "Verifier"},
+    ).json()
+
+    # The evidence-backed rule sees the edge, not the stale stored array.
+    confirmed = client.patch(
+        f"/api/v1/findings/{finding['id']}",
+        headers=_auth(),
+        json={
+            "expected_revision": 1,
+            "changes": {
+                "status": "confirmed",
+                "verifier_id": operator["id"],
+                "verified_at": "2026-09-20T12:00:00Z",
+            },
+        },
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "confirmed"
+    assert confirmed.json()["evidence_ids"] == [evidence.id]
+    stored = store.get(Finding, finding["id"])
+    assert stored.revision == 2
+    assert stored.evidence_ids == [evidence.id]
