@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, ChevronDown, RefreshCw, Server, ShieldCheck, TerminalSquare, Trash2, UploadCloud } from "lucide-react";
 import { ApiError } from "../api/client";
 import type { AutomationProjectPolicy, AutomationRuntimeInfo, RunnerProfile, RunnerIsolation, RunnerRuntime, VpnProfile } from "../api/types";
@@ -44,6 +44,7 @@ export function AutomationRuntimeSettings() {
   const [savingVpn, setSavingVpn] = useState(false);
   const [projectPolicy, setProjectPolicy] = useState<AutomationProjectPolicy>();
   const [selectingVpn, setSelectingVpn] = useState<string>();
+  const [removingVpn, setRemovingVpn] = useState<string>();
 
   const load = useCallback(async () => {
     if (!api || coreState !== "online") {
@@ -126,13 +127,15 @@ export function AutomationRuntimeSettings() {
   };
 
   const removeVpn = async (profile: VpnProfile) => {
-    if (!api) return;
-    setError(undefined);
+    // A second tap while the delete is in flight would issue another request whose
+    // 404/409 reports a failure for a profile that was in fact removed.
+    if (!api || removingVpn) return;
+    setRemovingVpn(profile.id); setError(undefined);
     try { await api.deleteVpnProfile(profile.id, profile.revision); setVpnProfiles((items) => items.filter((item) => item.id !== profile.id)); }
     catch (deleteError) {
       void logCaughtDiagnostic("interface.automation_runtime.vpn_delete_failed", "VPN profile could not be removed.", deleteError, "automation_runtime");
       setError(deleteError instanceof Error ? deleteError.message : "Could not remove the VPN profile.");
-    }
+    } finally { setRemovingVpn(undefined); }
   };
 
   const useVpnForProject = async (profile: VpnProfile) => {
@@ -170,7 +173,7 @@ export function AutomationRuntimeSettings() {
       </form>
       <section className="panel runner-status"><header className="panel-header compact"><div><h3>Saved profiles</h3><p>{engagement ? `Choose the route for new terminals in ${engagement.name}.` : "Open a project to choose where a profile is used."}</p></div><span className="inventory-count">{vpnProfiles.length}</span></header>{vpnProfiles.length ? vpnProfiles.map((profile) => {
         const selected = projectPolicy?.executionMode !== "host" && projectPolicy?.vpnProfileId === profile.id;
-        return <article key={profile.id}><span className={`status-dot ${profile.available ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.protocol.toUpperCase()} · {profile.remoteHost}:{profile.remotePort}</small><p>{!profile.available ? "Secret is unavailable; upload the profile again." : selected ? `Selected for ${engagement?.name ?? "this project"}. New terminals wait for the tunnel before opening.` : "Saved only — not connected to this project."}</p></div><div className="vpn-profile-actions">{profile.available && engagement && !selected && <button className="button quiet" type="button" disabled={!projectPolicy || projectPolicy.executionMode === "host" || selectingVpn === profile.id || previewMode} onClick={() => void useVpnForProject(profile)}>{selectingVpn === profile.id ? "Selecting…" : "Use for this project"}</button>}{selected && <span className="vpn-selected-label"><CheckCircle2 size={14} /> In use</span>}<button className="icon-button" type="button" aria-label={`Remove ${profile.name}`} disabled={selected} title={selected ? "Choose a different route before removing this profile." : undefined} onClick={() => void removeVpn(profile)}><Trash2 size={15} /></button></div></article>;
+        return <article key={profile.id}><span className={`status-dot ${profile.available ? "healthy" : "unavailable"}`} /><div><strong>{profile.name}</strong><small>{profile.protocol.toUpperCase()} · {profile.remoteHost}:{profile.remotePort}</small><p>{!profile.available ? "Secret is unavailable; upload the profile again." : selected ? `Selected for ${engagement?.name ?? "this project"}. New terminals wait for the tunnel before opening.` : "Saved only — not connected to this project."}</p></div><div className="vpn-profile-actions">{profile.available && engagement && !selected && <button className="button quiet" type="button" disabled={!projectPolicy || projectPolicy.executionMode === "host" || selectingVpn === profile.id || previewMode} onClick={() => void useVpnForProject(profile)}>{selectingVpn === profile.id ? "Selecting…" : "Use for this project"}</button>}{selected && <span className="vpn-selected-label"><CheckCircle2 size={14} /> In use</span>}<button className="icon-button" type="button" aria-label={`Remove ${profile.name}`} disabled={selected || Boolean(removingVpn)} title={selected ? "Choose a different route before removing this profile." : undefined} onClick={() => void removeVpn(profile)}><Trash2 size={15} /></button></div></article>;
       }) : <div className="empty-state compact"><ShieldCheck size={21} /><strong>No VPN profiles</strong><p>Upload one here, then select it for the open project.</p></div>}</section>
     </div>
   </section>;
@@ -190,25 +193,35 @@ export function RunnerSettings() {
   const [available, setAvailable] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  // Read through a ref so picking a profile does not re-run the load, which
+  // rewrote the form with server values over whatever the operator had typed.
+  const selectedIdRef = useRef(selectedId);
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     if (!api || coreState !== "online") return;
     try {
-      const next = await api.listRunnerProfiles();
+      const next = await api.listRunnerProfiles(signal);
+      if (signal?.aborted) return;
       setAvailable(true);
       setProfiles(next);
-      const selected = next.find((profile) => profile.id === selectedId) ?? next[0];
+      const selected = next.find((profile) => profile.id === selectedIdRef.current) ?? next[0];
       if (selected) {
         setSelectedId(selected.id); setSetupKind(profileSetup(selected)); setName(selected.name); setExecutable(selected.executable); setContext(selected.context ?? ""); setSocket(selected.socket ?? ""); setPlatform(selected.platform); setSeccompProfile(selected.seccompProfile ?? "");
       }
     } catch (loadError) {
+      if (signal?.aborted) return; // diagnostic-expected: superseded by unmount or a newer load
       void logCaughtDiagnostic("interface.tooling_settings.caught_failure_02", "A handled interface operation failed.", loadError, "tooling_settings");
       if (unavailable(loadError)) setAvailable(false);
       else setError(loadError instanceof Error ? loadError.message : "Could not load runner profiles.");
     }
-  }, [api, coreState, selectedId]);
+  }, [api, coreState]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  }, [load]);
 
   const chooseRuntime = (value: RunnerSetupKind) => {
     const defaults = runtimeDefaults[value];

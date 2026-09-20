@@ -120,14 +120,16 @@ export function EnvironmentSettings() {
     });
   }, []);
 
-  const test = useCallback(async (host: SshEnvironmentHost) => {
+  // The details dialog passes its own reporter so a failed test shows inside the
+  // modal rather than in the section notice hidden behind it.
+  const test = useCallback(async (host: SshEnvironmentHost, report: (message: string) => void = setError) => {
     if (!api) return;
     setBusy(host.alias);
     try {
       replaceEnvironment(await api.probeSshEnvironment(host.alias));
     } catch (probeError) {
       void logCaughtDiagnostic("interface.environment_settings.caught_failure_02", "A handled interface operation failed.", probeError, "environment_settings");
-      setError(failureMessage(probeError, "Connection test failed to run."));
+      report(failureMessage(probeError, "Connection test failed to run."));
     } finally {
       setBusy(undefined);
     }
@@ -249,7 +251,7 @@ interface HostDetailsDialogProps {
   api: ApiClient;
   host: SshEnvironmentHost;
   busy: boolean;
-  onTest: (host: SshEnvironmentHost) => Promise<void>;
+  onTest: (host: SshEnvironmentHost, onError: (message: string) => void) => Promise<void>;
   onClose: () => void;
   onSaved: (environment: SshEnvironment) => void;
   onForgotten: () => void;
@@ -314,10 +316,12 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
     { ok: probe.passwordlessSudo === true, label: "sudo", value: probe.passwordlessSudo ? "Works without a password" : "Needs a password; agents will avoid it" },
   ] : probe ? [{ ok: false, label: "SSH", value: hostStatus(host).label + (probe.detail ? ` — ${probe.detail}` : "") }] : [];
 
-  return <ModalSurface as="form" className={`provider-dialog resource-dialog ${styles.dialog}`} labelledBy="ssh-environment-dialog-title" onClose={() => { if (!saving) onClose(); }} onSubmit={(event) => void submit(event)}>
+  const close = () => { if (!saving) onClose(); };
+
+  return <ModalSurface as="form" className={`provider-dialog resource-dialog ${styles.dialog}`} labelledBy="ssh-environment-dialog-title" onClose={close} onSubmit={(event) => void submit(event)}>
     <header>
       <div><small>SSH environment</small><h2 id="ssh-environment-dialog-title">{label}</h2></div>
-      <button className="icon-button subtle" type="button" aria-label="Close host details" onClick={onClose}><X size={17} /></button>
+      <button className="icon-button subtle" type="button" aria-label="Close host details" disabled={saving} onClick={close}><X size={17} /></button>
     </header>
     <div className={styles.columns}>
       <div className={styles.column}>
@@ -349,14 +353,14 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
           <h3 id="ssh-test-heading">Last connection test</h3>
           {probe ? <p className={styles.muted}>{new Date(probe.checkedAt).toLocaleString()}</p> : <p className={styles.muted}>Not tested yet.</p>}
           {checks.length > 0 && <ul className={styles.checks}>{checks.map((check) => <li key={check.label}><span className={check.ok ? styles.healthy : styles.warning} aria-label={check.ok ? "passed" : "attention"}>{check.ok ? "✓" : "!"}</span><strong>{check.label}</strong><span>{check.value}</span></li>)}</ul>}
-          <button className="button secondary" type="button" disabled={busy || !host.inConfig} onClick={() => void onTest(host)}><RefreshCw className={busy ? "spin" : undefined} size={14} /> {busy ? "Testing" : probe ? "Test again" : "Test connection"}</button>
+          <button className="button secondary" type="button" disabled={busy || !host.inConfig} onClick={() => { setError(undefined); void onTest(host, setError); }}><RefreshCw className={busy ? "spin" : undefined} size={14} /> {busy ? "Testing" : probe ? "Test again" : "Test connection"}</button>
         </section>
       </div>
     </div>
     {error && <DiagnosticErrorNotice error={error} fallback="The environment operation could not be completed." compact />}
     <footer>
       {environment && <button className="button quiet" type="button" disabled={saving} onClick={() => void forget()} title="Remove Nebula's settings for this host. ~/.ssh/config is not changed.">Forget settings</button>}
-      <button className="button secondary" type="button" onClick={onClose} disabled={saving}>Cancel</button>
+      <button className="button secondary" type="button" onClick={close} disabled={saving}>Cancel</button>
       <button className="button primary" type="submit" disabled={saving || (!host.inConfig && !environment)}>{saving ? "Saving…" : "Save"}</button>
     </footer>
   </ModalSurface>;
