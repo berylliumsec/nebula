@@ -2720,6 +2720,9 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         "initial_title_state": "generated",
         "mcp_server_ids": [],
         "hook_ids": [],
+        # Recorded even when unset: "the model's own default" is a choice the
+        # operator can return to, so it has to round-trip as one.
+        "reasoning_effort": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,
@@ -2777,6 +2780,9 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         "initial_title_state": "generated",
         "mcp_server_ids": [],
         "hook_ids": [],
+        # Recorded even when unset: "the model's own default" is a choice the
+        # operator can return to, so it has to round-trip as one.
+        "reasoning_effort": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,

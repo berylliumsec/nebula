@@ -1779,6 +1779,8 @@ export interface ChatCompletionRequest {
   harnessReasoningEffort?: string;
   harnessServiceTier?: string;
   harnessSkill?: HarnessSkillInvocation;
+  /** Provider-side reasoning level; absent leaves the model's own default. */
+  reasoningEffort?: ReasoningEffort;
   runtimeSwitchConfirmation?: string;
 }
 
@@ -1801,6 +1803,11 @@ export interface ChatRuntimeSwitchPreflight {
   targetMaxOutputTokens?: number;
   metadataRevision?: string;
 }
+
+/** Reasoning levels Nebula can ask a provider for, lowest spend first past none. */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const REASONING_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh"];
 
 export interface ChatGoal {
   id: Identifier;
@@ -2082,6 +2089,8 @@ export interface ChatSessionSummary {
   toolsEnabled: boolean;
   mcpServerIds: Identifier[];
   hookIds: Identifier[];
+  /** The reasoning level this conversation was last sent with, if any. */
+  reasoningEffort?: ReasoningEffort;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;

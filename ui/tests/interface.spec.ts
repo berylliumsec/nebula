@@ -8971,3 +8971,121 @@ test("stabilization goal mode keeps the panel and its actions on Core's revision
   expect(rejected).toEqual([]);
 });
 
+
+const reasoningProvider = {
+  ...entity,
+  id: "provider-a",
+  name: "Local reasoning provider",
+  provider_type: "vllm",
+  endpoint: "http://127.0.0.1:8000/v1",
+  enabled: true,
+  is_local: true,
+  secret_ref: null,
+  model_allowlist: ["model-a"],
+  capabilities: { streaming: true },
+  privacy: { local_only: true, permits_sensitive_data: true },
+  metadata: { default_model: "model-a" },
+};
+
+async function installReasoningProvider(page: Page) {
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ json: [reasoningProvider] });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    await route.fallback();
+  });
+}
+
+test("stabilization an unfinished reply degrades quietly and keeps the chat usable", async ({ page }) => {
+  // A reasoning model that spends its budget thinking returns no prose. The
+  // turn is resumable and needs nothing decided, so it must not read as a
+  // broken conversation.
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const frames: unknown[] = [
+        { type: "started", provider_id: "provider-a", model: "model-a", session_id: "unfinished-session", turn_id: "unfinished-turn" },
+        { type: "reasoning", provider_id: "provider-a", model: "model-a", delta: "Weighing the options." },
+        {
+          type: "error",
+          feature: "chat",
+          code: "provider_final_answer_missing",
+          detail: "provider returned no operator-facing answer after bounded recovery",
+          retryable: true,
+          session_id: "unfinished-session",
+        },
+      ];
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    };
+  });
+  await installReasoningProvider(page);
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Give me a visible answer.");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const notice = page.locator(".chat-recovery-notice.unfinished");
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText("only the written answer is missing");
+  await expect(notice.getByRole("button", { name: "Finish the answer" })).toBeVisible();
+
+  // No alarm, and no suggestion that the conversation itself is broken.
+  await expect(page.locator(".chat-recovery-notice").getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Reload conversation" })).toHaveCount(0);
+  // The operator can simply keep talking.
+  await expect(composer).toBeEnabled();
+});
+
+test("stabilization an operator chooses how much a provider model may think", async ({ page }) => {
+  const sent: unknown[] = [];
+  await page.route("**/api/v1/chat/completions", async route => {
+    sent.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: [
+        'data: {"type":"started","provider_id":"provider-a","model":"model-a","session_id":"effort-session","turn_id":"effort-turn"}',
+        'data: {"type":"delta","provider_id":"provider-a","model":"model-a","delta":"Answered."}',
+        'data: {"type":"done","provider_id":"provider-a","model":"model-a","session_id":"effort-session","turn_id":"effort-turn","message":{"id":"effort-assistant","role":"assistant","content":"Answered."},"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6},"finish_reason":"stop","citations":[]}',
+        "data: [DONE]",
+        "",
+      ].join("\n\n"),
+    });
+  });
+  await installReasoningProvider(page);
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  const effort = page.getByRole("combobox", { name: "Reasoning effort" });
+  await expect(effort).toBeVisible();
+  // The model's own default is the starting point, not a level Nebula picked.
+  await expect(effort).toHaveValue("");
+  await effort.selectOption("none");
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+  const composer = page.getByPlaceholder("Ask about this project…");
+  await composer.fill("Answer briefly.");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.getByText("Answered.")).toBeVisible();
+  expect((sent[0] as { reasoning_effort?: string }).reasoning_effort).toBe("none");
+});

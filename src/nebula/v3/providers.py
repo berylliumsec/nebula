@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
 import boto3  # type: ignore[import-untyped]
@@ -404,6 +404,24 @@ class ModelToolResult(BaseModel):
     is_error: bool = False
 
 
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+"""Reasoning levels Nebula can ask for, lowest spend first past ``none``.
+
+A route advertises whether it takes the control at all; it does not advertise
+which levels it honours, so an adapter sends what it was asked for and the
+caller treats an unchanged response as the answer, not as a guarantee.
+"""
+
+REASONING_EFFORTS: tuple[ReasoningEffort, ...] = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+)
+
+
 class ModelRequest(BaseModel):
     messages: list[ModelMessage]
     model: str | None = None
@@ -415,6 +433,12 @@ class ModelRequest(BaseModel):
     temperature: float | None = None
     parallel_tool_calls: bool = False
     response_schema: dict[str, Any] | None = None
+    # How much of the output budget a reasoning model may spend thinking.
+    # Provider-neutral: an adapter translates it, or ignores it where the
+    # route does not advertise the control. ``None`` leaves the model's own
+    # default alone, which is what an ordinary turn wants.
+    reasoning_effort: ReasoningEffort | None = None
+    reasoning_max_tokens: int | None = Field(default=None, gt=0)
     metadata: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -1336,6 +1360,28 @@ def _openai_message_content(message: dict[str, Any]) -> str:
     return _openai_text_parts(message.get("content"))
 
 
+def _openrouter_reasoning(
+    request: "ModelRequest", supported: set[str]
+) -> dict[str, Any]:
+    """The reasoning object OpenRouter is sent for one request.
+
+    ``exclude: False`` asks for the thoughts to come back, which is what the
+    transcript shows the operator. An effort or a token ceiling is only added
+    when the route advertises the control: sending one it does not take costs
+    the request, and with ``require_parameters`` it can leave no eligible
+    endpoint at all.
+    """
+
+    reasoning: dict[str, Any] = {"exclude": False}
+    if "reasoning" not in supported and supported:
+        return reasoning
+    if request.reasoning_effort is not None:
+        reasoning["effort"] = request.reasoning_effort
+    if request.reasoning_max_tokens is not None:
+        reasoning["max_tokens"] = request.reasoning_max_tokens
+    return reasoning
+
+
 def _openai_message_reasoning(message: dict[str, Any]) -> str:
     """Model thoughts from OpenRouter/OpenAI-compatible reasoning channels.
 
@@ -1685,6 +1731,15 @@ class OpenAICompatibleProvider(ModelProvider):
         if request.temperature is not None:
             payload["temperature"] = request.temperature
         openrouter = self.config.flavor == ProviderFlavor.OPENROUTER
+        if (
+            not openrouter
+            and request.reasoning_effort is not None
+            and _openai_reasoning_model(model)
+        ):
+            # OpenAI's own reasoning families take the effort as a scalar.
+            # Other OpenAI-compatible endpoints advertise no such control, so
+            # they are left alone rather than sent a parameter they may reject.
+            payload["reasoning_effort"] = request.reasoning_effort
         if request.tools:
             if openrouter:
                 # Prevent OpenRouter from selecting an endpoint that drops a
@@ -1739,7 +1794,9 @@ class OpenAICompatibleProvider(ModelProvider):
             if allowed:
                 # Operator-selected upstream providers: never route elsewhere.
                 payload["provider"] = {**payload.get("provider", {}), "only": allowed}
-            payload["reasoning"] = {"exclude": False}
+            payload["reasoning"] = _openrouter_reasoning(
+                request, set(self.config.model_parameters.get(model, ()))
+            )
             # OpenRouter compresses the middle of an oversized prompt by default
             # on endpoints of 8K or less. Nebula sizes its own context and
             # recovers from a rejected request, so take the error over silent
