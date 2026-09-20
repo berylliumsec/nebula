@@ -9775,12 +9775,18 @@ def create_app(
         elif request.archived is False:
             metadata.pop("archived_at", None)
         changes["metadata"] = metadata
-        return store.update(
+        updated = store.update(
             ChatSession,
             session_id,
             changes,
             expected_revision=request.expected_revision or current.revision,
         )
+        # A hidden conversation must not keep spending tokens on a schedule.
+        if request.archived is True:
+            schedule_service.pause_for_archive(session_id)
+        elif request.archived is False:
+            schedule_service.resume_after_unarchive(session_id)
+        return updated
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/rewind",
