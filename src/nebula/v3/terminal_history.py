@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -49,6 +50,10 @@ MAX_PAGE_SIZE = 1_000
 MAX_COMMAND_BYTES = 1024 * 1024
 MAX_CWD_BYTES = 16 * 1024
 MAX_CAPTURED_OUTPUT_BYTES = 10 * 1024 * 1024
+# Durable spool syncs (raw fsync + metadata rewrite) are coalesced onto this
+# cadence; every chunk still reaches the page cache immediately.
+SPOOL_SYNC_INTERVAL_BYTES = 1024 * 1024
+SPOOL_SYNC_INTERVAL_SECONDS = 1.0
 OUTPUT_PREVIEW_CHARACTERS = 4_096
 LOGGER = logging.getLogger(__name__)
 
@@ -354,10 +359,13 @@ class _CaptureAccumulator:
     max_output_bytes: int
     output: bytearray = field(default_factory=bytearray)
     observed_output_bytes: int = 0
+    captured_output_bytes: int = 0
     digest: Any = field(default_factory=hashlib.sha256)
     spool_path: Path | None = None
     spool_metadata_path: Path | None = None
     spool_metadata: dict[str, Any] = field(default_factory=dict)
+    unsynced_output_bytes: int = 0
+    last_spool_sync: float = field(default_factory=time.monotonic)
     selected_tools: frozenset[str] | None = None
     matched_tools: set[str] = field(default_factory=set)
     recording_policy_revision: int | None = None
@@ -369,25 +377,48 @@ class _CaptureAccumulator:
             return
         self.digest.update(data)
         self.observed_output_bytes += len(data)
-        captured_size = (
-            self.spool_path.stat().st_size
-            if self.spool_path is not None and self.spool_path.exists()
-            else len(self.output)
+        remaining = self.max_output_bytes - self.captured_output_bytes
+        captured = data[:remaining] if remaining > 0 else b""
+        if self.spool_path is None:
+            self.output.extend(captured)
+            self.captured_output_bytes += len(captured)
+            return
+        # Every chunk reaches the page cache at once, so a Core crash keeps it.
+        # The durable work (raw fsync, then the metadata rewrite with its own
+        # fsync, rename and directory fsync) is coalesced onto a bounded
+        # byte/time cadence, the moment the capture cap is reached, and the
+        # command boundary in ``finish``: doing it three times per PTY chunk
+        # throttled heavy terminal output to storage latency.
+        self.unsynced_output_bytes += len(data)
+        sync_due = (
+            self.unsynced_output_bytes >= SPOOL_SYNC_INTERVAL_BYTES
+            or time.monotonic() - self.last_spool_sync >= SPOOL_SYNC_INTERVAL_SECONDS
+            or 0 < remaining <= len(data)
         )
-        remaining = self.max_output_bytes - captured_size
-        if remaining > 0:
-            captured = data[:remaining]
-            if self.spool_path is None:
-                self.output.extend(captured)
-            else:
-                with self.spool_path.open("ab") as stream:
-                    stream.write(captured)
+        if sync_due:
+            # Metadata first, so the durable description is never behind the
+            # raw bytes it covers; ``recover_spools`` tolerates a raw file that
+            # ran ahead between two syncs.
+            self.sync_spool_metadata()
+        if captured:
+            with self.spool_path.open("ab") as stream:
+                stream.write(captured)
+                if sync_due:
                     stream.flush()
                     os.fsync(stream.fileno())
-        if self.spool_metadata_path is not None:
-            self.spool_metadata["observed_output_bytes"] = self.observed_output_bytes
-            self.spool_metadata["output_sha256"] = self.digest.hexdigest()
-            _write_spool_metadata(self.spool_metadata_path, self.spool_metadata)
+            self.captured_output_bytes += len(captured)
+        if sync_due:
+            self.unsynced_output_bytes = 0
+            self.last_spool_sync = time.monotonic()
+
+    def sync_spool_metadata(self) -> None:
+        if self.spool_metadata_path is None:
+            return
+        self.spool_metadata["observed_output_bytes"] = self.observed_output_bytes
+        self.spool_metadata["output_sha256"] = self.digest.hexdigest()
+        self.spool_metadata["matched_tools"] = sorted(self.matched_tools)
+        self.spool_metadata["classification_failed"] = self.classification_failed
+        _write_spool_metadata(self.spool_metadata_path, self.spool_metadata)
 
     def observe_execution(self, command: str) -> None:
         if self.selected_tools is None:
@@ -409,10 +440,7 @@ class _CaptureAccumulator:
             for executable in executables
             if executable in self.selected_tools
         )
-        if self.spool_metadata_path is not None:
-            self.spool_metadata["matched_tools"] = sorted(self.matched_tools)
-            self.spool_metadata["classification_failed"] = self.classification_failed
-            _write_spool_metadata(self.spool_metadata_path, self.spool_metadata)
+        self.sync_spool_metadata()
 
     def finish(
         self,
@@ -422,6 +450,17 @@ class _CaptureAccumulator:
         completed_at: datetime,
         capture_error: str | None = None,
     ) -> CapturedTerminalCommand:
+        if self.spool_path is not None and self.unsynced_output_bytes:
+            # Command boundary: one durable sync, so a commit that fails in
+            # ``record_capture`` still leaves a recoverable spool pair.
+            self.sync_spool_metadata()
+            descriptor = os.open(self.spool_path, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            self.unsynced_output_bytes = 0
+            self.last_spool_sync = time.monotonic()
         output = (
             self.spool_path.read_bytes()
             if self.spool_path is not None and self.spool_path.exists()
@@ -706,14 +745,26 @@ class TerminalCommandHistory:
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
                 raw_path = self.spool_root / f"{metadata_path.stem}.raw"
                 output = raw_path.read_bytes() if raw_path.exists() else b""
-                observed = max(
-                    len(output), int(metadata.get("observed_output_bytes", len(output)))
+                recorded_observed = int(
+                    metadata.get("observed_output_bytes", len(output))
                 )
-                output_sha256 = str(
+                recorded_sha256 = str(
                     metadata.get("output_sha256", hashlib.sha256(output).hexdigest())
                 )
-                if re.fullmatch(r"[0-9a-f]{64}", output_sha256) is None:
+                if re.fullmatch(r"[0-9a-f]{64}", recorded_sha256) is None:
                     raise ValueError("recovered terminal output hash is invalid")
+                if len(output) > recorded_observed:
+                    # Metadata rewrites are coalesced, so a crash between a raw
+                    # append and the next rewrite leaves the raw file ahead of
+                    # its description. The raw bytes are then the whole stream
+                    # that can be proven; the stale digest must not be checked
+                    # against them (that made the capture unrecoverable and
+                    # leaked the spool pair on every startup).
+                    observed = len(output)
+                    output_sha256 = hashlib.sha256(output).hexdigest()
+                else:
+                    observed = recorded_observed
+                    output_sha256 = recorded_sha256
                 started_at = datetime.fromisoformat(str(metadata["started_at"]))
                 matched_tools = _normalized_tool_names(
                     metadata.get("matched_tools", [])
@@ -1233,13 +1284,11 @@ class TerminalCommandHistory:
         if not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError(f"limit must be between 1 and {MAX_PAGE_SIZE}")
         predicate: Any = TerminalCommandRow.engagement_id == engagement_id
+        search_pattern: str | None = None
         if search is not None:
             _validate_text_bytes("search", search, minimum=0, maximum=4096)
             if search:
-                escaped = _escape_like(search.casefold())
-                predicate = predicate & func.lower(TerminalCommandRow.command).like(
-                    f"%{escaped}%", escape="\\"
-                )
+                search_pattern = f"%{_escape_like(search.casefold())}%"
         if operator_id:
             predicate = predicate & (TerminalCommandRow.operator_id == operator_id)
         if session_id:
@@ -1258,6 +1307,15 @@ class TerminalCommandHistory:
                 TerminalCommandRow.occurred_at <= _aware_utc(date_to, field="date_to")
             )
         with self.database.session() as session:
+            if search_pattern is not None:
+                # SQLite's ``lower()`` folds ASCII only, so ``MÜNCHEN`` never
+                # matched; fold both sides with Python's casefold instead.
+                folded = (
+                    func.nebula_casefold(TerminalCommandRow.command)
+                    if _register_casefold(session)
+                    else func.lower(TerminalCommandRow.command)
+                )
+                predicate = predicate & folded.like(search_pattern, escape="\\")
             self._require_project(session, engagement_id)
             total = int(
                 session.scalar(
@@ -1914,6 +1972,26 @@ def _optional_utc(value: datetime | None) -> datetime | None:
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _sql_casefold(value: object) -> object:
+    return value.casefold() if isinstance(value, str) else value
+
+
+def _register_casefold(session: Session) -> bool:
+    """Expose Unicode case folding on the connection this session queries with.
+
+    Registering on the very connection that runs the query means pooling and
+    reconnects can never leave the function missing. Returns False on drivers
+    without ``create_function`` so callers can fall back to SQL ``lower()``.
+    """
+
+    raw = session.connection().connection.dbapi_connection
+    create_function = getattr(raw, "create_function", None)
+    if create_function is None:
+        return False
+    create_function("nebula_casefold", 1, _sql_casefold, deterministic=True)
+    return True
 
 
 def _matching_prefix_suffix(data: bytes, prefix: bytes) -> int:

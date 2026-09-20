@@ -1766,3 +1766,81 @@ async def test_large_workspace_terminal_readiness_does_not_scan(tmp_path, monkey
         ContainerTerminalPreflightRequest(engagement_id=engagement.id)
     )
     assert preview.allowed
+
+
+@async_test
+async def test_cancelled_attach_releases_a_launching_session(tmp_path):
+    store, engagement, runner, _platform, service = continuity_fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    started = await service.start(
+        ContainerTerminalStartRequest(
+            **request.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="cancelled-launch",
+        )
+    )
+    launching = asyncio.Event()
+    original_open = runner.open_terminal
+
+    async def slow_open(request, **kwargs):
+        launching.set()
+        await asyncio.sleep(3600)  # the WebSocket task is cancelled here
+        return await original_open(request, **kwargs)
+
+    runner.open_terminal = slow_open  # type: ignore[method-assign]
+    attach_task = asyncio.create_task(
+        service.attach(started.session_id, started.websocket_ticket)
+    )
+    await asyncio.wait_for(launching.wait(), timeout=1)
+    attach_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await attach_task
+
+    # The slot is released instead of sitting in ``launching`` forever.
+    assert started.session_id not in service._sessions
+    assert await service.engagement_active(engagement.id) is False
+    assert (await service.capacity()).active_sessions == 0
+    assert runner.processes == []
+    async with service.guard_workspace_operation(engagement.id):
+        pass
+    assert (await service.recover(engagement.id)).active is False
+    events = store.replay_operation_events(started.session_id)
+    assert events[-1].event_type == "container_terminal.terminal"
+    assert events[-1].payload["status"] == "failed"
+    assert events[-1].payload["error_code"] == "launch_cancelled"
+
+    # A fresh terminal for the same project starts immediately afterwards.
+    runner.open_terminal = original_open  # type: ignore[method-assign]
+    replacement, attachment = await start_controllable_terminal(
+        service, engagement, idempotency_key="after-cancel"
+    )
+    assert replacement.session_id != started.session_id
+    await service.close_attachment(attachment)
+
+
+@async_test
+async def test_idempotency_key_can_be_reused_after_the_session_finishes(tmp_path):
+    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    start_request = ContainerTerminalStartRequest(
+        **request.model_dump(),
+        preview_token=preview.preview_token,
+        preview_fingerprint=preview.preview_fingerprint,
+        client_idempotency_key="terminal-tab-1",
+    )
+    first = await service.start(start_request)
+    # While the session is alive the same key still returns the same session.
+    assert (await service.start(start_request)).session_id == first.session_id
+    await service.close(first.session_id)
+
+    # The tab's Retry re-posts the same key after the session died; that must
+    # start a fresh session instead of answering 409 forever.
+    retried = await service.start(start_request)
+    assert retried.session_id != first.session_id
+    assert (await service.capacity()).active_sessions == 1
+    assert len(service._idempotency) == 1
+    await service.close(retried.session_id)
+    assert service._idempotency == {}

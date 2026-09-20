@@ -365,6 +365,7 @@ class _TerminalReservation:
     replay_bytes: int = 0
     next_sequence: int = 1
     attachment: "ContainerTerminalAttachment | None" = None
+    idempotency_key: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -844,6 +845,7 @@ class ContainerTerminalService:
                 audit_nonce=audit_nonce,
                 last_activity=monotonic(),
                 parser=parser,
+                idempotency_key=key,
             )
             self._sessions[session_id] = reservation
             self._idempotency[key] = (request_fingerprint, session_id)
@@ -1119,6 +1121,22 @@ class ContainerTerminalService:
             )
             try:
                 await self._launch_session(session_id, expected_state="launching")
+            except asyncio.CancelledError as caught_error:
+                # The WebSocket task went away (tab closed, server shutdown)
+                # while the container was starting. ``CancelledError`` is not
+                # an ``Exception``, so the session used to stay in
+                # ``launching`` with both watchdog tasks already cancelled:
+                # nothing reaped it, every reconnect answered
+                # ``terminal_attached`` and workspace reset stayed blocked.
+                record_caught_exception(
+                    "terminal",
+                    "terminal.container_terminal.caught_failure_027",
+                    "A handled terminal operation raised an exception.",
+                    caught_error,
+                    stage="container_terminal",
+                )
+                await asyncio.shield(self._abandon_launch(session_id))
+                raise
             except Exception as caught_error:
                 record_caught_exception(
                     "terminal",
@@ -1130,6 +1148,20 @@ class ContainerTerminalService:
                 await self.detach(attachment)
                 raise
         return attachment
+
+    async def _abandon_launch(self, session_id: str) -> None:
+        """Release a session whose attach was cancelled mid-launch."""
+
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None or session.state != "launching":
+                return
+        await self.finish(
+            session_id,
+            outcome="failed",
+            detail="terminal launch was cancelled before the container connected",
+            error_code="launch_cancelled",
+        )
 
     async def next_event(
         self, attachment: ContainerTerminalAttachment
@@ -1265,6 +1297,14 @@ class ContainerTerminalService:
                 finishing_waiter = finishing.finished
             else:
                 self._finishing_sessions[session_id] = session
+                if session.idempotency_key is not None:
+                    recorded = self._idempotency.get(session.idempotency_key)
+                    if recorded is not None and recorded[1] == session_id:
+                        # The terminal tab re-posts the same key on Retry;
+                        # keeping the entry after the session died made that
+                        # a permanent 409 and grew the map for the process
+                        # lifetime.
+                        del self._idempotency[session.idempotency_key]
                 for attribute in (
                     "expiry_task",
                     "grace_task",
@@ -1457,7 +1497,22 @@ class ContainerTerminalService:
                 status_code=503,
             ) from exc
         interrupted = False
-        async with self._lock:
+        try:
+            await self._lock.acquire()
+        except asyncio.CancelledError as caught_error:
+            # Cancelled while waiting for the service lock after the container
+            # started: nothing references the process yet, so close it here or
+            # it would run until the next Core restart.
+            record_caught_exception(
+                "terminal",
+                "terminal.container_terminal.caught_failure_028",
+                "A handled terminal operation raised an exception.",
+                caught_error,
+                stage="container_terminal",
+            )
+            await asyncio.shield(process.close())
+            raise
+        try:
             current = self._sessions.get(session_id)
             if current is None or current.state != expected_state:
                 interrupted = True
@@ -1494,6 +1549,8 @@ class ContainerTerminalService:
                     name=f"container-terminal-watchdog-{current.id}",
                 )
                 session = current
+        finally:
+            self._lock.release()
         if interrupted:
             await process.close()
             raise ContainerTerminalError(

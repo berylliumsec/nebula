@@ -454,7 +454,7 @@ def test_exactly_one_verified_fixed_runtime_is_persisted_as_local(
 
     status = asyncio.run(service.refresh())
 
-    assert status.terminal.status == "preparing_image"
+    assert status.terminal.status == "needs_image"
     assert status.terminal.image_preparation.phase == "not_started"
     assert status.terminal.runner_profile_id == "local"
     assert [candidate.executable for candidate in status.terminal.candidates] == [
@@ -553,8 +553,8 @@ def test_fixed_candidate_selection_is_idempotent_and_never_accepts_a_path(
 
     assert selected.accepted is True
     assert selected.idempotent is False
-    assert selected.setup.terminal.status == "preparing_image"
-    assert repeated.setup.terminal.status == "preparing_image"
+    assert selected.setup.terminal.status == "needs_image"
+    assert repeated.setup.terminal.status == "needs_image"
     assert selected.setup.terminal.runner_profile_id == "local"
     assert repeated.idempotent is True
     profile = store.get(RunnerProfile, "local")
@@ -684,7 +684,7 @@ def test_image_preparation_reports_phases_can_cancel_and_retry(tmp_path, monkeyp
     assert duplicate.operation_id == retry.operation_id
     assert cancelled.accepted is True
     assert cancelled.setup.terminal.image_preparation.phase == "cancelled"
-    assert cancelled.setup.terminal.status == "preparing_image"
+    assert cancelled.setup.terminal.status == "needs_image"
     assert repeated_cancel.idempotent is True
     assert ready.terminal.image_preparation.image_digest == "sha256:" + "a" * 64
     assert ready.terminal.image_preparation.progress_percent == 100
@@ -828,3 +828,75 @@ def test_setup_control_api_and_sse_are_authenticated_and_path_closed(
             if line.startswith("id: ")
         ]
         assert resumed_ids == [ids[-1]]
+
+
+def test_idle_image_preparation_reports_needs_image_not_preparing(
+    tmp_path, monkeypatch
+):
+    runtime = tmp_path / "trusted" / "podman"
+    runtime.parent.mkdir()
+    runtime.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runtime.chmod(0o755)
+    monkeypatch.setattr(ContainerSandboxRunner, "_trusted_runtime_paths", (runtime,))
+
+    async def healthy(_runner):
+        return True, "verified local runtime"
+
+    monkeypatch.setattr(ContainerSandboxRunner, "available", healthy)
+    store = NebulaStore(tmp_path / "idle-image.db")
+    project = store.create(Engagement(name="Idle image"))
+    platform = _platform(tmp_path, store)
+    service = SetupService(store, platform)
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def resolve(project_id, *, on_progress=None):
+        del project_id, on_progress
+        started.set()
+        await release.wait()
+        return SimpleNamespace(
+            image=SimpleNamespace(
+                digest="sha256:" + "a" * 64,
+                detail="verified cached workstation image",
+            )
+        )
+
+    monkeypatch.setattr(platform, "resolve_human_terminal_runtime", resolve)
+
+    async def scenario():
+        detected = await service.refresh()
+        control = await service.prepare_image(
+            ImagePreparationRequest(project_id=project.id)
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        preparing = await service.status()
+        cancelled = await service.cancel_image_preparation(
+            ImagePreparationCancellationRequest(operation_id=control.operation_id)
+        )
+        release.set()
+        await service.retry_image_preparation(
+            ImagePreparationRequest(project_id=project.id)
+        )
+        for _ in range(100):
+            ready = await service.status()
+            if ready.terminal.image_preparation.phase == "ready":
+                break
+            await asyncio.sleep(0)
+        return detected, preparing, cancelled, ready
+
+    detected, preparing, cancelled, ready = asyncio.run(scenario())
+
+    # A selected runner with nothing running is idle, not "preparing_image":
+    # Settings would otherwise show "Preparing Kali runtime…" and poll forever.
+    assert detected.terminal.runner_profile_id == "local"
+    assert detected.terminal.image_preparation.phase == "not_started"
+    assert detected.terminal.status == "needs_image"
+    assert detected.application_stage == "ready"
+    assert preparing.terminal.image_preparation.phase == "preparing_image"
+    assert preparing.terminal.status == "preparing_image"
+    # Cancel leaves nothing running either.
+    assert cancelled.setup.terminal.image_preparation.phase == "cancelled"
+    assert cancelled.setup.terminal.status == "needs_image"
+    assert cancelled.setup.terminal.image_preparation.can_retry is True
+    assert ready.terminal.image_preparation.phase == "ready"
+    assert ready.terminal.status == "ready"
