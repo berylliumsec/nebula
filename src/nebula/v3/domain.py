@@ -3821,6 +3821,10 @@ class ChatMessage(Entity):
     provider_profile_id: str | None = None
     model: str | None = None
     usage: ChatTokenUsage | None = None
+    # Wall clock from the turn's first request to this message, and the part of
+    # it the turn spent waiting for an operator approval.
+    elapsed_ms: int | None = Field(default=None, ge=0)
+    approval_wait_ms: int | None = Field(default=None, ge=0)
     finish_reason: str | None = None
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)

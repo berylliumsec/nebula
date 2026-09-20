@@ -10,6 +10,9 @@ export interface ReconciledConversationMessage extends ChatMessage {
   createdAt: string;
   citations: ChatCitation[];
   usage?: ChatUsage;
+  /** How long the turn ran, and how much of that waited on an approval. */
+  elapsedMs?: number;
+  approvalWaitMs?: number;
   state: ConversationMessageState;
   durable: boolean;
   recoveredHarnessTurn?: boolean;
@@ -27,6 +30,8 @@ interface CompletedAssistantMessage {
   reasoning?: string;
   citations: ChatCitation[];
   usage?: ChatUsage;
+  elapsedMs?: number;
+  approvalWaitMs?: number;
   harnessTurnId?: string;
   toolSuggestions?: ToolSuggestionSummary;
   createdAt: string;
@@ -60,6 +65,8 @@ export function reconcileCompletedAssistantMessage(
     reasoning: completed.reasoning || existing?.reasoning,
     citations: completed.citations,
     usage: completed.usage,
+    elapsedMs: completed.elapsedMs ?? existing?.elapsedMs,
+    approvalWaitMs: completed.approvalWaitMs ?? existing?.approvalWaitMs,
     state: "complete",
     durable: Boolean(completed.durableAssistantId),
     harnessTurnId: completed.harnessTurnId ?? existing?.harnessTurnId,

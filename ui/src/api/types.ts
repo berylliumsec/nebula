@@ -1779,6 +1779,9 @@ export interface ChatCompletionResponse {
   message: ChatMessage;
   usage: ChatUsage;
   contextUsage?: ChatUsage;
+  /** How long the turn took, and how much of that waited on an approval. */
+  elapsedMs?: number;
+  approvalWaitMs?: number;
   finishReason?: string;
   providerRequestId?: string;
   citations: ChatCitation[];
@@ -1947,6 +1950,8 @@ export type ChatStreamEvent =
 export interface ChatTurn {
   id: Identifier;
   sessionId: Identifier;
+  /** When Core accepted the turn; the transcript counts up from here. */
+  startedAt?: string;
   revision: number;
   status:
     | "routing"
@@ -2336,6 +2341,9 @@ export interface PersistedChatMessage extends ChatMessage {
   providerId?: Identifier;
   model?: string;
   usage?: ChatUsage;
+  /** How long the turn took, and how much of that waited on an approval. */
+  elapsedMs?: number;
+  approvalWaitMs?: number;
   finishReason?: string;
   providerRequestId?: string;
   citations: ChatCitation[];

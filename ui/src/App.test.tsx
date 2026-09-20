@@ -609,6 +609,7 @@ describe("Nebula workspace", () => {
         return new Response(JSON.stringify({
           id: "turn-hook",
           session_id: "session-hook",
+          started_at: "2026-09-18T12:00:30Z",
           revision: turnRevision,
           status: "interrupted",
           tool_call_ids: [],
@@ -659,6 +660,7 @@ describe("Nebula workspace", () => {
         return new Response(JSON.stringify({
           id: "turn-hook",
           session_id: "session-hook",
+          started_at: "2026-09-18T12:00:30Z",
           revision: turnRevision,
           status: "interrupted",
           tool_call_ids: [],

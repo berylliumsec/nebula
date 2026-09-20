@@ -22,6 +22,7 @@ import threading
 from collections.abc import AsyncIterator, Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -409,6 +410,10 @@ class ChatCompletionResponse(NebulaModel):
     message: ChatResponseMessage
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     context_usage: ChatTokenUsage | None = None
+    # Set once the turn is persisted, so a streaming client shows the same
+    # elapsed time the transcript keeps after a reload.
+    elapsed_ms: int | None = None
+    approval_wait_ms: int | None = None
     finish_reason: str | None = None
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
@@ -521,6 +526,8 @@ class PreparedChat:
     context_snapshot: ContextSnapshot | None = None
     tools_enabled: bool = False
     tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
+    # A turn carries its own start; a turnless completion still reports elapsed.
+    started_at: datetime = field(default_factory=utc_now)
     turn: ChatTurn | None = None
     inputs_persisted: bool = False
     queue_claim: tuple[str, int, str] | None = None
@@ -6022,6 +6029,40 @@ class ChatService:
         if latest.goal_id and not prepared.tools_enabled:
             self._charge_goal(latest.goal_id, completion.usage)
 
+    def _turn_timing(
+        self, turn: ChatTurn | None, started_at: datetime | None = None
+    ) -> tuple[int | None, int | None]:
+        """Elapsed since the turn started, and the approval wait inside it."""
+
+        start = turn.created_at if turn is not None else started_at
+        if start is None:
+            return None, None
+        elapsed = max(0, round((utc_now() - start).total_seconds() * 1000))
+        if turn is None:
+            return elapsed, None
+        waited = 0
+        for call_id in turn.tool_call_ids:
+            try:
+                call = self.store.get(ToolCall, call_id)
+                approval = (
+                    self.store.get(Approval, call.approval_id)
+                    if call.approval_id
+                    else None
+                )
+            except NotFoundError:
+                # diagnostic-expected: a pruned call or approval only costs its share
+                continue
+            if approval is None or approval.decided_at is None:
+                continue
+            waited += max(
+                0,
+                round(
+                    (approval.decided_at - approval.requested_at).total_seconds() * 1000
+                ),
+            )
+        # Parallel approvals can overlap, so the wait never exceeds the turn.
+        return elapsed, min(waited, elapsed) if waited else None
+
     def _persist(
         self, prepared: PreparedChat, completion: ChatCompletionResponse
     ) -> None:
@@ -6052,6 +6093,11 @@ class ChatService:
         ]
         assistant_message_id = str(uuid4())
         completion.message.id = assistant_message_id
+        elapsed_ms, approval_wait_ms = self._turn_timing(
+            prepared.turn, prepared.started_at
+        )
+        completion.elapsed_ms = elapsed_ms
+        completion.approval_wait_ms = approval_wait_ms
         messages.append(
             ChatMessage(
                 id=assistant_message_id,
@@ -6064,6 +6110,8 @@ class ChatService:
                 provider_profile_id=completion.provider_id,
                 model=completion.model,
                 usage=completion.usage,
+                elapsed_ms=elapsed_ms,
+                approval_wait_ms=approval_wait_ms,
                 finish_reason=completion.finish_reason,
                 provider_request_id=completion.provider_request_id,
                 citations=completion.citations,

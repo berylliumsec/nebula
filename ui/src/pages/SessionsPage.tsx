@@ -160,6 +160,7 @@ import {
   type HarnessActivityItem,
 } from "./harnessActivity";
 import { detachChatStream } from "./chatStreamLifecycle";
+import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
@@ -457,6 +458,19 @@ function ReplacedMessages({ group }: { group: ReplacedMessageGroup }) {
   </details>;
 }
 
+/** Counts up in the slot the usage line takes once the turn lands. */
+function LiveTurnElapsed({ startedAt }: { startedAt: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsed = elapsedSince(startedAt, now);
+  if (elapsed === undefined) return null;
+  const label = formatLiveElapsed(elapsed);
+  return <span className="chat-turn-elapsed" role="timer" aria-label={`Running for ${label}`}>{label}</span>;
+}
+
 function persistedMessage(message: PersistedChatMessage): ConversationMessage {
   return {
     id: message.id,
@@ -467,6 +481,8 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     createdAt: message.createdAt,
     citations: message.citations,
     usage: message.usage,
+    elapsedMs: message.elapsedMs,
+    approvalWaitMs: message.approvalWaitMs,
     state: "complete",
     durable: true,
     sequence: message.sequence,
@@ -2225,7 +2241,7 @@ export function SessionsPage() {
           id: assistantId,
           role: "assistant",
           content: "",
-          createdAt: new Date().toISOString(),
+          createdAt: pendingTurn.startedAt ?? new Date().toISOString(),
           citations: [],
           state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : pendingTurn.status === "interrupted" ? "error" : "streaming",
           detail: pendingTurn.status === "interrupted" ? pendingTurn.error : undefined,
@@ -2820,6 +2836,8 @@ export function SessionsPage() {
         reasoning: streamEvent.message.reasoning,
         citations: streamEvent.citations,
         usage: streamEvent.usage,
+        elapsedMs: streamEvent.elapsedMs,
+        approvalWaitMs: streamEvent.approvalWaitMs,
         harnessTurnId: streamEvent.harnessTurnId,
         toolSuggestions: streamEvent.toolSuggestions,
         createdAt: new Date().toISOString(),
@@ -3299,7 +3317,7 @@ export function SessionsPage() {
         if (decision === "stop") {
           followUpAutoDrainRef.current = false;
           setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
-            ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
+            ? { ...message, state: "cancelled", elapsedMs: elapsedSince(message.createdAt), detail: "Response stopped by the operator." }
             : message));
         } else {
           setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
@@ -3312,7 +3330,7 @@ export function SessionsPage() {
       if (decision === "stop") {
         followUpAutoDrainRef.current = false;
         setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
-        ? { ...message, state: "cancelled", detail: "Response stopped by the operator." }
+        ? { ...message, state: "cancelled", elapsedMs: elapsedSince(message.createdAt), detail: "Response stopped by the operator." }
           : message));
         setPendingResponse(undefined);
         return;
@@ -4114,12 +4132,22 @@ export function SessionsPage() {
                       </div>)}
                       {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
                       {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && pendingResponseActive && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div>{pendingSshApproval && <button className="button quiet" type="button" disabled={approvalDecisionBusy} title={`Stop asking before commands on ${pendingSshApproval.label}, then run this one`} onClick={() => void alwaysAllowSshHost(pendingSshApproval.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
-                      {message.state === "cancelled" && <small className="muted" role="status">Stopped</small>}
+                      {message.state === "cancelled" && <small className="muted" role="status">Stopped{message.elapsedMs !== undefined ? ` · ${formatTurnElapsed(message.elapsedMs)}` : ""}</small>}
                       {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
                       {api && sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={api} sessionId={sessionId} messageId={message.id} onResults={() => updateSearchParams(next => {next.set("drawer", "results");})} />}
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
-                      {message.usage && message.usage.totalTokens > 0 && <details className="chat-message-usage"><summary>{message.usage.totalTokens.toLocaleString()} tokens</summary><span>{message.usage.inputTokens.toLocaleString()} input · {message.usage.outputTokens.toLocaleString()} output</span></details>}
+                      {message.role === "assistant" && ["streaming", "waiting_approval"].includes(message.state) && <LiveTurnElapsed startedAt={message.createdAt} />}
+                      {(() => {
+                        const tokens = message.usage && message.usage.totalTokens > 0 ? message.usage : undefined;
+                        if (!tokens && message.elapsedMs === undefined) return null;
+                        const detail = elapsedDetail(message.elapsedMs, message.approvalWaitMs);
+                        const summary = [
+                          tokens ? `${tokens.totalTokens.toLocaleString()} tokens` : undefined,
+                          message.elapsedMs !== undefined ? formatTurnElapsed(message.elapsedMs) : undefined,
+                        ].filter(Boolean).join(" · ");
+                        return <details className="chat-message-usage"><summary>{summary}</summary>{tokens && <span>{tokens.inputTokens.toLocaleString()} input · {tokens.outputTokens.toLocaleString()} output</span>}{detail && <span>{detail}</span>}</details>;
+                      })()}
                       {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={NotebookPen} label="Save as decision" onClick={event => {const selection = window.getSelection(); const container = event.currentTarget.closest(".chat-message"); const exact = selection && container?.contains(selection.anchorNode) && container.contains(selection.focusNode) ? selection.toString() : ""; const text = exact || message.content; setDecisionSeed({messageId: message.id, text, selection: text}); setSessionInspectorOpen(true); updateSearchParams(next => {next.set("drawer", "context");});}} /><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
                     </div>
                     {messageReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}

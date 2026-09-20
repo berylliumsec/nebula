@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 import json
 
 import httpx
@@ -390,6 +390,11 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
         f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
     )
     assert pending.status_code == 200, pending.text
+    # The transcript resumes its counter from the turn's own start.
+    assert (
+        datetime.fromisoformat(pending.json()["started_at"].replace("Z", "+00:00"))
+        == turn.created_at
+    )
     assert pending.json()["recovery_blocked"] is True
     assert pending.json()["unresolved_hook_execution_ids"] == ["hook-run"]
     outcomes = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())

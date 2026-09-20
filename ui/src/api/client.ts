@@ -1231,6 +1231,8 @@ interface WireChatCompletion extends JsonObject {
     output_tokens?: number;
     total_tokens?: number;
   } | null;
+  elapsed_ms?: number | null;
+  approval_wait_ms?: number | null;
   finish_reason?: string | null;
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
@@ -1349,6 +1351,8 @@ interface WireChatStreamEvent extends JsonObject {
     total_tokens?: number;
   };
   context_usage?: WireChatCompletion["context_usage"];
+  elapsed_ms?: number | null;
+  approval_wait_ms?: number | null;
   finish_reason?: string;
   provider_request_id?: string;
   detailed_usage?: JsonObject;
@@ -1577,6 +1581,7 @@ interface WireHarnessSessionActivity extends JsonObject {
 
 interface WireChatTurn extends WireEntity {
   session_id: string;
+  started_at?: string;
   status: ChatTurn["status"];
   approval_id?: string | null;
   harness_turn_id?: string | null;
@@ -1614,6 +1619,8 @@ interface WirePersistedChatMessage extends WireEntity {
     output_tokens?: number;
     total_tokens?: number;
   } | null;
+  elapsed_ms?: number | null;
+  approval_wait_ms?: number | null;
   finish_reason?: string | null;
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
@@ -2779,6 +2786,8 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
               : contextInputTokens + contextOutputTokens,
         }
       : undefined,
+    elapsedMs: value.elapsed_ms ?? undefined,
+    approvalWaitMs: value.approval_wait_ms ?? undefined,
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
@@ -3721,6 +3730,7 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
   return {
     id: value.id,
     sessionId: value.session_id,
+    startedAt: value.started_at ?? undefined,
     revision: value.revision,
     status: value.status,
     approvalId: value.approval_id ?? undefined,
@@ -3909,6 +3919,8 @@ function mapPersistedChatMessage(
               : inputTokens + outputTokens,
         }
       : undefined,
+    elapsedMs: value.elapsed_ms ?? undefined,
+    approvalWaitMs: value.approval_wait_ms ?? undefined,
     finishReason: value.finish_reason ?? undefined,
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
