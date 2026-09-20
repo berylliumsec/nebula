@@ -948,3 +948,62 @@ def test_capacity_failures_keep_their_type_and_persist_a_failed_snapshot(tmp_pat
     assert latest
     assert latest.status == ContextSnapshotStatus.FAILED
     assert "too little room" in (latest.error or "")
+
+
+def test_large_objective_reserves_compactor_capacity_for_segments(tmp_path):
+    store = NebulaStore(tmp_path / "large-objective.db")
+    # No configured window: the compactor uses the 8_192 fallback.
+    profile = _profile()
+    session = _owner(store, profile)
+    provider = SourcedMemoryProvider(profile.id)
+    objective = "Investigate " + ("exposure across the bounded scope " * 220)
+    assert 7_000 <= len(objective.encode("utf-8")) <= 8_000
+    # One 12 KB message must be split; each part fills a whole segment budget.
+    history = {
+        1: "Findings: " + ("security context " * 720),
+        2: "Follow-up: the exposure was confirmed by the analyst.",
+    }
+    assert 12_000 <= len(history[1].encode("utf-8")) <= 12_500
+    for index, content in history.items():
+        _message(
+            store,
+            session,
+            message_id=f"message-{index}",
+            sequence=index,
+            content=content,
+        )
+    sources = [
+        ContextSource(
+            ContextSourceReference(
+                source_kind="chat_message",
+                source_id=f"message-{index}",
+                sequence=index,
+            ),
+            content,
+        )
+        for index, content in history.items()
+    ]
+
+    result = asyncio.run(
+        ContextCompactor(store).compact(
+            owner_type=ContextOwnerType.CHAT_SESSION,
+            owner_id=session.id,
+            engagement_id=session.engagement_id,
+            provider_profile=profile,
+            provider=provider,
+            model="model-a",
+            sources=sources,
+            compacted_through=2,
+            objective=objective,
+        )
+    )
+
+    assert result.snapshot.status == ContextSnapshotStatus.READY
+    assert len(result.snapshot.source_references) == 2
+    assert len(provider.requests) > 1
+    limits = resolve_context_limits(profile, model="model-a")
+    for request in provider.requests:
+        assert (
+            estimate_messages(request.messages, request.instructions or "")
+            <= limits.input_capacity
+        )

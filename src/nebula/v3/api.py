@@ -6364,6 +6364,19 @@ def create_app(
                 or approval.exact_request.get("arguments") == request.edited_arguments
             ):
                 # A lost response must not redeliver or replay the original work.
+                # A mission whose resume failed after this decision was persisted
+                # (provider or profile error) is still waiting, so the recorded
+                # decision drives the resume again instead of stranding the run.
+                if (
+                    approval.origin == ToolCallOrigin.MISSION
+                    and approval.exact_request.get("tool_name") != "run_command"
+                    and request.decision != "stop"
+                    and approval_harness_turn(store, approval) is None
+                    and missions.approval_resume_pending(approval)
+                ):
+                    await missions.resume_after_approval(
+                        approval, actor_id=active_operator_id()
+                    )
                 return approval
             raise HTTPException(
                 status_code=409,

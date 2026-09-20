@@ -232,6 +232,27 @@ class ActionBroker:
         intent = self.store.get(ActionIntent, intent_id)
         now = utc_now()
         if intent.status not in TERMINAL_STATUSES and now >= intent.expires_at:
+            if (
+                intent.status == ActionIntentStatus.COMMITTED
+                and intent.core_mutation_committed
+            ):
+                # The Core side is already mutated and the device never reported.
+                # Plain expiry would hide the same obligation that a failed
+                # result enforces, so the intent ends in RECONCILE_REQUIRED.
+                return self._transition(
+                    intent,
+                    {
+                        "status": ActionIntentStatus.RECONCILE_REQUIRED,
+                        "error": (
+                            "device never reported the result of a committed action; "
+                            "the Core mutation was committed and must be reconciled"
+                        ),
+                        "lease_expires_at": None,
+                    },
+                    "action_intent.reconcile_required",
+                    actor_id="core",
+                    expected_revision=intent.revision,
+                )
             return self._transition(
                 intent,
                 {"status": ActionIntentStatus.EXPIRED, "lease_expires_at": None},
