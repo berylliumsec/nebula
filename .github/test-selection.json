@@ -1,30 +1,20 @@
 {
-  "change_digest": "7884f6facb15d091a1a55e7f4c2baa5675f9cd1e0dc74d5f615691cb17d0c55e",
-  "reviewed_by": "Claude review of ui-workbench-fixes",
-  "reason": "Five verified Workbench interface defects from the round-4 UI audit (findings 1, 2, 3, 4 and 6), each with a vitest that fails on main. Finding 1: terminalViewportCapture.selectedAt compared xterm's getSelectionPosition() range as if it were 1-based, but @xterm/xterm 6.0.0 reports 0-based buffer columns and absolute rows with an exclusive end (verified in jsdom against the installed package: select(2,0,3) gives start {x:2,y:0}, end {x:5,y:0}); the screenshot highlight therefore sat one row up and one column left of the operator's selection and a first-row selection was never highlighted. The two +1 offsets are removed and the fixture uses real coordinates. Finding 2: ExecutionHistory's output effect depended on the selected object, which the 2 s background poll replaced with equal data whenever any execution was active, so the stdout and stderr panes reset to offset 0 and discarded 'Load next 256 KiB' pages on every poll; the effect now keys on the selected id, status and completedAt. Finding 3: WorkbenchBrowser re-ran its eight Tauri listen() registrations on every SessionsPage render because the parent passed an inline onAttachContext and the effect depended on it, on the session and identity objects and on scope; the cleanup unlistened synchronously while the replacements registered asynchronously, so a capture reply, download or traffic event in that gap was lost. The listeners now register once per desktop project and read callbacks, session, identity, api, confirm and scope through refs, and SessionsPage memoizes onAttachContext with useCallback. Finding 4: EditorDebuggerPanel sent setBreakpoints exactly once on the initialized event, so a gutter toggle after launch changed only the marker; while a session is live the current breakpoint set is re-sent whenever it changes, and unrelated renders stay quiet. Finding 6: the autonomous web-test Duration, Tool-call and Request budget inputs stored Number(value) and snapped to 0 when cleared; they now hold the raw text and are parsed with the #415 empty/NaN guard and range validation before createMission. The six vitest files (65 tests) prove each behaviour with controlled promises and fake timers alongside their existing neighbours; npm run build typechecks and bundles.",
-  "exclusions": "No Python tests: no src/ or tests/ change. No native tests: no Tauri or Rust change. Playwright: the impact rules match browser-complete through WorkbenchBrowser.tsx, assistant, chat-edit-in-place and provider-thinking through SessionsPage.tsx, and the remaining-ui-components fallback areas desktop-interface and mobile-layout through EditorDebuggerPanel, ExecutionHistory and terminalCapture; all six matched areas are selected as the regression net for the native listener refactor and the SessionsPage callback change. None of those journeys toggles a breakpoint mid-session, pages execution output across a poll, selects terminal text before a screenshot or clears a budget field, so the vitest files are the proof for each defect. No real-browser desktop pass was run in this session. No full suites.",
+  "change_digest": "b83f6cd8664cacc21dc090ce2da6389b5bf219ca2b67c8a5998f466f4dcf17f0",
+  "reviewed_by": "Claude review of relations-evidence",
+  "reason": "Four related defects in the legacy relation arrays (Finding.asset_ids/evidence_ids, Observation.evidence_ids, Report.finding_ids/observation_ids, Evidence.finding_id), which every GET/LIST projects from ResourceRelationRow edges. (1) upload_evidence wrote Evidence.finding_id and Finding.evidence_ids only into the raw payloads and never created the EVIDENCE SUPPORTS FINDING edge, so evidence linked at upload showed evidence_ids: [] and finding_id: null on every API read; the upload now writes the edge in the same store transaction (ResourceRelationService.sync_legacy_edges on the new Evidence). (2) Any PATCH/PUT of a finding, note or report built its candidate from the raw payload and _sync_legacy_edges deleted every controlled edge before re-adding what the arrays said, so edges created through the relations API vanished on an unrelated title edit and edges deleted through it came back; make_patch now starts from relation_service.project_legacy(current) so untouched arrays reflect the current edges, sync_legacy_edges reconciles as a delta (existing rows keep their ids, only named/unnamed edges are added/removed), and the controlled-edge filter is narrowed to the edges the arrays actually project so a note's REFERENCES edge to a knowledge source survives note edits. (13) Duplicate ids in a legacy array hit the unique edge constraint and surfaced as a misleading 409 'entity already exists' on POST and an unhandled IntegrityError 500 on PATCH; _desired_legacy_edges now rejects repeats with a ValueError (422 naming the field and ids) before any write, and replace_legacy_entity maps a racing IntegrityError to a 409. (19) project_legacy read at most 500 edges through list_relations, so a report with more inclusions rendered truncated finding_ids and a GET->PUT round trip deleted the surplus; projection and sync now page through every controlled edge. tests/v3/test_relations.py adds four tests (delta sync across PATCH/PUT and relations-API delete, note-to-source retention, duplicate rejection on POST/PATCH/PUT with no write, 505-edge projection and round trip), tests/v3/test_evidence.py adds the upload read-path test with a same-transaction rollback check, and tests/v3/test_api_crud_validation.py adds the projected-PATCH test (confirming a finding whose only evidence link is a relations-API edge). All six fail on origin/main and pass here; the other 50 tests in those files still pass.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/api.py) does not exercise the relation projection of findings, notes or reports nor evidence upload linking; the one api.py change is a one-line projection of the PATCH base entity inside the generic CRUD route and the Python tests drive it directly through TestClient. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 65,
+    "python": 56,
+    "frontend": 0,
     "native": 0,
-    "playwright": 28
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/terminalCapture/terminalViewportCapture.test.ts",
-    "ui/src/components/ExecutionHistory.test.tsx",
-    "ui/src/components/EditorDebuggerPanel.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx",
-    "ui/src/components/TerminalScreenshotAction.test.tsx",
-    "ui/src/components/CodeEditorPanel.test.tsx"
+  "python": [
+    "tests/v3/test_relations.py",
+    "tests/v3/test_evidence.py",
+    "tests/v3/test_api_crud_validation.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:browser-complete",
-    "area:assistant",
-    "area:chat-edit-in-place",
-    "area:provider-thinking",
-    "area:desktop-interface",
-    "area:mobile-layout"
-  ]
+  "playwright": []
 }

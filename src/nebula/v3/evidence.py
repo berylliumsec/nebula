@@ -19,6 +19,7 @@ from pydantic import Field, field_validator
 
 from .artifacts import ArtifactStore
 from .domain import Artifact, Asset, Engagement, Evidence, Finding, NebulaModel
+from .relations import ResourceRelationService
 from .storage import NebulaStore
 
 MAX_EVIDENCE_BYTES = 25 * 1024 * 1024
@@ -623,6 +624,11 @@ def upload_evidence(
                         )
                     },
                     expected_revision=finding.revision,
+                )
+                # The finding link is read back from the authoritative edge, so
+                # the upload must write it in the same unit of work.
+                ResourceRelationService(store).sync_legacy_edges(
+                    transaction.session, evidence
                 )
     except Exception as caught_error:
         record_caught_exception(

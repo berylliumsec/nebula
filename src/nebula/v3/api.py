@@ -12521,7 +12521,9 @@ def _register_crud_routes(
             )
             if protected:
                 raise ValueError(f"cannot patch protected fields: {sorted(protected)}")
-            current = store.get(model, entity_id)
+            # Legacy relation arrays are edge projections: start the patch from
+            # them so untouched arrays keep edges written via the relations API.
+            current = relation_service.project_legacy(store.get(model, entity_id))
             if (
                 patch.expected_revision is not None
                 and current.revision != patch.expected_revision
