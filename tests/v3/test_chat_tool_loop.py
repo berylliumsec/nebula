@@ -92,11 +92,17 @@ class RecordingBroker:
         return ToolExecutionResult(output={"value": invocation.arguments["value"]})
 
 
-def _response(*, calls: list[ToolCall] | None = None, text: str = "") -> ModelResponse:
+def _response(
+    *,
+    calls: list[ToolCall] | None = None,
+    text: str = "",
+    reasoning: str = "",
+) -> ModelResponse:
     return ModelResponse(
         provider_id="provider",
         model="model-a",
         text=text,
+        reasoning=reasoning,
         tool_calls=calls or [],
         usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
         finish_reason="tool_calls" if calls else "stop",
@@ -535,3 +541,73 @@ def test_approval_inside_a_batch_pauses_and_drops_the_queued_calls(tmp_path):
         "call-1",
         "call-2",
     ]
+
+
+def test_routing_thoughts_reach_the_transcript(tmp_path):
+    """A reasoning model thinks before each tool call, not only as it answers."""
+
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            reasoning="The read is bounded, so run it first.",
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})],
+        ),
+        _response(
+            reasoning="The value came back; nothing else is needed.",
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})],
+        ),
+        _response(text="Tool result", reasoning="Report the value plainly."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    episode = (
+        "The read is bounded, so run it first."
+        "\n\nThe value came back; nothing else is needed."
+        "\n\nReport the value plainly."
+    )
+    # What the transcript shows live is what a reload reads back.
+    streamed = "".join(
+        payload["delta"] for name, payload in events if name == "reasoning_delta"
+    )
+    assert streamed == episode
+    stored = [
+        item
+        for item in service.session_messages("session")
+        if item.role == ChatRole.ASSISTANT
+    ]
+    assert stored[-1].reasoning == episode
+    assert stored[-1].content == "Tool result"
+    assert store.get(ChatTurn, "turn").reasoning == episode
+
+
+def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
+    """Models that only think sometimes leave no blank gap in the episode."""
+
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            reasoning="   ",
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})],
+        ),
+        _response(text="Tool result", reasoning="Only the answer needed thought."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    streamed = "".join(
+        payload["delta"] for name, payload in events if name == "reasoning_delta"
+    )
+    assert streamed == "Only the answer needed thought."
+    assert store.get(ChatTurn, "turn").reasoning == "Only the answer needed thought."

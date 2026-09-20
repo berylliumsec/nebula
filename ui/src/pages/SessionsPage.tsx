@@ -4112,6 +4112,7 @@ export function SessionsPage() {
                             </div>
                           </form>
                           : <p>{message.content}</p>)}
+                      {message.role === "assistant" && message.state === "complete" && !message.content && message.reasoning && <small className="muted" role="status">The model spent this turn thinking and returned no answer. Its thinking is above.</small>}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
                       {message.role === "assistant" && activityLedger && <ActivityLedger
