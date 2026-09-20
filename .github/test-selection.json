@@ -1,9 +1,14 @@
 {
-  "change_digest": "2d56745e12cef1eca5fda5240ee7af1a7d1b05d0ba25d30c3a17aecdce164bf5",
+  "change_digest": "cd159cca155400b8739bbca719ef22bc7c59caed39fd00af9816e2de2b928c74",
   "reviewed_by": "Claude review of settings and dialog reliability",
   "reason": "Nine verified defects in the web UI settings and dialogs. SettingsPage seeded its section and open advanced group once at mount and only re-synced on window hashchange, which react-router's pushState navigation never fires, so /settings#provider-settings opened from the phone list, a lens, or the palette showed the wrong section; tabs and groups also rewrote the hash with history.replaceState, so useLocation().hash drifted from the address bar. The page now derives section and group from useLocation().hash and rewrites the hash through navigate(replace). SettingsLens never moved focus into itself (its Escape and Tab handlers were inert until a click) and the embedded page looked its deep-link target up with document.getElementById, which focused and scrolled the full page behind the lens; the lens now takes focus on open, closes on a document-level Escape unless a modal is above it, and the page scopes the lookup to its own root. The provider dialog's X and Cancel, the SSH host dialog's X, the candidate-finding dialog and the add-asset dialog all closed unguarded while saving, hiding the failure (and a created vault credential rollback); they are now disabled and routed through a guarded close. A failed SSH 'Test connection' from inside the host dialog reported to the section notice behind the modal; the dialog now passes its own reporter. RunnerSettings.load depended on selectedId, so every profile pick refetched and rewrote typed text; it now reads the id through a ref and aborts on unmount. The project switcher dialog had no Escape handling or focus management; it now focuses its first control, closes on Escape, and returns focus to the trigger. VPN 'Remove' had no in-flight state, so a double tap issued two deletes and reported a false failure; it now tracks the pending id. Operator display names were neither trimmed nor validated; they are now trimmed and blank names disable Save. Each behaviour has a vitest test that fails on main: SettingsPage.test.tsx (5), SettingsLens.test.tsx (2, one guard), ToolingSettings.test.tsx (2), FindingsPage.test.tsx (1), AssetsPage.test.tsx (1), plus two new tests in EnvironmentSettings.test.tsx and one in SideNav.test.tsx alongside their existing coverage.",
   "exclusions": "No Python tests: no src/nebula change. No native tests: no Tauri or Rust change. No Playwright: the changed behaviours are component-level focus, keyboard, disabled-state and router-hash handling that the vitest files drive directly with a memory router and stubbed workspace; no real-browser pass was run. No full suites.",
-  "expected_tests": {"python": 0, "frontend": 41, "native": 0, "playwright": 0},
+  "expected_tests": {
+    "python": 0,
+    "frontend": 41,
+    "native": 0,
+    "playwright": 0
+  },
   "python": [],
   "frontend": [
     "ui/src/pages/SettingsPage.test.tsx",
