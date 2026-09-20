@@ -83,6 +83,12 @@
       {"area":"provider-operator-context-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"},
       {"area":"provider-operator-context-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"}
     ],
+    "durable-conversation-core": [
+      {"area":"durable-conversation-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},
+      {"area":"durable-conversation-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},
+      {"area":"durable-conversation-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},
+      {"area":"durable-conversation-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"}
+    ],
     "advanced-session-binding": [
       {"area":"advanced-session-binding","project":"desktop","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},
       {"area":"advanced-session-binding","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"advanced session binding: resume existing session","runtime":"mock","shard":"1/1"},

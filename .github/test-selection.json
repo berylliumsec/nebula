@@ -1,28 +1,20 @@
 {
-  "change_digest": "cfe01b59995d7feeffca7400a10ae6dbc0ad6c6e974da6ea63dc6f6a06a6cab5",
-  "reviewed_by": "Claude review of locked credential vault handling",
-  "reason": "CredentialStore.vault_available only checked that a trusted keyring backend existed with a positive priority, so a Linux host whose SecretService collection is locked \u2014 the normal state when Core runs headless under systemd, where nothing performs the PAM unlock a graphical login would \u2014 reported the vault as available. Every dialog that defaults to vault storage (the Jev key, provider credentials, harness and MCP credentials, VPN profile passwords) therefore offered a save that always failed with a 503. vault_state now reports available/locked/unavailable, probing the collection without ever raising a desktop prompt, vault_available derives from it, create/delete name the locked case, a GET /credentials/vault endpoint and the Jev status carry the state, and the four dialogs fall back to session storage with a note that names the remedy. test_credentials.py covers the locked, unlocked and unreachable states, the refused vault write, and the new endpoint and Jev status; test_mcp_import.py covers the import guard that now reads vault_state. useCredentialVault.test.tsx covers the shared hook and its copy, ToolSuggestions.test.tsx the locked Jev panel, HarnessSettings.test.tsx and EngagementPolicySettings.loading.test.tsx the dialogs and fixtures that carry the new field. A second commit moves that prompt-free probe into vault_probe.py so the sensitive diagnostic store shares it: its _vault_available only checked the backend's priority and then called keyring.get_password, which waits forever on a locked collection when no prompter is running (confirmed on the LAN Core host, where the call never returns), hanging Core the moment an operator switched sensitive-detail capture on. It now reads the lock state first and selects memory-only capture for anything but an unlocked, reachable vault. test_diagnostic_sensitive.py covers a locked vault selecting session memory with get_password and set_password wired to fail the test if they are reached. Merging main brought the scope tool-candidate fixture into EngagementPolicySettings.loading.test.tsx, which now carries both that mock and the vault_state field. Both vault fakes are SecretService subclasses with a fixed priority: reading keyring's own classproperty probes the session bus, which CI does not have, and the memory-only fallback test now pins keyring.get_keyring so an unlocked host vault cannot change what it covers.",
-  "exclusions": "No native tests: no Tauri or catalog change. No screenshot baselines change: the new notes render only when Core reports a vault that cannot take a secret, and every baseline captures a dialog-free surface. Playwright is limited to tool-suggestions, whose real-Core journey saves a Jev key against a host vault that is locked or absent, and mcp-import, which covers the MCP credential and import dialogs; both exercise the changed branch end to end. Other areas are excluded because the change is confined to credential storage copy and the persistence argument, with no routing, layout or theme effect. No full suites.",
+  "change_digest": "9f6cbf51a799024db154d88486ae4a8c4da4f9dcb4cc0f5771f33ae974f859f2",
+  "reviewed_by": "Claude review of the stale transcript-search step in the durable-conversation real-Core journey",
+  "reason": "The real-Core journey \"assistant upgrade foundation production LAN reads durable conversation\" clicked `.assistant-search > summary` to open transcript search. Transcript search stopped being a closed disclosure row in #288, which replaced the <details>/<summary> with a section that a named 44px header action toggles (docs/design/compact-chat-search.md: \"no closed search row\"). That commit updated tests/interface.spec.ts but not tests/real-core.spec.ts, and because playwright-impact only runs on pull requests nothing on main caught it, so every step after the search has been unexercised in the real-Core suite since September 12. The product control is not covered, off-viewport or overlay-blocked: the failure log shows Playwright still waiting for a locator that never enters the DOM, and the page snapshot taken at the timeout lists an enabled \"Search messages and bookmarks\" button in the Conversation actions toolbar. The journey therefore needed the new step, not a product fix. The test now opens search the way an operator does - the header action on desktop and compact widths, the Conversation actions menu item at phone widths - asserts the panel is visible, and closes it again so the durable transcript, attachment, queue and geometry assertions that follow measure the normal reading surface. ui/playwright-impact.json gains a durable-conversation-core area so this journey can be selected on its own instead of pulling the whole 48-test assistant real-Core project; tests/test_playwright_impact.py covers that manifest.",
+  "exclusions": "No frontend unit tests: no ui/src change, and ChatSearchPanel's open/close contract already has src/components/ChatSearchPanel.test.tsx coverage that this commit does not touch. No native tests: no Tauri or catalog-code change. No screenshot baselines: no rendered surface changes. Playwright is limited to the one repaired journey on the four real-Core profiles it was verified against (desktop 1440, compact 1024, Android Chromium 390, iPhone WebKit 390); area:assistant and area:transcript-search-layout are excluded because the search entry point itself is unchanged product code that interface.spec.ts already covers across eight profiles. Known unrelated flake now reachable on assistant-real-webkit-390: the journey's closing \"Edit and branch\" step left the composer empty in 2 of 14 local runs because editAndBranch seeds the draft in React state while the session-identity effect re-reads it from sessionStorage; that is a pre-existing SessionsPage defect this commit does not change. No full suites.",
   "expected_tests": {
-    "python": 52,
-    "frontend": 34,
+    "python": 33,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 4
   },
   "python": [
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_diagnostic_sensitive.py"
+    "tests/test_playwright_impact.py"
   ],
-  "frontend": [
-    "ui/src/hooks/useCredentialVault.test.tsx",
-    "ui/src/components/ToolSuggestions.test.tsx",
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:tool-suggestions",
-    "area:mcp-import"
+    "area:durable-conversation-core"
   ]
 }

@@ -2343,10 +2343,17 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
     await page.goto(url);
     await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
-    await page.locator(".assistant-search > summary").click();
+    // Transcript search is a header action; phones reach it from Conversation actions.
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
+      await page.getByRole("menuitem", {name: /Search messages/}).click();
+    } else await page.getByRole("button", {name: "Search messages and bookmarks", exact: true}).click();
+    await expect(page.locator("#assistant-transcript-search")).toBeVisible();
     await page.getByLabel("Search transcript", {exact: true}).fill("Hello");
     await page.getByRole("button", {name: "Search messages", exact: true}).click();
     await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
+    await page.getByRole("button", {name: "Close transcript search", exact: true}).click();
+    await expect(page.locator(".assistant-search")).toHaveCount(0);
     await page.getByRole("button", {name: "Attach files", exact: true}).click();
     await page.locator(".assistant-attachment-dialog input[type=file]").setInputFiles({name: "review.txt", mimeType: "text/plain", buffer: Buffer.from("Exact attachment preview\n")});
     await expect(page.locator(".assistant-attachment-dialog pre")).toContainText("Exact attachment preview");
