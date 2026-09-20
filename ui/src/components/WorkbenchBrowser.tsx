@@ -81,6 +81,8 @@ type BrowserNotice =
   | { kind: "info"; message: string };
 
 const MAX_TABS = 16;
+const MAX_SESSION_TRAFFIC = 500;
+const MAX_SESSION_FRAMES = 1000;
 const CLIPPING_OVERFLOW = new Set(["auto", "clip", "hidden", "scroll"]);
 const ASK_NEBULA_LAYOUT_EVENT = "nebula-ask-nebula-layout";
 
@@ -118,6 +120,18 @@ function blankTab(): BrowserTab {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** Appends a captured entry once and keeps each session's history bounded by dropping its oldest entries. */
+export function boundSessionHistory<T extends { id: string; sessionId: string }>(items: T[], item: T, limit: number): T[] {
+  if (items.some((entry) => entry.id === item.id)) return items;
+  const next = [...items, item];
+  let excess = next.filter((entry) => entry.sessionId === item.sessionId).length - limit;
+  if (excess <= 0) return next;
+  return next.filter((entry) => {
+    if (excess > 0 && entry.sessionId === item.sessionId) { excess -= 1; return false; }
+    return true;
+  });
 }
 
 function utf8Base64(value: string): string {
@@ -975,9 +989,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           });
           setWorkspace((current) => current ? {
             ...current,
-            traffic: current.traffic.some((item) => item.id === exchange.id)
-              ? current.traffic
-              : [...current.traffic, exchange],
+            traffic: boundSessionHistory(current.traffic, exchange, MAX_SESSION_TRAFFIC),
           } : current);
         };
         void save().catch((caught) => {
@@ -1010,8 +1022,8 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           truncated: payload.truncated,
         }).then((frame) => setWorkspace((current) => current ? {
           ...current,
-          traffic: current.traffic.some((item) => item.id === exchange.id) ? current.traffic : [...current.traffic, exchange],
-          frames: current.frames.some((item) => item.id === frame.id) ? current.frames : [...current.frames, frame],
+          traffic: boundSessionHistory(current.traffic, exchange, MAX_SESSION_TRAFFIC),
+          frames: boundSessionHistory(current.frames, frame, MAX_SESSION_FRAMES),
         } : current))).catch((caught) => {
           websocketExchangeRef.current.delete(key);
           void logCaughtDiagnostic("interface.security_browser.websocket_persist_failed", "A WebSocket frame could not be persisted.", caught, "workbench_browser");
@@ -1861,6 +1873,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       {capabilities?.projectStorage === "ephemeral" && <div className="browser-privacy-notice"><ShieldCheck size={14} /> macOS 13 browser data is isolated and cleared when Nebula closes.</div>}
       {nativeScopeError && <div className="browser-notice error" role="alert"><span><strong>Navigation blocked: browser scope unavailable.</strong> The Project policy and native browser session are out of sync. Existing research records remain available. Reload to refresh Project scope and retry. <small>{nativeScopeError}</small></span><button type="button" disabled={!activeTab?.created} onClick={() => void runControl("reload")}>Reload page</button></div>}
       {error && <div className="browser-notice error" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss browser error" onClick={() => setError(undefined)}><X size={14} /></button></div>}
+      {activeTab?.created && activeTab.error && <div className="browser-notice error" role="alert"><span>{activeTab.error}</span><button type="button" aria-label="Dismiss navigation error" onClick={() => updateTab(activeTab.id, { error: undefined })}><X size={14} /></button></div>}
       {notice && <div className="browser-notice" role="status">
         <span className="browser-notice-icon" aria-hidden="true">{notice.kind === "knowledge" ? <BookOpenCheck size={14} /> : notice.kind === "download" ? <Download size={14} /> : <Check size={14} />}</span>
         <span className="browser-notice-message">{notice.message}</span>

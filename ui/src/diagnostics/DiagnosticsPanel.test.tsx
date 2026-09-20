@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
@@ -44,6 +44,7 @@ vi.mock("../state/WorkspaceContext", () => ({
 }));
 
 vi.mock("./logger", () => ({
+  diagnosticErrorPresentation: () => undefined,
   diagnosticsFallbackErrors: () => [],
   isDiagnosticsAvailable: () => true,
   logCaughtDiagnostic: mocks.logCaught,
@@ -279,6 +280,34 @@ describe("DiagnosticsPanel", () => {
       "run_health_check",
       true,
     ));
+  });
+
+  it("shows the newest refresh when an older one resolves later", async () => {
+    const user = userEvent.setup();
+    let resolveFirst: (records: Array<typeof errorRecord>) => void = () => undefined;
+    mocks.api.diagnosticErrors
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValue([{ ...errorRecord, error_id: "err_newer_456", message: "The newer failure." }]);
+    render(<DiagnosticsPanel />);
+    await waitFor(() => expect(mocks.api.diagnosticErrors).toHaveBeenCalledTimes(1));
+
+    await user.selectOptions(screen.getByLabelText("Filter diagnostic errors by feature"), "chat");
+    expect(await screen.findByText("The newer failure.")).toBeVisible();
+
+    await act(async () => { resolveFirst([errorRecord]); });
+    expect(screen.getByText("The newer failure.")).toBeVisible();
+    expect(screen.queryByText("A chat stream could not complete.")).not.toBeInTheDocument();
+  });
+
+  it("shows a visible failure when protected detail cannot be accessed", async () => {
+    const user = userEvent.setup();
+    mocks.api.diagnosticErrors.mockResolvedValue([{ ...errorRecord, sensitive_detail_available: true }]);
+    mocks.api.diagnosticSensitiveDetail.mockRejectedValueOnce(new Error("The protected detail has expired."));
+    render(<DiagnosticsPanel />);
+
+    await user.click(await screen.findByRole("button", { name: "Reveal sensitive detail" }));
+    expect(await screen.findByText("The protected detail has expired.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reveal sensitive detail" })).toBeEnabled();
   });
 
   it("keeps available failures visible when an independent source fails", async () => {

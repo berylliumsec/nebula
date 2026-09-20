@@ -6,7 +6,7 @@ import type { EngagementScopePolicy } from "../api/types";
 import type { ApiClient } from "../api/client";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
 import { DialogProvider, useDialogPresence } from "./DialogSystem";
-import { largestUnoccludedBrowserRect, WorkbenchBrowser } from "./WorkbenchBrowser";
+import { boundSessionHistory, largestUnoccludedBrowserRect, WorkbenchBrowser } from "./WorkbenchBrowser";
 
 const runtimeMocks = vi.hoisted(() => ({
   isTauriRuntime: vi.fn(),
@@ -240,6 +240,30 @@ describe("WorkbenchBrowser", () => {
     await waitFor(() => expect(browserMocks.control).toHaveBeenCalled());
     expect(browserMocks.applyProxyScope).toHaveBeenLastCalledWith("project-1", "browser-session-1", scope);
     expect(browserMocks.applyProxyScope.mock.invocationCallOrder.at(-1)).toBeLessThan(browserMocks.control.mock.invocationCallOrder[0]);
+  });
+
+  it("keeps captured traffic bounded per session by dropping the oldest entries", () => {
+    const entry = (id: string, sessionId: string) => ({ id, sessionId });
+    let items = [entry("other-1", "session-b")];
+    for (let index = 0; index < 4; index += 1) items = boundSessionHistory(items, entry(`a-${index}`, "session-a"), 3);
+    expect(items.map((item) => item.id)).toEqual(["other-1", "a-1", "a-2", "a-3"]);
+    expect(boundSessionHistory(items, entry("a-3", "session-a"), 3)).toBe(items);
+  });
+
+  it("keeps a blocked navigation visible on a live tab", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    const api = browserApi();
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    await openPage();
+    expect(screen.queryByLabelText("Start browsing")).not.toBeInTheDocument();
+
+    vi.mocked(api.getEngagementScope).mockResolvedValue({...scope, allowedDomains: [], revision: 10});
+    const address = screen.getByLabelText("Address or search");
+    fireEvent.change(address, {target: {value: "https://docs.example.com/next"}});
+    fireEvent.submit(address.closest("form")!);
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Navigation blocked"));
+    expect(browserMocks.navigate).not.toHaveBeenCalled();
   });
 
   it("does not open a page after Core revokes its previously allowed scope", async () => {

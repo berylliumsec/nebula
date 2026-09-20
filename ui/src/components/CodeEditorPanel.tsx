@@ -107,7 +107,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
   const [syncing, setSyncing] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
-  const [selection, setSelection] = useState("");
+  const [selection, setSelection] = useState<{ text: string; from: number; to: number }>();
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [suggestionRevision, setSuggestionRevision] = useState<string>();
   const [localCompletionEnabled, setLocalCompletionEnabled] = useState(true);
@@ -519,12 +519,18 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       setSuggestionOpen(false);
       return;
     }
-    const source = selection || buffer.content;
-    const start = selection ? buffer.content.indexOf(source) : 0;
-    const next = selection && start >= 0
-      ? `${buffer.content.slice(0, start)}${result.content}${buffer.content.slice(start + source.length)}`
-      : result.content;
-    updateBuffer({ content: next });
+    if (selection) {
+      // The suggestion was reviewed against the selected range, so it is
+      // spliced there rather than into the first identical text in the file.
+      if (buffer.content.slice(selection.from, selection.to) !== selection.text) {
+        setError("The selected code changed while the suggestion was being prepared. Select it again before applying.");
+        setSuggestionOpen(false);
+        return;
+      }
+      updateBuffer({ content: `${buffer.content.slice(0, selection.from)}${result.content}${buffer.content.slice(selection.to)}` });
+    } else {
+      updateBuffer({ content: result.content });
+    }
     setNotice("Suggestion applied to the editor draft. Review it, then save explicitly.");
     setSuggestionOpen(false);
   };
@@ -771,7 +777,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
 
   const editorPane = (candidate: WorkbenchEditorBuffer, pane: "primary" | "secondary") => <div className={`code-editor-pane${candidate.id === buffer?.id ? " active" : ""}`} key={`${pane}:${candidate.id}`}>
     {secondaryBuffer && <header><button className="code-editor-pane-focus" type="button" aria-label={`Focus ${candidate.filePath} editor`} aria-pressed={candidate.id === buffer?.id} onClick={() => focusPane(candidate.id)}><span>{candidate.filePath}</span></button>{pane === "secondary" && <button className="icon-button subtle" type="button" aria-label="Close split editor" onClick={closeSplit}><X size={14} /></button>}</header>}
-    <CodeMirrorSurface active={active} ariaLabel={secondaryBuffer ? `${pane === "primary" ? "Primary" : "Secondary"} code editor: ${candidate.filePath}` : "Code editor"} filePath={candidate.filePath} fontSize={preferences.fontSize} tabSize={preferences.tabSize} wordWrap={preferences.wordWrap} saveKey={codeMirrorKey(preferences.keybindings.save)} value={candidate.content} breakpointLines={breakpoints[candidate.filePath] ?? []} onToggleBreakpoint={(line) => toggleBreakpoint(candidate.filePath, line)} definitionRequest={candidate.id === buffer?.id ? definitionRequest : 0} findRequest={candidate.id === buffer?.id ? findRequest : 0} problemsRequest={candidate.id === buffer?.id ? problemsRequest : 0} formatRequest={candidate.id === buffer?.id ? formatRequest : 0} referencesRequest={candidate.id === buffer?.id ? referencesRequest : 0} renameRequest={candidate.id === buffer?.id ? renameRequest : 0} reveal={candidate.id === buffer?.id ? navigation : undefined} onFocus={() => focusPane(candidate.id)} onChange={(content) => updateBufferById(candidate.id, { content })} onSelectionChange={(text) => { if (candidate.id === buffer?.id) setSelection(text); }} completionSource={candidate.filePath.endsWith(".py") ? undefined : completionSource} languageServer={candidate.filePath.endsWith(".py") ? { apiBaseUrl: api.baseUrl ?? "/api/v1", engagementId, token: api.getToken?.(), onState: setLanguageServerState } : undefined} onCursorChange={(line, column) => { if (candidate.id === buffer?.id) setCursor({ line, column }); }} onSave={() => void save(false, candidate)} />
+    <CodeMirrorSurface active={active} ariaLabel={secondaryBuffer ? `${pane === "primary" ? "Primary" : "Secondary"} code editor: ${candidate.filePath}` : "Code editor"} filePath={candidate.filePath} fontSize={preferences.fontSize} tabSize={preferences.tabSize} wordWrap={preferences.wordWrap} saveKey={codeMirrorKey(preferences.keybindings.save)} value={candidate.content} breakpointLines={breakpoints[candidate.filePath] ?? []} onToggleBreakpoint={(line) => toggleBreakpoint(candidate.filePath, line)} definitionRequest={candidate.id === buffer?.id ? definitionRequest : 0} findRequest={candidate.id === buffer?.id ? findRequest : 0} problemsRequest={candidate.id === buffer?.id ? problemsRequest : 0} formatRequest={candidate.id === buffer?.id ? formatRequest : 0} referencesRequest={candidate.id === buffer?.id ? referencesRequest : 0} renameRequest={candidate.id === buffer?.id ? renameRequest : 0} reveal={candidate.id === buffer?.id ? navigation : undefined} onFocus={() => focusPane(candidate.id)} onChange={(content) => updateBufferById(candidate.id, { content })} onSelectionChange={(text, from, to) => { if (candidate.id === buffer?.id) setSelection(text ? { text, from, to } : undefined); }} completionSource={candidate.filePath.endsWith(".py") ? undefined : completionSource} languageServer={candidate.filePath.endsWith(".py") ? { apiBaseUrl: api.baseUrl ?? "/api/v1", engagementId, token: api.getToken?.(), onState: setLanguageServerState } : undefined} onCursorChange={(line, column) => { if (candidate.id === buffer?.id) setCursor({ line, column }); }} onSave={() => void save(false, candidate)} />
   </div>;
 
   return <div ref={sidebarSize.panelRef} style={sidebarSize.style} className={`code-editor-panel${buffer ? " has-buffer" : ""}${mobileFilesOpen ? " mobile-files-open" : ""}`}>
@@ -824,7 +830,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       </> : <><StandardEmptyState icon={<Braces size={25} />} title="Shared workspace editor" explanation="Open or create a text file here, then run it from Terminal in /workspace using its interpreter." primaryAction={<><button className="button primary" type="button" onClick={() => void createFile()}><FilePlus2 size={15} /> New file</button>{onRun && <button className="button secondary" type="button" onClick={() => setTasksOpen(true)}><ListTodo size={15} /> Project tasks</button>}</>} />{error && <DiagnosticErrorNotice error={error} fallback="The editor operation failed." compact />}</>}
       {persistenceState === "failed" && <div className="code-editor-persistence-error" role="alert"><ShieldAlert size={15} /><span><strong>Hot-exit recovery is unavailable</strong><small>Save workspace files before closing this browser. {persistenceError}</small></span><button className="button quiet" type="button" onClick={retryPersistence}>Retry</button></div>}
     </section>
-    {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
+    {suggestionOpen && <AIWritingDialog api={api} engagementId={engagementId} providers={providers} harnesses={harnesses} purpose="code_suggestion" title="Suggest a code change" description="Generate an operator-reviewed suggestion for the active file. Nothing is saved until you review, apply, and save." sourceLabel={selection ? "Selected code" : buffer?.filePath ?? "Active file"} sourceText={selection?.text || buffer?.content || ""} initialInstruction="Suggest a focused improvement for this code." onClose={() => setSuggestionOpen(false)} onApply={applySuggestion} />}
     {workspaceSearchMode && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode={workspaceSearchMode} initialQuery={initialWorkspaceSearch} onClose={() => setWorkspaceSearchMode(undefined)} onOpen={(match) => void openWorkspaceMatch(match)} />}
     {preferencesOpen && <EditorPreferencesDialog preferences={preferences} onApply={savePreferences} onClose={() => setPreferencesOpen(false)} />}
     {environmentOpen && <EditorEnvironmentDialog api={api} engagementId={engagementId} workspacePath={workspacePath} onOpenTerminal={onOpenTerminal} onClose={() => setEnvironmentOpen(false)} />}
