@@ -1372,6 +1372,7 @@ interface WireChatStreamEvent extends JsonObject {
   turn_id?: string;
   tool_call_id?: string;
   capability?: string;
+  display_name?: string | null;
   arguments?: JsonObject;
   status?: string;
   summary?: string;
@@ -1392,6 +1393,7 @@ interface WireChatStreamEvent extends JsonObject {
   step?: number;
   approval?: JsonObject;
   approval_id?: string;
+  server_id?: string;
   tool_name?: string;
   provider_id?: string;
   model?: string;
@@ -3853,6 +3855,8 @@ function mapHarnessActivityEvent(
     itemStatus: value.item_status,
     title: value.title,
     summary: value.summary,
+    // The server a tool call reached, which names an MCP call in the ledger.
+    serverId: value.server_id,
     stream: value.stream,
     delta: value.delta,
     message: typeof value.message === "string" ? value.message : undefined,
@@ -3970,6 +3974,7 @@ function mapPersistedChatMessage(
           return [{
             toolCallId: row.tool_call_id,
             capability: row.capability,
+            displayName: typeof row.display_name === "string" ? row.display_name : undefined,
             status: typeof row.status === "string" ? row.status : "completed",
             summary: typeof row.summary === "string" ? row.summary : undefined,
             evidenceIds: Array.isArray(row.evidence_ids)
@@ -8783,6 +8788,7 @@ export class ApiClient {
           turnId,
           toolCallId: wire.tool_call_id,
           capability,
+          displayName: wire.display_name ?? undefined,
           arguments: wire.arguments ?? wire.payload ?? {},
           step: wire.step ?? 0,
         });
@@ -8801,6 +8807,7 @@ export class ApiClient {
           turnId,
           toolCallId: wire.tool_call_id,
           capability,
+          displayName: wire.display_name ?? undefined,
           status:
             wire.status ??
             (typeof wire.payload?.status === "string"

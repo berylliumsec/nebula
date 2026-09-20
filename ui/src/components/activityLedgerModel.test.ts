@@ -156,6 +156,52 @@ describe("activity ledger presentation model", () => {
     expect(model.entries[0].label).toBe("Search evidence");
   });
 
+  it("names a brokered MCP call by its server and tool, not its routing digest", () => {
+    const model = activityLedgerFromNative("Work summary", "complete", [{
+      assistantId: "assistant-1",
+      toolCallId: "tool-1",
+      capability: "mcp.9a4c1f0b77de.create_issue",
+      displayName: "GitHub · create_issue",
+      status: "complete",
+      evidenceIds: [],
+      artifacts: [],
+    }]);
+    expect(model.entries[0].label).toBe("GitHub · create_issue");
+  });
+
+  it("still drops the digest for MCP calls recorded before Core sent a readable name", () => {
+    const model = activityLedgerFromNative("Work summary", "complete", [{
+      assistantId: "assistant-1",
+      toolCallId: "tool-1",
+      capability: "mcp.9a4c1f0b77de.create_issue",
+      status: "complete",
+      evidenceIds: [],
+      artifacts: [],
+    }]);
+    expect(model.entries[0].label).toBe("create_issue");
+  });
+
+  it("names the MCP server a harness tool call reached", () => {
+    const model = activityLedgerFromHarness("Work summary", "complete", [
+      harnessItem({ key: "mcp", kind: "tool", title: "read_file", serverId: "workspace", status: "completed" }),
+      harnessItem({ key: "own", kind: "tool", title: "Grep", serverId: "claude", status: "completed", sequence: 2 }),
+    ]);
+    expect(model.entries.map((entry) => entry.label)).toEqual(["Grep", "workspace · read_file"]);
+  });
+
+  it("prefers the readable name Core sends with a brokered call on a harness turn", () => {
+    const model = activityLedgerFromHarness("Work summary", "complete", [
+      harnessItem({
+        key: "brokered",
+        kind: "tool",
+        title: "mcp.9a4c1f0b77de.create_issue",
+        status: "completed",
+        payload: { display_name: "GitHub · create_issue" },
+      }),
+    ]);
+    expect(model.entries[0].label).toBe("GitHub · create_issue");
+  });
+
   it("uses saved mission stages as the visible live phases", () => {
     const model = activityLedgerFromMission(run({
       stages: [

@@ -611,3 +611,98 @@ def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
     )
     assert streamed == "Only the answer needed thought."
     assert store.get(ChatTurn, "turn").reasoning == "Only the answer needed thought."
+
+
+def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):
+    """An MCP tool routes under a digest; a conversation shows server and tool."""
+
+    broker = RecordingBroker()
+    mcp_spec = ToolSpec(
+        name="mcp.9a4c1f0b77de.create_issue",
+        description="File an issue upstream.",
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.WORKSPACE_WRITE,
+        source_id="mcp:tracker",
+        display_name="GitHub · create_issue",
+    )
+    responses = [
+        _response(
+            calls=[
+                ToolCall(
+                    id="call-1",
+                    name="mcp.9a4c1f0b77de.create_issue",
+                    arguments={"value": "a"},
+                )
+            ]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Filed."),
+    ]
+    store, service, prepared, _ = _prepared(
+        tmp_path, responses, broker, extra_specs=[mcp_spec]
+    )
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    lifecycle = [
+        payload
+        for name, payload in events
+        if name in {"tool_started", "tool_completed"}
+    ]
+    assert [item["capability"] for item in lifecycle] == [
+        "mcp.9a4c1f0b77de.create_issue",
+        "mcp.9a4c1f0b77de.create_issue",
+    ]
+    # The runtime name still routes the call; the readable one rides alongside.
+    assert [item["display_name"] for item in lifecycle] == [
+        "GitHub · create_issue",
+        "GitHub · create_issue",
+    ]
+    # A reload reads the same name, without re-deriving it from the digest.
+    stored = [
+        item
+        for item in service.session_messages("session")
+        if item.role == ChatRole.ASSISTANT
+    ]
+    [result] = stored[-1].metadata["tool_results"]
+    assert result["capability"] == "mcp.9a4c1f0b77de.create_issue"
+    assert result["display_name"] == "GitHub · create_issue"
+    [step] = store.get(ChatTurn, "turn").tool_history
+    assert step["display_name"] == "GitHub · create_issue"
+
+
+def test_a_fixed_capability_carries_no_display_name(tmp_path):
+    """Only tools whose runtime name is unreadable carry a second name."""
+
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Tool result"),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    started = [payload for name, payload in events if name == "tool_started"]
+    assert [item["display_name"] for item in started] == [None]
+    [step] = store.get(ChatTurn, "turn").tool_history
+    assert "display_name" not in step

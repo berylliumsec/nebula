@@ -15,7 +15,12 @@ from nebula.v3.domain import (
     McpTransport,
     utc_now,
 )
-from nebula.v3.mcp import McpProbeService, build_mcp_tool_plugins
+from nebula.v3.mcp import (
+    McpProbeService,
+    build_mcp_tool_plugins,
+    mcp_tool_display_name,
+    mcp_tool_runtime_name,
+)
 from nebula.v3.storage import NebulaStore
 
 # A stdio server whose capabilities and per-method errors come from argv, and
@@ -255,6 +260,24 @@ def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert result.execution["timed_out"] is True
+
+
+def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):
+    """The runtime name routes the call; the display name is what a person reads."""
+
+    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+    [plugin] = build_mcp_tool_plugins(service, (profile,))
+
+    assert plugin.spec.name == mcp_tool_runtime_name(profile.id, "scan")
+    assert plugin.spec.name != plugin.spec.display_name
+    assert plugin.spec.display_name == "remote · scan"
+
+
+def test_mcp_display_name_stays_bounded_and_single_line(tmp_path):
+    assert mcp_tool_display_name("a\n b", "c\td") == "a b · c d"
+    assert mcp_tool_display_name("", "") == "MCP · tool"
+    long = mcp_tool_display_name("s" * 200, "t" * 200)
+    assert len(long) == 80 + 3 + 100
 
 
 def test_probe_keeps_discovered_tools_when_the_profile_changes_meanwhile(

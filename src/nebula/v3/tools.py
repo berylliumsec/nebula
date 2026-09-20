@@ -120,6 +120,10 @@ class ToolSpec(BaseModel):
     cloud_transfer: bool = False
     requires_approval: bool = False
     source_id: str | None = Field(default=None, max_length=400)
+    # Readable identity for surfaces an operator reads: the ledger entry in a
+    # conversation, and the approval card. ``name`` stays the runtime identity
+    # (for MCP it carries a profile digest, which reads as noise).
+    display_name: str | None = Field(default=None, max_length=200)
     parser_contract: dict[str, Any] | None = None
     budget_class: Literal["execution", "artifact_query"] = "execution"
     capture_paths: list[str] = Field(default_factory=list, max_length=32)
@@ -567,6 +571,7 @@ class StoreToolLedger:
             exact_request: dict[str, Any] = {
                 "tool_name": invocation.tool_name,
                 "arguments": invocation.arguments,
+                **({"display_name": spec.display_name} if spec.display_name else {}),
             }
             approval = Approval(
                 id=approval_id,

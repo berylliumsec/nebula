@@ -716,6 +716,20 @@ def _safe(value: Any) -> str:
     return (text or "MCP probe failed")[:1_000]
 
 
+def mcp_tool_display_name(server_name: str, tool_name: str) -> str:
+    """Readable identity for an MCP tool, for ledgers and approval cards.
+
+    ``mcp_tool_runtime_name`` builds the name the model and the broker use; it
+    carries a profile digest so two servers can expose the same tool name. That
+    digest is meaningless to an operator reading a conversation, so every
+    surface a person reads gets this instead.
+    """
+
+    server = " ".join(server_name.split())[:80] or "MCP"
+    tool = " ".join(tool_name.split())[:100] or "tool"
+    return f"{server} · {tool}"
+
+
 def mcp_tool_runtime_name(profile_id: str, tool_name: str) -> str:
     digest = (
         __import__("hashlib")
@@ -783,6 +797,7 @@ def build_mcp_tool_plugins(
                 risk_class=_mcp_tool_risk(snapshot),
                 requires_approval=_mcp_requires_approval(profile, snapshot),
                 source_id=f"mcp:{profile.id}",
+                display_name=mcp_tool_display_name(profile.name, snapshot.name),
             )
 
         async def execute(self, invocation: Any, runner: Any) -> Any:
@@ -1114,5 +1129,6 @@ __all__ = [
     "McpProbeService",
     "build_mcp_tool_plugins",
     "encode_gateway_frame",
+    "mcp_tool_display_name",
     "resolve_mcp_profiles",
 ]

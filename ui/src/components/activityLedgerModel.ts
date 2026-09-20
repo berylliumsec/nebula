@@ -1,5 +1,6 @@
 import type { AgentRunSummary, RunEvent, ToolArtifactReference } from "../api/types";
 import type { HarnessActivityItem } from "../pages/harnessActivity";
+import { formatMcpToolLabel, isConnectedMcpServer, mcpToolLabel } from "../mcpTools";
 import { sshToolHost } from "../sshTools";
 
 export type ActivityLedgerStatus =
@@ -74,6 +75,8 @@ export interface NativeActivitySource {
   assistantId: string;
   toolCallId: string;
   capability: string;
+  /** Readable identity Core sends for a brokered MCP call. */
+  displayName?: string;
   status: string;
   summary?: string;
   evidenceIds: string[];
@@ -198,6 +201,10 @@ function firstSentence(value: string | undefined): string | undefined {
 function meaningfulLabel(title: string | undefined, summary: string | undefined, phase: ActivityLedgerPhaseKey): string {
   const sshHost = sshToolHost(title);
   if (sshHost) return `Command on ${sshHost}`;
+  // An MCP tool keeps its exact upstream name, which is what the server's own
+  // documentation calls it; only the runtime's routing prefix is dropped.
+  const mcp = mcpToolLabel(title);
+  if (mcp) return mcp;
   const cleanTitle = title?.replaceAll("_", " ").trim();
   if (cleanTitle && !INTERNAL_LABELS.has(cleanTitle.toLowerCase())) return cleanTitle;
   return firstSentence(summary) ?? PHASE_LABELS[phase];
@@ -216,13 +223,20 @@ export function harnessLedgerEntries(items: HarnessActivityItem[]): ActivityLedg
     const commentary = item.streams.commentary;
     const reasoningSummary = item.streams.reasoning_summary;
     const summary = commentary || reasoningSummary || item.summary;
+    // Core sends the readable identity for a call it brokers; a harness names
+    // the server separately from the tool it reached.
+    const displayName = typeof item.payload.display_name === "string" ? item.payload.display_name.trim() : "";
+    const label = displayName
+      || (item.kind === "tool" && item.title && isConnectedMcpServer(item.serverId)
+        ? formatMcpToolLabel(item.serverId, item.title)
+        : meaningfulLabel(item.title, summary, phase));
     return {
       id: item.key,
       source: "harness" as const,
       phase,
       status: normalizeActivityStatus(item.status),
       statusLabel: sourceStatusLabel(item.status),
-      label: meaningfulLabel(item.title, summary, phase),
+      label,
       summary,
       brief: firstSentence(summary),
       occurredAt: item.occurredAt,
@@ -248,7 +262,7 @@ export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedg
     phase: "execution" as const,
     status: normalizeActivityStatus(item.status),
     statusLabel: sourceStatusLabel(item.status),
-    label: meaningfulLabel(item.capability, item.summary, "execution"),
+    label: item.displayName?.trim() || meaningfulLabel(item.capability, item.summary, "execution"),
     summary: item.summary,
     brief: firstSentence(item.summary),
     sequence: index,
