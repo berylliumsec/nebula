@@ -7,6 +7,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from nebula.v3.domain import (
     AgentRun,
     Approval,
+    ApprovalStatus,
+    ChatTokenUsage,
     ContextOwnerType,
     ContextSnapshot,
     Engagement,
@@ -24,6 +26,7 @@ from nebula.v3.orchestration import (
     MissionRuntime,
     ModelSpecialist,
     PlannedTask,
+    SpecialistApprovalRequired,
     SpecialistOutcome,
     SpecialistResult,
     SpecialistRole,
@@ -1006,3 +1009,76 @@ def test_evidence_verifier_requires_linked_evidence_and_reproduction_steps():
     assert no_steps.evidence_ids == ["evidence-1"]
     assert complete.accepted is True
     assert complete.evidence_ids == ["evidence-1"]
+
+
+def test_budget_overrun_cancels_the_approval_it_drops(tmp_path):
+    """A pending Approval dropped by a budget overrun must not stay PENDING."""
+
+    task = PlannedTask(
+        id="scan",
+        role=SpecialistRole.NETWORK_SERVICE,
+        title="Scan approved service",
+        instructions="Perform only the approved operation",
+        risk_class=RiskClass.ACTIVE_SCAN,
+    )
+    supervisor = PlannedSupervisor(
+        MissionPlan(summary="Budget vs approval", rationale="Gate", tasks=[task])
+    )
+
+    class ExpensiveApprovalSpecialist:
+        role = SpecialistRole.NETWORK_SERVICE
+        allowed_tools = frozenset({"scan.tcp"})
+
+        def __init__(self) -> None:
+            self.store: NebulaStore | None = None
+
+        async def run(self, context):
+            assert self.store is not None
+            # The broker persists the card before the specialist pauses on it.
+            approval = self.store.create(
+                Approval(
+                    id="approval-budget",
+                    engagement_id=context.engagement_id,
+                    run_id=context.run_id,
+                    task_id=context.task.id,
+                    risk_class=RiskClass.ACTIVE_SCAN,
+                    exact_request={
+                        "tool_name": "scan.tcp",
+                        "arguments": {"ports": [443]},
+                    },
+                    target="10.0.0.8",
+                    policy_rationale="active scanning requires operator approval",
+                    requested_by="network-specialist",
+                )
+            )
+            raise SpecialistApprovalRequired(
+                approval,
+                usage=ChatTokenUsage(input_tokens=40, output_tokens=0, total_tokens=40),
+            )
+
+    specialist = ExpensiveApprovalSpecialist()
+    runtime, store = _runtime(
+        tmp_path,
+        supervisor,
+        {SpecialistRole.NETWORK_SERVICE: specialist},
+    )
+    specialist.store = store
+
+    state = asyncio.run(
+        runtime.start(
+            engagement_id="engagement-approval-budget",
+            objective="Run one bounded scan",
+            budget=RunBudget(max_tokens=10, max_retries=0),
+        )
+    )
+
+    assert state["task_status"] == {task.id: TaskStatus.BLOCKED.value}
+    assert state["errors"] == {
+        task.id: "mission token budget exceeded by context compaction"
+    }
+    assert state.get("waiting_approvals", {}) == {}
+    approval = store.get(Approval, "approval-budget")
+    assert approval.status == ApprovalStatus.CANCELLED
+    assert approval.decision_note == "mission budget exhausted"
+    assert approval.decided_at is not None
+    assert approval.decided_by

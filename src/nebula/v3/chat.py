@@ -1214,6 +1214,7 @@ class ChatService:
     async def _produce_provider_turn(
         self, prepared: PreparedChat, runtime: _ActiveProviderTurn
     ) -> None:
+        stopped = False
         try:
             async for event in self.stream(prepared):
                 async with runtime.condition:
@@ -1227,10 +1228,26 @@ class ChatService:
                 exc,
                 stage="provider-turn-stream",
             )
+            stopped = True
             await self._run_terminal_native_hooks(
                 prepared, "chat.turn.cancelled", "response stopped"
             )
-            runtime.error = exc
+            # Only this producer task was cancelled. Followers run in their own
+            # tasks and get the stop as a terminal frame they can forward, not
+            # as a CancelledError re-raised inside a task nobody cancelled;
+            # runtime.error stays reserved for real failures.
+            async with runtime.condition:
+                runtime.events.append(
+                    (
+                        "cancelled",
+                        {
+                            "type": "cancelled",
+                            "turn_id": prepared.turn.id if prepared.turn else None,
+                            "detail": "response stopped",
+                        },
+                    )
+                )
+                runtime.condition.notify_all()
         except BaseException as exc:
             record_caught_exception(
                 "chat",
@@ -1248,7 +1265,7 @@ class ChatService:
                 runtime.done = True
                 runtime.condition.notify_all()
             turn = prepared.turn
-            if turn is not None and runtime.error is not None:
+            if turn is not None and (stopped or runtime.error is not None):
                 latest = self.store.get(ChatTurn, turn.id)
                 if (
                     latest.status
@@ -1260,9 +1277,7 @@ class ChatService:
                     and latest.execution_claim_id == prepared.execution_claim_id
                 ):
                     status = (
-                        ChatTurnStatus.CANCELLED
-                        if isinstance(runtime.error, asyncio.CancelledError)
-                        else ChatTurnStatus.FAILED
+                        ChatTurnStatus.CANCELLED if stopped else ChatTurnStatus.FAILED
                     )
                     self.store.update(
                         ChatTurn,
@@ -1271,7 +1286,7 @@ class ChatService:
                             "status": status,
                             "error": (
                                 "response stopped"
-                                if status == ChatTurnStatus.CANCELLED
+                                if stopped
                                 else str(runtime.error)[:1_000]
                             ),
                         },
@@ -2529,10 +2544,9 @@ class ChatService:
         self, profile_id: str, provider: ModelProvider, model: str
     ) -> ProviderProfile:
         profile = self.store.get(ProviderProfile, profile_id)
-        metadata = dict(profile.metadata)
         descriptors = [
             dict(item)
-            for item in metadata.get("model_descriptors", [])
+            for item in profile.metadata.get("model_descriptors", [])
             if isinstance(item, dict)
         ]
         descriptor = next(
@@ -2541,7 +2555,6 @@ class ChatService:
         )
         if descriptor is None:
             descriptor = {"id": model, "name": model}
-            descriptors.append(descriptor)
         checked_at = utc_now().isoformat()
         if profile.provider_type == "openrouter":
             loader = getattr(provider, "openrouter_route_limits", None)
@@ -2588,8 +2601,7 @@ class ChatService:
                 )
             descriptor.update(exact.model_dump(mode="json", exclude_none=True))
             revision_payload = descriptor
-        metadata["model_descriptors"] = descriptors
-        metadata["route_catalog_revision"] = hashlib.sha256(
+        route_catalog_revision = hashlib.sha256(
             json.dumps(
                 {
                     "model": model,
@@ -2600,11 +2612,56 @@ class ChatService:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        # The provider call above can take up to 15 s. An operator save or a
+        # sibling turn's recovery may have moved the profile on in that window,
+        # so the refreshed descriptor is merged onto the current revision, not
+        # the one read before the call.
+        try:
+            return self._write_refreshed_descriptor(
+                profile_id, model, descriptor, route_catalog_revision
+            )
+        except ConflictError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.context_metadata.refresh_conflict",
+                "A provider profile changed while its context limits were being "
+                "refreshed; the merge is retried once on the current revision.",
+                exc,
+                stage="chat",
+            )
+        return self._write_refreshed_descriptor(
+            profile_id, model, descriptor, route_catalog_revision
+        )
+
+    def _write_refreshed_descriptor(
+        self,
+        profile_id: str,
+        model: str,
+        descriptor: dict[str, Any],
+        route_catalog_revision: str,
+    ) -> ProviderProfile:
+        latest = self.store.get(ProviderProfile, profile_id)
+        metadata = dict(latest.metadata)
+        descriptors = [
+            dict(item)
+            for item in metadata.get("model_descriptors", [])
+            if isinstance(item, dict)
+        ]
+        merged = False
+        for index, item in enumerate(descriptors):
+            if item.get("id") == model:
+                descriptors[index] = {**item, **descriptor}
+                merged = True
+                break
+        if not merged:
+            descriptors.append(dict(descriptor))
+        metadata["model_descriptors"] = descriptors
+        metadata["route_catalog_revision"] = route_catalog_revision
         return self.store.update(
             ProviderProfile,
-            profile.id,
+            latest.id,
             {"metadata": metadata},
-            expected_revision=profile.revision,
+            expected_revision=latest.revision,
         )
 
     async def stream(
@@ -2703,7 +2760,12 @@ class ChatService:
                         continue
                     yield item
                 turn = self._refresh_turn(turn)
-                if turn.status == ChatTurnStatus.WAITING_APPROVAL:
+                if turn.status in {
+                    ChatTurnStatus.WAITING_APPROVAL,
+                    ChatTurnStatus.WAITING_CALLBACK,
+                }:
+                    # Still paused, or the approved call turned out to be a
+                    # background command that now waits for its LAN callback.
                     prepared.turn = turn
                     self._release_execution(prepared)
                     return
@@ -3006,38 +3068,8 @@ class ChatService:
                         {"status": "failed", "provider_result": provider_result}
                     )
                 else:
-                    provider_result = serialize_model_result(result.model_result())
-                    result_failed = self._tool_result_failed(result)
-                    waiting_callback = bool(
-                        result.receipt
-                        and result.receipt.results_url
-                        and result.receipt.results_api_key
-                    )
-                    entry.update(
-                        {
-                            "status": (
-                                "waiting_callback"
-                                if waiting_callback
-                                else "failed"
-                                if result_failed
-                                else "complete"
-                            ),
-                            "provider_result": provider_result,
-                            "trusted_result": result.receipt is None,
-                            "evidence_ids": result.evidence_ids,
-                            "result_artifact_id": result.result_artifact_id,
-                            "artifacts": result.model_result().get("artifacts", []),
-                            "result_summary": self._result_summary(
-                                result.model_result()
-                            ),
-                            "process_id": (
-                                result.receipt.process_id if result.receipt else None
-                            ),
-                            "results_url": (
-                                result.receipt.results_url if result.receipt else None
-                            ),
-                        }
-                    )
+                    fields, waiting_callback = self._tool_result_entry(result)
+                    entry.update(fields)
                     receipt = result.receipt
                     if waiting_callback and receipt is not None:
                         turn = self._save_tool_step(
@@ -3665,6 +3697,38 @@ class ChatService:
             return True
         return result.output.get("timed_out") is True
 
+    def _tool_result_entry(self, result: Any) -> tuple[dict[str, Any], bool]:
+        """Classify one broker result into its durable tool-history fields.
+
+        Shared by the fresh execution path and the approval resume so that a
+        background command (a receipt carrying results_url and results_api_key)
+        parks the turn in WAITING_CALLBACK from either path.
+        """
+
+        model_result = result.model_result()
+        receipt = result.receipt
+        waiting_callback = bool(
+            receipt and receipt.results_url and receipt.results_api_key
+        )
+        fields = {
+            "status": (
+                "waiting_callback"
+                if waiting_callback
+                else "failed"
+                if self._tool_result_failed(result)
+                else "complete"
+            ),
+            "provider_result": serialize_model_result(model_result),
+            "trusted_result": receipt is None,
+            "evidence_ids": result.evidence_ids,
+            "result_artifact_id": result.result_artifact_id,
+            "artifacts": model_result.get("artifacts", []),
+            "result_summary": self._result_summary(model_result),
+            "process_id": receipt.process_id if receipt else None,
+            "results_url": receipt.results_url if receipt else None,
+        }
+        return fields, waiting_callback
+
     @staticmethod
     def _result_summary(output: dict[str, Any]) -> str:
         if output.get("schema") == "nebula.tool-result/v2":
@@ -3755,18 +3819,39 @@ class ChatService:
                 }
             )
         else:
-            result_failed = self._tool_result_failed(result)
-            entry.update(
-                {
-                    "status": "failed" if result_failed else "complete",
-                    "provider_result": serialize_model_result(result.model_result()),
-                    "trusted_result": result.receipt is None,
-                    "evidence_ids": result.evidence_ids,
-                    "result_artifact_id": result.result_artifact_id,
-                    "artifacts": result.model_result().get("artifacts", []),
-                    "result_summary": self._result_summary(result.model_result()),
-                }
-            )
+            fields, waiting_callback = self._tool_result_entry(result)
+            entry.update(fields)
+            receipt = result.receipt
+            if waiting_callback and receipt is not None:
+                # The approved command runs in the background and will POST its
+                # results to Core. Park the turn exactly as a fresh execution
+                # does; routing again now would answer with no output and the
+                # webhook would find nothing waiting for it.
+                turn = self.store.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "status": ChatTurnStatus.WAITING_CALLBACK,
+                        "approval_id": None,
+                        "tool_history": [*turn.tool_history[:-1], entry],
+                    },
+                    expected_revision=turn.revision,
+                )
+                prepared.turn = turn
+                yield (
+                    "callback_required",
+                    {
+                        "type": "callback_required",
+                        "turn_id": turn.id,
+                        "tool_call_id": entry["tool_call_id"],
+                        "process_id": receipt.process_id,
+                        "results_url": receipt.results_url,
+                        "summary": entry.get("result_summary")
+                        or "Waiting for the command to POST results.",
+                    },
+                )
+                self._release_execution(prepared)
+                return
         history = [*turn.tool_history[:-1], entry]
         turn = self.store.update(
             ChatTurn,
