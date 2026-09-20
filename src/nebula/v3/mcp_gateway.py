@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .mcp import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION
+from .mcp import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION, encode_gateway_frame
 
 
 class GatewayClient:
@@ -65,9 +65,12 @@ class GatewayClient:
                 "method": method,
                 **({"params": params} if params is not None else {}),
             }
-            self.writer.write(
-                json.dumps(payload, separators=(",", ":")).encode() + b"\n"
-            )
+            encoded = encode_gateway_frame(payload)
+            # Refuse before writing: a partial or oversized frame would cost
+            # the single-use authenticated connection for the whole session.
+            if len(encoded) > MAX_MCP_MESSAGE_BYTES:
+                raise ValueError("MCP request exceeded 4 MiB")
+            self.writer.write(encoded)
             await self.writer.drain()
             line = await self.reader.readline()
             if not line or len(line) > MAX_MCP_MESSAGE_BYTES:

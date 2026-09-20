@@ -73,7 +73,21 @@ class _McpClient:
         self.next_id = 1
         self.response_limit = response_limit
 
-    async def request(self, method: str, params: dict[str, Any] | None = None) -> Any:
+    async def request(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """Send one request; ``timeout`` bounds waiting for its answer.
+
+        Callers still wrap the call in ``asyncio.wait_for``; the per-request
+        timeout lets transports that enforce their own read deadline (HTTP)
+        wait as long as the caller does instead of cutting off at the
+        connection default.
+        """
+
         request_id = self.next_id
         self.next_id += 1
         response = await self.exchange(
@@ -82,7 +96,8 @@ class _McpClient:
                 "id": request_id,
                 "method": method,
                 **({"params": params} if params is not None else {}),
-            }
+            },
+            timeout=timeout,
         )
         if not isinstance(response, dict) or response.get("id") != request_id:
             raise McpProbeError(f"MCP {method} returned an uncorrelated response")
@@ -109,7 +124,11 @@ class _McpClient:
         )
 
     async def exchange(
-        self, message: dict[str, Any], *, notification: bool = False
+        self,
+        message: dict[str, Any],
+        *,
+        notification: bool = False,
+        timeout: float | None = None,
     ) -> Any:
         raise NotImplementedError
 
@@ -136,8 +155,15 @@ class _StdioMcpClient(_McpClient):
         )
 
     async def exchange(
-        self, message: dict[str, Any], *, notification: bool = False
+        self,
+        message: dict[str, Any],
+        *,
+        notification: bool = False,
+        timeout: float | None = None,
     ) -> Any:
+        # Pipe reads carry no deadline of their own; the caller's wait_for
+        # bounds them, so the per-request timeout is not needed here.
+        del timeout
         if self.process.stdin is None or self.process.stdout is None:
             raise McpProbeError("MCP stdio transport is unavailable")
         encoded = json.dumps(message, separators=(",", ":")).encode() + b"\n"
@@ -153,6 +179,14 @@ class _StdioMcpClient(_McpClient):
                     "MCP response exceeded its bounded response limit"
                 ) from exc
             if not line:
+                # A server usually explains its exit on stderr right around the
+                # time stdout closes; give the reader a moment so the failure
+                # message carries that explanation instead of nothing.
+                if not self.stderr_task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(self.stderr_task), 0.5)
+                    except Exception:  # diagnostic-expected: stderr still open or its reader already reported its own failure; report what was captured
+                        pass
                 detail = f": {self.stderr_tail}" if self.stderr_tail else ""
                 raise McpProbeError(f"MCP stdio server exited during discovery{detail}")
             if len(line) > self.response_limit:
@@ -218,6 +252,7 @@ class _HttpMcpClient(_McpClient):
         super().__init__(response_limit=response_limit)
         self.url = url
         self.headers = headers
+        self.startup_timeout = timeout
         self.session_id: str | None = None
         self.client = httpx.AsyncClient(
             follow_redirects=False,
@@ -226,7 +261,11 @@ class _HttpMcpClient(_McpClient):
         )
 
     async def exchange(
-        self, message: dict[str, Any], *, notification: bool = False
+        self,
+        message: dict[str, Any],
+        *,
+        notification: bool = False,
+        timeout: float | None = None,
     ) -> Any:
         headers = {
             **self.headers,
@@ -237,8 +276,19 @@ class _HttpMcpClient(_McpClient):
         if self.session_id:
             headers["MCP-Session-Id"] = self.session_id
         payload = bytearray()
+        # Connecting is bounded by the startup timeout; waiting for the answer
+        # is bounded by the request's own timeout, which for tools/call is the
+        # tool timeout rather than the (much shorter) startup timeout.
+        request_timeout = httpx.Timeout(
+            self.startup_timeout,
+            read=self.startup_timeout if timeout is None else timeout,
+        )
         async with self.client.stream(
-            "POST", self.url, headers=headers, json=message
+            "POST",
+            self.url,
+            headers=headers,
+            json=message,
+            timeout=request_timeout,
         ) as response:
             if response.status_code in {401, 403}:
                 raise McpProbeError("MCP HTTP authentication failed")
@@ -392,17 +442,6 @@ class McpProbeService:
                     "by connected harness transports when the server advertises it."
                 ),
             )
-            self.store.update(
-                McpServerProfile,
-                profile.id,
-                {"capabilities": snapshot},
-                expected_revision=profile.revision,
-            )
-            return McpProbeReport(
-                profile_id=profile.id,
-                compatible=True,
-                capabilities=snapshot,
-            )
         except Exception as exc:
             record_caught_exception(
                 "harnesses",
@@ -429,6 +468,22 @@ class McpProbeService:
         finally:
             if client is not None:
                 await client.close()
+        # The profile may have been edited while the server was being probed.
+        # Persist the discovered snapshot onto the latest revision; a conflict
+        # from a concurrent write in this window is a real conflict and is
+        # raised as one rather than recorded as an incompatible server.
+        latest = self.store.get(McpServerProfile, profile.id)
+        self.store.update(
+            McpServerProfile,
+            latest.id,
+            {"capabilities": snapshot},
+            expected_revision=latest.revision,
+        )
+        return McpProbeReport(
+            profile_id=profile.id,
+            compatible=True,
+            capabilities=snapshot,
+        )
 
     async def _connect(
         self,
@@ -530,7 +585,9 @@ class McpProbeService:
             await client.notify("notifications/initialized")
             result = await asyncio.wait_for(
                 client.request(
-                    "tools/call", {"name": tool_name, "arguments": arguments}
+                    "tools/call",
+                    {"name": tool_name, "arguments": arguments},
+                    timeout=profile.tool_timeout_seconds,
                 ),
                 timeout=profile.tool_timeout_seconds,
             )
@@ -769,7 +826,9 @@ def build_mcp_tool_plugins(
                     "started_at": started.isoformat(),
                     "completed_at": completed.isoformat(),
                     "duration_seconds": max(0.0, (completed - started).total_seconds()),
-                    "timed_out": isinstance(failure, asyncio.TimeoutError),
+                    "timed_out": isinstance(
+                        failure, (asyncio.TimeoutError, httpx.TimeoutException)
+                    ),
                 },
             )
 
@@ -844,6 +903,60 @@ class McpGatewayLaunch:
 
 GatewayListHandler = Callable[[dict[str, Any]], Any]
 GatewayCallHandler = Callable[[str, dict[str, Any]], Any]
+
+
+def encode_gateway_frame(message: dict[str, Any]) -> bytes:
+    """Encode one newline-delimited gateway frame as UTF-8.
+
+    Non-ASCII text stays UTF-8 rather than becoming ``\\uXXXX`` escapes, so
+    the frame limit measures the message itself: a tool argument that is under
+    the limit on the harness side stays under it on the Core socket. Lone
+    surrogates cannot be encoded as UTF-8 and fall back to escaping.
+    """
+
+    text = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+    try:
+        return text.encode("utf-8") + b"\n"
+    except UnicodeEncodeError as exc:
+        record_caught_exception(
+            "harnesses",
+            "harnesses.mcp.caught_failure_010",
+            "A handled harnesses operation raised an exception.",
+            exc,
+            stage="gateway",
+        )
+        return json.dumps(message, separators=(",", ":")).encode() + b"\n"
+
+
+async def _read_gateway_frame(reader: asyncio.StreamReader) -> bytes | None:
+    """Read one newline-delimited frame from the gateway socket.
+
+    Returns ``b""`` at end of stream and ``None`` when the frame exceeded the
+    stream limit. An oversized frame is skipped through its newline so the
+    connection stays in sync and the caller can answer with a bounded error
+    instead of closing the only authenticated connection.
+    """
+
+    skipped = False
+    while True:
+        try:
+            line = await reader.readuntil(b"\n")
+        except asyncio.IncompleteReadError as exc:  # diagnostic-expected: end of stream, possibly after a trailing partial frame
+            return b"" if skipped else exc.partial
+        except asyncio.LimitOverrunError as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.mcp.caught_failure_011",
+                "A handled harnesses operation raised an exception.",
+                exc,
+                stage="gateway",
+            )
+            # Discard what was scanned; the rest of the frame (if any) is
+            # still arriving and is skipped by the next iterations.
+            await reader.readexactly(exc.consumed)
+            skipped = True
+            continue
+        return None if skipped else line
 
 
 class McpGatewaySession:
@@ -937,12 +1050,15 @@ class McpGatewaySession:
             self._authenticated_writer = writer
             writer.write(b'{"id":0,"result":{"authenticated":true}}\n')
             await writer.drain()
-            while line := await reader.readline():
-                if len(line) > MAX_MCP_MESSAGE_BYTES:
+            while True:
+                line = await _read_gateway_frame(reader)
+                if line == b"":
                     break
                 response: dict[str, Any]
                 request_id: Any = None
                 try:
+                    if line is None or len(line) > MAX_MCP_MESSAGE_BYTES:
+                        raise ValueError("gateway request exceeded 4 MiB")
                     message = json.loads(line)
                     request_id = message.get("id")
                     method = message.get("method")
@@ -972,17 +1088,13 @@ class McpGatewaySession:
                         "id": request_id,
                         "error": {"message": _safe(exc), "type": type(exc).__name__},
                     }
-                encoded = json.dumps(response, separators=(",", ":")).encode() + b"\n"
+                encoded = encode_gateway_frame(response)
                 if len(encoded) > MAX_MCP_MESSAGE_BYTES:
-                    encoded = (
-                        json.dumps(
-                            {
-                                "id": request_id,
-                                "error": {"message": "gateway response exceeded 4 MiB"},
-                            },
-                            separators=(",", ":"),
-                        ).encode()
-                        + b"\n"
+                    encoded = encode_gateway_frame(
+                        {
+                            "id": request_id,
+                            "error": {"message": "gateway response exceeded 4 MiB"},
+                        }
                     )
                 writer.write(encoded)
                 await writer.drain()
@@ -1001,5 +1113,6 @@ __all__ = [
     "McpProbeReport",
     "McpProbeService",
     "build_mcp_tool_plugins",
+    "encode_gateway_frame",
     "resolve_mcp_profiles",
 ]
