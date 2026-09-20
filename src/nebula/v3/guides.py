@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from .database import EntityRow
+from .diagnostics import scrub_host_paths
 from .domain import Engagement, GuideProgress, utc_now
 from .operators import OperatorProfileService
 from .project_instructions import (
@@ -149,7 +150,9 @@ def guides_router(
             OSError,
             ValueError,
         ) as exc:  # diagnostic-expected: the refusal reason is returned to the guide step
-            return ProjectInstructionsStatus(present=True, error=str(exc))
+            return ProjectInstructionsStatus(
+                present=True, error=scrub_host_paths(str(exc))
+            )
         if instructions is None:
             return ProjectInstructionsStatus(present=False)
         return ProjectInstructionsStatus(
@@ -195,6 +198,15 @@ Keep it short: the rules that must always hold for this project.
 - 
 """
 
+SKILL_CHECKLIST = """# Checklist
+
+Replace these with the checks the skill must complete, one per line.
+
+- [ ] Confirm the target is in scope before touching it.
+- [ ] Record evidence for every finding.
+- [ ] Summarise what was verified and what was not.
+"""
+
 
 def starter_files(kind: str, name: str) -> list[tuple[str, str, int]]:
     """Return (relative path, content, mode) for a guide's starter files."""
@@ -221,6 +233,8 @@ def starter_files(kind: str, name: str) -> list[tuple[str, str, int]]:
             (f"{folder}/hook.json", json.dumps(manifest, indent=2) + "\n", 0o644),
             (f"{folder}/run.sh", HOOK_SCRIPT, 0o755),
         ]
+    # Every relative link in SKILL.md must resolve when the skill is selected,
+    # so the example link points at a file the starter writes too.
     skill = (
         "---\n"
         f"name: {name}\n"
@@ -230,7 +244,11 @@ def starter_files(kind: str, name: str) -> list[tuple[str, str, int]]:
         "Write the steps the assistant should follow. Link supporting files in this\n"
         "folder with relative links, e.g. [checklist](checklist.md).\n"
     )
-    return [(f".agents/skills/{name}/SKILL.md", skill, 0o644)]
+    folder = f".agents/skills/{name}"
+    return [
+        (f"{folder}/SKILL.md", skill, 0o644),
+        (f"{folder}/checklist.md", SKILL_CHECKLIST, 0o644),
+    ]
 
 
 def write_new_files(workspace: Path, files: list[tuple[str, str, int]]) -> None:

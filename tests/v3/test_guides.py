@@ -124,7 +124,12 @@ def test_core_app_serves_guide_progress_with_auth_and_conflicts(tmp_path):
 
 def test_starter_files_are_discovered_and_never_overwritten(tmp_path):
     from nebula.v3.native_hooks import discover_native_hooks
-    from nebula.v3.skill_catalog import discover_skills, native_skill_roots
+    from nebula.v3.skill_catalog import (
+        SkillSelection,
+        discover_skills,
+        native_skill_roots,
+        snapshot_skill,
+    )
 
     _, _, workspace, client = setup(tmp_path)
     old_umask = os.umask(0o077)
@@ -147,12 +152,17 @@ def test_starter_files_are_discovered_and_never_overwritten(tmp_path):
         "/guides/starter-files",
         json={"engagement_id": "p", "kind": "skill", "name": "recon-checklist"},
     )
-    assert skill.json()["paths"] == [".agents/skills/recon-checklist/SKILL.md"]
-    names = [
-        item.name
-        for item in discover_skills(native_skill_roots(workspace, tmp_path / "managed"))
+    assert skill.json()["paths"] == [
+        ".agents/skills/recon-checklist/SKILL.md",
+        ".agents/skills/recon-checklist/checklist.md",
     ]
-    assert names == ["recon-checklist"]
+    available = discover_skills(native_skill_roots(workspace, tmp_path / "managed"))
+    assert [item.name for item in available] == ["recon-checklist"]
+    # The starter must be selectable as written: its example link resolves.
+    snapshot = snapshot_skill(
+        SkillSelection(name="recon-checklist", path=available[0].path), available
+    )
+    assert [item.relative_path for item in snapshot.resources] == ["checklist.md"]
 
     agents = client.post(
         "/guides/starter-files", json={"engagement_id": "p", "kind": "agents_md"}
@@ -184,3 +194,20 @@ def test_starter_files_reject_bad_names_and_symlinked_folders(tmp_path):
             json={"engagement_id": "p", "kind": "skill", "name": "x"},
         )
     assert list(elsewhere.iterdir()) == []
+
+
+def test_project_instructions_errors_do_not_reveal_host_paths(tmp_path, monkeypatch):
+    from nebula.v3 import guides
+
+    _, _, workspace, client = setup(tmp_path)
+
+    def unreadable(_workspace):
+        raise PermissionError(13, "Permission denied", str(workspace / "AGENTS.md"))
+
+    monkeypatch.setattr(guides, "load_project_instructions", unreadable)
+
+    status = client.get("/project-instructions?engagement_id=p").json()
+
+    assert status["present"] is True
+    assert "Permission denied" in status["error"]
+    assert str(tmp_path) not in status["error"] and "Errno" not in status["error"]

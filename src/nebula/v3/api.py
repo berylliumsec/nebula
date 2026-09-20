@@ -192,6 +192,7 @@ from .diagnostics import (
     new_error_id,
     new_request_id,
     record_diagnostic,
+    scrub_host_paths,
 )
 from .diagnostic_guidance import (
     DiagnosticIncident,
@@ -9671,7 +9672,10 @@ def create_app(
                 native_skill_roots(native_workspace(engagement_id), managed_skill_root)
             )
         except (ValueError, OSError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # An OSError names the host path it failed on; keep it off the wire.
+            raise HTTPException(
+                status_code=409, detail=scrub_host_paths(str(exc))
+            ) from exc
 
     @app.get(
         f"{API_PREFIX}/skills/catalog",

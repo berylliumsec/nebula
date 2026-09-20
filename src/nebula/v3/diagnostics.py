@@ -265,6 +265,16 @@ def _scrub_operator_detail(value: str) -> str:
     return _ABSOLUTE_PATH.sub("<path>", _OS_ERROR_CODE.sub("", value)).strip()
 
 
+def scrub_host_paths(value: str) -> str:
+    """Error text for a client: the exception's own words, minus what the OS added.
+
+    The same reduction ``operator_detail`` gets before export, for messages that
+    reach the UI directly (an unreadable workspace file names its host path).
+    """
+
+    return _scrub_operator_detail(value)
+
+
 def _on_event_loop() -> bool:
     try:
         asyncio.get_running_loop()
@@ -2492,5 +2502,6 @@ __all__ = [
     "record_caught_exception",
     "require_diagnostics",
     "sanitize_metadata",
+    "scrub_host_paths",
     "shutdown_diagnostics",
 ]

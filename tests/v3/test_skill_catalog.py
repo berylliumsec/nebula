@@ -111,3 +111,37 @@ def test_skill_resource_references_cannot_escape_or_use_symlinks(tmp_path):
             SkillSelection(name="linked", path=str(linked)),
             discover_skills(native_skill_roots(tmp_path)),
         )
+
+
+def test_blank_link_targets_are_a_validation_error(tmp_path):
+    root = tmp_path / ".agents" / "skills"
+    blank = _skill(root, "blank", "Open [the notes]( ) first.")
+
+    with pytest.raises(ValueError, match="empty target"):
+        snapshot_skill(
+            SkillSelection(name="blank", path=str(blank)),
+            discover_skills(native_skill_roots(tmp_path)),
+        )
+
+
+def test_skill_listing_failures_do_not_reveal_host_paths(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from nebula.v3.api import create_app
+    from nebula.v3.domain import Engagement
+    from nebula.v3.storage import NebulaStore
+
+    store = NebulaStore(tmp_path / "app.db")
+    client = TestClient(create_app(store, auth_token="test-token"))
+    missing = tmp_path / "moved-elsewhere"
+    store.create(Engagement(id="p", name="Project", workspace_path=str(missing)))
+
+    response = client.get(
+        "/api/v1/skills?engagement_id=p",
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "No such file or directory" in detail
+    assert str(tmp_path) not in detail and "Errno" not in detail

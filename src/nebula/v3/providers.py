@@ -11,6 +11,8 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
+import base64
+import binascii
 import ipaddress
 import hashlib
 import json
@@ -332,6 +334,46 @@ def _gemini_parts(content: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif part.get("type") == "text":
             parts.append({"text": str(part.get("text") or "")})
     return parts
+
+
+_BEDROCK_IMAGE_FORMATS = {
+    "image/png": "png",
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+}
+
+
+def _bedrock_content(content: str | list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Converse content blocks. An image travels as an image block, never as text."""
+
+    if isinstance(content, str):
+        return [{"text": content}]
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        kind = part.get("type")
+        if kind == "text":
+            blocks.append({"text": str(part.get("text") or "")})
+            continue
+        if kind != "image":
+            raise ProviderError(f"Bedrock does not accept {kind or 'untyped'} parts")
+        media_type = str(part.get("media_type") or "").lower()
+        image_format = _BEDROCK_IMAGE_FORMATS.get(media_type)
+        if image_format is None:
+            raise ProviderError(
+                f"Bedrock does not accept {media_type or 'untyped'} images; "
+                "send png, jpeg, gif or webp"
+            )
+        try:
+            data = base64.b64decode(str(part.get("data") or ""), validate=True)
+        except (
+            binascii.Error,
+            ValueError,
+        ) as exc:  # diagnostic-expected: a malformed attachment is reported, not sent as text
+            raise ProviderError("image part is not valid base64") from exc
+        blocks.append({"image": {"format": image_format, "source": {"bytes": data}}})
+    return blocks
 
 
 class ToolDefinition(BaseModel):
@@ -1342,6 +1384,63 @@ def _vllm_grammar_schema(value: Any) -> Any:
     return value
 
 
+# Reasoning families reject sampling parameters: OpenAI answers 400
+# "Unsupported parameter: 'temperature'" for the o-series and gpt-5 models.
+_OPENAI_REASONING_MODEL = re.compile(r"^(?:o\d+|gpt-5)(?:[-.]|$)")
+
+
+def _openai_reasoning_model(model: str) -> bool:
+    return _OPENAI_REASONING_MODEL.match(model.rsplit("/", 1)[-1]) is not None
+
+
+_STRICT_SCHEMA_MAPPINGS = frozenset(
+    {"properties", "$defs", "definitions", "patternProperties"}
+)
+_STRICT_SCHEMA_DATA = frozenset({"enum", "const", "examples", "required"})
+
+
+def _openai_strict_schema(schema: Any) -> bool:
+    """Whether OpenAI strict mode accepts a schema as written.
+
+    Strict mode requires every property to be listed in ``required`` and every
+    object to forbid additional properties, and rejects ``default`` and
+    ``uniqueItems``. Nebula keeps the real schema and validates arguments at
+    the broker, so a schema strict mode would reject is sent without strict
+    instead of failing the whole request.
+    """
+
+    if isinstance(schema, list):
+        return all(_openai_strict_schema(item) for item in schema)
+    if not isinstance(schema, dict):
+        return True
+    if "default" in schema or "uniqueItems" in schema:
+        return False
+    properties = schema.get("properties")
+    kind = schema.get("type")
+    is_object = kind == "object" or (isinstance(kind, list) and "object" in kind)
+    if is_object or isinstance(properties, dict):
+        required = schema.get("required") or []
+        if (
+            not isinstance(required, list)
+            or schema.get("additionalProperties") is not False
+        ):
+            return False
+        if isinstance(properties, dict) and set(properties) - set(required):
+            return False
+    for key, value in schema.items():
+        if key in _STRICT_SCHEMA_DATA:
+            continue
+        if key in _STRICT_SCHEMA_MAPPINGS:
+            if isinstance(value, dict) and not all(
+                _openai_strict_schema(item) for item in value.values()
+            ):
+                return False
+            continue
+        if not _openai_strict_schema(value):
+            return False
+    return True
+
+
 class OpenAIResponsesProvider(ModelProvider):
     """OpenAI Responses API adapter.
 
@@ -1353,6 +1452,7 @@ class OpenAIResponsesProvider(ModelProvider):
         return self._bearer_or_key_headers()
 
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
+        wire_names = _wire_tool_names(request)
         payload: dict[str, Any] = {
             "model": model,
             "input": [
@@ -1365,7 +1465,7 @@ class OpenAIResponsesProvider(ModelProvider):
                     {
                         "type": "function_call",
                         "call_id": result.call_id,
-                        "name": result.name,
+                        "name": wire_names.get(result.name, result.name),
                         "arguments": json.dumps(result.arguments, sort_keys=True),
                     },
                     {
@@ -1383,17 +1483,23 @@ class OpenAIResponsesProvider(ModelProvider):
             payload["instructions"] = request.instructions
         if request.max_output_tokens:
             payload["max_output_tokens"] = request.max_output_tokens
-        if request.temperature is not None:
+        if request.temperature is not None and not _openai_reasoning_model(model):
             payload["temperature"] = request.temperature
         if request.tools:
             payload["parallel_tool_calls"] = request.parallel_tool_calls
             payload["tools"] = [
                 {
                     "type": "function",
-                    "name": tool.name,
+                    "name": wire_names.get(tool.name, tool.name),
                     "description": tool.description,
                     "parameters": tool.input_schema,
-                    "strict": tool.strict,
+                    # Strict mode is a request-level contract: one schema it
+                    # rejects fails every tool in the call.
+                    **(
+                        {"strict": True}
+                        if tool.strict and _openai_strict_schema(tool.input_schema)
+                        else {}
+                    ),
                 }
                 for tool in request.tools
             ]
@@ -1431,7 +1537,7 @@ class OpenAIResponsesProvider(ModelProvider):
                 calls.append(
                     _normalized_tool_call(
                         id=item.get("call_id") or item.get("id", ""),
-                        name=item["name"],
+                        name=_decode_tool_name(request, item.get("name", "")),
                         arguments=_arguments(item.get("arguments")),
                     )
                 )
@@ -1464,7 +1570,11 @@ class OpenAIResponsesProvider(ModelProvider):
                 response = await client.get(self._path("/v1/models"))
             if response.is_error:
                 raise _safe_error(response)
-            models = [item["id"] for item in response.json().get("data", [])]
+            models = [
+                item["id"]
+                for item in response.json().get("data", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            ]
             return ProviderHealth(
                 provider_id=self.config.id, healthy=True, models=models
             )
@@ -1485,11 +1595,12 @@ _WIRE_TOOL_NAME = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 
 
 def _wire_tool_names(request: ModelRequest) -> dict[str, str]:
-    """Map Nebula tool names to names every Chat Completions vendor accepts.
+    """Map Nebula tool names to names every vendor accepts.
 
-    Nebula names may contain dots (``tool_output.search``); OpenAI and
-    Anthropic accept only ``[a-zA-Z0-9_-]{1,64}``. The mapping is derived from
-    the request alone, so responses and replayed history decode identically.
+    Nebula names may contain dots (``tool_output.search``); OpenAI (Chat
+    Completions and Responses), Anthropic and Bedrock accept only
+    ``[a-zA-Z0-9_-]{1,64}``. The mapping is derived from the request alone, so
+    responses and replayed history decode identically.
     """
 
     names = sorted(
@@ -1690,7 +1801,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 )
             if response.is_error:
                 raise _safe_error(response)
-            models = [item["id"] for item in response.json().get("data", [])]
+            models = [
+                item["id"]
+                for item in response.json().get("data", [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            ]
             return ProviderHealth(
                 provider_id=self.config.id, healthy=True, models=models
             )
@@ -2124,6 +2239,7 @@ class AnthropicProvider(ModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
+        wire_names = _wire_tool_names(request)
         payload: dict[str, Any] = {
             "model": model,
             "max_tokens": request.max_output_tokens or 4096,
@@ -2142,7 +2258,7 @@ class AnthropicProvider(ModelProvider):
                             {
                                 "type": "tool_use",
                                 "id": result.call_id,
-                                "name": result.name,
+                                "name": wire_names.get(result.name, result.name),
                                 "input": result.arguments,
                             }
                         ],
@@ -2174,7 +2290,7 @@ class AnthropicProvider(ModelProvider):
         if request.tools:
             payload["tools"] = [
                 {
-                    "name": tool.name,
+                    "name": wire_names.get(tool.name, tool.name),
                     "description": tool.description,
                     "input_schema": tool.input_schema,
                 }
@@ -2204,7 +2320,7 @@ class AnthropicProvider(ModelProvider):
                 calls.append(
                     _normalized_tool_call(
                         id=block.get("id", ""),
-                        name=block.get("name", ""),
+                        name=_decode_tool_name(request, block.get("name", "")),
                         arguments=_arguments(block.get("input")),
                     )
                 )
@@ -2227,15 +2343,33 @@ class AnthropicProvider(ModelProvider):
 
     async def health(self) -> ProviderHealth:
         try:
+            models: list[str] = []
+            params: dict[str, str] = {"limit": "1000"}
             async with self._client(self._headers()) as client:
-                response = await client.get(self._path("/v1/models"))
-            if response.is_error:
-                raise _safe_error(response)
-            models = [
-                item["id"]
-                for item in response.json().get("data", [])
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            ]
+                # The list is paged (20 rows by default); a model past the
+                # first page must not look like one the account lost.
+                for _page in range(20):
+                    response = await client.get(self._path("/v1/models"), params=params)
+                    if response.is_error:
+                        raise _safe_error(response)
+                    payload = response.json()
+                    rows = payload.get("data") if isinstance(payload, dict) else None
+                    models.extend(
+                        item["id"]
+                        for item in (rows if isinstance(rows, list) else [])
+                        if isinstance(item, dict) and isinstance(item.get("id"), str)
+                    )
+                    last_id = (
+                        payload.get("last_id") if isinstance(payload, dict) else None
+                    )
+                    if (
+                        not isinstance(payload, dict)
+                        or not payload.get("has_more")
+                        or not isinstance(last_id, str)
+                        or not last_id
+                    ):
+                        break
+                    params = {**params, "after_id": last_id}
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=True,
@@ -2252,6 +2386,24 @@ class AnthropicProvider(ModelProvider):
             return ProviderHealth(
                 provider_id=self.config.id, healthy=False, detail=str(exc)
             )
+
+
+# Gemini's REST function calls usually carry no ``id``; Nebula needs one to
+# pair a call with its result. Ids Nebula made up are never echoed to Gemini.
+_GEMINI_SYNTHETIC_CALL_ID = "nebula-gemini-call:"
+
+
+def _gemini_call_id(value: Any, response_id: Any, index: int) -> str:
+    if isinstance(value, str) and value:
+        return value
+    scope = response_id if isinstance(response_id, str) and response_id else "call"
+    return f"{_GEMINI_SYNTHETIC_CALL_ID}{scope}:{index}"
+
+
+def _gemini_call_identity(call_id: str) -> dict[str, str]:
+    if call_id.startswith(_GEMINI_SYNTHETIC_CALL_ID):
+        return {}
+    return {"id": call_id}
 
 
 class GeminiProvider(ModelProvider):
@@ -2299,7 +2451,7 @@ class GeminiProvider(ModelProvider):
                         "parts": [
                             {
                                 "functionCall": {
-                                    "id": result.call_id,
+                                    **_gemini_call_identity(result.call_id),
                                     "name": result.name,
                                     "args": result.arguments,
                                 }
@@ -2311,7 +2463,7 @@ class GeminiProvider(ModelProvider):
                         "parts": [
                             {
                                 "functionResponse": {
-                                    "id": result.call_id,
+                                    **_gemini_call_identity(result.call_id),
                                     "name": result.name,
                                     "response": (
                                         result.output
@@ -2376,11 +2528,13 @@ class GeminiProvider(ModelProvider):
         text_parts = [part.get("text", "") for part in parts if "text" in part]
         calls = [
             _normalized_tool_call(
-                id=part.get("functionCall", {}).get("id", ""),
+                id=_gemini_call_id(
+                    part["functionCall"].get("id"), data.get("responseId"), index
+                ),
                 name=part["functionCall"]["name"],
                 arguments=_arguments(part["functionCall"].get("args")),
             )
-            for part in parts
+            for index, part in enumerate(parts)
             if "functionCall" in part
         ]
         usage = data.get("usageMetadata") or {}
@@ -2401,27 +2555,45 @@ class GeminiProvider(ModelProvider):
 
     async def health(self) -> ProviderHealth:
         try:
-            async with self._client(self._headers()) as client:
-                if self.config.flavor == ProviderFlavor.VERTEX:
-                    project = self.config.options.get("project")
-                    location = self.config.options.get("location")
-                    if not project or not location:
-                        raise ProviderError(
-                            "Vertex profiles require project and location options"
-                        )
-                    response = await client.get(
-                        f"/v1/projects/{project}/locations/{location}/publishers/google/models"
+            if self.config.flavor == ProviderFlavor.VERTEX:
+                project = self.config.options.get("project")
+                location = self.config.options.get("location")
+                if not project or not location:
+                    raise ProviderError(
+                        "Vertex profiles require project and location options"
                     )
-                else:
-                    response = await client.get(self._path("/v1beta/models"))
-            if response.is_error:
-                raise _safe_error(response)
-            models = [
-                item["name"].rsplit("/", 1)[-1]
-                for item in response.json().get("models", [])
-            ]
+                path = f"/v1/projects/{project}/locations/{location}/publishers/google/models"
+                params: dict[str, str] = {}
+            else:
+                path = self._path("/v1beta/models")
+                params = {"pageSize": "1000"}
+            models: list[str] = []
+            async with self._client(self._headers()) as client:
+                # Google pages the catalog (50 rows by default); follow the
+                # token so a model past page one is not reported as gone.
+                for _page in range(20):
+                    response = await client.get(path, params=params)
+                    if response.is_error:
+                        raise _safe_error(response)
+                    payload = response.json()
+                    rows = payload.get("models") if isinstance(payload, dict) else None
+                    models.extend(
+                        item["name"].rsplit("/", 1)[-1]
+                        for item in (rows if isinstance(rows, list) else [])
+                        if isinstance(item, dict) and isinstance(item.get("name"), str)
+                    )
+                    token = (
+                        payload.get("nextPageToken")
+                        if isinstance(payload, dict)
+                        else None
+                    )
+                    if not isinstance(token, str) or not token:
+                        break
+                    params = {**params, "pageToken": token}
             return ProviderHealth(
-                provider_id=self.config.id, healthy=True, models=models
+                provider_id=self.config.id,
+                healthy=True,
+                models=list(dict.fromkeys(models)),
             )
         except Exception as exc:
             record_caught_exception(
@@ -2470,12 +2642,13 @@ class BedrockProvider(ModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
+        wire_names = _wire_tool_names(request)
         kwargs: dict[str, Any] = {
             "modelId": model,
             "messages": [
                 {
                     "role": "assistant" if msg.role == "assistant" else "user",
-                    "content": [{"text": str(msg.content)}],
+                    "content": _bedrock_content(msg.content),
                 }
                 for msg in request.messages
                 if msg.role != "system"
@@ -2490,7 +2663,7 @@ class BedrockProvider(ModelProvider):
                             {
                                 "toolUse": {
                                     "toolUseId": result.call_id,
-                                    "name": result.name,
+                                    "name": wire_names.get(result.name, result.name),
                                     "input": result.arguments,
                                 }
                             }
@@ -2526,7 +2699,7 @@ class BedrockProvider(ModelProvider):
                 "tools": [
                     {
                         "toolSpec": {
-                            "name": tool.name,
+                            "name": wire_names.get(tool.name, tool.name),
                             "description": tool.description,
                             "inputSchema": {"json": tool.input_schema},
                         }
@@ -2565,7 +2738,7 @@ class BedrockProvider(ModelProvider):
         calls = [
             _normalized_tool_call(
                 id=block["toolUse"].get("toolUseId", ""),
-                name=block["toolUse"].get("name", ""),
+                name=_decode_tool_name(request, block["toolUse"].get("name", "")),
                 arguments=_arguments(block["toolUse"].get("input")),
             )
             for block in blocks
