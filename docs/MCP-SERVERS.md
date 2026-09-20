@@ -177,8 +177,33 @@ a project's scope (`PUT /api/v1/engagements/{id}/scope`) to send every tool
 with every request again. A project that opts into Jev suggestions from
 TypeSafe uses Jev's picks instead of the local ranking, and falls back to the
 local ranking when Jev is unavailable. Jev is sent the redacted operator
-messages, the expanded instructions of the skills selected for the turn, and
-tool names and descriptions — never tool output.
+messages, the expanded instructions of the skills selected for the turn,
+server names and descriptions, and tool names and descriptions — never tool
+output.
+
+Jev ranks two things in one call: the selected servers and the individual
+tools. It is never asked whether the turn needs a tool at all; every question
+carries a "none of these" option instead. A server's rank weights the tools
+that come from it — the top-ranked server's tools keep their full score and
+the bottom-ranked server's tools keep half — and at most three tools survive:
+up to two have their schema preloaded, and the rest are named as hints
+alongside the servers most likely to hold what the request needs. A tool whose
+question rated "none of these" higher is never preloaded, only hinted.
+
+Jev is asked once per turn, and a ranking is reused when the request that
+produced it recurs: the cache key covers the operator's message, the selected
+skills, the tool list and the source descriptions, so a retried turn or a
+repeated question against an unchanged catalog costs nothing, while the next
+message, a new MCP server or a re-probed description asks again. The cache
+holds the newest 64 rankings in the Core process, records nothing on disk, and
+never stores a failed call; a turn answered from it is marked `cached` in its
+snapshot and reports no input tokens.
+
+A server profile carries no description of its own, so the text describing it
+is the `instructions` string the server returned at the MCP handshake, stored
+in its capability snapshot. A server that sent none is described to Jev by its
+tool names. Like tool descriptions, that text is written by the server, so it
+steers a ranking and nothing else.
 
 ## Fields that are not imported
 

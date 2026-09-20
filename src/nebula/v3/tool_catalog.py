@@ -79,6 +79,9 @@ class CatalogReceipt(NebulaModel):
     deferred: list[str] = Field(default_factory=list)
     preloaded: list[str] = Field(default_factory=list)
     suggested: list[str] = Field(default_factory=list)
+    # Labels of the connected sources ranked most likely to help. Only Jev
+    # ranks sources; the local rankers leave this empty.
+    source_hints: list[str] = Field(default_factory=list)
     ranker: Ranker = "keyword"
     scores: dict[str, float] = Field(default_factory=dict)
 
@@ -325,7 +328,13 @@ def catalog_instructions(
         )
     if suggested:
         text += "\nPossibly relevant, not loaded: " + json.dumps(suggested)
-    if preloaded or suggested:
+    hints = [str(item) for item in receipt.get("source_hints", [])]
+    if hints:
+        text += (
+            f"\nSources ranked most likely to hold what this request needs (use "
+            f"{CATALOG_SEARCH} to see their tools): " + json.dumps(hints)
+        )
+    if preloaded or suggested or hints:
         text += "\nIgnore these if they do not fit what the operator actually asked."
     return text
 
