@@ -456,6 +456,77 @@ def test_openrouter_chat_verifies_route_limits_before_sizing_context(
     assert first.provider_profile.id == profile.id
 
 
+def test_openrouter_chat_sizes_an_alias_from_its_target_routes(tmp_path, monkeypatch):
+    measured: list[str] = []
+
+    class AliasProvider(FakeProvider):
+        async def openrouter_route_limits(
+            self, model: str
+        ) -> list[ModelRouteDescriptor]:
+            measured.append(model)
+            if model.startswith("~"):
+                raise ProviderError(
+                    "OpenRouter alias models publish no endpoints of their own"
+                )
+            return [
+                ModelRouteDescriptor(
+                    provider_name="wide",
+                    context_window=1_000_000,
+                    max_input_tokens=1_000_000,
+                    max_output_tokens=262_144,
+                    supported_parameters=["tools"],
+                )
+            ]
+
+    store = NebulaStore(tmp_path / "chat-alias-routes.db")
+    engagement = store.create(Engagement(id="eng-alias", name="Alias"))
+    payload = _profile(local=False, permits_sensitive_data=True).model_dump(
+        mode="python"
+    )
+    payload["provider_type"] = "openrouter"
+    payload["model_allowlist"] = ["~deepseek/deepseek-flash-latest"]
+    payload["metadata"] = {
+        "default_model": "~deepseek/deepseek-flash-latest",
+        "model_descriptors": [
+            {
+                "id": "~deepseek/deepseek-flash-latest",
+                "name": "DeepSeek Flash Latest",
+                "context_window": 1_048_576,
+                "max_output_tokens": 262_144,
+                "alias_target": "deepseek/model-a",
+                "route_limits": [],
+                "route_limits_verified": False,
+                "route_limits_checked_at": None,
+            }
+        ],
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = AliasProvider(profile.id, local=False)
+    provider.config.default_model = "~deepseek/deepseek-flash-latest"
+    provider.config.model_allowlist = ["~deepseek/deepseek-flash-latest"]
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    def prepare():
+        return service.prepare(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                model="~deepseek/deepseek-flash-latest",
+                messages=[{"role": "user", "content": "hello"}],
+                include_knowledge=False,
+            )
+        )
+
+    prepare()
+    second = prepare()
+
+    limits = json.loads(second.model_request.metadata["resolved_context_limits"])
+    assert measured == ["deepseek/model-a"]
+    assert limits["route_limits_verified"] is True
+    assert limits["context_window"] == 1_000_000
+
+
 def test_provider_chat_persists_reasoning_apart_from_the_reply(tmp_path, monkeypatch):
     class ThinkingProvider(FakeProvider):
         async def complete(self, request: ModelRequest) -> ModelResponse:

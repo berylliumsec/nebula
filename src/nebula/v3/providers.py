@@ -1546,6 +1546,11 @@ class OpenAICompatibleProvider(ModelProvider):
                         "choose another model or allow more providers"
                     )
             if not routes:
+                if model.startswith("~"):
+                    raise ProviderError(
+                        "OpenRouter alias models publish no endpoints of their own; "
+                        "refresh the provider so the alias target is known"
+                    )
                 raise ProviderError("OpenRouter returned no eligible model endpoints")
             return routes
         except (httpx.HTTPError, TimeoutError, ValueError) as exc:

@@ -1,20 +1,21 @@
 {
-  "change_digest": "5a78cad2038cf8749b0c5ebcbdcdda63c3020d84348508d972db9b7fc4a8b9be",
-  "reviewed_by": "Claude review of the stale transcript-search step in the durable-conversation real-Core journey",
-  "reason": "The real-Core journey \"assistant upgrade foundation production LAN reads durable conversation\" clicked `.assistant-search > summary` to open transcript search. Transcript search stopped being a closed disclosure row in #288, which replaced the <details>/<summary> with a section that a named 44px header action toggles (docs/design/compact-chat-search.md: \"no closed search row\"). That commit updated tests/interface.spec.ts but not tests/real-core.spec.ts, and because playwright-impact only runs on pull requests nothing on main caught it, so every step after the search has been unexercised in the real-Core suite since September 12. The product control is not covered, off-viewport or overlay-blocked: the failure log shows Playwright still waiting for a locator that never enters the DOM, and the page snapshot taken at the timeout lists an enabled \"Search messages and bookmarks\" button in the Conversation actions toolbar. The journey therefore needed the new step, not a product fix. The test now opens search the way an operator does - the header action on desktop and compact widths, the Conversation actions menu item at phone widths - asserts the panel is visible, and closes it again so the durable transcript, attachment, queue and geometry assertions that follow measure the normal reading surface. ui/playwright-impact.json gains a durable-conversation-core area so this journey can be selected on its own instead of pulling the whole 48-test assistant real-Core project; tests/test_playwright_impact.py covers that manifest. Merging main brought in #377, which rewrote the end of this same journey to fork explicitly instead of editing and branching; the merged journey was re-verified on all four profiles.",
-  "exclusions": "No frontend unit tests: no ui/src change, and ChatSearchPanel's open/close contract already has src/components/ChatSearchPanel.test.tsx coverage that this commit does not touch. No native tests: no Tauri or catalog-code change. No screenshot baselines: no rendered surface changes. Playwright is limited to the one repaired journey on the four real-Core profiles it was verified against (desktop 1440, compact 1024, Android Chromium 390, iPhone WebKit 390); area:assistant and area:transcript-search-layout are excluded because the search entry point itself is unchanged product code that interface.spec.ts already covers across eight profiles, and the chat-edit-in-place areas #377 selected are excluded because that merge is already validated on main and this commit changes none of its code. No full suites.",
+  "change_digest": "316ed1704bffce946508f236c2e0cee52cdca3a9fd39f6332b44f9f4ccf11e35",
+  "reviewed_by": "Claude review of OpenRouter alias models pinned to the 8,192-token safe ceiling",
+  "reason": "OpenRouter alias models (`~deepseek/deepseek-flash-latest` and the other 17 `~author/family-latest` entries) publish an empty endpoint set: the live API returns `{\"endpoints\": []}` for the alias and 22 routes for its target `deepseek/deepseek-v4.1-flash`. `openrouter_route_limits` therefore raised \"OpenRouter returned no eligible model endpoints\" for every alias, capability verification stored `route_limits_verified: false`, and `resolve_context_limits` clamped the model to `DEFAULT_CONTEXT_WINDOW` (8,192) less 2,048 reserved output, so a 27k-token conversation could not dispatch against a model the catalog advertises at 1,048,576. This is not the #362 retention regression: there were never any route limits to retain. The catalog publishes `alias_target.slug`, so discovery now resolves the alias before calling the endpoints API and records `route_limits_source_model`; limits count as verified only while the measured slug is still the alias target, so a family that ships a new model falls back to the safe ceiling until the new target is measured. The four suites selected are the only ones that exercise model descriptors: test_providers covers catalog parsing of `alias_target` and the alias-specific discovery error, test_context covers sizing from target routes and the lapse when the target moves, test_api covers capability verification measuring the target and persisting the measured slug, and test_chat covers the prepare-time route refresh never asking the alias for endpoints.",
+  "exclusions": "No frontend unit tests: ui/src is untouched, and the wire mapping for the context limits payload is unchanged (no new field reaches the UI). No native tests: no Tauri or catalog-code change. No screenshot baselines: no rendered surface changes. No Playwright: alias sizing depends on the live OpenRouter catalog and endpoint API, which the Playwright stubs do not model, and the real-Core journeys assert conversation behaviour rather than provider route discovery. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites: the selection is limited to the four v3 suites that touch model descriptors and route limits.",
   "expected_tests": {
-    "python": 33,
+    "python": 161,
     "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 0
   },
   "python": [
-    "tests/test_playwright_impact.py"
+    "tests/v3/test_api.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_providers.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:durable-conversation-core"
-  ]
+  "playwright": []
 }

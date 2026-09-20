@@ -33,6 +33,7 @@ from .domain import (
     utc_now,
 )
 from .known_model_limits import KNOWN_MODEL_LIMITS, KNOWN_MODEL_LIMITS_REVISION
+from .model_catalog import route_limits_verified as descriptor_routes_verified
 from .providers import ModelMessage, ModelProvider, ModelRequest
 from .storage import ConflictError, NebulaStore, NotFoundError
 
@@ -212,8 +213,8 @@ def resolve_context_limits(
         if known is not None:
             model_window, model_output = known[0], model_output or known[1] or 0
             known_model = True
-    route_limits_verified = bool(
-        isinstance(descriptor, dict) and descriptor.get("route_limits_verified") is True
+    route_limits_verified = model is not None and descriptor_routes_verified(
+        descriptor, model
     )
     route_context_window = 0
     route_input_limit = 0

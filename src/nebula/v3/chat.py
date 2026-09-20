@@ -94,6 +94,11 @@ from .context import (
     memory_text,
     resolve_context_limits,
 )
+from .model_catalog import (
+    find_model_descriptor,
+    route_discovery_model,
+    route_limits_verified,
+)
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .environments import resolve_ssh_environments
 from .mcp import McpProbeError, resolve_mcp_profiles
@@ -2458,15 +2463,10 @@ class ChatService:
 
         if profile.provider_type != "openrouter":
             return profile
-        descriptor = next(
-            (
-                item
-                for item in profile.metadata.get("model_descriptors", [])
-                if isinstance(item, dict) and item.get("id") == model
-            ),
-            None,
+        descriptor = find_model_descriptor(
+            profile.metadata.get("model_descriptors"), model
         )
-        if isinstance(descriptor, dict) and descriptor.get("route_limits_verified"):
+        if route_limits_verified(descriptor, model):
             return profile
         if getattr(provider, "openrouter_route_limits", None) is None:
             return profile
@@ -2508,8 +2508,10 @@ class ChatService:
                     "the provider rejected the request context and exact endpoint "
                     "limits cannot be refreshed"
                 )
+            # An alias exposes no endpoints; its target carries the real routes.
+            discovery_model = route_discovery_model(descriptor, model)
             try:
-                routes = await asyncio.wait_for(loader(model), 15)
+                routes = await asyncio.wait_for(loader(discovery_model), 15)
             except Exception as exc:
                 raise ChatConfigurationError(
                     "the provider rejected the request context and exact endpoint "
@@ -2521,6 +2523,7 @@ class ChatService:
                     "route_limits_verified": True,
                     "route_limits_checked_at": checked_at,
                     "route_limits_error": None,
+                    "route_limits_source_model": discovery_model,
                 }
             )
             revision_payload: Any = descriptor["route_limits"]
