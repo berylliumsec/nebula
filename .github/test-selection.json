@@ -1,24 +1,16 @@
 {
-  "change_digest": "6d98aa18f16dc0f93b1fa054ab0c896677e7366a0a47882f56e89fb0aa32f32b",
-  "reviewed_by": "Codex review of Thinking layout and durable assistant-selection coverage",
-  "reason": "The change removes the duplicate whitespace authority that inflated Markdown paragraph gaps and makes provider MCP server and lifecycle-hook choices durable chat-session settings. The selected unit tests cover Markdown paragraph semantics and API mapping; the API test covers validated durable metadata; the browser matrix covers the Thinking disclosure; and the production/LAN real-Core matrix proves MCP and hook selections survive reload, Core process replacement, reconnection, and subsequent conversation use.",
-  "exclusions": "Full Python, frontend, and Playwright suites are explicitly excluded. Unrelated provider, harness, workspace, and chat journeys are unchanged. No native tests are selected because no Rust code changed. No live OpenRouter or external MCP transport call is selected: Thinking layout is provider-independent, and the MCP change concerns persisted selection identity rather than server probing or tool execution.",
+  "change_digest": "9a6700f7e1ff2e63c99281416bf96bb608c383eebfe5c13064bc2602550a5428",
+  "reviewed_by": "Claude review of pre-existing interface.spec.ts harness failures",
+  "reason": "Three interface.spec.ts failures were red on pristine origin/main and blocked every UI pull request, because recent merges were Python-only and never ran the Playwright matrix. (1) The global API stub answers an array for any unrecognised path, so the credentials/vault endpoint added by #374 read as an unavailable vault and every credential dialog silently downgraded to session-only storage; 'VPN settings keep upload and project routing calm at every width' expected persistence 'vault' and received 'session' at all widths. The stub now answers {state: available}. (2) The tool-follow-up-runtime-required desktop baseline was 380x85 while both CI and a local run render 381x85 with identical content; the CI-rendered actual replaces it. (3) Mobile emulation scales layout by the device pixel ratio, so a 44px control measured 43.999969482421875 and failed 'conversation More actions remain usable on mobile Workbench navigation' on mobile-chromium-small only; the 44px assertions now go through one expectTouchTarget helper that rounds to hundredths, the pattern one site in this file already used. Only test files and one snapshot change; no product code is touched.",
+  "exclusions": "No python tests: no src/nebula change. No frontend tests: no ui/src change, so no vitest file is affected. No native tests: no Tauri or Rust change. Playwright runs the full matrix because ui/tests/** is a full_pattern in ui/playwright-impact.json, which is the right coverage for a change to the shared interface spec: it re-runs every width that surfaced these three failures.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 2,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history"
-  ],
-  "frontend": [
-    "ui/src/api/client.test.ts",
-    "ui/src/components/HarnessThinking.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:provider-thinking",
-    "area:provider-native-hooks-core"
-  ]
+  "playwright": []
 }
