@@ -1959,3 +1959,33 @@ def test_stream_error_frame_maps_context_length_to_the_typed_error():
         is None
     )
     assert providers._stream_error_frame({"error": None}) is None
+
+
+def test_streaming_context_length_rejection_is_flagged_for_recovery():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "This model's maximum context length is 8192 tokens",
+                    "code": "context_length_exceeded",
+                }
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("stream-context-length"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(_chat_request())]
+
+    events = asyncio.run(collect())
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].context_length_exceeded is True
+    assert "context length" in (events[-1].error or "")

@@ -1,16 +1,16 @@
 {
-  "change_digest": "c292bbbe7d87d8cad09992ab817706f634679a13ea1095388e46e3737fdbf72e",
-  "reviewed_by": "Claude review of transcript pagination after in-place edits",
-  "reason": "Edit-in-place (#377) retracts messages by setting metadata.retracted_at and leaves the rows in place. Transcript search (chat_workspace.search), /results and /context-sources each fetched limit+1 rows, filtered the retracted ones out in Python, and then decided next_offset from the filtered count, so whenever a retracted message fell inside the fetched page the count dropped to limit or below and next_offset became null although more rows existed: search stopped listing older matches, /results silently omitted later results and /context-sources later attachments. Each endpoint now decides has_more from the fetched page before filtering and returns only the first limit rows filtered, so offsets keep counting stored rows and every page is reachable. Separately, one missing or digest-mismatched harness diff blob raised out of /results and lost every other result item for the conversation; the diff preview now degrades to a 'Preview unavailable' item. test_chat_workspace gains three cases: search pages and results/context-sources pages walked to completion with a retracted message inside a page (both fail on main by dropping later rows), and a results response that survives a missing diff artifact (500 on main); the file's existing search, bookmark, edit-branch, naming and results-source cases cover the surrounding behaviour.",
-  "exclusions": "No frontend tests: no ui/ change; the UI already follows next_offset. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_workspace.py and chat_results.py) is the real-Core journey suite; the durable-conversation search journey does not edit a message inside a search page, and the Python tests drive the exact pagination through the routers. No full suites.",
+  "change_digest": "8ab0f50c3d33dde452b455a44c0f7b8fb1b36825d58d41f1ed9ff7cd1f9482e2",
+  "reviewed_by": "Claude review of streaming context-length recovery",
+  "reason": "_stream_openai_compatible's generic except yielded a StreamEventType.ERROR event without context_length_exceeded, while the non-streaming fallback in ModelProvider.stream sets it from isinstance(exc, ProviderContextLengthError). chat.py's _stream_with_context_recovery only compacts and retries once when that flag is set, so an OpenRouter, vLLM or Ollama profile in streaming mode failed the turn with 'provider returned HTTP 400: ... context length' where the same profile without streaming recovered. The except now carries the flag. test_providers gains a streaming 400 context_length_exceeded case asserting STARTED, ERROR with the flag set (False on main); the rest of the file covers _safe_error classification, retries and the other streaming paths.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for providers.py) is the real-Core journey suite and cannot make a provider reject on context length; the Python test drives the transport with httpx.MockTransport. No full suites.",
   "expected_tests": {
-    "python": 8,
+    "python": 54,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_workspace.py"
+    "tests/v3/test_providers.py"
   ],
   "frontend": [],
   "native": [],

@@ -1764,7 +1764,13 @@ async def _stream_openai_compatible(
             exc,
             stage="providers",
         )
-        yield ModelStreamEvent(type=StreamEventType.ERROR, error=str(exc))
+        yield ModelStreamEvent(
+            type=StreamEventType.ERROR,
+            error=str(exc),
+            # Chat recovers from an overflow (compact, then retry once) only
+            # when the event says so; the non-streaming fallback already does.
+            context_length_exceeded=isinstance(exc, ProviderContextLengthError),
+        )
 
 
 class AnthropicProvider(ModelProvider):
