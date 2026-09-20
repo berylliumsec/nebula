@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import Field
@@ -31,12 +33,26 @@ class CheckpointFileStatus(NebulaModel):
     status: str
 
 
-def _safe_file(workspace: Path, relative: str) -> Path:
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW
+
+
+def _checkpoint_parts(relative: str) -> tuple[str, ...]:
     candidate = Path(relative)
-    if candidate.is_absolute() or ".." in candidate.parts or not relative.strip():
+    if (
+        candidate.is_absolute()
+        or ".." in candidate.parts
+        or not candidate.parts
+        or not relative.strip()
+    ):
         raise NativeCheckpointError(
             f"checkpoint path is not a bounded relative file: {relative}"
         )
+    return candidate.parts
+
+
+def _safe_file(workspace: Path, relative: str) -> Path:
+    candidate = Path(*_checkpoint_parts(relative))
     root = workspace.resolve()
     target = (root / candidate).resolve()
     try:
@@ -50,6 +66,101 @@ def _safe_file(workspace: Path, relative: str) -> Path:
             f"checkpoint path is not a regular file: {relative}"
         )
     return target
+
+
+def _lstat_or_none(path: Path, relative: str) -> os.stat_result | None:
+    try:
+        return os.lstat(path)
+    except FileNotFoundError:
+        # diagnostic-expected: nothing exists at this component of the checkpointed path.
+        return None
+    except OSError as exc:
+        raise NativeCheckpointError(
+            f"checkpoint path cannot be inspected: {relative}"
+        ) from exc
+
+
+def _current_state(
+    workspace: Path, relative: str
+) -> Literal["missing", "conflict", "regular"]:
+    """Classify the live workspace entry for a checkpointed path.
+
+    Every component is inspected with ``lstat`` so a symlink anywhere on the
+    path (dangling or not) or a non-directory parent is a ``conflict`` rather
+    than a ``missing`` file that a restore would write through.
+    """
+
+    parts = _checkpoint_parts(relative)
+    current = workspace
+    for part in parts[:-1]:
+        current = current / part
+        info = _lstat_or_none(current, relative)
+        if info is None:
+            return "missing"
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            return "conflict"
+    info = _lstat_or_none(current / parts[-1], relative)
+    if info is None:
+        return "missing"
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        return "conflict"
+    return "regular"
+
+
+def _restore_file(workspace: Path, relative: str, payload: bytes) -> None:
+    """Write checkpoint bytes to ``relative`` without following any symlink.
+
+    Directories are opened component by component with ``O_NOFOLLOW``
+    (recreating the ones the workspace lost since capture), the bytes land in
+    a private temporary file beside the destination, and ``os.replace`` swaps
+    it in, so a link that raced in after the preview is replaced rather than
+    written through.
+    """
+
+    parts = _checkpoint_parts(relative)
+    try:
+        directory = os.open(workspace, _DIRECTORY_FLAGS)
+    except OSError as exc:
+        raise NativeCheckpointError(
+            f"workspace is unavailable for restore: {relative}"
+        ) from exc
+    try:
+        for part in parts[:-1]:
+            try:
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=directory)
+            except FileNotFoundError:
+                # diagnostic-expected: restore recreates directories removed since capture.
+                os.mkdir(part, dir_fd=directory)
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        temporary = f".{uuid4().hex}.restore"
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+            0o666,
+            dir_fd=directory,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, parts[-1], src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            # diagnostic-expected: the private temporary file is removed and the failure re-raised unchanged.
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                # diagnostic-expected: the temporary file never reached the directory.
+                pass
+            raise
+    except OSError as exc:
+        raise NativeCheckpointError(
+            f"checkpoint path cannot be restored: {relative}"
+        ) from exc
+    finally:
+        os.close(directory)
 
 
 def _copy_bounded(source: Path, destination: Path) -> dict[str, Any]:
@@ -164,17 +275,17 @@ class NativeCheckpointService:
         statuses: list[CheckpointFileStatus] = []
         for item in checkpoint.files:
             relative = str(item["path"])
-            current = workspace / relative
             captured = workspace / CHECKPOINT_ROOT / checkpoint.id / Path(relative)
             if not captured.is_file():
                 raise NotFoundError(f"checkpoint file is missing: {relative}")
-            if not current.exists():
+            state = _current_state(workspace, relative)
+            if state != "regular":
                 statuses.append(
                     CheckpointFileStatus(
                         path=relative,
                         sha256=str(item["sha256"]),
                         size=int(item["size"]),
-                        status="missing",
+                        status=state,
                     )
                 )
                 continue
@@ -204,7 +315,5 @@ class NativeCheckpointService:
         for item in checkpoint.files:
             relative = str(item["path"])
             captured = workspace / CHECKPOINT_ROOT / checkpoint.id / Path(relative)
-            destination = workspace / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(captured.read_bytes())
+            _restore_file(workspace, relative, captured.read_bytes())
         return self.preview(checkpoint_id)

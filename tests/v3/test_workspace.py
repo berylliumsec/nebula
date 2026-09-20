@@ -22,7 +22,11 @@ from nebula.v3.domain import (
     RunnerRuntime,
 )
 from nebula.v3.storage import NebulaStore
-from nebula.v3.workspace import WorkspaceResetRequest, WorkspaceService
+from nebula.v3.workspace import (
+    MAX_PREVIEW_BYTES,
+    WorkspaceResetRequest,
+    WorkspaceService,
+)
 
 AUTH = {"Authorization": "Bearer test-token"}
 
@@ -942,3 +946,172 @@ def test_workspace_listing_skips_entries_removed_while_listing(tmp_path, monkeyp
     listing = workspace.list(engagement.id, path="")
 
     assert [entry.name for entry in listing.entries] == ["stable.txt"]
+
+
+def test_workspace_preview_decodes_large_utf8_on_a_character_boundary(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    payload = ("ア" * 100_000).encode("utf-8")
+    assert len(payload) > MAX_PREVIEW_BYTES
+    (root / "report.md").write_bytes(payload)
+
+    preview = workspace.preview(engagement.id, "report.md")
+
+    complete = MAX_PREVIEW_BYTES - (MAX_PREVIEW_BYTES % 3)
+    assert preview.text == payload[:complete].decode("utf-8")
+    assert preview.bytes_returned == complete
+    assert preview.truncated is True
+    assert preview.preview_sha256 == hashlib.sha256(payload[:complete]).hexdigest()
+
+    (root / "broken.md").write_bytes(b"prefix " + "ア".encode("utf-8")[:2])
+    with pytest.raises(Exception) as caught:
+        workspace.preview(engagement.id, "broken.md")
+    assert getattr(caught.value, "code", None) == "unsupported_preview"
+
+
+def test_workspace_search_opens_one_directory_at_a_time(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    for index in range(120):
+        folder = root / f"pkg-{index:03d}"
+        folder.mkdir()
+        (folder / "index.js").write_text(f"needle {index}\n", encoding="utf-8")
+
+    real_open = os.open
+    real_close = os.close
+    directories: set[int] = set()
+    peak = 0
+
+    def counting_open(*args, **kwargs):
+        nonlocal peak
+        descriptor = real_open(*args, **kwargs)
+        flags = args[1] if len(args) > 1 else kwargs.get("flags", 0)
+        if flags & os.O_DIRECTORY:
+            directories.add(descriptor)
+            peak = max(peak, len(directories))
+        return descriptor
+
+    def counting_close(descriptor):
+        directories.discard(descriptor)
+        return real_close(descriptor)
+
+    monkeypatch.setattr(os, "open", counting_open)
+    monkeypatch.setattr(os, "close", counting_close)
+
+    result = workspace.search(engagement.id, "needle", mode="text", limit=200)
+
+    assert len(result.matches) == 120
+    assert result.truncated is False
+    assert directories == set()
+    assert peak <= 3
+
+
+def test_workspace_search_skips_generated_directories(tmp_path):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("needle = 1\n", encoding="utf-8")
+    (root / "node_modules" / "pkg").mkdir(parents=True)
+    (root / "node_modules" / "pkg" / "index.js").write_text(
+        "needle\n", encoding="utf-8"
+    )
+    (root / ".git").mkdir()
+    (root / ".git" / "config").write_text("needle\n", encoding="utf-8")
+
+    text = workspace.search(engagement.id, "needle", mode="text")
+    assert [match.path for match in text.matches] == ["src/app.py"]
+    assert text.scanned_files == 1
+    assert text.skipped_directories == 2
+
+    files = workspace.search(engagement.id, "index", mode="files")
+    assert files.matches == []
+
+    explicit = workspace.search(
+        engagement.id, "needle", mode="text", path="node_modules"
+    )
+    assert [match.path for match in explicit.matches] == ["node_modules/pkg/index.js"]
+
+
+def test_workspace_upload_success_records_no_handled_exceptions(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    (platform.workspace_for(engagement.id) / "notes").mkdir()
+    recorded: list[tuple[str, str]] = []
+
+    def recorder(feature, event_code, message, exception, *, stage, metadata=None):
+        recorded.append((event_code, type(exception).__name__))
+        return None
+
+    monkeypatch.setattr("nebula.v3.workspace.record_caught_exception", recorder)
+
+    async def chunks(*values: bytes):
+        for value in values:
+            yield value
+
+    created = asyncio.run(
+        workspace.upload(engagement.id, "notes/new.txt", chunks(b"first"))
+    )
+    replaced = asyncio.run(
+        workspace.upload(
+            engagement.id,
+            "notes/new.txt",
+            chunks(b"second"),
+            overwrite=True,
+            expected_sha256=created.sha256,
+        )
+    )
+    assert replaced.overwritten is True
+    assert recorded == []
+
+
+def test_workspace_api_runs_filesystem_operations_off_the_event_loop(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.executions import ExecutionServiceError
+
+    _store, _artifacts, platform, workspace, engagement, client = _services(tmp_path)
+    platform.workspace_for(engagement.id)
+    on_loop: dict[str, bool] = {}
+
+    def stub(name):
+        def call(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                on_loop[name] = False
+            else:
+                on_loop[name] = True
+            raise ExecutionServiceError("stub_probe", name, status_code=418)
+
+        return call
+
+    for name in ("list", "search", "preview", "rename", "delete", "promote", "reset"):
+        monkeypatch.setattr(workspace, name, stub(name))
+
+    base = f"/api/v1/engagements/{engagement.id}/workspace"
+    with client:
+        responses = {
+            "list": client.get(base, headers=AUTH),
+            "search": client.get(f"{base}/search", headers=AUTH, params={"query": "x"}),
+            "preview": client.get(
+                f"{base}/preview", headers=AUTH, params={"path": "a.txt"}
+            ),
+            "rename": client.patch(
+                f"{base}/entry",
+                headers=AUTH,
+                json={"path": "a.txt", "new_name": "b.txt"},
+            ),
+            "delete": client.delete(
+                f"{base}/entry", headers=AUTH, params={"path": "a.txt"}
+            ),
+            "promote": client.post(
+                f"{base}/promote", headers=AUTH, json={"path": "a.txt"}
+            ),
+            "reset": client.post(
+                f"{base}/reset",
+                headers=AUTH,
+                json={"engagement_name": engagement.name},
+            ),
+        }
+    for name, response in responses.items():
+        assert response.status_code == 418, (name, response.text)
+        assert on_loop[name] is False, f"{name} ran on the event loop"

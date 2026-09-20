@@ -13,6 +13,8 @@ import { loadEditorSessions, saveEditorSessions, type PersistedEditorSessions } 
 
 export interface WorkbenchEditorBuffer {
   id: string;
+  /** The file began with a UTF-8 byte order mark that saves must re-emit. */
+  byteOrderMark?: boolean;
   content: string;
   expectedSha256?: string;
   existing: boolean;

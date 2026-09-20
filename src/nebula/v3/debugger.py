@@ -29,6 +29,9 @@ from .workspace import WorkspaceService
 DEBUG_PROTOCOL = "nebula.debug.v1"
 MAX_DAP_MESSAGE_BYTES = 1_048_576
 MAX_DEBUG_DURATION_SECONDS = 3_600
+# A started session whose websocket never attaches is closed after this long
+# so an abandoned start does not hold the project for the full session cap.
+DEBUG_ATTACH_TIMEOUT_SECONDS = 60
 MAX_DEBUG_SESSIONS = 4
 _ALLOWED_REQUESTS = {
     "initialize",
@@ -131,6 +134,7 @@ class DebugService:
         self.runtime_resolver = runtime_resolver
         self._sessions: dict[str, _DebugSession] = {}
         self._expiry_tasks: dict[str, asyncio.Task[None]] = {}
+        self._attach_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
         self._start_lock = asyncio.Lock()
 
@@ -143,6 +147,8 @@ class DebugService:
             self._sessions.clear()
             expiry_tasks = list(self._expiry_tasks.values())
             self._expiry_tasks.clear()
+            expiry_tasks.extend(self._attach_tasks.values())
+            self._attach_tasks.clear()
         for task in expiry_tasks:
             task.cancel()
         await asyncio.gather(
@@ -244,6 +250,11 @@ class DebugService:
             self._expiry_tasks[session_id] = asyncio.create_task(
                 self._expire(session_id), name=f"debug-expiry-{session_id}"
             )
+            # diagnostic-expected: attach() and close() cancel this deadline task.
+            self._attach_tasks[session_id] = asyncio.create_task(
+                self._attach_deadline(session_id),
+                name=f"debug-attach-deadline-{session_id}",
+            )
         return DebugStartResponse(
             session_id=session_id,
             websocket_path=f"/api/v1/debug-sessions/{session_id}/ws",
@@ -255,6 +266,7 @@ class DebugService:
         )
 
     async def attach(self, session_id: str, ticket: str) -> _DebugSession:
+        attach_task: asyncio.Task[None] | None = None
         async with self._lock:
             session = self._sessions.get(session_id)
             if session is None:
@@ -264,6 +276,7 @@ class DebugService:
             if session.expires_at <= utc_now():
                 self._sessions.pop(session_id, None)
                 expiry_task = self._expiry_tasks.pop(session_id, None)
+                attach_task = self._attach_tasks.pop(session_id, None)
                 expired = session
             else:
                 expiry_task = None
@@ -281,7 +294,11 @@ class DebugService:
                     )
                 session.attached = True
                 session.ticket = secrets.token_urlsafe(32)
-                return session
+                attach_task = self._attach_tasks.pop(session_id, None)
+        if attach_task is not None and attach_task is not asyncio.current_task():
+            attach_task.cancel()
+        if expired is None:
+            return session
         if expiry_task is not None and expiry_task is not asyncio.current_task():
             expiry_task.cancel()
         await self._close_session(expired)
@@ -289,18 +306,55 @@ class DebugService:
             "session_expired", "Debug session expired.", status_code=410
         )
 
+    async def stop(self, session_id: str, ticket: str) -> None:
+        """Close a session on behalf of the client that started it.
+
+        The one-use ticket proves the caller received the start response. It
+        rotates on attach, so an attached session can only be ended through
+        its websocket.
+        """
+
+        async with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                raise DebuggerError(
+                    "session_not_found", "Debug session was not found.", status_code=404
+                )
+            if not hmac.compare_digest(session.ticket, ticket):
+                raise DebuggerError(
+                    "ticket_invalid",
+                    "Debug session ticket is invalid.",
+                    status_code=401,
+                )
+        await self.close(session_id)
+
     async def close(self, session_id: str) -> None:
         async with self._lock:
             session = self._sessions.pop(session_id, None)
             expiry = self._expiry_tasks.pop(session_id, None)
-        if expiry is not None and expiry is not asyncio.current_task():
-            expiry.cancel()
+            attach_task = self._attach_tasks.pop(session_id, None)
+        for task in (expiry, attach_task):
+            if task is not None and task is not asyncio.current_task():
+                task.cancel()
         if session is not None:
             await self._close_session(session)
 
     async def _expire(self, session_id: str) -> None:
         await asyncio.sleep(MAX_DEBUG_DURATION_SECONDS)
         await self.close(session_id)
+
+    async def _attach_deadline(self, session_id: str) -> None:
+        await asyncio.sleep(DEBUG_ATTACH_TIMEOUT_SECONDS)
+        async with self._lock:
+            self._attach_tasks.pop(session_id, None)
+            session = self._sessions.get(session_id)
+            if session is None or session.attached:
+                return
+            self._sessions.pop(session_id, None)
+            expiry = self._expiry_tasks.pop(session_id, None)
+        if expiry is not None:
+            expiry.cancel()
+        await self._close_session(session)
 
     async def send(self, session: _DebugSession, message: dict[str, Any]) -> None:
         self._validate_message(session, message)

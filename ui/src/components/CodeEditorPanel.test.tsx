@@ -151,6 +151,34 @@ describe("CodeEditorPanel", () => {
     expect(await screen.findByText("Saved /workspace/tool.py. Use it from Terminal when you're ready.")).toBeVisible();
   });
 
+  it("preserves a UTF-8 byte order mark when saving an edited file", async () => {
+    const user = userEvent.setup();
+    const uploadWorkspaceFile = vi.fn().mockResolvedValue({
+      engagementId: "project-1",
+      path: "tool.py",
+      size: 17,
+      sha256: "b".repeat(64),
+      overwritten: true,
+    });
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob([new Uint8Array([0xef, 0xbb, 0xbf]), "print('first')\n"])),
+      uploadWorkspaceFile,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    await waitFor(() => expect(editor).toHaveValue("print('first')\n"));
+    await user.clear(editor);
+    await user.type(editor, "print('saved')");
+    await user.keyboard("{Control>}s{/Control}");
+
+    await waitFor(() => expect(uploadWorkspaceFile).toHaveBeenCalledTimes(1));
+    const uploaded = new Uint8Array(await (uploadWorkspaceFile.mock.calls[0][2] as Blob).arrayBuffer());
+    expect(Array.from(uploaded.slice(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
+    expect(new TextDecoder().decode(uploaded.slice(3))).toBe("print('saved')");
+  });
+
   it("retains a stale draft and requires explicit confirmation to force overwrite", async () => {
     const user = userEvent.setup();
     const uploadWorkspaceFile = vi.fn()
