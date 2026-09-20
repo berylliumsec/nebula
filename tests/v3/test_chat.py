@@ -2501,6 +2501,8 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         "message_count": 4,
         "last_sequence": 4,
         "initial_title_state": "generated",
+        "mcp_server_ids": [],
+        "hook_ids": [],
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,
@@ -2556,6 +2558,8 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         "message_count": 2,
         "last_sequence": 2,
         "initial_title_state": "generated",
+        "mcp_server_ids": [],
+        "hook_ids": [],
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,
