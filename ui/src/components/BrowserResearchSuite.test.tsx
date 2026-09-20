@@ -55,6 +55,28 @@ describe("BrowserResearchSuite", () => {
     expect(screen.getByLabelText("Crawl start URL")).toHaveValue("https://app.example.test/");
   });
 
+  it("keeps a cleared crawl budget field empty and submits the retyped numbers", async () => {
+    const createSecurityBrowserCrawl = vi.fn().mockResolvedValue({});
+    renderSuite(<BrowserResearchSuite api={api({ createSecurityBrowserCrawl })} desktop identity={identity} operatorId="operator" projectId="project-1" session={session} view="target" />);
+
+    const depth = await screen.findByLabelText("Maximum depth");
+    const budget = screen.getByLabelText("Request budget");
+    fireEvent.change(depth, { target: { value: "" } });
+    expect(depth).toHaveValue(null);
+    fireEvent.change(depth, { target: { value: "3" } });
+    expect(depth).toHaveValue(3);
+    fireEvent.change(budget, { target: { value: "" } });
+    expect(budget).toHaveValue(null);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create bounded crawl" }));
+    expect(await screen.findByText(/Request budget must be a whole number/)).toBeInTheDocument();
+    expect(createSecurityBrowserCrawl).not.toHaveBeenCalled();
+
+    fireEvent.change(budget, { target: { value: "250" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create bounded crawl" }));
+    await waitFor(() => expect(createSecurityBrowserCrawl).toHaveBeenCalledWith("project-1", expect.objectContaining({ maxDepth: 3, maxRequests: 250 })));
+  });
+
   it("keeps native crawl execution unavailable on a paired browser", async () => {
     renderSuite(<BrowserResearchSuite api={api()} desktop={false} identity={identity} operatorId="operator" projectId="project-1" session={session} view="target" />);
 

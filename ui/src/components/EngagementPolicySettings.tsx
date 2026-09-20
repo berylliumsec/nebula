@@ -60,6 +60,11 @@ function formatAllowedPorts(values: number[]): string {
   return entries.join(", ");
 }
 
+/** The raw text of a number field; empty text is NaN rather than 0. */
+function integerField(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+
 function inputDate(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
@@ -96,14 +101,16 @@ export function EngagementPolicySettings() {
   const [alwaysLoadedTools, setAlwaysLoadedTools] = useState<string[]>([]);
   const [toolCandidates, setToolCandidates] = useState<ScopeToolCandidate[]>([]);
   const [typesafe, setTypesafe] = useState<TypeSafeIntegration>();
-  const [maxConcurrency, setMaxConcurrency] = useState(1);
+  // Number fields keep the operator's raw text so a cleared field stays empty
+  // instead of snapping to 0; they are parsed with a NaN guard on save.
+  const [maxConcurrency, setMaxConcurrency] = useState("1");
   const [approvalPolicy, setApprovalPolicy] = useState<AutomationProjectPolicy["approvalPolicy"]>("on_boundary");
   const [executionMode, setExecutionMode] = useState<"docker" | "host">("docker");
   const [hostAcknowledged, setHostAcknowledged] = useState(false);
   const [networkEnabled, setNetworkEnabled] = useState(false);
   const [vpnProfileId, setVpnProfileId] = useState("");
   const [vpnProfiles, setVpnProfiles] = useState<VpnProfile[]>([]);
-  const [maxTimeoutMs, setMaxTimeoutMs] = useState(300_000);
+  const [maxTimeoutMs, setMaxTimeoutMs] = useState("300000");
   const [saving, setSaving] = useState<"scope" | "runtime">();
   const [error, setError] = useState<unknown>();
   const [validationError, setValidationError] = useState<string>();
@@ -127,7 +134,7 @@ export function EngagementPolicySettings() {
     setLocalOnly(next.localOnly);
     setToolSuggestions(next.toolSuggestions);
     setAlwaysLoadedTools(next.alwaysLoadedTools);
-    setMaxConcurrency(next.maxConcurrency);
+    setMaxConcurrency(String(next.maxConcurrency));
   };
 
   const applyPolicy = (next: AutomationProjectPolicy) => {
@@ -137,7 +144,7 @@ export function EngagementPolicySettings() {
     setApprovalPolicy(next.approvalPolicy);
     setNetworkEnabled(next.networkEnabled);
     setVpnProfileId(next.vpnProfileId ?? "");
-    setMaxTimeoutMs(next.maxTimeoutMs);
+    setMaxTimeoutMs(String(next.maxTimeoutMs));
   };
 
   const load = useCallback(async () => {
@@ -215,7 +222,8 @@ export function EngagementPolicySettings() {
       setValidationError("The scope end time must be after its start time. Change one of the dates and save again.");
       return;
     }
-    if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1 || maxConcurrency > 256) {
+    const concurrency = integerField(maxConcurrency);
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 256) {
       setValidationError("Maximum concurrency must be a whole number from 1 through 256.");
       return;
     }
@@ -242,7 +250,7 @@ export function EngagementPolicySettings() {
         localOnly,
         toolSuggestions,
         alwaysLoadedTools,
-        maxConcurrency,
+        maxConcurrency: concurrency,
         grants: scope.grants,
         expectedRevision: scope.revision,
       });
@@ -260,7 +268,8 @@ export function EngagementPolicySettings() {
     event.preventDefault();
     if (!api || !engagement || !policy || !policyReady || saving || previewMode) return;
     const revision = loadRevision.current;
-    if (!Number.isInteger(maxTimeoutMs) || maxTimeoutMs < 1_000 || maxTimeoutMs > 86_400_000) {
+    const timeoutMs = integerField(maxTimeoutMs);
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 86_400_000) {
       setValidationError("Maximum command timeout must be a whole number from 1000 through 86400000 milliseconds.");
       return;
     }
@@ -274,7 +283,7 @@ export function EngagementPolicySettings() {
         networkEnabled,
         runnerProfileId: policy.runnerProfileId,
         vpnProfileId: vpnProfileId || undefined,
-        maxTimeoutMs,
+        maxTimeoutMs: timeoutMs,
         expectedRevision: policy.revision,
       });
       if (revision !== loadRevision.current) return;
@@ -301,7 +310,7 @@ export function EngagementPolicySettings() {
           <label>Approval policy<select aria-describedby="command-approval-scope" value={approvalPolicy} onChange={(event) => setApprovalPolicy(event.target.value as AutomationProjectPolicy["approvalPolicy"])}><option value="on_boundary">On boundary · prompt once for project networking</option><option value="always">Always · prompt before every command</option><option value="never">Never · no command prompts</option></select></label>
           <p id="command-approval-scope" className="provider-dialog-note">Applies to Nebula's command runtime for new sessions. Harness, MCP and browser permissions are separate.</p>
           {approvalPolicy === "never" && <InlineValidationNotice message="Commands run without per-command approval; scope and other permission checks still apply." />}
-          <label>Maximum command timeout (milliseconds)<input type="number" min={1000} max={86400000} value={maxTimeoutMs} onChange={(event) => setMaxTimeoutMs(Number(event.target.value))} /></label>
+          <label>Maximum command timeout (milliseconds)<input type="number" min={1000} max={86400000} value={maxTimeoutMs} onChange={(event) => setMaxTimeoutMs(event.target.value)} /></label>
           {executionMode === "docker" && <><label className="provider-consent"><input type="checkbox" checked={networkEnabled} onChange={(event) => setNetworkEnabled(event.target.checked)} /><span><strong>Make project-scoped networking available</strong><small>The session receives the complete validated CIDR/domain/port policy. An approval never expands that scope.</small></span></label>
           <label>VPN route<select value={vpnProfileId} disabled={!networkEnabled} onChange={(event) => setVpnProfileId(event.target.value)}><option value="">Direct, scope-filtered egress</option>{vpnProfiles.map((profile) => <option key={profile.id} value={profile.id} disabled={!profile.available}>{profile.name} · {profile.protocol.toUpperCase()} {profile.remoteHost}</option>)}</select><small>{vpnProfileId ? "New command sessions must establish this tunnel before network access is released." : "Select a saved profile to route authorized container traffic through OpenVPN."}</small></label></>}
           <footer><span>Existing sessions keep their frozen policy revision.</span><button className="button primary" type="submit" disabled={previewMode || !policy || saving === "runtime" || (executionMode === "host" && !hostAcknowledged)}><Save size={14} /> {saving === "runtime" ? "Saving…" : "Save runtime policy"}</button></footer>
@@ -318,7 +327,7 @@ export function EngagementPolicySettings() {
           <label>URL-only scope entries<textarea rows={3} value={allowedUrls} placeholder="https://example.com/reviewed/path" disabled={allowAllTargets} onChange={(event) => setAllowedUrls(event.target.value)} /></label>
           <div className="resource-form-grid"><label>Active from<input type="datetime-local" value={notBefore} onChange={(event) => setNotBefore(event.target.value)} /></label><label>Expires<input type="datetime-local" value={notAfter} onChange={(event) => setNotAfter(event.target.value)} /></label></div>
           <label>Prohibited actions<textarea rows={3} value={prohibitedActions} onChange={(event) => setProhibitedActions(event.target.value)} /></label>
-          <div className="resource-form-grid"><label>Maximum concurrency<input type="number" min={1} max={256} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Number(event.target.value))} /></label><label className="provider-consent"><input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} /><span><strong>Local only</strong><small>Do not send project data to remote models.</small></span></label></div>
+          <div className="resource-form-grid"><label>Maximum concurrency<input type="number" min={1} max={256} value={maxConcurrency} onChange={(event) => setMaxConcurrency(event.target.value)} /></label><label className="provider-consent"><input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} /><span><strong>Local only</strong><small>Do not send project data to remote models.</small></span></label></div>
           <label className="provider-consent" id="tool-suggestions-option"><input type="checkbox" aria-describedby="tool-suggestions-detail" checked={toolSuggestions && !localOnly} disabled={localOnly || (!toolSuggestions && !typesafeUsable(typesafe))} onChange={(event) => setToolSuggestions(event.target.checked)} /><span><strong>Suggest tools with TypeSafe Jev</strong><small id="tool-suggestions-detail">{localOnly ? "Unavailable while Local only is on." : "Before each turn, send redacted operator messages, the instructions of any skill selected for the turn, and MCP tool names to TypeSafe. The model then loads only the tools it needs. Tool output is never sent."}</small></span></label>
           {!localOnly && !typesafeUsable(typesafe) && <a className="tool-suggestions-key-link" href="#typesafe-integration-settings">Add a key in Settings › Integrations →</a>}
           {toolSuggestions && !localOnly && typesafe && !typesafeUsable(typesafe) && <InlineValidationNotice message="Tool suggestions are on, but no working TypeSafe key is available. Turns run without suggestions until a key works." />}

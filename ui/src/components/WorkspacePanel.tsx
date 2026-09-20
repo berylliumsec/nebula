@@ -1,6 +1,6 @@
 import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
-import { Activity, AlertTriangle, Download, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, Download, EllipsisVertical, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { WorkspaceEntry, WorkspacePreview, WorkspaceResetStatus } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
@@ -176,7 +176,9 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       anchor.href = url;
       anchor.download = selected.name;
       anchor.click();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously can abort the download before the browser
+      // starts it (Firefox); defer like the other download paths.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (downloadError) {
       void logCaughtDiagnostic("interface.workspace_panel.caught_failure_05", "A handled interface operation failed.", downloadError, "workspace_panel");
       setError(downloadError instanceof Error ? downloadError.message : "Could not download the file.");
@@ -318,7 +320,10 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         >
           <header><span>{uploading ? `Uploading ${uploading.name}…` : `${total} entr${total === 1 ? "y" : "ies"}`}</span><small>Drop a file here · symlinks are inert</small></header>
           {dragActive && <div className="workspace-drop-prompt" role="status"><Upload size={22} /><strong>Upload to /workspace/{path}</strong><span>Drop to copy the file into this folder</span></div>}
-          {entries.map((entry) => <button type="button" title={`${entry.path} · Right-click for actions`} className={selected?.path === entry.path ? "active" : undefined} disabled={entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => void openEntry(entry)} key={entry.path}>{entry.kind === "directory" ? <Folder size={16} /> : entry.kind === "symlink" ? <Link2 size={16} /> : <File size={16} />}<span><strong>{entry.name}</strong><small>{entry.kind} · {sizeLabel(entry.size)} · {new Date(entry.modifiedAt).toLocaleString()}</small></span></button>)}
+          {entries.map((entry) => <div className="workspace-entry-row" key={entry.path}>
+            <button type="button" title={entry.path} className={selected?.path === entry.path ? "active" : undefined} disabled={entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => void openEntry(entry)}>{entry.kind === "directory" ? <Folder size={16} /> : entry.kind === "symlink" ? <Link2 size={16} /> : <File size={16} />}<span><strong>{entry.name}</strong><small>{entry.kind} · {sizeLabel(entry.size)} · {new Date(entry.modifiedAt).toLocaleString()}</small></span></button>
+            <IconAction icon={EllipsisVertical} label={`Actions for ${entry.name}`} title="File actions" aria-haspopup="menu" aria-expanded={entryMenu?.entry.path === entry.path} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setEntryMenu({ entry, x: rect.right - 242, y: rect.bottom + 4 }); }} />
+          </div>)}
           {!entries.length && !loading && <div className="empty-state compact"><Folder size={21} /><strong>Workspace is empty</strong><p>Files created by reviewed executions persist here until reset.</p></div>}
           {nextOffset !== undefined && <button className="button quiet" type="button" disabled={loading} onClick={() => void load(nextOffset)}>Load more</button>}
         </section>

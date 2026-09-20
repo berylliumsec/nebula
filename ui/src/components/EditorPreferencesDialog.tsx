@@ -37,6 +37,10 @@ export function EditorPreferencesDialog({ preferences, onApply, onClose }: Edito
   }, [draft.keybindings]);
 
   const capture = (action: EditorAction, event: KeyboardEvent<HTMLInputElement>) => {
+    // Plain Tab and Shift+Tab move focus between the fields; swallowing them
+    // trapped keyboard operators in the first shortcut input. Only a modified
+    // chord such as Mod+Tab is a shortcut worth capturing.
+    if (event.key === "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) return;
     event.preventDefault();
     event.stopPropagation();
     const shortcut = shortcutFromKeyboardEvent(event.nativeEvent);

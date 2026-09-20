@@ -66,7 +66,7 @@ describe("WorkspacePanel uploads", () => {
     const renameWorkspaceEntry = vi.fn().mockResolvedValue({ path: "finding.txt", previousPath: "proof.txt" });
     renderPanel({ listWorkspace, renameWorkspaceEntry });
 
-    const entry = await screen.findByRole("button", { name: /proof\.txt/ });
+    const entry = await screen.findByRole("button", { name: /^proof\.txt/ });
     fireEvent.contextMenu(entry, { clientX: 40, clientY: 50 });
     const menu = await screen.findByRole("menu", { name: "Actions for proof.txt" });
     await user.click(within(menu).getByRole("menuitem", { name: "Rename" }));
@@ -76,6 +76,53 @@ describe("WorkspacePanel uploads", () => {
 
     await waitFor(() => expect(renameWorkspaceEntry).toHaveBeenCalledWith("project-1", "proof.txt", "finding.txt"));
     expect(await screen.findByText("Renamed proof.txt to finding.txt.")).toBeVisible();
+  });
+
+  it("opens file actions from a per-row Actions button without a right-click", async () => {
+    const user = userEvent.setup();
+    const listWorkspace = vi.fn().mockResolvedValue({
+      ...listing(), total: 1, entries: [{
+        path: "proof.txt", name: "proof.txt", kind: "file", size: 5,
+        modifiedAt: "2026-07-13T12:00:00Z",
+      }],
+    });
+    renderPanel({ listWorkspace });
+
+    await user.click(await screen.findByRole("button", { name: "Actions for proof.txt" }));
+    const menu = await screen.findByRole("menu", { name: "Actions for proof.txt" });
+    expect(within(menu).getByRole("menuitem", { name: "Rename" })).toBeEnabled();
+    expect(within(menu).getByRole("menuitem", { name: "Delete" })).toBeEnabled();
+    await user.click(within(menu).getByRole("button", { name: "Close file actions" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps the download object URL alive until the browser has started the download", async () => {
+    const user = userEvent.setup();
+    const createObjectURL = vi.fn(() => "blob:workspace-proof");
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue({
+        ...listing(), total: 1, entries: [{
+          path: "proof.txt", name: "proof.txt", kind: "file", size: 5,
+          modifiedAt: "2026-07-13T12:00:00Z",
+        }],
+      }),
+      previewWorkspaceFile: vi.fn().mockResolvedValue({
+        engagementId: "project-1", path: "proof.txt", text: "proof", bytesReturned: 5,
+        truncated: false, previewSha256: "a".repeat(64),
+      }),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["proof"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /^proof\.txt/ }));
+    await user.click(await screen.findByRole("button", { name: "Download" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:workspace-proof"), { timeout: 2_500 });
+    click.mockRestore();
   });
 
   it("uploads a selected file into the open workspace folder", async () => {
@@ -190,7 +237,7 @@ describe("WorkspacePanel uploads", () => {
       onUseWithAssistant={onUseWithAssistant}
     /></DialogProvider>);
 
-    await user.click(await screen.findByRole("button", { name: /proof\.txt/ }));
+    await user.click(await screen.findByRole("button", { name: /^proof\.txt/ }));
     await user.click(await screen.findByRole("button", { name: "Use with Assistant" }));
 
     expect(onUseWithAssistant).toHaveBeenCalledWith({

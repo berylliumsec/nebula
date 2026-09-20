@@ -51,6 +51,26 @@ describe("CommandPalette federated search", () => {
     expect(screen.getByRole("menuitem", { name: /open/i })).toBeEnabled();
   });
 
+  it("scrolls the keyboard selection into view and announces it on the search field", () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) { scrolled.push(this); });
+    renderPalette({ searchResources: vi.fn().mockResolvedValue({ items: [], partialIndex: false }) } as unknown as ApiClient);
+    const input = screen.getByLabelText("Search pages, actions, and settings");
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const options = screen.getAllByRole("option");
+    expect(options[2]).toHaveAttribute("aria-selected", "true");
+    expect(options[2].id).not.toBe("");
+    expect(input).toHaveAttribute("aria-activedescendant", options[2].id);
+    expect(Element.prototype.scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+    expect(scrolled.at(-1)).toBe(options[2]);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(input).toHaveAttribute("aria-activedescendant", options[1].id);
+    expect(scrolled.at(-1)).toBe(options[1]);
+  });
+
   it("keeps local commands available when Core search is offline", async () => {
     renderPalette({ searchResources: vi.fn().mockRejectedValue(new Error("offline")) } as unknown as ApiClient);
     fireEvent.change(screen.getByLabelText("Search pages, actions, and settings"), { target: { value: "settings" } });

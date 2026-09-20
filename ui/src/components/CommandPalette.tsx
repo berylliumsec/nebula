@@ -53,6 +53,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
   const [actionResult, setActionResult] = useState<SearchResult>();
   const inputRef = useRef<HTMLInputElement>(null);
   const paletteRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const guides = useOptionalGuides();
 
@@ -211,6 +212,14 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
     onClose();
   };
 
+  const optionId = (index: number) => `palette-option-${index}`;
+  // Keyboard selection has to stay visible in a long list and be announced
+  // through the search field; hover selection leaves the scroll position alone.
+  const moveSelection = (next: number) => {
+    setSelected(next);
+    listRef.current?.querySelectorAll<HTMLElement>("[role='option']")[next]?.scrollIntoView?.({ block: "nearest" });
+  };
+
   const trapFocus = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -249,17 +258,19 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
           <input
             ref={inputRef}
             aria-label="Search pages, actions, and settings"
+            aria-controls="palette-results"
+            aria-activedescendant={results[selected] ? optionId(selected) : undefined}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages, actions, and settings…"
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
-                setSelected((value) => Math.min(value + 1, results.length - 1));
+                moveSelection(Math.min(selected + 1, results.length - 1));
               }
               if (event.key === "ArrowUp") {
                 event.preventDefault();
-                setSelected((value) => Math.max(value - 1, 0));
+                moveSelection(Math.max(selected - 1, 0));
               }
               if (event.key === "Enter") execute(results[selected]);
               if (event.key === "ArrowRight" && results[selected]?.resource) {
@@ -285,12 +296,13 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
             onClick={() => execute(results.find((item) => item.resource === actionResult))}
           >{descriptor.id.replaceAll("_", " ")}<small>{descriptor.authority}</small></button>)}
         </div>}
-        <div className="palette-results" role="listbox" aria-label="Commands">
+        <div ref={listRef} id="palette-results" className="palette-results" role="listbox" aria-label="Commands">
           {results.map((action, index) => {
             const Icon = action.icon;
             return (
               <button
                 key={action.id}
+                id={optionId(index)}
                 type="button"
                 role="option"
                 aria-selected={selected === index}
