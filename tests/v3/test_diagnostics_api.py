@@ -87,6 +87,8 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "recovery_destination": "/settings#diagnostics-settings",
             }
 
+            # Errors recorded on the event loop land asynchronously.
+            assert manager.flush()
             matching = [
                 record
                 for record in _records(manager.log_dir / "storage.log")
@@ -144,6 +146,7 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
                 "accepted": 1,
                 "error_ids": [browser_error_id],
             }
+            assert manager.flush()
             interface_record = _records(manager.log_dir / "interface.log")[-1]
             assert interface_record["error_id"] == browser_error_id
             assert interface_record["source"] == "browser"

@@ -709,3 +709,139 @@ def test_diagnostics_cli_status_levels_reset_and_export(tmp_path: Path) -> None:
     }
 
     diagnostics.shutdown_diagnostics()
+
+
+def test_error_records_on_an_event_loop_return_before_the_writer_acknowledges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    gate = [threading.Event()]
+    original = manager._write_pending
+
+    def blocked(pending):
+        gate[0].wait(timeout=5)
+        original(pending)
+
+    monkeypatch.setattr(manager, "_write_pending", blocked)
+
+    async def timed_record(level: str, event_code: str) -> float:
+        started = time.monotonic()
+        manager.record(level, "api", event_code, "A record from the event loop.")
+        return time.monotonic() - started
+
+    try:
+        # The writer is stuck on a slow disk for 1.5 s. An ERROR recorded from
+        # the event loop must not stall the loop for that long.
+        threading.Timer(1.5, gate[0].set).start()
+        elapsed = asyncio.run(timed_record("error", "api.test.loop_error"))
+        assert elapsed < 1.0
+        assert manager.flush(timeout=5)
+        assert any(
+            item["event_code"] == "api.test.loop_error"
+            for item in _records(manager.log_dir / "errors.log")
+        )
+
+        # CRITICAL keeps its durable acknowledgement even on the loop.
+        gate[0] = threading.Event()
+        threading.Timer(0.3, gate[0].set).start()
+        elapsed = asyncio.run(timed_record("critical", "api.test.loop_critical"))
+        assert elapsed >= 0.3
+        assert any(
+            item["event_code"] == "api.test.loop_critical"
+            for item in _records(manager.log_dir / "errors.log")
+        )
+
+        # Synchronous callers with no loop to stall still wait for durability.
+        gate[0] = threading.Event()
+        threading.Timer(0.3, gate[0].set).start()
+        started = time.monotonic()
+        manager.record("error", "api", "api.test.sync_error", "A synchronous error.")
+        assert time.monotonic() - started >= 0.3
+        assert any(
+            item["event_code"] == "api.test.sync_error"
+            for item in _records(manager.log_dir / "errors.log")
+        )
+    finally:
+        gate[0].set()
+        manager.close()
+
+
+def test_in_memory_error_retention_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(diagnostics, "MAX_MEMORY_ERRORS", 5)
+    # Desktop children answer recent_errors() from memory alone, so the deque
+    # bound is observable through the public reader.
+    manager = DiagnosticManager(tmp_path, desktop_parent=True, watch_settings=False)
+    try:
+        for index in range(8):
+            manager.record(
+                "error",
+                "api",
+                f"api.test.retained-{index}",
+                "An error retained in memory.",
+            )
+        assert manager.flush()
+        codes = [item["event_code"] for item in manager.recent_errors(limit=500)]
+        assert codes == [f"api.test.retained-{index}" for index in range(3, 8)]
+    finally:
+        manager.close()
+
+
+def test_aggregate_sink_failure_retains_the_error_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    original = manager._append
+
+    def failing_aggregate(path: Path, line: bytes) -> None:
+        if path.name == "errors.log":
+            raise OSError(28, "No space left on device")
+        original(path, line)
+
+    monkeypatch.setattr(manager, "_append", failing_aggregate)
+    try:
+        error_id = manager.record(
+            "error", "api", "api.test.aggregate_failed", "The aggregate sink failed."
+        )
+        assert manager.flush()
+        retained = [
+            item
+            for item in manager._memory_errors
+            if item.get("event_code") == "api.test.aggregate_failed"
+        ]
+        assert len(retained) == 1
+        assert retained[0]["error_id"] == error_id
+        assert manager.status()["degraded"] is True
+    finally:
+        manager.close()
+
+
+def test_operator_detail_drops_os_error_codes_and_host_paths(
+    manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+    exception = diagnostics.DiagnosticsError(
+        "cannot read data.json: [Errno 13] Permission denied: "
+        "'/home/operator/private/data.json' (see https://example.test/docs/errors)"
+    )
+
+    error_id = record_caught_exception(
+        "storage",
+        "storage.test.host_path",
+        "A storage read failed.",
+        exception,
+        stage="read",
+    )
+
+    assert error_id
+    assert manager.flush()
+    record = _records(manager.log_dir / "storage.log")[-1]
+    detail = record["operator_detail"]
+    assert "cannot read data.json" in detail
+    assert "Permission denied" in detail
+    assert "https://example.test/docs/errors" in detail
+    assert "/home/operator" not in detail
+    assert "Errno" not in detail
+    exported = json.dumps(DiagnosticManager._sanitize_export_record(record))
+    assert "/home/operator" not in exported

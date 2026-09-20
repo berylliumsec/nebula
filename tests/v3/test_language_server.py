@@ -1,10 +1,13 @@
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
+from nebula.v3 import language_server
 from nebula.v3.api import create_app
 from nebula.v3.domain import Engagement
 from nebula.v3.language_server import (
@@ -306,3 +309,81 @@ def test_authenticated_language_websocket_and_batch_endpoint(tmp_path) -> None:
         ):
             pass
     assert exc_info.value.code == 4401
+
+
+def test_language_analysis_uses_a_bounded_pool_and_skips_stale_versions(
+    monkeypatch,
+) -> None:
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="test-language")
+    monkeypatch.setattr(language_server, "_analysis_executor", executor)
+    gate = threading.Event()
+    uri = "file:///workspace/demo.py"
+
+    async def exercise() -> None:
+        session = LanguageServerSession("engagement-1")
+        await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"rootUri": "file:///workspace"},
+            }
+        )
+        opened = await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "method": "textDocument/didOpen",
+                "params": {
+                    "textDocument": {
+                        "uri": uri,
+                        "languageId": "python",
+                        "version": 1,
+                        "text": "value = 'a'\nvalue.",
+                    }
+                },
+            }
+        )
+        assert opened[0]["params"]["version"] == 1
+
+        # Occupy the only analysis worker, then queue a completion against
+        # version 1 and, behind it, the change that makes version 1 stale.
+        blocker = executor.submit(gate.wait, 5)
+        completion = asyncio.create_task(
+            session.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "textDocument/completion",
+                    "params": {
+                        "textDocument": {"uri": uri},
+                        "position": {"line": 1, "character": 6},
+                    },
+                }
+            )
+        )
+        await asyncio.sleep(0.05)
+        changed = asyncio.create_task(
+            session.handle(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/didChange",
+                    "params": {
+                        "textDocument": {"uri": uri, "version": 2},
+                        "contentChanges": [{"text": "value = 'b'\nvalue."}],
+                    },
+                }
+            )
+        )
+        await asyncio.sleep(0.05)
+        gate.set()
+        completion_response, change_response = await asyncio.gather(completion, changed)
+        blocker.result(timeout=5)
+        assert completion_response[0]["error"]["code"] == -32801
+        assert change_response[0]["params"]["version"] == 2
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        gate.set()
+        executor.shutdown(wait=True)
+    assert 1 <= language_server.MAX_ANALYSIS_WORKERS <= 8
