@@ -1205,6 +1205,14 @@ class ChatService:
                     exc,
                     stage="schedule",
                 )
+            except Exception as exc:  # diagnostic-expected: one schedule's failure must not stop the others from firing this tick
+                record_caught_exception(
+                    "chat",
+                    "chat.schedule.failed",
+                    "A scheduled provider chat occurrence could not be processed.",
+                    exc,
+                    stage="schedule",
+                )
 
     async def _fire_schedule(
         self,
@@ -1233,13 +1241,24 @@ class ChatService:
             schedules.skip(schedule, "No conversation goal is available.")
             return
         if goal.status != ChatGoalStatus.RUNNING:
+            if goal.status == ChatGoalStatus.DRAFT:
+                action = "Start"
+            elif goal.status in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
+                action = "Resume"
+            else:
+                action = "a new goal"
             schedules.skip(
                 schedule,
-                f"Goal is {goal.status.value}; scheduled work waits for Start.",
+                f"Goal is {goal.status.value}; scheduled work waits for {action}.",
             )
             return
+        # An occurrence runs with the tools, MCP servers, SSH hosts and
+        # subagents the operator last sent, exactly as a manual send would.
+        settings = schedules.turn_settings(schedule.session_id)
         try:
-            prepared = self.prepare(
+            # prepare() wraps prepare_async() in asyncio.run(), which cannot be
+            # called from the scheduler's event loop.
+            prepared = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=schedule.provider_profile_id,
                     engagement_id=schedule.engagement_id,
@@ -1253,6 +1272,11 @@ class ChatService:
                         )
                     ],
                     include_knowledge=False,
+                    tools_enabled=settings.tools_enabled,
+                    mcp_server_ids=settings.mcp_server_ids,
+                    ssh_environment_ids=settings.ssh_environment_ids,
+                    allow_subagents=settings.allow_subagents,
+                    allow_cloud_tool_results=settings.allow_cloud_tool_results,
                 )
             )
             completion = await self.complete(prepared)

@@ -3851,10 +3851,24 @@ class ChatSchedule(Entity):
     interval_seconds: int = Field(ge=3_600, le=30 * 24 * 3_600)
     next_run_at: datetime
     enabled: bool = True
+    # Set when archiving the conversation paused the schedule, so unarchiving
+    # resumes it without overriding a pause the operator chose.
+    paused_by: Literal["archive"] | None = None
     last_run_at: datetime | None = None
     last_turn_id: str | None = Field(default=None, max_length=200)
     last_status: str | None = Field(default=None, max_length=40)
     skip_reason: str | None = Field(default=None, max_length=1_000)
+
+    @field_validator("next_run_at", "last_run_at")
+    @classmethod
+    def run_times_must_be_aware(cls, value: datetime | None) -> datetime | None:
+        # A naive time cannot be compared with the scheduler's aware clock;
+        # one such row would raise inside the tick and stop every schedule.
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("schedule times must include a timezone")
+        return value.astimezone(timezone.utc)
 
 
 class NativeHookExecution(Entity):

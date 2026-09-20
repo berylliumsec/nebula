@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import NamedTuple
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -10,10 +11,25 @@ from pydantic import BaseModel, Field
 from .domain import (
     ChatSchedule,
     ChatSession,
+    ChatTurn,
+    McpServerProfile,
     ProviderProfile,
+    SshEnvironment,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
+
+ARCHIVED_SKIP_REASON = "Conversation is archived; unarchive it to resume the schedule."
+
+
+class ScheduledTurnSettings(NamedTuple):
+    """The tool settings a scheduled occurrence sends, mirroring a manual send."""
+
+    tools_enabled: bool
+    mcp_server_ids: list[str]
+    ssh_environment_ids: list[str] | None
+    allow_subagents: bool
+    allow_cloud_tool_results: bool
 
 
 class ScheduleCreate(BaseModel):
@@ -69,13 +85,126 @@ class ChatScheduleService:
         changes: dict = {}
         if body.enabled is not None:
             changes["enabled"] = body.enabled
+            # An operator's explicit choice replaces any archive-driven pause.
+            changes["paused_by"] = None
             if body.enabled:
                 changes["skip_reason"] = None
                 changes["next_run_at"] = utc_now() + timedelta(
                     seconds=schedule.interval_seconds
                 )
-        return self.store.update(
+        updated = self.store.update(
             ChatSchedule, schedule.id, changes, expected_revision=schedule.revision
+        )
+        if body.enabled:
+            # Enabling a schedule is a write to the conversation: like sending
+            # or queueing a message, it returns an archived chat to the list so
+            # the occurrences it produces are visible.
+            from .chat import unarchive_chat_session
+
+            unarchive_chat_session(self.store, session_id)
+        return updated
+
+    def pause_for_archive(self, session_id: str) -> None:
+        """Park an enabled schedule while its conversation is archived."""
+
+        try:
+            schedule = self.get(session_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: most conversations have no schedule to pause
+            return
+        if not schedule.enabled:
+            return
+        self.store.update(
+            ChatSchedule,
+            schedule.id,
+            {
+                "enabled": False,
+                "paused_by": "archive",
+                "skip_reason": ARCHIVED_SKIP_REASON,
+            },
+            expected_revision=schedule.revision,
+        )
+
+    def resume_after_unarchive(self, session_id: str) -> None:
+        """Resume a schedule that archiving paused; leave an operator's pause alone."""
+
+        try:
+            schedule = self.get(session_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: most conversations have no schedule to resume
+            return
+        if schedule.enabled or schedule.paused_by != "archive":
+            return
+        self.store.update(
+            ChatSchedule,
+            schedule.id,
+            {
+                "enabled": True,
+                "paused_by": None,
+                "skip_reason": None,
+                "next_run_at": utc_now() + timedelta(seconds=schedule.interval_seconds),
+            },
+            expected_revision=schedule.revision,
+        )
+
+    def turn_settings(self, session_id: str) -> ScheduledTurnSettings:
+        """Tool settings for an occurrence: what the operator last sent.
+
+        A scheduled occurrence has no composer to read the toggles from, so it
+        reuses the newest turn's request snapshot: tools, MCP servers, SSH hosts
+        and subagents. Servers and hosts removed or disabled since that turn are
+        dropped rather than failing every occurrence until the next manual send.
+        Before any turn ran, the conversation's saved tools toggle applies.
+        """
+
+        turns = self.store.list_session_entities(ChatTurn, session_id)
+        latest = next((item for item in reversed(turns) if item.request_snapshot), None)
+        if latest is None:
+            session = self.store.get(ChatSession, session_id)
+            tools_enabled = bool(session.metadata.get("tools_enabled", False))
+            return ScheduledTurnSettings(
+                tools_enabled=tools_enabled,
+                mcp_server_ids=[],
+                ssh_environment_ids=None,
+                allow_subagents=False,
+                allow_cloud_tool_results=tools_enabled,
+            )
+        snapshot = latest.request_snapshot
+        tools_enabled = bool(snapshot.get("include_oci_tools", False))
+        mcp_server_ids: list[str] = []
+        for server_id in snapshot.get("mcp_server_ids") or []:
+            if not isinstance(server_id, str):
+                continue
+            try:
+                server = self.store.get(McpServerProfile, server_id)
+            except NotFoundError:  # diagnostic-expected: the server was removed since the last turn; the occurrence runs without it
+                continue
+            if server.enabled:
+                mcp_server_ids.append(server_id)
+        ssh_environment_ids: list[str] | None = None
+        hosts = snapshot.get("ssh_environment_snapshot")
+        if isinstance(hosts, list):
+            ssh_environment_ids = []
+            for host in hosts:
+                host_id = host.get("id") if isinstance(host, dict) else None
+                if not isinstance(host_id, str):
+                    continue
+                try:
+                    environment = self.store.get(SshEnvironment, host_id)
+                except NotFoundError:  # diagnostic-expected: the host was removed since the last turn; the occurrence runs without it
+                    continue
+                if environment.enabled:
+                    ssh_environment_ids.append(host_id)
+        return ScheduledTurnSettings(
+            tools_enabled=tools_enabled,
+            mcp_server_ids=mcp_server_ids,
+            ssh_environment_ids=ssh_environment_ids,
+            allow_subagents=bool(snapshot.get("allow_subagents", False)),
+            # The operator already confirmed tool-result transfer for the turn
+            # this occurrence continues, as subagent goal continuation does.
+            allow_cloud_tool_results=tools_enabled,
         )
 
     def due(self) -> list[ChatSchedule]:
@@ -130,10 +259,30 @@ class ChatScheduleService:
         """
 
         try:
-            self.store.get(ChatSession, schedule.session_id)
+            session = self.store.get(ChatSession, schedule.session_id)
         except NotFoundError:  # diagnostic-expected: the conversation was deleted; its schedule has nothing to run
             self.store.delete(ChatSchedule, schedule.id)
             return None
+        if (
+            session.backend.value == "provider"
+            and session.provider_profile_id
+            and (
+                session.provider_profile_id != schedule.provider_profile_id
+                or session.model != schedule.model
+            )
+        ):
+            # The schedule follows the conversation: an operator who picks
+            # another model or provider in the chat expects occurrences to use
+            # it, and the UI offers no other way to repoint the schedule.
+            schedule = self.store.update(
+                ChatSchedule,
+                schedule.id,
+                {
+                    "provider_profile_id": session.provider_profile_id,
+                    "model": session.model,
+                },
+                expected_revision=schedule.revision,
+            )
         try:
             self.store.get(ProviderProfile, schedule.provider_profile_id)
         except NotFoundError:  # diagnostic-expected: the provider was removed; keep the schedule for the operator to repoint
@@ -150,10 +299,12 @@ class ChatScheduleService:
         return schedule
 
     def revalidate(self, schedule: ChatSchedule) -> str | None:
+        session = self.store.get(ChatSession, schedule.session_id)
+        if "archived_at" in session.metadata:
+            return ARCHIVED_SKIP_REASON
+        if session.backend.value != "provider" or not session.provider_profile_id:
+            return "Conversation no longer runs on a provider; the schedule is paused until it does."
         profile = self.store.get(ProviderProfile, schedule.provider_profile_id)
         if not profile.enabled:
             return "Provider is disabled; the schedule is paused until it is enabled."
-        session = self.store.get(ChatSession, schedule.session_id)
-        if session.model != schedule.model or session.provider_profile_id != profile.id:
-            return "Saved provider or model changed; update the schedule before it can run."
         return None
