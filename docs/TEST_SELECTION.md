@@ -17,6 +17,10 @@ coverage require diagnosis or selection review, never automatic full expansion.
    python scripts/test_selection.py --baseline origin/main --candidate WORKTREE --digest
    ```
 
+   The digest binds that diff alone. It pins git's object-name abbreviation length,
+   which git otherwise scales to how many objects the local clone holds, so the same
+   baseline and candidate hash identically in a working clone and in CI's fresh one.
+
 4. Write `.github/test-selection.json` with `change_digest`, `reviewed_by`, `reason`,
    `exclusions`, `expected_tests`, and the lists `python`, `frontend`, `native`,
    `playwright`. Empty lists explicitly mean no relevant tests at that layer;
