@@ -727,6 +727,13 @@ class ScopePolicy(Entity):
     # Tools from connected sources (MCP and other non-standard sources) are
     # searched and loaded on demand instead of sent with every request.
     on_demand_tools: bool = True
+    # Opt-in: let the agent query the local metasearch runtime for background
+    # research. Ignored while local_only is set. Never used against a target.
+    web_search: bool = False
+    # Opt-in: permit search queries that name an in-scope host, IP or CIDR.
+    # Disclosing the client's attack surface to upstream engines is the
+    # operator's call, not the model's.
+    web_search_discloses_scope: bool = False
     # Sourced tools the operator keeps in every request's function list, by
     # runtime name. Names that no longer resolve to a tool are simply unused.
     always_loaded_tools: list[str] = Field(default_factory=list, max_length=500)
@@ -936,6 +943,72 @@ class ToolSuggestionSettings(Entity):
         ):
             raise ValueError("secret_ref must use vault:ID or session:ID")
         return value
+
+
+class WebSearchEngine(StringEnum):
+    DUCKDUCKGO = "duckduckgo"
+    BRAVE = "brave"
+    WIKIPEDIA = "wikipedia"
+    STACKEXCHANGE = "stackexchange"
+    GITHUB = "github"
+
+
+class WebSearchRuntimeState(StringEnum):
+    ABSENT = "absent"
+    STOPPED = "stopped"
+    STARTING = "starting"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class WebSearchTest(NebulaModel):
+    """Outcome of the fixed-sample search test; never contains project data."""
+
+    tested_at: datetime
+    ok: bool
+    latency_ms: int | None = Field(default=None, ge=0)
+    engines_answered: list[str] = Field(default_factory=list, max_length=32)
+    error: str | None = Field(default=None, max_length=500)
+
+
+class WebSearchSettings(Entity):
+    """Nebula-wide local search runtime; projects opt in via ScopePolicy.
+
+    The runtime is a loopback-bound metasearch container owned by this host.
+    It holds no account and no key, so nothing here is secret. Queries still
+    reach upstream engines, which is why ``cloud_transfer`` stays set on the
+    tool and ``local_only`` projects keep denying it.
+    """
+
+    entity_kind: ClassVar[str] = "web_search_settings"
+    image_digest: str | None = Field(default=None, max_length=80)
+    container_state: WebSearchRuntimeState = WebSearchRuntimeState.ABSENT
+    port: int | None = Field(default=None, ge=1024, le=65_535)
+    engines: list[WebSearchEngine] = Field(
+        default_factory=lambda: [
+            WebSearchEngine.DUCKDUCKGO,
+            WebSearchEngine.BRAVE,
+            WebSearchEngine.WIKIPEDIA,
+        ],
+        min_length=1,
+        max_length=16,
+    )
+    last_test: WebSearchTest | None = None
+    last_detail: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("image_digest")
+    @classmethod
+    def digest_is_pinned(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
+            raise ValueError("image_digest must be sha256:<64 hex>")
+        return value
+
+    @field_validator("engines")
+    @classmethod
+    def engines_are_unique(cls, values: list[WebSearchEngine]) -> list[WebSearchEngine]:
+        if len(values) != len(set(values)):
+            raise ValueError("search engines must be unique")
+        return values
 
 
 class VpnProfile(Entity):
@@ -4417,6 +4490,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     AutomationProjectPolicy,
     VpnProfile,
     ToolSuggestionSettings,
+    WebSearchSettings,
     AutomationSession,
     CommandExecution,
     RunnerProfile,

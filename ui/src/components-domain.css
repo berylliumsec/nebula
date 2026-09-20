@@ -760,6 +760,43 @@
   .typesafe-actions, .typesafe-actions .button { width: 100%; }
   .typesafe-actions .button { flex: 1 1 0; min-height: var(--touch-target); }
 }
+/* Local metasearch runtime: same shell as the TypeSafe panel, no key fields. */
+.web-search-panel { display: grid; gap: 16px; padding: 18px 20px; }
+.web-search-header { align-items: flex-start; gap: 12px; }
+.web-search-header p { max-width: 62ch; }
+.web-search-engines { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 0; padding: 0; border: 0; }
+.web-search-engines legend { padding: 0 0 8px; color: var(--muted); font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+.web-search-engines .provider-consent { display: inline-flex; align-items: flex-start; gap: 8px; }
+.web-search-engines .provider-consent input { width: 16px; min-height: 16px; margin-top: 2px; }
+.web-search-engines .provider-consent span { display: flex; flex-direction: column; gap: 2px; font-size: var(--type-control); }
+.web-search-engines .provider-consent small { color: var(--muted); }
+.web-search-disclosure { max-width: 72ch; margin: 0; color: var(--muted); font-size: var(--type-secondary); }
+.web-search-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: var(--type-secondary); }
+.web-search-actions { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) {
+  .web-search-panel { padding: 16px; }
+  .web-search-header { flex-direction: column; }
+  .web-search-engines { gap: 4px 16px; }
+  .web-search-engines .provider-consent { min-height: var(--touch-target); align-items: center; }
+  .web-search-actions, .web-search-actions .button { width: 100%; }
+  .web-search-actions .button { flex: 1 1 0; min-height: var(--touch-target); }
+}
+/* Ranked public-web hits inside an assistant turn. */
+.web-search-results { display: grid; gap: 10px; margin-top: 8px; }
+.web-search-results ol { display: grid; gap: 10px; margin: 0; padding: 0 0 0 18px; }
+.web-search-results li { margin: 0; }
+.web-search-results li::marker { color: var(--muted); font-size: var(--type-secondary); }
+.web-search-result-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.web-search-result-head a { color: var(--blue); font-size: var(--type-control); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.web-search-result-host, .web-search-result-date { color: var(--muted); font-size: var(--type-secondary); }
+.web-search-results p { margin: 2px 0 0; color: var(--muted); font-size: var(--type-secondary); overflow-wrap: anywhere; }
+.web-search-provenance { max-width: 72ch; }
+@media (max-width: 640px) {
+  .web-search-results ol { padding-left: 16px; }
+  .web-search-result-head a { min-height: var(--touch-target); display: inline-flex; align-items: center; }
+}
+/* Nested under its parent consent so the dependency is visible. */
+.policy-form-body > .nested-consent { margin-left: 26px; }
 /* Kept outside the option's label so a tap on it always navigates. */
 .policy-form-body > .tool-suggestions-key-link { justify-self: start; margin: -6px 0 0 26px; color: var(--blue); font-size: var(--type-secondary); font-weight: var(--weight-medium); }
 @media (max-width: 640px) {

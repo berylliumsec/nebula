@@ -9,6 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ProviderHealthCard } from "../components/ProviderHealthCard";
 import { ReleaseSettingsPanel } from "../components/ReleaseSettingsPanel";
 import { TypeSafeIntegrationSettings } from "../components/TypeSafeIntegrationSettings";
+import { WebSearchRuntimeSettings } from "../components/WebSearchRuntimeSettings";
 import { EngagementPolicySettings } from "../components/EngagementPolicySettings";
 import { AutomationRuntimeSettings, RunnerSettings } from "../components/ToolingSettings";
 import { EnvironmentSettings } from "../components/EnvironmentSettings";
@@ -69,7 +70,7 @@ function elapsedLabel(startedAt: string | undefined, now: number): string | unde
 function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSettingsGroup {
   if (["automation-settings", "post-tool-assistant-settings", "harness-settings", "mcp-settings", "automation-runtime-settings", "runtime-settings"].includes(hash)) return "automation-settings";
   if (["environments-settings", "ssh-environment-settings"].includes(hash)) return "environments-settings";
-  if (["integrations-settings", "typesafe-integration-settings"].includes(hash)) return "integrations-settings";
+  if (["integrations-settings", "typesafe-integration-settings", "web-search-runtime-settings"].includes(hash)) return "integrations-settings";
   if (["project-policy-settings", "engagement-policy-settings"].includes(hash)) return "project-policy-settings";
   if (["identity-security-settings", "operator-settings", "device-pairing-settings", "general-settings", "appearance-settings", "security-settings"].includes(hash)) return "identity-security-settings";
   if (["release-settings-group", "release-settings"].includes(hash)) return "release-settings-group";
@@ -821,7 +822,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <SettingsGroup id="environments-settings" title="Environments" summary="SSH hosts from ~/.ssh/config" open={openAdvancedGroup === "environments-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "environments-settings"}>
       <EnvironmentSettings />
       </SettingsGroup>
-      <SettingsGroup id="integrations-settings" title="Integrations" summary="TypeSafe Jev tool suggestions" open={openAdvancedGroup === "integrations-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "integrations-settings"}>
+      <SettingsGroup id="integrations-settings" title="Integrations" summary="Web search runtime and TypeSafe Jev tool suggestions" open={openAdvancedGroup === "integrations-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "integrations-settings"}>
+      <WebSearchRuntimeSettings />
       <TypeSafeIntegrationSettings />
       </SettingsGroup>
       <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "project-policy-settings"}>

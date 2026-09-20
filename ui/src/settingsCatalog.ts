@@ -39,6 +39,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["skill", "skills", "skill.md", ".agents", "agents skills", "shared skills", "playbook", "procedure", "catalog"],
   },
   {
+    id: "settings.web-search",
+    label: "Web search runtime",
+    description: "Run the local metasearch container agents use to research the public web",
+    category: "Integrations",
+    scope: "Workspace",
+    target: "web-search-runtime-settings",
+    keywords: ["web search", "search", "internet", "research", "searxng", "metasearch", "google", "duckduckgo", "brave", "online"],
+  },
+  {
     id: "settings.follow-up",
     label: "Post-tool assistant",
     description: "Configure automatic follow-up after terminal and tool results",

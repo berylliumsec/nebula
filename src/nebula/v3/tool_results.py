@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from time import monotonic
-from typing import Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
+from typing import Annotated, Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
 
 import regex  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field
@@ -109,16 +109,43 @@ class ToolTimingReceipt(BaseModel):
     duration_seconds: float | None = Field(default=None, ge=0)
 
 
-class ToolObservation(BaseModel):
+class NetworkPortObservation(BaseModel):
     """A small parser-derived fact safe to place directly in model context."""
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["network_port"]
+    kind: Literal["network_port"] = "network_port"
     protocol: Literal["tcp", "udp", "sctp"]
     port: int = Field(ge=1, le=65_535)
     state: str = Field(min_length=1, max_length=80)
     service: str | None = Field(default=None, max_length=120)
+
+
+class WebResultObservation(BaseModel):
+    """One ranked public-web hit, bounded and redacted for model context.
+
+    Titles and snippets are written by whoever controls the page, so they are
+    data, never instruction. They are safe to place here only because the
+    agent cannot act on them: there is no fetch tool, and ``browser.navigate``
+    stays scope-checked, so a URL from here cannot be retrieved unless it is
+    already an authorized target.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["web_result"] = "web_result"
+    rank: int = Field(ge=1, le=10)
+    title: str = Field(max_length=200)
+    url: str = Field(max_length=500)
+    snippet: str = Field(default="", max_length=300)
+    engine: str | None = Field(default=None, max_length=40)
+    published_at: str | None = Field(default=None, max_length=40)
+
+
+ToolObservation = Annotated[
+    NetworkPortObservation | WebResultObservation,
+    Field(discriminator="kind"),
+]
 
 
 class ToolResultReceipt(BaseModel):
@@ -1017,10 +1044,12 @@ __all__ = [
     "ToolOutputQueryError",
     "ToolOutputService",
     "ToolParserReceipt",
+    "NetworkPortObservation",
     "ToolResultReceipt",
     "ToolObservation",
     "ToolResultStatus",
     "ToolTimingReceipt",
+    "WebResultObservation",
     "WorkspaceOutputService",
     "artifact_ref",
     "bytes_are_searchable",

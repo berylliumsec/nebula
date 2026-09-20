@@ -261,6 +261,9 @@ from .domain import (
     VpnProfile,
     ToolSuggestionSettings,
     ToolSuggestionTest,
+    WebSearchEngine,
+    WebSearchRuntimeState,
+    WebSearchTest,
     CommandExecution,
     ChatBackend,
     ChatMessage,
@@ -549,6 +552,7 @@ CUSTOM_RESOURCES = {
     "runner_profiles",
     "vpn_profiles",
     "tool_suggestion_settings",
+    "web_search_settings",
     "ssh_environments",
     "browser_actions",
     "browser_handoffs",
@@ -927,6 +931,24 @@ class TypeSafeIntegrationStatus(NebulaModel):
     projects_using: int = Field(default=0, ge=0)
 
 
+class WebSearchStatus(NebulaModel):
+    """Public view of the local search runtime; it holds no secret."""
+
+    runtime_available: bool = False
+    runtime_detail: str = ""
+    container_state: WebSearchRuntimeState = WebSearchRuntimeState.ABSENT
+    image_digest: str | None = None
+    port: int | None = None
+    engines: list[WebSearchEngine] = Field(default_factory=list)
+    last_test: WebSearchTest | None = None
+    last_detail: str | None = None
+    projects_using: int = Field(default=0, ge=0)
+
+
+class WebSearchEngineRequest(NebulaModel):
+    engines: list[WebSearchEngine] = Field(min_length=1, max_length=16)
+
+
 class CredentialVaultStatus(NebulaModel):
     """Whether Core can store a credential in the OS vault right now."""
 
@@ -1087,6 +1109,8 @@ class ScopePolicyUpdateRequest(NebulaModel):
     # None keeps the stored value, so clients unaware of the field never clear it.
     tool_suggestions: bool | None = None
     on_demand_tools: bool | None = None
+    web_search: bool | None = None
+    web_search_discloses_scope: bool | None = None
     always_loaded_tools: list[str] | None = Field(default=None, max_length=500)
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
@@ -1620,6 +1644,10 @@ def create_app(
         key_source,
         load_settings,
         resolve_jev_client,
+    )
+    from .web_search import (
+        WebSearchError,
+        load_settings as load_web_search_settings,
     )
 
     provider_chat = ChatService(
@@ -6917,7 +6945,13 @@ def create_app(
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
-        for optional in ("tool_suggestions", "on_demand_tools", "always_loaded_tools"):
+        for optional in (
+            "tool_suggestions",
+            "on_demand_tools",
+            "web_search",
+            "web_search_discloses_scope",
+            "always_loaded_tools",
+        ):
             if payload[optional] is None:
                 del payload[optional]
         payload["grants"] = [
@@ -7111,6 +7145,153 @@ def create_app(
         if settings is not None:
             await save_typesafe_settings(secret_ref=None, last_test=None)
         return await asyncio.to_thread(typesafe_status)
+
+    def require_search_runtime() -> Any:
+        if tool_platform is None:
+            raise HTTPException(
+                status_code=503,
+                detail="the local search runtime requires a configured Core runtime",
+            )
+        return tool_platform.search_runtime
+
+    async def web_search_status() -> WebSearchStatus:
+        projects_using = 0
+        offset = 0
+        while page := store.list_entities(ScopePolicy, offset=offset, limit=1_000):
+            projects_using += sum(
+                1 for scope in page if scope.web_search and not scope.local_only
+            )
+            offset += len(page)
+        settings = await asyncio.to_thread(load_web_search_settings, store)
+        if tool_platform is None:
+            return WebSearchStatus(
+                runtime_available=False,
+                runtime_detail="Core has no container runtime configured",
+                projects_using=projects_using,
+                engines=settings.engines if settings else [],
+                last_test=settings.last_test if settings else None,
+            )
+        state, detail = await tool_platform.search_runtime.state()
+        return WebSearchStatus(
+            runtime_available=state != WebSearchRuntimeState.ABSENT
+            or "not created" in detail,
+            runtime_detail=detail,
+            container_state=state,
+            image_digest=settings.image_digest if settings else None,
+            port=settings.port if settings else None,
+            engines=settings.engines if settings else [],
+            last_test=settings.last_test if settings else None,
+            last_detail=settings.last_detail if settings else None,
+            projects_using=projects_using,
+        )
+
+    @app.get(
+        f"{API_PREFIX}/integrations/web-search",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_web_search_integration() -> WebSearchStatus:
+        return await web_search_status()
+
+    @app.post(
+        f"{API_PREFIX}/integrations/web-search/install",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def install_web_search_runtime() -> WebSearchStatus:
+        """Pull the metasearch image and pin it by the digest the runtime proves."""
+
+        runtime = require_search_runtime()
+        try:
+            digest = await runtime.install()
+        except WebSearchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        await asyncio.to_thread(
+            runtime.record, image_digest=digest, last_detail="image pinned"
+        )
+        return await web_search_status()
+
+    @app.post(
+        f"{API_PREFIX}/integrations/web-search/start",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def start_web_search_runtime() -> WebSearchStatus:
+        runtime = require_search_runtime()
+        try:
+            await runtime.ensure_ready()
+        except WebSearchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return await web_search_status()
+
+    @app.post(
+        f"{API_PREFIX}/integrations/web-search/stop",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_web_search_runtime() -> WebSearchStatus:
+        runtime = require_search_runtime()
+        try:
+            await runtime.stop()
+        except WebSearchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return await web_search_status()
+
+    @app.post(
+        f"{API_PREFIX}/integrations/web-search/test",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def test_web_search_runtime() -> WebSearchStatus:
+        """Run one fixed neutral query; never touches project data."""
+
+        runtime = require_search_runtime()
+        result = await runtime.check()
+        await asyncio.to_thread(runtime.record, last_test=result)
+        return await web_search_status()
+
+    @app.put(
+        f"{API_PREFIX}/integrations/web-search/engines",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def put_web_search_engines(
+        request: WebSearchEngineRequest,
+    ) -> WebSearchStatus:
+        runtime = require_search_runtime()
+        if len(set(request.engines)) != len(request.engines):
+            raise HTTPException(status_code=422, detail="search engines must be unique")
+        await asyncio.to_thread(runtime.record, engines=request.engines)
+        # The engine list lives in the mounted settings file, so a running
+        # runtime keeps the old list until it is recreated.
+        state, _ = await runtime.state()
+        if state == WebSearchRuntimeState.READY:
+            try:
+                await runtime.remove()
+                await runtime.ensure_ready()
+            except WebSearchError as exc:
+                raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return await web_search_status()
+
+    @app.delete(
+        f"{API_PREFIX}/integrations/web-search",
+        response_model=WebSearchStatus,
+        tags=["integrations"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def delete_web_search_runtime() -> WebSearchStatus:
+        runtime = require_search_runtime()
+        try:
+            await runtime.remove()
+        except WebSearchError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return await web_search_status()
 
     def public_vpn_profile(profile: VpnProfile) -> dict[str, Any]:
         value = profile.model_dump(exclude={"secret_ref"})

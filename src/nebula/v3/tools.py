@@ -39,6 +39,7 @@ from .domain import (
     utc_now,
 )
 from .policy import PolicyDecision, PolicyEffect, PolicyEngine, PolicyRequest
+from .redaction import redacted_display
 from .sandbox import SandboxRunner
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_results import (
@@ -51,11 +52,16 @@ from .tool_results import (
     ToolTimingReceipt,
     ToolResultReceipt,
     ToolOutputService,
+    NetworkPortObservation,
     ToolObservation,
+    WebResultObservation,
     WorkspaceOutputService,
     artifact_ref,
     bytes_are_searchable,
 )
+
+
+WEB_SEARCH_TOOL_NAME = "web.search"
 
 
 class ToolBrokerError(RuntimeError):
@@ -678,11 +684,61 @@ def _regular_files_beneath(root: Path) -> Iterator[Path]:
 def _compact_tool_summary(
     result: ToolExecutionResult, status: ToolResultStatus
 ) -> str | None:
-    del result, status
+    del status
+    if result.output.get("tool") != WEB_SEARCH_TOOL_NAME:
+        return None
+    # A refusal or runtime failure has to reach the operator's transcript, not
+    # only the stderr artifact, because its whole job is to name the next step.
+    detail = result.output.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return redacted_display(detail)[:1_000]
+    count = result.output.get("result_count")
+    query = result.output.get("query")
+    if isinstance(count, int) and isinstance(query, str):
+        found = (
+            "no results" if count == 0 else f"{count} result{'' if count == 1 else 's'}"
+        )
+        return redacted_display(f"Found {found} for \u201c{query}\u201d.")[:1_000]
     return None
 
 
+def _web_search_observations(result: ToolExecutionResult) -> list[ToolObservation]:
+    """Lift bounded, redacted search hits into the receipt.
+
+    The full provider response is still stored as an artifact; this only
+    spares the model two round-trips for a handful of titles and links.
+    """
+
+    if result.exit_code != 0:
+        return []
+    observations: list[ToolObservation] = []
+    for index, entry in enumerate(result.output.get("results", []), start=1):
+        if not isinstance(entry, dict) or index > 10:
+            break
+        url = str(entry.get("url") or "")
+        title = str(entry.get("title") or "")
+        if not url or not title:
+            continue
+        observations.append(
+            WebResultObservation(
+                rank=index,
+                title=redacted_display(title)[:200],
+                url=url[:500],
+                snippet=redacted_display(str(entry.get("snippet") or ""))[:300],
+                engine=(str(entry["engine"])[:40] if entry.get("engine") else None),
+                published_at=(
+                    str(entry["published_at"])[:40]
+                    if entry.get("published_at")
+                    else None
+                ),
+            )
+        )
+    return observations
+
+
 def _compact_tool_observations(result: ToolExecutionResult) -> list[ToolObservation]:
+    if result.output.get("tool") == WEB_SEARCH_TOOL_NAME:
+        return _web_search_observations(result)
     if result.output.get("tool") != "nmap" or result.exit_code != 0:
         return []
     nested_stdout = result.output.get("stdout")
@@ -700,7 +756,7 @@ def _compact_tool_observations(result: ToolExecutionResult) -> list[ToolObservat
         if not 1 <= port <= 65_535:
             continue
         observations.append(
-            ToolObservation(
+            NetworkPortObservation(
                 kind="network_port",
                 protocol=cast(Literal["tcp", "udp", "sctp"], match.group("protocol")),
                 port=port,

@@ -6,6 +6,7 @@ import {
   Boxes,
   ChevronRight,
   Cpu,
+  Globe,
   Globe2,
   Link2,
   Moon,
@@ -25,13 +26,14 @@ import { settingCatalog, settingCatalogText, type SettingCatalogEntry } from "..
 import { useOptionalChrome } from "../state/ChromeContext";
 import { isNebulaShell } from "../hooks/useCompactLayout";
 
-const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Project Policy", "Identity & Security", "Release", "Diagnostics"];
+const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Integrations", "Project Policy", "Identity & Security", "Release", "Diagnostics"];
 
 /** Row glyph per catalog entry; every entry needs one so no row falls back to the generic terminal. */
 export const settingIcons: Record<string, LucideIcon> = {
   "settings.setup": SquareTerminal,
   "settings.providers": Bot,
   "settings.skills": BookOpen,
+  "settings.web-search": Globe,
   "settings.follow-up": Sparkles,
   "settings.harnesses": Cpu,
   "settings.mcp": Plug,
