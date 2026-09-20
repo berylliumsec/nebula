@@ -1,13 +1,20 @@
 {
-  "change_digest": "e59f4001a26552569f49b00b77c8a7bedae05f4c4f2d37eb5f386140f7580676",
+  "change_digest": "80396d8a1d58a904e69c806c5725d42cfff25c0cef2c56b61729966b11a0fcfe",
   "reviewed_by": "Claude review of terminal-lifecycle",
   "reason": "Six terminal/setup defects from the workbench audit. (2) The terminal audit spool did three durable syncs per PTY chunk (raw fsync, metadata tmp fsync + rename, directory fsync) before the reader issued the next read, so heavy output crawled at storage latency; syncs are now coalesced onto a 1 MiB / 1 s cadence, the moment the capture cap is reached, and the command boundary, with every chunk still reaching the page cache at once. (4) The raw append ran before the metadata rewrite, so a crash in between left the raw file ahead of a stale digest and recover_spools raised on the hash check forever, leaking the spool pair; the metadata is now written first when a sync is due and recovery recomputes the digest from the raw bytes whenever the raw file is longer than the recorded observed count (a malformed recorded hash is still rejected). (3) A cancelled attach() (browser tab closed or ASGI cancellation while the container started) escaped the except Exception guard and stranded the session in launching with both watchdog tasks already cancelled: reconnect answered terminal_attached, capacity lost a slot and workspace reset stayed blocked until restart; attach now finishes the session as failed/launch_cancelled on CancelledError, and a process obtained before the launch could take the service lock is closed instead of leaking. (6) Idempotency entries were never pruned, so the terminal tab's Retry (which re-posts the same key) answered 409 idempotency_conflict forever once the session died; finish() now drops the entry for the finished session, so a live session still dedupes and a dead one starts fresh. (9) Setup reported terminal.status preparing_image for an idle selected runner (phase not_started) and after Cancel (phase cancelled), so Settings showed 'Preparing Kali runtime...' with a spinning disabled button and polled every second forever; a new TerminalSetupState.NEEDS_IMAGE is reported for those phases and preparing_image only while queued/resolving/preparing/cancelling. (16) Terminal-command search compared SQLite's ASCII-only lower() against a Python casefold, so any non-ASCII text never matched; a Unicode casefold function is registered on the query's own SQLite connection. Tests: test_terminal_history.py::test_spool_writes_coalesce_durable_syncs_across_chunks (192 fsyncs on main), ::test_spool_recovery_tolerates_raw_bytes_ahead_of_metadata (recovered 0 on main), ::test_history_search_matches_non_ascii_text_case_insensitively (empty on main); test_container_terminal.py::test_cancelled_attach_releases_a_launching_session (session stranded on main), ::test_idempotency_key_can_be_reused_after_the_session_finishes (409 on main); test_setup.py::test_idle_image_preparation_reports_needs_image_not_preparing plus the three existing assertions that pinned preparing_image for idle and cancelled states. The three full files are selected because they cover the spool, replay, finish/cancel and setup state-machine paths the changed code sits in.",
   "exclusions": "No frontend tests: no ui/ change (the UI reads needs_image as a neutral, non-polling state through its existing fallbacks; a dedicated label is a follow-up). No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/container_terminal.py, terminal_history.py and setup.py) does not exercise a cancelled attach, spool durability, idempotency retry, the idle setup state or non-ASCII audit search; the Python tests drive each path directly against the service objects. No full suites.",
-  "expected_tests": {"python": 85, "frontend": 0, "native": 0, "playwright": 0},
+  "expected_tests": {
+    "python": 85,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
   "python": [
     "tests/v3/test_container_terminal.py",
     "tests/v3/test_terminal_history.py",
     "tests/v3/test_setup.py"
   ],
-  "frontend": [], "native": [], "playwright": []
+  "frontend": [],
+  "native": [],
+  "playwright": []
 }
