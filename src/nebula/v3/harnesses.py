@@ -11793,6 +11793,10 @@ class HarnessRuntimeService:
                 content=final_message or "Harness completed without a text response.",
                 model=self.store.get(HarnessSession, turn.harness_session_id).model,
                 usage=usage,
+                elapsed_ms=max(
+                    0,
+                    round((utc_now() - chat_turn.created_at).total_seconds() * 1000),
+                ),
                 citations=[
                     ChatCitation.model_validate(item)
                     for item in turn.metadata.get("citations", [])

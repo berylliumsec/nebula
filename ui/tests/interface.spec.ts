@@ -4026,7 +4026,7 @@ test("assistant upgrade provider thinking stays collapsed and out of the reply",
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", session_id: "session-thinking", turn_id: "turn-thinking" })}\n\n`));
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", delta: "Private chain of thought." })}\n\n`));
           controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", delta: "FLASH_OK" })}\n\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking", session_id: "session-thinking", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "FLASH_OK", reasoning: "Private chain of thought." }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "stop", citations: [] })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking", session_id: "session-thinking", provider_id: "provider-thinking", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "FLASH_OK", reasoning: "Private chain of thought." }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, elapsed_ms: 8240, approval_wait_ms: 1400, finish_reason: "stop", citations: [] })}\n\n`));
           controller.close();
         },
       });
@@ -4049,6 +4049,10 @@ test("assistant upgrade provider thinking stays collapsed and out of the reply",
   await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveText("FLASH_OK");
   await thinking.locator("summary").click();
   await expect(thinking).toContainText("Private chain of thought.");
+  const usage = reply.locator(".chat-message-usage");
+  await expect(usage.locator("summary")).toHaveText("5 tokens · 8.2s");
+  await usage.locator("summary").click();
+  await expect(usage).toContainText("8.2s elapsed · 1.4s waiting for approval");
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 

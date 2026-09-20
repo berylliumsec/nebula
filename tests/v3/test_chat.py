@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +18,7 @@ from nebula.v3.chat import (
     ChatService,
 )
 from nebula.v3.domain import (
+    Approval,
     ChatDecision,
     ChatMessage,
     ChatGoal,
@@ -566,6 +568,108 @@ def test_provider_chat_persists_reasoning_apart_from_the_reply(tmp_path, monkeyp
     ]
     assert stored[-1].content == "FLASH_OK"
     assert stored[-1].reasoning == "Private chain of thought."
+
+
+def test_completed_turn_records_the_time_it_took(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "chat-elapsed.db")
+    engagement = store.create(Engagement(id="eng-elapsed", name="Elapsed"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Reply with FLASH_OK."}],
+            include_knowledge=False,
+        )
+    )
+    response = asyncio.run(service.complete(prepared))
+
+    assistant = [
+        item
+        for item in service.session_messages(response.session_id)
+        if item.role == ChatRole.ASSISTANT
+    ][-1]
+    assert assistant.elapsed_ms is not None and 0 <= assistant.elapsed_ms < 60_000
+    # A streaming client shows the number the transcript keeps after a reload.
+    assert response.elapsed_ms == assistant.elapsed_ms
+    # Nothing waited on the operator, so the expanded line stays one item long.
+    assert assistant.approval_wait_ms is None
+    assert response.approval_wait_ms is None
+
+
+def test_turn_timing_counts_only_decided_approval_waits(tmp_path):
+    store = NebulaStore(tmp_path / "chat-approval-wait.db")
+    engagement = store.create(Engagement(id="eng-wait", name="Wait"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-wait",
+            engagement_id=engagement.id,
+            title="Wait session",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    started = utc_now() - timedelta(seconds=30)
+    turn = store.create(
+        ChatTurn(
+            id="turn-wait",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            created_at=started,
+            tool_call_ids=["call-decided", "call-pending", "call-missing"],
+        )
+    )
+
+    def _approval(identifier: str, decided: datetime | None) -> Approval:
+        return store.create(
+            Approval(
+                id=identifier,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                risk_class=RiskClass.LOCAL_READ,
+                exact_request={"tool": "command.run"},
+                policy_rationale="operator boundary",
+                requested_by="chat",
+                requested_at=started + timedelta(seconds=2),
+                decided_at=decided,
+            )
+        )
+
+    _approval("approval-decided", started + timedelta(seconds=3, milliseconds=400))
+    _approval("approval-pending", None)
+    for identifier, approval_id in (
+        ("call-decided", "approval-decided"),
+        ("call-pending", "approval-pending"),
+    ):
+        store.create(
+            ToolCall(
+                id=identifier,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="command.run",
+                risk_class=RiskClass.LOCAL_READ,
+                approval_id=approval_id,
+            )
+        )
+
+    elapsed, waited = ChatService(store)._turn_timing(store.get(ChatTurn, turn.id))
+
+    assert elapsed is not None and elapsed >= 30_000
+    # Only the decided approval counts; the pending one and the pruned call do not.
+    assert waited == 1_400
 
 
 def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkeypatch):

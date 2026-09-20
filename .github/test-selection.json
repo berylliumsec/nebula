@@ -1,24 +1,29 @@
 {
-  "change_digest": "5a8576762d6c94b166d3397b011fb947114f3900ce71c2f68c3fb5d2a73deabd",
-  "reviewed_by": "Claude review of selected-skill instructions in the Jev request",
-  "reason": "Jev ranked the deferred catalog from the operator's messages alone: a turn driven by a selected skill sent the skill's name only if the operator happened to type it, while the skill body - the steps that say which tools the turn needs - stayed in the system instructions. build_state now carries the newest selected skills as operator_selected_skills, redacted with the same redact_text pass as messages and bounded to 4 skills, 6k chars each and 12k chars total so state plus the longest choice question stays inside Jev's 32k window; the gate and choice questions gain a clause naming that key only when it is present, so skill-free turns keep byte-identical wording and the tuned thresholds. The receipt records which skills were sent, including on a failed call, so the turn snapshot documents the egress. The selection runs test_tool_suggestions for the new state, questions, receipt and the prepare-level wiring, and test_chat because chat.py now passes its snapshots into that call.",
-  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: the only rendered change is one sentence of consent copy inside the existing #tool-suggestions-option label, which the area's journeys screenshot as an output artifact, not a compared baseline. ui/src/api/types.ts is unmapped by ui/playwright-impact.json but the change there is a doc comment, so it selects nothing on its own. area:assistant (matched through src/nebula/v3/chat.py) is excluded: chat.py's only change is the skills= argument on the Jev call, with no transcript, routing or rendering behaviour touched, and tests/v3/test_chat.py plus area:tool-suggestions cover that path. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites.",
+  "change_digest": "8fad872e23040aed71ead81a532454f94f6a5dcbd0e81ea6cf92c4c2841daa5d",
+  "reviewed_by": "Claude review of per-turn elapsed time in the transcript",
+  "reason": "The transcript never said how long a turn took. Core now records the wall clock from the turn's creation to the message it produced (elapsed_ms on ChatMessage, mirrored on ChatCompletionResponse so a streaming client and a reloaded transcript agree), plus approval_wait_ms summed from the decided approvals bound to the turn's tool calls; a turnless completion falls back to the prepare timestamp. ChatTurnSummary gained started_at so a reload keeps counting from the real start instead of restarting at zero. The transcript shows a counting pill while the turn runs, appends the elapsed to the existing token summary once it lands, adds the elapsed split when that summary is expanded, and reports the duration on a stopped turn. The selection runs test_chat for the timing helper and the persisted message, test_api for started_at on the pending-turn payload, test_harnesses because harness chat turns now persist the same field, and the three frontend suites that own the formatter, the view-model reconciliation and the mid-turn restore fixture.",
+  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: the compared snapshots (critical workspaces, zero dark) capture freshly opened workspaces with no completed assistant turn, so the new line never enters them; the elapsed rendering is asserted by text in the assistant journey instead. Playwright is limited to the mocked assistant entries plus the narrow chat-edit-in-place entry, because the changed view model feeds both; the real-core entries are excluded since they need a live Core and this change adds no Core interaction a mock cannot model. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites.",
   "expected_tests": {
-    "python": 69,
-    "frontend": 9,
+    "python": 169,
+    "frontend": 53,
     "native": 0,
-    "playwright": 7
+    "playwright": 124
   },
   "python": [
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_api.py",
+    "tests/v3/test_harnesses.py"
   ],
   "frontend": [
-    "ui/src/components/EngagementPolicySettings.test.ts",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
+    "ui/src/pages/turnElapsed.test.ts",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/App.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:tool-suggestions"
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "entry:chat-edit-in-place/mobile-chromium-small"
   ]
 }
