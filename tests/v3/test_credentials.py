@@ -474,3 +474,98 @@ def test_missing_secretstorage_is_reported_instead_of_raising(monkeypatch):
     caught: list[Exception] = []
     assert secret_service_state(Keyring(), on_caught=caught.append) == "unavailable"
     assert isinstance(caught[0], ImportError)
+
+
+class ChainedKeyring:
+    """Stand in for keyring.backends.chainer.ChainerBackend."""
+
+    __module__ = "keyring.backends.chainer"
+    priority = 10
+
+    def __init__(self, *backends):
+        self.backends = list(backends)
+
+
+def test_chained_keyring_backend_uses_its_first_trusted_member():
+    from nebula.v3.vault_probe import vault_state
+
+    plaintext = PlaintextKeyring()
+    vault = MemoryKeyring()
+    chain = ChainedKeyring(plaintext, vault)
+
+    assert vault_state(chain) == "available"
+    store = CredentialStore(chain)
+    assert store.vault_state == "available"
+    created = store.create(CredentialCreateRequest(secret=SecretStr("secret")))
+    assert created.persistence == "vault"
+    assert store.resolve(created.reference).get_secret_value() == "secret"
+    assert vault.values and not plaintext.values
+
+    assert CredentialStore(ChainedKeyring(plaintext)).vault_available is False
+
+
+def test_credential_status_endpoints_run_off_the_event_loop(tmp_path):
+    import asyncio
+    from nebula.v3.domain import VpnProfile
+
+    store = NebulaStore(tmp_path / "core.db")
+    credential_store = CredentialStore(MemoryKeyring())
+    session = credential_store.create(
+        CredentialCreateRequest(secret=SecretStr("secret"), persistence="session")
+    )
+    store.create(
+        VpnProfile(
+            name="Fixture",
+            filename="fixture.ovpn",
+            remote_host="vpn.example.test",
+            remote_port=1194,
+            protocol="udp",
+            fingerprint="a" * 64,
+            secret_ref=session.reference,
+        )
+    )
+    calls = []
+    real_status = credential_store.status
+
+    def observed_status(reference):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            calls.append("worker")
+        else:
+            calls.append("event-loop")
+        return real_status(reference)
+
+    credential_store.status = observed_status
+    client = TestClient(
+        create_app(store, auth_token="test-token", credential_store=credential_store)
+    )
+    auth = {"Authorization": "Bearer test-token"}
+    config = (
+        "client\ndev tun\nproto udp\nremote vpn.example.test 1194\n"
+        "remote-cert-tls server\n<ca>\ncertificate\n</ca>\n"
+    )
+
+    with client:
+        listed = client.get("/api/v1/vpn-profiles", headers=auth)
+        assert listed.status_code == 200
+        assert listed.json()[0]["available"] is True
+        created = client.post(
+            "/api/v1/vpn-profiles",
+            headers=auth,
+            json={
+                "name": "Created",
+                "filename": "created.ovpn",
+                "config": config,
+                "persistence": "session",
+            },
+        )
+        assert created.status_code == 201
+        assert created.json()["available"] is True
+        status = client.get(
+            f"/api/v1/credentials/{session.reference}/status", headers=auth
+        )
+        assert status.status_code == 200
+        assert status.json()["available"] is True
+
+    assert calls == ["worker"] * 3

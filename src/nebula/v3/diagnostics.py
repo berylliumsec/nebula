@@ -567,11 +567,17 @@ class DiagnosticManager:
         if self._sensitive_detail_store_override is not None:
             self._sensitive_detail_store = self._sensitive_detail_store_override
             return
-        self._sensitive_detail_store = SensitiveDiagnosticStore(
-            self.data_dir / "diagnostic-details",
-            enabled=self._settings.sensitive_detail_capture,
-            owner="core",
-        )
+        enabled = self._settings.sensitive_detail_capture
+        if self._sensitive_detail_store is None:
+            self._sensitive_detail_store = SensitiveDiagnosticStore(
+                self.data_dir / "diagnostic-details",
+                enabled=enabled,
+                owner="core",
+            )
+            return
+        # Session-memory detail lives only in the store instance: rebuilding
+        # it on every preference save would drop every detail captured so far.
+        self._sensitive_detail_store.set_enabled(enabled)
 
     def _secure_touch(self, path: Path) -> None:
         try:
@@ -1282,10 +1288,14 @@ class DiagnosticManager:
                         exception=exc,
                     )
                     self._settings = DiagnosticSettings()
+                    self._configure_sensitive_detail_store()
                 continue
             if stamp == self._settings_stamp:
                 continue
             self._settings = self._load_settings()
+            # The desktop shell writes this file directly, so a capture
+            # preference changed there has to reach the store as well.
+            self._configure_sensitive_detail_store()
             self.record(
                 "info",
                 "diagnostics",

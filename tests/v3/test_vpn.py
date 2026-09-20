@@ -82,3 +82,38 @@ def test_requires_server_identity_verification_and_one_remote():
         parse_openvpn_profile(BASE.replace("remote-cert-tls server\n", ""))
     with pytest.raises(VpnProfileError, match="exactly one remote"):
         parse_openvpn_profile(BASE + "remote backup.example.com 1194\n")
+
+
+def test_remote_transport_argument_is_admitted_and_sets_the_protocol():
+    parsed = parse_openvpn_profile(
+        BASE.replace("remote vpn.example.com 1194", "remote vpn.example.com 443 tcp")
+    )
+
+    assert (parsed.remote_host, parsed.remote_port, parsed.protocol) == (
+        "vpn.example.com",
+        443,
+        "tcp",
+    )
+    assert "remote vpn.example.com 443 tcp\n" in parsed.config
+
+    # OpenVPN lets the remote's transport override a global proto line,
+    # whichever order the exported profile lists them in.
+    reordered = parse_openvpn_profile(
+        BASE.replace("proto udp\n", "").replace(
+            "remote vpn.example.com 1194", "remote vpn.example.com 443 tcp\nproto udp"
+        )
+    )
+    assert reordered.protocol == "tcp"
+
+    with pytest.raises(VpnProfileError, match="UDP or TCP"):
+        parse_openvpn_profile(
+            BASE.replace(
+                "remote vpn.example.com 1194", "remote vpn.example.com 443 sctp"
+            )
+        )
+    with pytest.raises(VpnProfileError, match="remote must contain"):
+        parse_openvpn_profile(
+            BASE.replace(
+                "remote vpn.example.com 1194", "remote vpn.example.com 443 tcp extra"
+            )
+        )

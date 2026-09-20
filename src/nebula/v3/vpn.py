@@ -99,6 +99,13 @@ class ParsedVpnProfile:
     requires_credentials: bool
 
 
+_CLIENT_TRANSPORTS = frozenset({"udp", "udp4", "tcp", "tcp4", "tcp-client"})
+
+
+def _protocol_family(transport: str) -> str:
+    return "tcp" if transport.lower().startswith("tcp") else "udp"
+
+
 def parse_openvpn_profile(
     config: str, *, username: str | None = None, password: str | None = None
 ) -> ParsedVpnProfile:
@@ -112,6 +119,7 @@ def parse_openvpn_profile(
     block_names: set[str] = set()
     remotes: list[tuple[str, int]] = []
     protocol = "udp"
+    remote_protocol: str | None = None
     has_client = False
     has_tun = False
     has_server_verification = False
@@ -153,24 +161,30 @@ def parse_openvpn_profile(
             output.append("dev tun0")
             continue
         if option == "proto":
-            if len(fields) != 2 or fields[1].lower() not in {
-                "udp",
-                "udp4",
-                "tcp",
-                "tcp4",
-                "tcp-client",
-            }:
+            if len(fields) != 2 or fields[1].lower() not in _CLIENT_TRANSPORTS:
                 raise VpnProfileError("only UDP or TCP client transports are supported")
-            protocol = "tcp" if fields[1].lower().startswith("tcp") else "udp"
+            protocol = _protocol_family(fields[1])
         elif option == "remote":
-            if len(fields) not in {2, 3}:
-                raise VpnProfileError("remote must contain one host and optional port")
+            if len(fields) not in {2, 3, 4}:
+                raise VpnProfileError(
+                    "remote must contain one host, an optional port and an "
+                    "optional transport"
+                )
             try:
-                port = int(fields[2]) if len(fields) == 3 else 1194
+                port = int(fields[2]) if len(fields) >= 3 else 1194
             except ValueError as exc:
                 raise VpnProfileError("remote port must be a number") from exc
             if not 1 <= port <= 65535:
                 raise VpnProfileError("remote port is outside 1..65535")
+            if len(fields) == 4:
+                # OpenVPN's ``remote <host> <port> <proto>`` form, as exported
+                # by Access Server and many providers. Its transport overrides
+                # a global proto line for that remote, whichever comes first.
+                if fields[3].lower() not in _CLIENT_TRANSPORTS:
+                    raise VpnProfileError(
+                        "only UDP or TCP client transports are supported"
+                    )
+                remote_protocol = _protocol_family(fields[3])
             remotes.append((fields[1], port))
         elif option == "client":
             has_client = True
@@ -230,7 +244,7 @@ def parse_openvpn_profile(
         config=admitted,
         remote_host=remote_host,
         remote_port=remote_port,
-        protocol=protocol,
+        protocol=remote_protocol or protocol,
         fingerprint=hashlib.sha256(admitted.encode()).hexdigest(),
         requires_credentials=auth_user_pass,
     )

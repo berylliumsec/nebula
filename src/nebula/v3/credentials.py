@@ -19,6 +19,7 @@ from .domain import NebulaModel
 from .vault_probe import (
     VaultState,
     backend_usable,
+    resolve_vault_backend,
     secret_service_collection,
 )
 from .vault_probe import vault_state as probe_vault_state
@@ -97,6 +98,9 @@ class CredentialStore:
                     stage="credentials",
                 )
                 self.keyring_backend = None
+        # keyring hands out its chainer when several backends are viable;
+        # Nebula talks to the trusted member, not the chain.
+        self.keyring_backend = resolve_vault_backend(self.keyring_backend)
 
     @property
     def vault_state(self) -> VaultState:

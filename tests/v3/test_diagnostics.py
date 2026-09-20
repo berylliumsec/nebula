@@ -938,3 +938,104 @@ def test_a_failed_append_closes_the_torn_line_so_the_next_record_survives(
     codes = [str(item["event_code"]) for item in manager.recent_errors(limit=100)]
     assert "api.test.after_torn_write" in codes
     assert manager.status()["unreadable_record_count"] == 1
+
+
+def _replace_settings(manager: DiagnosticManager, payload: dict[str, object]) -> None:
+    """Rewrite the preferences file the way the desktop shell does: atomically."""
+
+    replacement = manager.settings_path.with_suffix(".replacement")
+    replacement.write_text(json.dumps(payload), encoding="utf-8")
+    os.chmod(replacement, 0o600)
+    os.replace(replacement, manager.settings_path)
+
+
+def _wait_for(predicate, timeout: float = 3.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while not predicate() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return predicate()
+
+
+def test_live_reload_reconfigures_protected_detail_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebula.v3 import diagnostic_sensitive
+
+    # No host vault in the test: capture must select session memory, not the
+    # developer's keyring.
+    monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
+    manager = DiagnosticManager(tmp_path, watch_settings=True)
+    try:
+        assert manager.status()["sensitive_detail_persistence"] == "disabled"
+        settings = {
+            "schema": SETTINGS_SCHEMA,
+            "global_level": "error",
+            "feature_levels": {},
+            "sensitive_detail_capture": True,
+        }
+        _replace_settings(manager, settings)
+        assert _wait_for(lambda: manager.status()["sensitive_detail_capture"])
+        assert _wait_for(
+            lambda: manager.status()["sensitive_detail_persistence"] == "session-memory"
+        ), manager.status()["sensitive_detail_persistence"]
+        error_id = manager.record(
+            "error",
+            "chat",
+            "chat.fixture.failed",
+            "Fixture failed.",
+            exception=RuntimeError("secret-ish detail xyz"),
+        )
+        assert error_id is not None
+        revealed = manager.reveal_sensitive_detail(
+            error_id, operator_id="op-1", action="reveal"
+        )
+        assert "secret-ish detail xyz" in revealed
+
+        _replace_settings(manager, {**settings, "sensitive_detail_capture": False})
+        assert _wait_for(lambda: not manager.status()["sensitive_detail_capture"])
+        assert _wait_for(
+            lambda: manager.status()["sensitive_detail_persistence"] == "disabled"
+        ), manager.status()["sensitive_detail_persistence"]
+    finally:
+        manager.close()
+
+
+def test_settings_save_keeps_session_memory_protected_detail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebula.v3 import diagnostic_sensitive
+
+    monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    try:
+        settings = {
+            "schema": SETTINGS_SCHEMA,
+            "global_level": "error",
+            "feature_levels": {},
+            "sensitive_detail_capture": True,
+        }
+        manager.update_settings(settings)
+        assert manager.status()["sensitive_detail_persistence"] == "session-memory"
+        error_id = manager.record(
+            "error",
+            "chat",
+            "chat.fixture.failed",
+            "Fixture failed.",
+            exception=RuntimeError("secret-ish detail xyz"),
+        )
+        assert error_id is not None
+        before = manager.reveal_sensitive_detail(
+            error_id, operator_id="op-1", action="reveal"
+        )
+        assert "secret-ish detail xyz" in before
+
+        # Any unrelated preference change used to rebuild the store and drop
+        # every memory-only detail captured so far.
+        manager.update_settings({**settings, "feature_levels": {"chat": "debug"}})
+
+        after = manager.reveal_sensitive_detail(
+            error_id, operator_id="op-1", action="reveal"
+        )
+        assert after == before
+    finally:
+        manager.close()
