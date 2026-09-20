@@ -1,14 +1,21 @@
 {
-  "change_digest": "69016a594a728a2ba333c74e93564610b928399be351189e3e5ef31490eeb3d6",
+  "change_digest": "b208e53ffa5ae75732a46c71feca759cb2c5c0add7ce9fe3b91005a0823999a8",
   "reviewed_by": "Claude review of mission approval resume, recurrence, scheduled capacity, silent-device reconcile and compactor objective budget",
   "reason": "Five verified defects. (1) MissionService.resume_after_approval ran only after api.py had persisted the approval as APPROVED, and it could still raise MissionCapacityError, a ProviderError, or NotFound for a deleted profile; the run then sat in WAITING_APPROVAL forever because re-posting the decision hit the idempotent branch and returned without resuming. The capacity check is removed for resumes (a waiting run already holds its logical slot), resume_after_approval refuses to resume the same decision twice using the run ledger's resume idempotency key, and the idempotent branch in decide_approval re-drives a still-waiting mission via missions.approval_resume_pending. (2) _schedule_recurrence called start_mission unguarded inside _execute's finally, so a capacity, configuration, unavailability or missing-profile error silently ended a recurring series; it now records metadata.recurrence_error plus a run.recurrence_failed event on the completed run, and startup() retries stalled series whose next occurrence could not be scheduled, clearing the marker on success. (3) _scheduled_execute inserted into _tasks without a capacity check, so N scheduled missions ran at once past max_active_missions; it now re-checks under the lock and re-sleeps SCHEDULED_CAPACITY_RETRY_SECONDS while at capacity, leaving the run QUEUED, cancellable, and annotated once with run.scheduled_start_deferred. (4) ActionBroker._current expired a COMMITTED intent whose Core mutation was committed to terminal EXPIRED when the device never reported, losing the reconcile obligation that result() enforces; it now transitions to RECONCILE_REQUIRED with an explanatory error. (5) ContextCompactor budgeted segments from the whole prompt capacity although every compactor request embeds the objective, so a ~7.5 KB objective with a 12 KB history deterministically raised ContextCapacityError under the 8192 fallback window; the objective plus a fixed overhead is now reserved before the segment budget is derived. Proof: test_missions.py::test_approval_resume_is_not_blocked_by_mission_capacity (MissionCapacityError on main), ::test_reposting_an_approval_decision_resumes_a_stranded_run (run stays waiting_approval on main), ::test_recurrence_scheduling_failure_is_recorded_on_the_completed_run (MissionConfigurationError escapes the task on main), ::test_scheduled_missions_wait_for_capacity_before_running (max_active 2 on main); test_action_broker.py::test_committed_core_mutation_without_device_result_requires_reconciliation (expired on main); test_context.py::test_large_objective_reserves_compactor_capacity_for_segments (ContextCapacityError on main). test_api.py is included because the shared decide_approval handler changed.",
   "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through api.py) does not exercise mission approval resumes, recurring or scheduled missions, action-intent expiry, or context compaction; the Python tests drive them directly through the service objects and the FastAPI app. No full suites.",
-  "expected_tests": {"python": 98, "frontend": 0, "native": 0, "playwright": 0},
+  "expected_tests": {
+    "python": 98,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
   "python": [
     "tests/v3/test_missions.py",
     "tests/v3/test_action_broker.py",
     "tests/v3/test_context.py",
     "tests/v3/test_api.py"
   ],
-  "frontend": [], "native": [], "playwright": []
+  "frontend": [],
+  "native": [],
+  "playwright": []
 }
