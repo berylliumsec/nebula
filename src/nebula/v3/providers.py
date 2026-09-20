@@ -18,7 +18,13 @@ import os
 import random
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+)
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -71,6 +77,10 @@ class ProviderOverloadedError(ProviderError):
         super().__init__(message)
         self.status_code = status_code
         self.retry_after = retry_after
+
+
+class ProviderQuotaError(ProviderError):
+    """The account's quota or billing limit is spent; retrying cannot help."""
 
 
 class UnsupportedCapability(ProviderError):
@@ -420,6 +430,9 @@ class ModelStreamEvent(BaseModel):
     response: ModelResponse | None = None
     error: str | None = None
     context_length_exceeded: bool = False
+    # A transient upstream failure the operator may simply retry, as opposed
+    # to a request defect or a chat-side error.
+    retryable: bool = False
 
 
 class ProviderHealth(BaseModel):
@@ -577,6 +590,7 @@ class ModelProvider(ABC):
                 type=StreamEventType.ERROR,
                 error=str(exc),
                 context_length_exceeded=isinstance(exc, ProviderContextLengthError),
+                retryable=isinstance(exc, ProviderOverloadedError),
             )
             return
         if response.reasoning:
@@ -725,11 +739,15 @@ async def _send_with_retry(
     send: Callable[[], Awaitable[httpx.Response]],
     *,
     operation: str,
+    retry_transient_statuses: bool = True,
 ) -> httpx.Response:
     """Send a provider request, retrying only transient upstream failures.
 
     The caller still raises for the returned response; only an exhausted
     transient failure is raised here, so its message can name the attempts.
+    Health probes pass ``retry_transient_statuses=False``: a 429 or 5xx from a
+    discovery endpoint is handed back with its status instead of being retried
+    to exhaustion, while a refused connection is still retried.
     """
 
     policy = retry_policy(config)
@@ -742,7 +760,7 @@ async def _send_with_retry(
             # A connection that was never established cannot have reached the
             # provider, so the same request is safe to send again.
             if attempt >= policy.attempts:
-                raise
+                raise _transport_failure(exc) from exc
             record_caught_exception(
                 "providers",
                 "providers.providers.caught_failure_016",
@@ -751,11 +769,24 @@ async def _send_with_retry(
                 stage="providers",
             )
             delay = _retry_delay(policy, attempt, None)
+        except httpx.HTTPError as exc:
+            # Anything after the connection opened (a read timeout, a torn
+            # body) may have reached the provider: name it, never replay it.
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_018",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
+            raise _transport_failure(exc) from exc
         else:
             if not response.is_error:
                 return response
             error = _safe_error(response)
-            if not isinstance(error, ProviderOverloadedError):
+            if not retry_transient_statuses or not isinstance(
+                error, ProviderOverloadedError
+            ):
                 return response
             if attempt >= policy.attempts:
                 if attempt == 1:
@@ -775,6 +806,136 @@ async def _send_with_retry(
         attempt += 1
 
 
+def _transport_failure(exc: httpx.HTTPError) -> ProviderError:
+    """Name a transport failure; ``str(httpx.ReadTimeout(""))`` is empty."""
+
+    reason = redact_text(" ".join(str(exc).split()))[:300]
+    kind = type(exc).__name__
+    verb = "timed out" if isinstance(exc, httpx.TimeoutException) else "failed"
+    return ProviderError(
+        f"provider request {verb} ({kind})" + (f": {reason}" if reason else "")
+    )
+
+
+_SSE_LINE_END = re.compile(r"\r\n|\r|\n")
+
+
+async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None]:
+    """Yield the ``data`` payload of each server-sent event.
+
+    SSE lines end only at LF, CRLF or CR. ``aiter_lines()`` follows
+    ``str.splitlines()`` and also breaks at U+2028, U+2029 and U+0085, which a
+    gateway serialising with ``ensure_ascii=False`` sends raw inside JSON
+    strings; one frame would then arrive as two unparsable halves. Several
+    ``data:`` lines in one event are joined with a newline, as the format
+    requires; comments and other fields are skipped.
+    """
+
+    buffer = ""
+    data_lines: list[str] = []
+
+    def take(line: str) -> str | None:
+        if not line:
+            payload = "\n".join(data_lines) if data_lines else None
+            data_lines.clear()
+            return payload
+        if line.startswith("data:"):
+            data_lines.append(line[5:].removeprefix(" "))
+        return None
+
+    async for chunk in response.aiter_text():
+        buffer += chunk
+        start = 0
+        while True:
+            match = _SSE_LINE_END.search(buffer, start)
+            if match is None:
+                break
+            if match.group() == "\r" and match.end() == len(buffer):
+                # A trailing CR may be the first half of a CRLF; wait for more.
+                break
+            payload = take(buffer[start : match.start()])
+            start = match.end()
+            if payload is not None:
+                yield payload
+        buffer = buffer[start:]
+    tail = buffer.rstrip("\r")
+    if tail:
+        take(tail)
+    if data_lines:
+        yield "\n".join(data_lines)
+
+
+def _frame_has_output(data: Any) -> bool:
+    """Whether a Chat Completions chunk carries anything the operator sees."""
+
+    if not isinstance(data, dict):
+        return True
+    choices = data.get("choices")
+    if not isinstance(choices, list):
+        return bool(choices)
+    for choice in choices:
+        if not isinstance(choice, dict):
+            return True
+        if choice.get("finish_reason"):
+            return True
+        delta = choice.get("delta")
+        if not isinstance(delta, dict):
+            continue
+        if (
+            delta.get("tool_calls")
+            or _openai_message_content(delta)
+            or _openai_message_reasoning(delta)
+        ):
+            return True
+    return False
+
+
+# Role-only and heartbeat frames precede an in-band error; a peek past this
+# many frames without output stops looking and hands them to the parser.
+_LEADING_FRAME_LIMIT = 32
+
+
+async def _leading_frames(
+    frames: AsyncIterator[str],
+) -> tuple[list[str], ProviderOverloadedError | None]:
+    """Read frames up to the first output so a leading transient error frame
+    can be replayed exactly as the equivalent HTTP status would be."""
+
+    buffered: list[str] = []
+    async for encoded in frames:
+        buffered.append(encoded)
+        stripped = encoded.strip()
+        if not stripped:
+            continue
+        if stripped == "[DONE]":
+            return buffered, None
+        try:
+            data = json.loads(stripped)
+        except (
+            ValueError
+        ):  # diagnostic-expected: the parser reports the malformed frame
+            return buffered, None
+        failure = _stream_error_frame(data)
+        if isinstance(failure, ProviderOverloadedError):
+            return buffered, failure
+        if (
+            failure is not None
+            or _frame_has_output(data)
+            or len(buffered) >= _LEADING_FRAME_LIMIT
+        ):
+            return buffered, None
+    return buffered, None
+
+
+async def _replay_frames(
+    leading: list[str], frames: AsyncIterator[str]
+) -> AsyncIterator[str]:
+    for encoded in leading:
+        yield encoded
+    async for encoded in frames:
+        yield encoded
+
+
 @asynccontextmanager
 async def _stream_with_retry(
     config: ProviderConfig,
@@ -784,11 +945,17 @@ async def _stream_with_retry(
     *,
     json: dict[str, Any],
     operation: str,
-) -> AsyncIterator[httpx.Response]:
-    """Open a streaming provider response, retrying before the first token.
+) -> AsyncIterator[AsyncIterator[str]]:
+    """Open a streaming provider response and hand over its SSE data frames,
+    retrying before the first token.
 
-    Once any token has been yielded the stream is never replayed: a partial
-    answer must not be silently restarted underneath the operator.
+    A transient failure arrives either as an HTTP status or, once the gateway
+    has already sent its 200, as a leading ``{"error": {...}}`` frame; both
+    are replayed while attempts remain. Once any output frame has been read
+    the stream is never replayed: a partial answer must not be silently
+    restarted underneath the operator. Transport failures are raised as
+    provider errors that name the failure, since httpx's own text is often
+    empty.
     """
 
     policy = retry_policy(config)
@@ -799,15 +966,20 @@ async def _stream_with_retry(
         error: ProviderError | None = None
         try:
             async with client.stream(method, url, json=json) as response:
-                if not response.is_error:
-                    started = True
-                    yield response
-                    return
-                await response.aread()
-                error = _safe_error(response)
+                if response.is_error:
+                    await response.aread()
+                    error = _safe_error(response)
+                else:
+                    frames = _sse_data_frames(response)
+                    leading, error = await _leading_frames(frames)
+                    if error is None:
+                        started = True
+                        yield _replay_frames(leading, frames)
+                        return
+                    await frames.aclose()
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             if started or attempt >= policy.attempts:
-                raise
+                raise _transport_failure(exc) from exc
             record_caught_exception(
                 "providers",
                 "providers.providers.caught_failure_017",
@@ -816,6 +988,15 @@ async def _stream_with_retry(
                 stage="providers",
             )
             delay = _retry_delay(policy, attempt, None)
+        except httpx.HTTPError as exc:
+            record_caught_exception(
+                "providers",
+                "providers.providers.caught_failure_019",
+                "A handled providers operation raised an exception.",
+                exc,
+                stage="providers",
+            )
+            raise _transport_failure(exc) from exc
         else:
             # A consumed stream already returned, so only an error reaches here.
             assert error is not None
@@ -854,6 +1035,14 @@ _CONTEXT_ERROR_MARKERS = (
     "prompt is too long",
     "prompt too long",
     "too many tokens",
+    # Gemini: "The input token count (N) exceeds the maximum number of tokens
+    # allowed (M)."; Bedrock: "Input is too long for requested model."
+    "input token count",
+    "input is too long",
+)
+# A 429 carrying one of these is spent quota or billing, not a busy upstream.
+_QUOTA_ERROR_CODES = frozenset(
+    {"insufficient_quota", "billing_not_active", "billing_hard_limit_reached"}
 )
 
 
@@ -895,13 +1084,27 @@ def _context_length_error(detail: str | None, error_code: str | None) -> bool:
     )
 
 
+def _quota_exhausted(body: Any, detail: str | None, error_code: str | None) -> bool:
+    """Whether a rate-limit answer names spent quota or billing instead."""
+
+    error = body.get("error") if isinstance(body, dict) else None
+    kind = error.get("type") if isinstance(error, dict) else None
+    codes = {error_code, kind.casefold() if isinstance(kind, str) else None}
+    return (
+        bool(codes & _QUOTA_ERROR_CODES)
+        or "insufficient_quota" in str(detail or "").casefold()
+    )
+
+
 def _safe_error(response: httpx.Response) -> ProviderError:
     request_id = response.headers.get("x-request-id") or response.headers.get(
         "request-id"
     )
     error_code: str | None = None
+    body: Any = None
     try:
-        detail, error_code = _error_detail(response.json())
+        body = response.json()
+        detail, error_code = _error_detail(body)
     except (ValueError, AttributeError) as caught_error:
         record_caught_exception(
             "providers",
@@ -919,6 +1122,13 @@ def _safe_error(response: httpx.Response) -> ProviderError:
         detail, error_code
     ):
         return ProviderContextLengthError(message)
+    if response.status_code == 429 and _quota_exhausted(body, detail, error_code):
+        # Retrying spent quota only burns attempts and then mislabels the
+        # billing cause as a transient overload.
+        return ProviderQuotaError(
+            f"provider quota or billing limit reached (HTTP 429){suffix}"
+            + (f": {detail}" if detail else "")
+        )
     if response.status_code in _RETRYABLE_STATUS_CODES:
         return ProviderOverloadedError(
             message,
@@ -934,7 +1144,8 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     OpenRouter, vLLM and other OpenAI-compatible gateways report an upstream
     failure that happens after the response headers were sent as a
     ``{"error": {...}}`` data frame instead of an HTTP status. Ignoring the
-    frame ends the stream as an empty, successful reply.
+    frame ends the stream as an empty, successful reply. A frame relaying a
+    transient status is as replayable as that status would have been.
     """
 
     if not isinstance(data, dict) or not data.get("error"):
@@ -945,6 +1156,11 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     )
     if _context_length_error(detail, error_code):
         return ProviderContextLengthError(message)
+    status = int(error_code) if error_code and error_code.isdigit() else None
+    if status == 429 and _quota_exhausted(data, detail, error_code):
+        return ProviderQuotaError(message)
+    if status in _RETRYABLE_STATUS_CODES:
+        return ProviderOverloadedError(message, status_code=status)
     return ProviderError(message)
 
 
@@ -967,6 +1183,78 @@ def _arguments(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise ProviderError("provider returned non-object tool arguments")
     return parsed
+
+
+def _token_count(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+def _openai_usage(usage: Any) -> ModelUsage:
+    """Read Chat Completions usage; gateways omit ``total_tokens`` or send null.
+
+    Goal token budgets gate on the total, so a missing one is summed rather
+    than recorded as zero.
+    """
+
+    if not isinstance(usage, dict):
+        return ModelUsage()
+    prompt = _token_count(usage.get("prompt_tokens"))
+    completion = _token_count(usage.get("completion_tokens"))
+    return ModelUsage(
+        input_tokens=prompt,
+        output_tokens=completion,
+        total_tokens=_token_count(usage.get("total_tokens")) or prompt + completion,
+    )
+
+
+def _merge_tool_call_deltas(call_parts: dict[int, dict[str, str]], items: Any) -> None:
+    """Fold one chunk's tool-call deltas into the calls assembled so far.
+
+    OpenAI keys fragments by ``index``. Vendors that omit it send whole calls
+    per chunk, so those are keyed by ``id`` when it is already known and by
+    arrival order otherwise: two calls in one chunk must never merge into one.
+    ``id`` and ``name`` are taken once, because vendors that resend them on
+    every fragment would otherwise yield ``call_1call_1``.
+    """
+
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if not isinstance(function, dict):
+            function = {}
+        call_id = str(item.get("id") or "")
+        name = str(function.get("name") or "")
+        raw_index = item.get("index")
+        if isinstance(raw_index, int) and not isinstance(raw_index, bool):
+            key = raw_index
+        else:
+            known = [
+                index
+                for index, value in call_parts.items()
+                if call_id and value["id"] == call_id
+            ]
+            if known:
+                key = known[0]
+            elif call_parts and not call_id and not name:
+                # An argument fragment without any identity continues the
+                # most recent call.
+                key = max(call_parts)
+            else:
+                key = max(call_parts, default=-1) + 1
+        current = call_parts.setdefault(key, {"id": "", "name": "", "arguments": ""})
+        current["id"] = current["id"] or call_id
+        current["name"] = current["name"] or name
+        arguments = function.get("arguments")
+        current["arguments"] += (
+            json.dumps(arguments)
+            if isinstance(arguments, dict)
+            else str(arguments or "")
+        )
 
 
 def _openai_text_parts(value: Any) -> str:
@@ -1374,18 +1662,13 @@ class OpenAICompatibleProvider(ModelProvider):
             )
             for item in message.get("tool_calls", [])
         ]
-        usage = data.get("usage") or {}
         return ModelResponse(
             provider_id=self.config.id,
-            model=data.get("model", model),
+            model=data.get("model") or model,
             text=_openai_message_content(message).strip(),
             reasoning=_openai_message_reasoning(message).strip(),
             tool_calls=calls,
-            usage=ModelUsage(
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
-                total_tokens=usage.get("total_tokens", 0),
-            ),
+            usage=_openai_usage(data.get("usage")),
             finish_reason=choice.get("finish_reason"),
             provider_request_id=data.get("id"),
             raw=data,
@@ -1432,6 +1715,7 @@ class OpenAICompatibleProvider(ModelProvider):
                         self.config,
                         lambda: client.get(self._path("/v1/key"), timeout=10.0),
                         operation="openrouter_credential_verification",
+                        retry_transient_statuses=False,
                     )
                     if key_response.is_error:
                         return ProviderHealth(
@@ -1455,23 +1739,31 @@ class OpenAICompatibleProvider(ModelProvider):
                         self.config,
                         lambda: client.get(self._path("/v1/models/user"), timeout=10.0),
                         operation="openrouter_model_discovery",
+                        retry_transient_statuses=False,
                     )
                     directory: httpx.Response | None = None
+                    directory_failure: str | None = None
                     try:
                         if not response.is_error:
                             directory = await client.get(
                                 self._path("/v1/providers"), timeout=10.0
                             )
-                    except httpx.HTTPError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
-                        directory = None
+                    except httpx.HTTPError:  # diagnostic-expected: reported below when an allowlist needs the directory; routing is unaffected
+                        directory_failure = "could not be reached"
                     upstream: list[UpstreamProvider] = []
                     try:
-                        if directory is not None and not directory.is_error:
+                        if directory is not None and directory.is_error:
+                            directory_failure = f"failed (HTTP {directory.status_code})"
+                        elif directory is not None:
                             upstream = openrouter_upstream_providers(directory.json())
-                    except ValueError:  # diagnostic-expected: the allowlist picker stays empty; routing is unaffected
-                        upstream = []
+                    except ValueError:  # diagnostic-expected: reported below when an allowlist needs the directory; routing is unaffected
+                        directory_failure = "was unreadable"
                     served: set[str] | None = None
-                    if not response.is_error and self.openrouter_allowed_providers:
+                    if (
+                        not response.is_error
+                        and self.openrouter_allowed_providers
+                        and directory_failure is None
+                    ):
                         served = await self._openrouter_models_served_by(
                             client, {item.slug for item in upstream}
                         )
@@ -1495,6 +1787,20 @@ class OpenAICompatibleProvider(ModelProvider):
                         detail=(
                             f"OpenRouter model discovery failed (HTTP {response.status_code}). "
                             "Check credentials and account access, then refresh."
+                        ),
+                    )
+                if directory_failure is not None and self.openrouter_allowed_providers:
+                    # An empty directory would filter out every model and blame
+                    # the operator's allowlist; fail closed like /models/user.
+                    return ProviderHealth(
+                        provider_id=self.config.id,
+                        healthy=False,
+                        credential_verified=True,
+                        catalog_source="openrouter:/models/user",
+                        detail=(
+                            f"The OpenRouter provider directory {directory_failure}, "
+                            "so the upstream provider allowlist could not be applied. "
+                            "The model list was left unchanged; refresh to retry."
                         ),
                     )
                 descriptors = openrouter_models(response.json())
@@ -1536,10 +1842,12 @@ class OpenAICompatibleProvider(ModelProvider):
             )
         except (
             httpx.HTTPError,
+            ProviderError,
             TimeoutError,
             ValueError,
         ):  # diagnostic-expected: failure is reported as unhealthy; raw text may contain credentials
-            # Transport and upstream payload exceptions may contain credentials.
+            # Transport and upstream payload exceptions may contain credentials;
+            # an exhausted connection retry arrives as a ProviderError.
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=False,
@@ -1698,6 +2006,7 @@ async def _stream_openai_compatible(
     finish_reason: str | None = None
     response_id: str | None = None
     response_model = model
+    terminated = False
     try:
         async with provider._client(provider._headers()) as client:
             async with _stream_with_retry(
@@ -1707,26 +2016,25 @@ async def _stream_openai_compatible(
                 provider._path("/v1/chat/completions"),
                 json=payload,
                 operation="chat_completions_stream",
-            ) as response:
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
+            ) as frames:
+                async for frame in frames:
+                    encoded = frame.strip()
+                    if not encoded:
                         continue
-                    encoded = line.removeprefix("data:").strip()
-                    if not encoded or encoded == "[DONE]":
+                    if encoded == "[DONE]":
+                        terminated = True
                         continue
                     data = json.loads(encoded)
                     failure = _stream_error_frame(data)
                     if failure is not None:
                         raise failure
-                    response_id = data.get("id", response_id)
-                    response_model = data.get("model", response_model)
-                    chunk_usage = data.get("usage") or {}
+                    # Usage-only frames may carry an explicit null; it must not
+                    # erase the id and model an earlier frame named.
+                    response_id = data.get("id") or response_id
+                    response_model = data.get("model") or response_model
+                    chunk_usage = data.get("usage")
                     if chunk_usage:
-                        usage = ModelUsage(
-                            input_tokens=chunk_usage.get("prompt_tokens", 0),
-                            output_tokens=chunk_usage.get("completion_tokens", 0),
-                            total_tokens=chunk_usage.get("total_tokens", 0),
-                        )
+                        usage = _openai_usage(chunk_usage)
                     choice = (data.get("choices") or [{}])[0]
                     finish_reason = choice.get("finish_reason") or finish_reason
                     delta = choice.get("delta") or {}
@@ -1742,20 +2050,15 @@ async def _stream_openai_compatible(
                         yield ModelStreamEvent(
                             type=StreamEventType.TEXT_DELTA, delta=content
                         )
-                    for item in delta.get("tool_calls", []):
-                        index = int(item.get("index", 0))
-                        current = call_parts.setdefault(
-                            index, {"id": "", "name": "", "arguments": ""}
-                        )
-                        current["id"] += item.get("id") or ""
-                        function = item.get("function") or {}
-                        current["name"] += function.get("name") or ""
-                        arguments = function.get("arguments")
-                        current["arguments"] += (
-                            json.dumps(arguments)
-                            if isinstance(arguments, dict)
-                            else arguments or ""
-                        )
+                    _merge_tool_call_deltas(call_parts, delta.get("tool_calls"))
+        if not terminated and finish_reason is None:
+            # Chat Completions ends every reply with a finish_reason and then
+            # [DONE]; a body that closes cleanly without either was cut short
+            # (a proxy idle timeout) and must not be stored as a whole answer.
+            raise ProviderError(
+                "provider stream ended before the reply completed: no finish "
+                "reason or [DONE] frame arrived"
+            )
         calls = [
             _normalized_tool_call(
                 id=value["id"],
@@ -1800,6 +2103,9 @@ async def _stream_openai_compatible(
             # Chat recovers from an overflow (compact, then retry once) only
             # when the event says so; the non-streaming fallback already does.
             context_length_exceeded=isinstance(exc, ProviderContextLengthError),
+            # A transient upstream failure is the operator's to retry; chat
+            # reports it as a provider overload rather than a chat defect.
+            retryable=isinstance(exc, ProviderOverloadedError),
         )
 
 
@@ -2149,6 +2455,16 @@ def _bedrock_error_detail(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+def _bedrock_failure(exc: BaseException) -> ProviderError:
+    """Type a Converse failure so chat can compact and retry an overflow."""
+
+    detail = _bedrock_error_detail(exc)
+    message = f"Bedrock request failed: {detail}"
+    if _context_length_error(detail, None):
+        return ProviderContextLengthError(message)
+    return ProviderError(message)
+
+
 class BedrockProvider(ModelProvider):
     """AWS Bedrock Converse adapter using boto3 without leaking its types."""
 
@@ -2244,9 +2560,7 @@ class BedrockProvider(ModelProvider):
                 exc,
                 stage="providers",
             )
-            raise ProviderError(
-                f"Bedrock request failed: {_bedrock_error_detail(exc)}"
-            ) from exc
+            raise _bedrock_failure(exc) from exc
         blocks = data.get("output", {}).get("message", {}).get("content", [])
         calls = [
             _normalized_tool_call(

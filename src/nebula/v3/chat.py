@@ -116,6 +116,7 @@ from .providers import (
     ModelToolResult,
     ModelUsage,
     ProviderContextLengthError,
+    ProviderOverloadedError,
     StreamEventType,
     ToolCall as ModelToolCall,
     ToolChoice,
@@ -2901,6 +2902,12 @@ class ChatService:
                     "provider returned a tool call even though chat exposes no tools"
                 )
             if event.type == StreamEventType.ERROR:
+                if event.retryable:
+                    # A transient upstream failure is the provider's, and the
+                    # operator may simply retry; a ChatError would blame chat.
+                    raise ProviderOverloadedError(
+                        event.error or "provider stream failed"
+                    )
                 raise ChatError(event.error or "provider stream failed")
             if event.type == StreamEventType.COMPLETED:
                 if prepared.turn is not None:
@@ -3393,6 +3400,10 @@ class ChatService:
                         attempted_tool_call = True
                         continue
                     if event.type == StreamEventType.ERROR:
+                        if event.retryable:
+                            raise ProviderOverloadedError(
+                                event.error or "provider final synthesis failed"
+                            )
                         raise ChatError(
                             event.error or "provider final synthesis failed"
                         )

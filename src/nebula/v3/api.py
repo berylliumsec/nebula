@@ -436,6 +436,7 @@ from .providers import (
     ProviderError,
     ProviderFlavor,
     ProviderHealth,
+    ProviderQuotaError,
     ToolChoice,
     ToolDefinition,
     provider_from_profile,
@@ -3049,6 +3050,15 @@ def create_app(
             detail=str(exc),
             retryable=True,
             headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(ProviderQuotaError)
+    async def provider_quota_handler(
+        request: Request, exc: ProviderQuotaError
+    ) -> JSONResponse:
+        # Spent quota or billing does not clear by retrying the turn.
+        return diagnostic_error_response(
+            request, exc, status_code=502, detail=str(exc), retryable=False
         )
 
     @app.exception_handler(ChatError)
