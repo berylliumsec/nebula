@@ -19,6 +19,34 @@ from .domain import Artifact
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 
+# ``mimetypes`` reports a compressed file as the type it wraps plus a separate
+# encoding; the artifact is the compressed bytes, so the encoding wins.
+_ENCODING_MEDIA_TYPES = {
+    "gzip": "application/gzip",
+    "bzip2": "application/x-bzip2",
+    "xz": "application/x-xz",
+    "compress": "application/x-compress",
+    "br": "application/x-brotli",
+}
+# Common capture formats the platform tables leave unregistered.
+_EXTENSION_MEDIA_TYPES = {
+    ".log": "text/plain",
+    ".har": "application/json",
+    ".ndjson": "application/x-ndjson",
+}
+
+
+def infer_media_type(filename: str | None) -> str:
+    """Infer a stored artifact's media type from its filename."""
+
+    kind, encoding = mimetypes.guess_type(filename or "")
+    if encoding is not None:
+        return _ENCODING_MEDIA_TYPES.get(encoding, "application/octet-stream")
+    if kind is None:
+        suffix = os.path.splitext(filename or "")[1].casefold()
+        kind = _EXTENSION_MEDIA_TYPES.get(suffix)
+    return kind or "application/octet-stream"
+
 
 class ArtifactStoreError(RuntimeError):
     pass
@@ -246,9 +274,7 @@ class ArtifactStore:
                 sha256=digest_value,
                 size=size,
                 filename=filename,
-                media_type=media_type
-                or mimetypes.guess_type(filename or "")[0]
-                or "application/octet-stream",
+                media_type=media_type or infer_media_type(filename),
                 storage_path=relative_path,
                 source=source,
                 parent_artifact_id=parent_artifact_id,

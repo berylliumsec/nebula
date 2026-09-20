@@ -1,5 +1,7 @@
 import base64
+import io
 import re
+import zipfile
 from typing import Any
 
 import numpy as np
@@ -258,6 +260,118 @@ def test_startup_migrates_inline_chunks_to_chroma(tmp_path):
     assert migrated.metadata["index_backend"] == "chromadb"
     assert "chunks" not in migrated.metadata
     assert index.query(engagement.id, ["SQL storage"], limit=8)[0].id == "legacy-chunk"
+
+
+def test_spreadsheet_with_repeated_rows_indexes_and_reindexes(tmp_path):
+    embedding = SecurityEmbeddingFunction()
+    index = ChromaKnowledgeIndex(
+        tmp_path / "knowledge-index", embedding_function=embedding
+    )
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(id="eng-a", name="A"))
+    client = TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_index=index,
+        )
+    )
+    workbook = b"""<?xml version="1.0"?>
+    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <sheets><sheet name="EMEA" sheetId="1" r:id="rId1"/>
+      <sheet name="APAC" sheetId="2" r:id="rId2"/></sheets>
+    </workbook>"""
+    relationships = b"""<?xml version="1.0"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+      <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+    </Relationships>"""
+    sheet = b"""<?xml version="1.0"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Host</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>Port</t></is></c></row>
+      <row r="2"><c r="A2" t="inlineStr"><is><t>db.example.test</t></is></c>
+      <c r="B2" t="inlineStr"><is><t>5432 postgres listener</t></is></c></row></sheetData>
+    </worksheet>"""
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+        archive.writestr("xl/worksheets/sheet2.xml", sheet)
+
+    response = client.post(
+        "/api/v1/knowledge/ingest",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "filename": "assets.xlsx",
+            "content_base64": base64.b64encode(archive_buffer.getvalue()).decode(),
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "ready"
+    assert response.json()["metadata"]["chunk_count"] == 4
+    matches = index.query(engagement.id, ["postgres database port"], limit=8)
+    listener_rows = [match for match in matches if "5432" in match.text]
+    # The identical EMEA and APAC rows are both retrievable under distinct ids.
+    assert len(listener_rows) == 2
+    assert len({match.id for match in listener_rows}) == 2
+
+    reindexed = client.post(
+        f"/api/v1/knowledge/{response.json()['id']}/reindex", headers=_auth()
+    )
+    assert reindexed.status_code == 200, reindexed.text
+    assert reindexed.json()["status"] == "ready"
+    assert reindexed.json()["document_count"] == 4
+
+
+def test_startup_migrates_inline_library_chunks_to_chroma(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    item = store.create(
+        LibraryItem(
+            id="library-a",
+            name="legacy-playbook.txt",
+            source_type="text",
+            document_count=1,
+            metadata={
+                "scope": "library",
+                "chunks": [
+                    {
+                        "id": "legacy-library-chunk",
+                        "text": "Rotate the PostgreSQL database credential after access.",
+                    }
+                ],
+            },
+        )
+    )
+    index = ChromaKnowledgeIndex(
+        tmp_path / "knowledge-index",
+        embedding_function=SecurityEmbeddingFunction(),
+    )
+
+    with TestClient(
+        create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            knowledge_index=index,
+        )
+    ):
+        pass
+
+    migrated = store.get(LibraryItem, item.id)
+    assert migrated.metadata["index_backend"] == "chromadb"
+    assert migrated.metadata["collection"] == "nebula-library-v1"
+    assert "chunks" not in migrated.metadata
+    matches = index.query_library(["SQL storage"], limit=8)
+    assert [match.id for match in matches] == ["legacy-library-chunk"]
+    assert matches[0].scope == "library"
 
 
 def test_default_chroma_index_reports_first_use_download_before_ingestion(

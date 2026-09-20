@@ -6,7 +6,7 @@ import base64
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from .action_registry import ActionRegistry
@@ -19,7 +19,7 @@ from .domain import (
     SearchResult,
     SearchScope,
 )
-from .storage import NebulaStore
+from .storage import NebulaStore, not_temporary_chat_session
 
 
 @dataclass(frozen=True)
@@ -358,6 +358,20 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
                 session.delete(tab_document)
 
 
+def projected_entity_rows() -> ColumnElement[bool]:
+    """SQL predicate for the entity rows that own a search document.
+
+    Temporary "Ask Nebula" sessions are indexed kinds but never projected
+    (``project_search_document`` returns ``None``), so the stale-projection
+    comparison has to leave them out or every search reads as a repair.
+    """
+
+    return and_(
+        EntityRow.kind.in_(INDEXED_ENTITY_KINDS),
+        or_(EntityRow.kind != "chat_sessions", not_temporary_chat_session()),
+    )
+
+
 class FederatedSearch:
     def __init__(self, store: NebulaStore, actions: ActionRegistry) -> None:
         self.store = store
@@ -371,7 +385,7 @@ class FederatedSearch:
                     func.count(EntityRow.id),
                     func.coalesce(func.sum(EntityRow.revision), 0),
                     func.max(EntityRow.updated_at),
-                ).where(EntityRow.kind.in_(INDEXED_ENTITY_KINDS))
+                ).where(projected_entity_rows())
             ).one()
             document_signature = session.execute(
                 select(
@@ -383,9 +397,7 @@ class FederatedSearch:
             if entity_signature == document_signature:
                 return False
             rows = list(
-                session.scalars(
-                    select(EntityRow).where(EntityRow.kind.in_(INDEXED_ENTITY_KINDS))
-                )
+                session.scalars(select(EntityRow).where(projected_entity_rows()))
             )
             documents = {
                 item.id: item for item in session.scalars(select(SearchDocumentRow))

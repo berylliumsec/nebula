@@ -25,6 +25,7 @@ from nebula.v3.domain import (
     HarnessTurn,
     HarnessTurnOrigin,
     HarnessTurnStatus,
+    ProviderProfile,
     RiskClass,
     RunBackend,
     RunBudget,
@@ -437,6 +438,43 @@ def test_overview_counts_entities_by_engagement(store):
     overview = store.overview(first.id)
     assert overview["counts"]["engagements"] == 1
     assert overview["counts"]["assets"] == 1
+
+
+def test_count_and_overview_agree_with_list_entities_about_temporary_chats(store):
+    engagement = store.create(Engagement(name="Popup"))
+    provider = store.create(
+        ProviderProfile(name="Local", provider_type="vllm", is_local=True)
+    )
+    durable = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Durable",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    popup = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Ask Nebula",
+            provider_profile_id=provider.id,
+            model="model-a",
+            metadata={"temporary_assistant": True},
+        )
+    )
+
+    assert [item.id for item in store.list_entities(ChatSession)] == [durable.id]
+    assert store.count(ChatSession) == 1
+    assert store.count(ChatSession, engagement_id=engagement.id) == 1
+    assert store.overview()["counts"]["chat_sessions"] == 1
+    assert store.overview(engagement.id)["counts"]["chat_sessions"] == 1
+
+    listed = store.list_entities(ChatSession, include_temporary=True)
+    assert [item.id for item in listed] == [durable.id, popup.id]
+    assert store.count(ChatSession, include_temporary=True) == 2
+    # Other kinds are unaffected by the conversation filter.
+    assert store.overview()["counts"]["engagements"] == 1
+    assert store.overview()["counts"]["providers"] == 1
 
 
 @pytest.mark.parametrize("limit", [None, 2])

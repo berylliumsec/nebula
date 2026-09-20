@@ -10,9 +10,11 @@ from nebula.v3.domain import (
     BrowserAssessment,
     BrowserSession,
     BrowserTabState,
+    ChatSession,
     CommandExecution,
     Engagement,
     Observation,
+    ProviderProfile,
 )
 from nebula.v3.storage import NebulaStore
 
@@ -162,3 +164,42 @@ def test_search_repairs_a_stale_projection(tmp_path):
     assert response.status_code == 200
     assert response.json()["partial_index"] is True
     assert response.json()["items"][0]["label"] == "After"
+
+
+def test_temporary_conversations_do_not_keep_the_projection_stale(tmp_path):
+    store = NebulaStore(tmp_path / "popup.db")
+    project = store.create(Engagement(name="Popup project"))
+    provider = store.create(
+        ProviderProfile(name="Local", provider_type="vllm", is_local=True)
+    )
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Durable conversation",
+            provider_profile_id=provider.id,
+            model="model-a",
+        )
+    )
+    store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Ask Nebula popup",
+            provider_profile_id=provider.id,
+            model="model-a",
+            metadata={"temporary_assistant": True},
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    # The popup session is deliberately never projected, so its presence must
+    # not read as a stale index on every search.
+    for _ in range(2):
+        response = client.get(
+            "/api/v1/search",
+            params={"query": "conversation", "active_project": project.id},
+            headers=_auth(),
+        )
+        assert response.status_code == 200
+        assert response.json()["partial_index"] is False
+        labels = [item["label"] for item in response.json()["items"]]
+        assert labels == ["Durable conversation"]

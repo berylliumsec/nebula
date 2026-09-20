@@ -76,3 +76,43 @@ def test_artifact_path_must_match_digest(tmp_path):
     forged = artifact.model_copy(update={"storage_path": "../outside"})
     with pytest.raises(ArtifactStoreError):
         store.path_for(forged)
+
+
+@pytest.mark.parametrize(
+    ("filename", "media_type"),
+    [
+        ("log.txt.gz", "application/gzip"),
+        ("scan.json.gz", "application/gzip"),
+        ("capture.tar.bz2", "application/x-bzip2"),
+        ("scan.log", "text/plain"),
+        ("session.har", "application/json"),
+        ("events.ndjson", "application/x-ndjson"),
+        ("report.json", "application/json"),
+        ("blob.bin", "application/octet-stream"),
+    ],
+)
+def test_media_type_inference_keeps_the_compression_encoding(
+    tmp_path, filename, media_type
+):
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    stored = store.put_bytes_with_status(
+        b"payload", engagement_id="eng-1", filename=filename, source="test"
+    )
+
+    # A gzip member must never be served or searched as the text it wraps.
+    assert stored.artifact.media_type == media_type
+
+
+def test_explicit_media_type_wins_over_filename_inference(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+
+    stored = store.put_bytes_with_status(
+        b"payload",
+        engagement_id="eng-1",
+        filename="log.txt.gz",
+        media_type="application/x-custom",
+        source="test",
+    )
+
+    assert stored.artifact.media_type == "application/x-custom"
