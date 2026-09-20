@@ -33,13 +33,19 @@ def validate_chat_image(data: bytes, declared_media_type: str) -> ValidatedChatI
         raise ChatImageError("image must be PNG, JPEG, or WebP")
     try:
         with Image.open(io.BytesIO(data)) as source:
-            source.load()
+            # The header carries the size; refuse oversized images before the
+            # pixels are decoded, since a few-KB file can declare a huge canvas.
             width, height = source.size
             if width <= 0 or height <= 0 or width * height > MAX_CHAT_IMAGE_PIXELS:
                 raise ChatImageError("image exceeds the 40 megapixel limit")
             detected = Image.MIME.get(source.format or "")
+            if detected == "image/mpo":
+                # Phones save portrait and burst photos as multi-picture JPEGs
+                # (MPO). They are JPEG files and browsers declare them as such.
+                detected = "image/jpeg"
             if detected != declared_media_type:
                 raise ChatImageError("declared image type does not match its bytes")
+            source.load()
             image = source.copy()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ChatImageError("image bytes could not be decoded safely") from exc
