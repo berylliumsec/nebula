@@ -4,6 +4,7 @@ import re
 from hashlib import sha256
 from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import select
+from .artifacts import ArtifactStoreError
 from .database import EntityRow
 from .domain import (
     Artifact,
@@ -54,23 +55,26 @@ def results_router(store, artifacts):
     ):
         session = store.get(ChatSession, session_id)
         with store.database.session() as database:
-            messages = [
-                message
-                for message in (
-                    ChatMessage.model_validate(row.payload)
-                    for row in database.scalars(
-                        select(EntityRow)
-                        .where(
-                            EntityRow.kind == "chat_messages",
-                            EntityRow.engagement_id == session.engagement_id,
-                            EntityRow.payload["session_id"].as_string() == session_id,
-                        )
-                        .order_by(EntityRow.payload["sequence"].as_integer())
-                        .offset(offset)
-                        .limit(limit + 1)
+            page = [
+                ChatMessage.model_validate(row.payload)
+                for row in database.scalars(
+                    select(EntityRow)
+                    .where(
+                        EntityRow.kind == "chat_messages",
+                        EntityRow.engagement_id == session.engagement_id,
+                        EntityRow.payload["session_id"].as_string() == session_id,
                     )
+                    .order_by(EntityRow.payload["sequence"].as_integer())
+                    .offset(offset)
+                    .limit(limit + 1)
                 )
-                if not message_is_replaced(message)
+            ]
+            # Offsets count stored rows, retracted ones included, so decide
+            # whether another page exists before edited-away messages are
+            # filtered out.
+            has_more = len(page) > limit
+            messages = [
+                message for message in page[:limit] if not message_is_replaced(message)
             ]
             calls = [
                 ToolCall.model_validate(row.payload)
@@ -83,7 +87,7 @@ def results_router(store, artifacts):
                 )
             ]
         items = []
-        for message in messages[:limit]:
+        for message in messages:
             if message.role.value != "assistant":
                 continue
             for index, block in enumerate(message.content_blocks):
@@ -133,8 +137,16 @@ def results_router(store, artifacts):
                         )
                     ]
                 for diff in diffs:
-                    with artifacts.path_for(diff).open("rb") as stream:
-                        preview = stream.read(8192).decode("utf-8", errors="replace")
+                    try:
+                        with artifacts.path_for(diff).open("rb") as stream:
+                            preview = stream.read(8192).decode(
+                                "utf-8", errors="replace"
+                            )
+                    except (
+                        OSError,
+                        ArtifactStoreError,
+                    ):  # diagnostic-expected: one pruned or mismatched diff blob must not hide the conversation's other results
+                        preview = "Preview unavailable: the recorded diff artifact is missing."
                     items.append(
                         {
                             "id": diff.id,
@@ -178,7 +190,7 @@ def results_router(store, artifacts):
                     )
         return {
             "items": items,
-            "next_offset": offset + limit if len(messages) > limit else None,
+            "next_offset": offset + limit if has_more else None,
         }
 
     @router.get("/chat/sessions/{session_id}/context-sources")
@@ -196,10 +208,10 @@ def results_router(store, artifacts):
                 .offset(offset)
                 .limit(41)
             )
+            page = [ChatMessage.model_validate(row.payload) for row in rows]
+            has_more = len(page) > 40
             messages = [
-                message
-                for message in (ChatMessage.model_validate(row.payload) for row in rows)
-                if not message_is_replaced(message)
+                message for message in page[:40] if not message_is_replaced(message)
             ]
         from .chat import (
             _CHAT_INSTRUCTIONS,
@@ -215,11 +227,11 @@ def results_router(store, artifacts):
                     "attachments": m.metadata.get("context_attachments", []),
                     "operator_decisions": m.metadata.get("operator_decisions", []),
                 }
-                for m in messages[:40]
+                for m in messages
                 if m.metadata.get("context_attachments")
                 or m.metadata.get("operator_decisions")
             ],
-            "next_offset": offset + 40 if len(messages) > 40 else None,
+            "next_offset": offset + 40 if has_more else None,
             "core_instructions": (
                 _CHAT_TOOL_INSTRUCTIONS
                 + "\n\nFinal synthesis policy:\n"
