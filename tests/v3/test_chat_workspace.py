@@ -149,3 +149,114 @@ def test_results_only_project_owned_retained_sources(tmp_path):
     results = client.get("/chat/sessions/s/results").json()
     assert results["items"][0]["text"] == "retained code\n"
     assert results["items"][0]["artifact_id"] is None
+
+
+def _retract(store, message_id):
+    message = store.get(ChatMessage, message_id)
+    store.update(
+        ChatMessage,
+        message_id,
+        {"metadata": {**message.metadata, "retracted_at": "2026-09-19T00:00:00+00:00"}},
+        expected_revision=message.revision,
+    )
+
+
+def _walk(client, path, params):
+    seen, offset = [], 0
+    while offset is not None:
+        response = client.get(path, params={**params, "offset": offset})
+        assert response.status_code == 200, response.text
+        data = response.json()
+        seen.extend(data["items"])
+        offset = data["next_offset"]
+    return seen
+
+
+def test_search_pages_are_complete_after_an_in_place_edit(tmp_path):
+    store, client = workspace(tmp_path)
+    for i, text in ((4, "document four"), (5, "document five")):
+        store.create(
+            ChatMessage(
+                id=f"s-{i}",
+                engagement_id="p",
+                session_id="s",
+                sequence=i,
+                role="user",
+                content=text,
+            )
+        )
+    _retract(store, "s-2")
+
+    items = _walk(client, "/chat/projects/p/search", {"q": "document", "limit": 2})
+
+    assert sorted(item["message_id"] for item in items) == ["s-3", "s-4", "s-5"]
+
+
+def test_results_pages_are_complete_after_an_in_place_edit(tmp_path):
+    from nebula.v3.chat_results import results_router
+
+    store, _ = workspace(tmp_path)
+    for i in range(4, 9):
+        store.create(
+            ChatMessage(
+                id=f"s-{i}",
+                engagement_id="p",
+                session_id="s",
+                sequence=i,
+                role="assistant",
+                content=f"```text\nresult {i}\n```",
+            )
+        )
+    _retract(store, "s-4")
+    app = FastAPI()
+    app.include_router(results_router(store, None))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    items = _walk(client, "/chat/sessions/s/results", {"limit": 2})
+
+    assert sorted(item["message_id"] for item in items) == ["s-5", "s-6", "s-7", "s-8"]
+    assert _walk(client, "/chat/sessions/s/context-sources", {}) == []
+
+
+def test_results_survive_a_missing_diff_artifact(tmp_path):
+    from nebula.v3.artifacts import ArtifactStore
+    from nebula.v3.chat_results import results_router
+    from nebula.v3.domain import Artifact
+
+    store, _ = workspace(tmp_path)
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    digest = "ab" * 32
+    store.create(
+        ChatMessage(
+            id="s-9",
+            engagement_id="p",
+            session_id="s",
+            sequence=9,
+            role="assistant",
+            content="Changed files.",
+            metadata={"harness_turn_id": "turn-1"},
+        )
+    )
+    store.create(
+        Artifact(
+            id="diff-1",
+            engagement_id="p",
+            sha256=digest,
+            size=12,
+            storage_path=str(
+                artifacts.path_for_digest(digest).relative_to(artifacts.root)
+            ),
+            source="harness-file-diff",
+            metadata={"harness_turn_id": "turn-1"},
+        )
+    )
+    app = FastAPI()
+    app.include_router(results_router(store, artifacts))
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/chat/sessions/s/results")
+
+    assert response.status_code == 200, response.text
+    (item,) = [row for row in response.json()["items"] if row["kind"] == "file_change"]
+    assert item["artifact_id"] == "diff-1"
+    assert "unavailable" in item["text"].casefold()

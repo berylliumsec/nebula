@@ -1,18 +1,18 @@
 {
-  "change_digest": "3575d8493c19d0576214087c8b0f639346c0224208a2e3b9f00aae9d95adb687",
-  "reviewed_by": "Claude review of harness and MCP server deletion",
-  "reason": "The Trash icon buttons on the Agent harnesses and MCP servers cards in Settings called deleteHarness / deleteMcpServer on the first click with no confirmation, so one stray tap on a 14 px icon removed a saved profile and its credentials binding; the interface principles require a clear confirmation for destructive actions and a tooltip on every icon button, and the Edit and Delete icons had neither. HarnessSettings now asks through the shared DialogProvider confirmation (danger tone, 'Delete harness' / 'Delete MCP server' confirm labels) before deleting, keeps the same busy, reload and error handling, and gives the four icon buttons title tooltips. HarnessSettings.test.tsx gains a case that clicking Delete opens the confirmation, Cancel leaves the profile untouched and never calls the API, and confirming calls deleteHarness with the profile id and revision then reloads; the existing 13 cases in the file cover the surrounding save, check, import and edit flows and pass unchanged.",
-  "exclusions": "No Python tests: no backend change. No native tests: no Tauri or Rust change. No Playwright: area:mcp-import (matched through HarnessSettings*) is the real-Core 'mcp import previews, saves, trusts, probes' journey across eight desktop and phone projects and never deletes a harness or server; the confirmation surface is the same DialogProvider dialog other journeys already drive. No screenshot baselines: no layout change beyond a native title tooltip. This session did not exercise the delete flow in a real browser; the unit test drives the confirmation and API call through the rendered component. No full suites.",
+  "change_digest": "c292bbbe7d87d8cad09992ab817706f634679a13ea1095388e46e3737fdbf72e",
+  "reviewed_by": "Claude review of transcript pagination after in-place edits",
+  "reason": "Edit-in-place (#377) retracts messages by setting metadata.retracted_at and leaves the rows in place. Transcript search (chat_workspace.search), /results and /context-sources each fetched limit+1 rows, filtered the retracted ones out in Python, and then decided next_offset from the filtered count, so whenever a retracted message fell inside the fetched page the count dropped to limit or below and next_offset became null although more rows existed: search stopped listing older matches, /results silently omitted later results and /context-sources later attachments. Each endpoint now decides has_more from the fetched page before filtering and returns only the first limit rows filtered, so offsets keep counting stored rows and every page is reachable. Separately, one missing or digest-mismatched harness diff blob raised out of /results and lost every other result item for the conversation; the diff preview now degrades to a 'Preview unavailable' item. test_chat_workspace gains three cases: search pages and results/context-sources pages walked to completion with a retracted message inside a page (both fail on main by dropping later rows), and a results response that survives a missing diff artifact (500 on main); the file's existing search, bookmark, edit-branch, naming and results-source cases cover the surrounding behaviour.",
+  "exclusions": "No frontend tests: no ui/ change; the UI already follows next_offset. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_workspace.py and chat_results.py) is the real-Core journey suite; the durable-conversation search journey does not edit a message inside a search page, and the Python tests drive the exact pagination through the routers. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 14,
+    "python": 8,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx"
+  "python": [
+    "tests/v3/test_chat_workspace.py"
   ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }

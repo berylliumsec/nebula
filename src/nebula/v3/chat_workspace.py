@@ -87,16 +87,16 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             .limit(limit + 1)
         )
         with store.database.session() as database:
-            rows = [
-                message
-                for message in (
-                    ChatMessage.model_validate(row.payload)
-                    for row in database.scalars(statement)
-                )
-                if not message_is_replaced(message)
+            page = [
+                ChatMessage.model_validate(row.payload)
+                for row in database.scalars(statement)
             ]
+        # Offsets count stored rows, retracted ones included, so decide whether
+        # another page exists before edited-away messages are filtered out.
+        has_more = len(page) > limit
+        rows = [message for message in page[:limit] if not message_is_replaced(message)]
         items = []
-        for message in rows[:limit]:
+        for message in rows:
             text = message.content
             start = (
                 max(0, text.casefold().find(q.strip().casefold()) - 80)
@@ -117,7 +117,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             )
         return {
             "items": items,
-            "next_offset": offset + limit if len(rows) > limit else None,
+            "next_offset": offset + limit if has_more else None,
         }
 
     @router.get("/chat/sessions/{session_id}/bookmarks")
