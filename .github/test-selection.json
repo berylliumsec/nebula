@@ -1,23 +1,18 @@
 {
-  "change_digest": "a1a916342fe7e8a493137719731f10949bbde6127aa01429e63e20492834d5d5",
-  "reviewed_by": "Claude review of workspace-editor-fixes",
-  "reason": "Nine workbench defects from the round-4 audit. (1) NativeCheckpointService.preview classified any non-existent path as missing and restore wrote through symlinks with Path.write_bytes, so a checkpoint restore could create files outside the project; preview now lstat-walks every component (a symlink or non-directory parent is a conflict) and restore opens the directory chain with O_NOFOLLOW, writes a private temp file and os.replace()s it in. (7) A debug session whose websocket never attached held the project for the full hour; DebugService now closes unattached sessions after DEBUG_ATTACH_TIMEOUT_SECONDS and exposes a ticket-authorised stop() behind DELETE /debug-sessions/{id}. (8) list/search/preview/rename/delete/promote/reset ran the filesystem work on the event loop; the routes now await asyncio.to_thread. (11) preview strict-decoded a 256 KiB byte cut and reported valid UTF-8 as invalid; it now uses an incremental decoder and reports the bytes actually decoded. (12) search parked one open directory fd per pending folder; it now keeps a stack of relative paths and opens one directory at a time, treating EMFILE/ENFILE as truncation. (14) the checkpoint preview route returned 500 for NativeCheckpointError; it maps to 409 like capture/restore. (18) every successful upload recorded FileNotFoundError catches (absent destination on create, temp name already consumed by replace/link); those are now silent expected paths. (19) the editor's TextDecoder stripped a UTF-8 BOM and saves dropped it; the buffer remembers the BOM and re-emits it. (21) editor search scanned node_modules/.git; it now honours WORKSPACE_SEARCH_EXCLUDES and reports skipped_directories. Proven by the new tests in test_native_checkpoints.py (symlink/parent-symlink/missing restore, preview 409), test_workspace.py (character-boundary preview, peak directory fds, ignore list, no recorded catches on save, all seven routes off the loop), test_debugger.py (attach deadline, stop ticket, DELETE route) and CodeEditorPanel.test.tsx (BOM preserved on save); each failed on origin/main.",
-  "exclusions": "Frontend: only the editor and persistence vitest files (BOM buffer flag). No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through api.py) does not exercise checkpoint restore through symlinks, debug attach deadlines, threaded workspace handlers or the editor BOM; the Python and vitest tests drive them directly. No full suites.",
+  "change_digest": "872e4efa356c505a4da67bcf3b20703175a82e8b7d41618e9387b4752abb2ed6",
+  "reviewed_by": "Claude review of stale session-metadata assertions",
+  "reason": "PR #447 began persisting the conversation's chosen MCP servers and hooks as session metadata (chat.py writes mcp_server_ids and hook_ids), but two assertions in tests/v3/test_chat.py compare session.metadata for exact equality and were not updated. Both have been failing on origin/main since that merge: test_durable_session_rejects_divergent_or_forged_history and test_existing_session_cursor_and_messages_roll_back_together. The product behaviour is intended, so the assertions now include the two new keys; nothing else changes. This unblocks every pull request whose receipt names test_chat.py.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: no ui/ change at all, so no area applies. Only a test file changes, so no other Python file is affected.",
   "expected_tests": {
-    "python": 42,
-    "frontend": 30,
+    "python": 50,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_native_checkpoints.py",
-    "tests/v3/test_workspace.py",
-    "tests/v3/test_debugger.py"
+    "tests/v3/test_chat.py"
   ],
-  "frontend": [
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/state/editorSessionPersistence.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }
