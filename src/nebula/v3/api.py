@@ -753,6 +753,18 @@ class ChatSessionForkRequest(NebulaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+class ChatSessionRewindRequest(NebulaModel):
+    before_message_id: str = Field(min_length=1, max_length=200)
+
+
+class ChatSessionRewind(NebulaModel):
+    """The conversation after an in-place edit retracted the replaced turns."""
+
+    session: ChatSession
+    messages: list[ChatMessage]
+    replaced: list[ChatMessage]
+
+
 class ChatSessionActivity(NebulaModel):
     session_id: str
     state: Literal["working", "waiting", "idle"]
@@ -9338,8 +9350,12 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
-        return chat_service().session_messages(session_id)
+    async def list_chat_session_messages(
+        session_id: str, include_replaced: bool = False
+    ) -> list[ChatMessage]:
+        return chat_service().session_messages(
+            session_id, include_replaced=include_replaced
+        )
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
@@ -9403,6 +9419,28 @@ def create_app(
             changes,
             expected_revision=request.expected_revision or current.revision,
         )
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/rewind",
+        response_model=ChatSessionRewind,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def rewind_chat_session(
+        session_id: str, request: ChatSessionRewindRequest
+    ) -> ChatSessionRewind:
+        """Retract an operator message and its replies without leaving the chat."""
+
+        session, retained, replaced = chat_service().rewind_session(
+            session_id, before_message_id=request.before_message_id
+        )
+        if session.backend == ChatBackend.HARNESS:
+            # The vendor session keeps its own transcript, so the conversation
+            # continues on a fresh one that replays only the retained messages.
+            session = harness_runtime.rewind_chat_session(
+                session, reason="operator_edit"
+            )
+        return ChatSessionRewind(session=session, messages=retained, replaced=replaced)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/fork",

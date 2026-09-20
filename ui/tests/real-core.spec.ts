@@ -906,7 +906,7 @@ test("assistant upgrade conversation switching restores durable Core history pro
     let releaseHistory = () => {};
     let failHistory = false;
     const historyGate = new Promise<void>(resolve => {releaseHistory = resolve;});
-    await page.route(`**/chat/sessions/${sourceId}/messages`, async route => {
+    await page.route(`**/chat/sessions/${sourceId}/messages*`, async route => {
       await historyGate;
       if (failHistory) {
         await route.fulfill({status: 503, json: {detail: "Temporary history outage"}});
@@ -2313,6 +2313,76 @@ test("assistant upgrade real Core retains unresolved operator questions until re
   }
 });
 
+test("assistant upgrade edits a sent message in place on real Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore();
+  const stub = await startLocalModelStub({streamDelayMs: 20});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Edit in place model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const send = async (content: string, sessionId?: string) => {
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model",
+        engagement_id: projects[0].id, session_id: sessionId,
+        messages: [{role: "user", content}], include_knowledge: false, stream: false,
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {session_id: string}).session_id;
+    };
+    const sessionId = await send("Summarize the open findings.");
+    expect(await send("Any update on the certificate?", sessionId)).toBe(sessionId);
+    const url = `${core.origin}/?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    const operator = page.locator(".chat-message.operator");
+    const edited = operator.filter({hasText: "Any update on the certificate?"});
+    await expect(edited).toBeVisible({timeout: 20_000});
+    await edited.hover();
+    await edited.getByRole("button", {name: "Edit message"}).click();
+    const editor = page.getByRole("textbox", {name: "Edit message"});
+    await expect(editor).toHaveValue("Any update on the certificate?");
+    await editor.fill("Any update on the certificate and IKEv1?");
+    await page.getByRole("button", {name: "Resend", exact: true}).click();
+
+    await expect(operator).toHaveCount(2, {timeout: 20_000});
+    await expect(operator.last()).toContainText("Any update on the certificate and IKEv1?");
+    await expect(page.getByRole("button", {name: "Open parent"})).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionId);
+    // The retained prefix keeps sequences 1-2 while the edited turn takes the
+    // next free slots, so replaced records can never be overwritten. Wait for
+    // the durable reply before reloading, which would abort a live stream.
+    await expect.poll(async () => (
+      await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number}>
+    ).map(item => item.sequence), {timeout: 20_000}).toEqual([1, 2, 5, 6]);
+
+    // The replaced turns survive a reload: Core owns them, not the browser.
+    await page.goto(url);
+    await expect(operator).toHaveCount(2, {timeout: 20_000});
+    const replacedGroup = page.locator(".chat-replaced-group").first();
+    await expect(replacedGroup.locator("summary")).toContainText("2 replaced messages");
+    await replacedGroup.locator("summary").click();
+    await expect(replacedGroup).toContainText("Any update on the certificate?");
+
+    const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string}>;
+    expect(sessions.map(item => item.id)).toEqual([sessionId]);
+    const live = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number; content: string}>;
+    expect(live[2].content).toBe("Any update on the certificate and IKEv1?");
+    const everything = await (await api.get(`chat/sessions/${sessionId}/messages?include_replaced=true`)).json() as Array<{metadata: Record<string, unknown>}>;
+    expect(everything.filter(item => item.metadata.retracted_at)).toHaveLength(2);
+    const resent = stub.requests.filter(request => JSON.stringify(request.messages).includes("IKEv1"));
+    expect(resent.length).toBeGreaterThan(0);
+    expect(resent.every(request => !JSON.stringify(request.messages).includes("Any update on the certificate?"))).toBe(true);
+    await testInfo.attach("real-core-edit-in-place", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   // WebKit's production-LAN pass can spend more than a minute covering the
   // complete durable-conversation lifecycle on shared CI runners.
@@ -2425,10 +2495,11 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     expect(queuedModelRequests.every(request => JSON.stringify(request.messages).includes("Use concise plain language"))).toBe(true);
     const recorded = await (await api.get(`chat/sessions/${chat.session_id}/context-sources`)).json() as {items: {operator_decisions: {text: string; scope: string}[]}[]};
     expect(recorded.items.some(item => item.operator_decisions.some(entry => entry.text === "Use concise plain language" && entry.scope === "project"))).toBe(true);
-    await operator.first().getByRole("button", {name: "Edit and branch"}).click();
-    await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Hello");
-    await expect(page.locator(".chat-message")).toHaveCount(0);
+    // Branching stays an explicit, separate action from editing in place.
+    await operator.first().getByRole("button", {name: "Fork conversation here"}).click();
     await expect(page.getByRole("button", {name: "Open parent"})).toBeVisible();
+    await expect(operator).toHaveCount(1);
+    await expect(operator.first()).toContainText("Hello");
     await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });

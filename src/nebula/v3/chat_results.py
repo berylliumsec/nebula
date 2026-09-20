@@ -8,6 +8,7 @@ from .database import EntityRow
 from .domain import (
     Artifact,
     ChatMessage,
+    message_is_replaced,
     ChatSession,
     ChatTurn,
     KnowledgeSource,
@@ -54,18 +55,22 @@ def results_router(store, artifacts):
         session = store.get(ChatSession, session_id)
         with store.database.session() as database:
             messages = [
-                ChatMessage.model_validate(row.payload)
-                for row in database.scalars(
-                    select(EntityRow)
-                    .where(
-                        EntityRow.kind == "chat_messages",
-                        EntityRow.engagement_id == session.engagement_id,
-                        EntityRow.payload["session_id"].as_string() == session_id,
+                message
+                for message in (
+                    ChatMessage.model_validate(row.payload)
+                    for row in database.scalars(
+                        select(EntityRow)
+                        .where(
+                            EntityRow.kind == "chat_messages",
+                            EntityRow.engagement_id == session.engagement_id,
+                            EntityRow.payload["session_id"].as_string() == session_id,
+                        )
+                        .order_by(EntityRow.payload["sequence"].as_integer())
+                        .offset(offset)
+                        .limit(limit + 1)
                     )
-                    .order_by(EntityRow.payload["sequence"].as_integer())
-                    .offset(offset)
-                    .limit(limit + 1)
                 )
+                if not message_is_replaced(message)
             ]
             calls = [
                 ToolCall.model_validate(row.payload)
@@ -191,7 +196,11 @@ def results_router(store, artifacts):
                 .offset(offset)
                 .limit(41)
             )
-            messages = [ChatMessage.model_validate(row.payload) for row in rows]
+            messages = [
+                message
+                for message in (ChatMessage.model_validate(row.payload) for row in rows)
+                if not message_is_replaced(message)
+            ]
         from .chat import (
             _CHAT_INSTRUCTIONS,
             _CHAT_TOOL_INSTRUCTIONS,

@@ -129,6 +129,7 @@ import type {
   OperatorProfileUpdateRequest,
   PostToolAssistantConfig,
   Page,
+  ChatSessionRewind,
   PersistedChatMessage,
   LocalProviderDetection,
   ModelDescriptor,
@@ -3935,6 +3936,14 @@ function mapPersistedChatMessage(
     harnessTurnId:
       typeof value.metadata?.harness_turn_id === "string"
         ? value.metadata.harness_turn_id
+        : undefined,
+    replacedAt:
+      typeof value.metadata?.retracted_at === "string"
+        ? value.metadata.retracted_at
+        : undefined,
+    replacedGroupId:
+      typeof value.metadata?.retraction_id === "string"
+        ? value.metadata.retraction_id
         : undefined,
     toolSuggestions: mapToolSuggestions(value.metadata?.tool_suggestions),
     toolResults: Array.isArray(value.metadata?.tool_results)
@@ -8505,11 +8514,31 @@ export class ApiClient {
   listChatMessages(
     sessionId: string,
     signal?: AbortSignal,
+    options?: { includeReplaced?: boolean },
   ): Promise<PersistedChatMessage[]> {
+    const query = options?.includeReplaced ? "?include_replaced=true" : "";
     return this.request<WirePersistedChatMessage[]>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      `chat/sessions/${encodeURIComponent(sessionId)}/messages${query}`,
       { signal },
     ).then((items) => items.map(mapPersistedChatMessage));
+  }
+
+  rewindChatSession(
+    sessionId: string,
+    beforeMessageId: string,
+  ): Promise<ChatSessionRewind> {
+    return this.request<{
+      session: WireChatSession;
+      messages: WirePersistedChatMessage[];
+      replaced: WirePersistedChatMessage[];
+    }>(`chat/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ before_message_id: beforeMessageId }),
+    }).then((value) => ({
+      session: mapChatSession(value.session),
+      messages: value.messages.map(mapPersistedChatMessage),
+      replaced: value.replaced.map(mapPersistedChatMessage),
+    }));
   }
 
   getChatContext(

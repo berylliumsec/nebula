@@ -3833,6 +3833,12 @@ class ChatMessage(Entity):
         return self
 
 
+def message_is_replaced(message: ChatMessage) -> bool:
+    """Report whether an in-place edit retracted this message from the transcript."""
+
+    return bool(message.metadata.get("retracted_at"))
+
+
 class PairedDeviceSession(Entity):
     """Revocable browser-device session; only token hashes are durable."""
 

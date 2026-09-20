@@ -436,6 +436,27 @@ function harnessPhaseLabel(phase: string): string {
   }
 }
 
+interface ReplacedMessageGroup {
+  id: string;
+  at?: string;
+  from: number;
+  items: PersistedChatMessage[];
+}
+
+/** Replaced turns stay readable in place; the model only ever sees the live transcript. */
+function ReplacedMessages({ group }: { group: ReplacedMessageGroup }) {
+  const count = group.items.length;
+  const label = `${count} replaced message${count === 1 ? "" : "s"}${group.at ? ` · ${timeLabel(group.at)}` : ""}`;
+  return <details className="chat-replaced-group">
+    <summary>{label}</summary>
+    <p className="chat-replaced-note">Replaced by your edit and kept for reference. They are not sent to the model.</p>
+    {group.items.map((item) => <article className="chat-replaced-message" key={item.id}>
+      <strong>{`${item.role === "user" ? "You" : "Assistant"} · ${timeLabel(item.createdAt)}`}</strong>
+      <p>{item.content}</p>
+    </article>)}
+  </details>;
+}
+
 function persistedMessage(message: PersistedChatMessage): ConversationMessage {
   return {
     id: message.id,
@@ -693,6 +714,8 @@ export function SessionsPage() {
   const pendingResponseActive = Boolean(pendingResponse && isPendingRequest(authoritativeState, pendingResponse.approval.id));
   const approvalRestorationRef = useRef<string | undefined>(undefined);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const [replacedMessages, setReplacedMessages] = useState<PersistedChatMessage[]>([]);
+  const [messageEdit, setMessageEdit] = useState<{messageId: string; sequence?: number; text: string; busy: boolean; error?: string}>();
   const [draft, setDraft] = useState("");
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
   const coreQueue = useChatQueue(api, sessionId);
@@ -2136,7 +2159,7 @@ export function SessionsPage() {
     }
     try {
       const [history, pendingTurn] = await Promise.all([
-        api.listChatMessages(id, loadController.signal),
+        api.listChatMessages(id, loadController.signal, {includeReplaced: true}),
         api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
           if (loadController.signal.aborted) return undefined;
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
@@ -2144,10 +2167,13 @@ export function SessionsPage() {
         }),
       ]);
       if (!selectionIsCurrent()) return;
-      const recoveredHistory = await recoverHarnessHistory(history.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
+      const replacedHistory = history.filter((message) => message.replacedAt);
+      const activeHistory = history.filter((message) => !message.replacedAt);
+      setReplacedMessages(replacedHistory);
+      const recoveredHistory = await recoverHarnessHistory(activeHistory.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
       if (!selectionIsCurrent()) return;
       setMessages(recoveredHistory);
-      const restoredToolCards: ToolLifecycleCard[] = history.flatMap((message) => message.role === "assistant"
+      const restoredToolCards: ToolLifecycleCard[] = activeHistory.flatMap((message) => message.role === "assistant"
         ? (message.toolResults ?? []).map((result) => ({
             assistantId: message.id,
             toolCallId: result.toolCallId,
@@ -2401,16 +2427,79 @@ export function SessionsPage() {
     }
   };
 
-  const editAndBranch = async (message: ConversationMessage) => {
-    if (!api || !sessionId || sending || !message.durable) return;
-    try {
-      const fork = await api.forkChatSession(sessionId, undefined, undefined, message.id);
-      setSessions(current => [fork, ...current]);
-      await selectSession(fork.id);
-      updateComposerDraft(message.content);
-      composerRef.current?.focus();
-    } catch (error) { void logCaughtDiagnostic("interface.assistant_chat.branch_failed", "The edited branch could not be created.", error, "assistant_chat"); setChatError(error instanceof Error ? error.message : "Could not branch this message."); }
+  const beginMessageEdit = (message: ConversationMessage) => {
+    if (!sessionId || !message.durable || message.role !== "user" || sending) return;
+    setChatError(undefined);
+    setMessageEdit({messageId: message.id, sequence: message.sequence, text: message.content, busy: false});
   };
+
+  const cancelMessageEdit = () => {
+    setMessageEdit(undefined);
+    composerRef.current?.focus();
+  };
+
+  // Editing rewinds this conversation instead of branching: Core retracts the
+  // edited message and everything it produced, then the edited wording is sent
+  // as the next message of the same conversation.
+  const resendEditedMessage = async () => {
+    const editing = messageEdit;
+    if (!api || !sessionId || !editing || editing.busy || sending) return;
+    const text = editing.text.trim();
+    if (!text) return;
+    const original = messages.find((item) => item.id === editing.messageId);
+    setMessageEdit({...editing, busy: true, error: undefined});
+    let rewound;
+    try {
+      rewound = await api.rewindChatSession(sessionId, editing.messageId);
+    } catch (error) {
+      void logCaughtDiagnostic("interface.assistant_chat.edit_rewind_failed", "The edited message could not replace the saved conversation.", error, "assistant_chat");
+      setMessageEdit({...editing, busy: false, error: error instanceof Error ? error.message : "Could not replace this message. The conversation is unchanged."});
+      return;
+    }
+    setMessages(rewound.messages.map(persistedMessage));
+    setReplacedMessages((current) => [
+      ...current.filter((item) => !rewound.replaced.some((entry) => entry.id === item.id)),
+      ...rewound.replaced,
+    ]);
+    setSessions((current) => current.map((item) => item.id === rewound.session.id ? rewound.session : item));
+    if (rewound.session.harnessSessionId) setHarnessSessionId(rewound.session.harnessSessionId);
+    setMessageEdit(undefined);
+    await submit(undefined, undefined, undefined, {
+      text,
+      contentBlocks: [
+        {type: "text" as const, text},
+        ...(original?.contentBlocks ?? []).filter((block) => block.type === "image"),
+      ],
+    });
+  };
+
+  const replacedGroups = useMemo(() => {
+    const grouped = new Map<string, PersistedChatMessage[]>();
+    for (const message of replacedMessages) {
+      const key = message.replacedGroupId ?? message.id;
+      grouped.set(key, [...(grouped.get(key) ?? []), message]);
+    }
+    return [...grouped.entries()]
+      .map(([id, items]) => {
+        const ordered = [...items].sort((left, right) => left.sequence - right.sequence);
+        return {id, at: ordered[0]?.replacedAt, from: ordered[0]?.sequence ?? 0, items: ordered};
+      })
+      .sort((left, right) => left.from - right.from);
+  }, [replacedMessages]);
+  const {anchoredReplacements, leadingReplacements} = useMemo(() => {
+    // Each replaced group keeps its place: it renders under the last message
+    // still in the conversation, or above the transcript when the first
+    // message was the one edited.
+    const anchored = new Map<string, ReplacedMessageGroup[]>();
+    const leading: ReplacedMessageGroup[] = [];
+    const durable = messages.filter((item) => item.durable && typeof item.sequence === "number");
+    for (const group of replacedGroups) {
+      const anchor = [...durable].reverse().find((item) => (item.sequence ?? 0) < group.from);
+      if (!anchor) { leading.push(group); continue; }
+      anchored.set(anchor.id, [...(anchored.get(anchor.id) ?? []), group]);
+    }
+    return {anchoredReplacements: anchored, leadingReplacements: leading};
+  }, [replacedGroups, messages]);
 
   const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
   useEffect(() => {
@@ -2872,7 +2961,7 @@ export function SessionsPage() {
     }
   };
 
-  const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }) => {
+  const submit = async (event?: FormEvent, queuedFollowUp?: ChatFollowUp, queueOptions?: { paused?: boolean; first?: boolean; key?: string; uncertain?: boolean }, resent?: { text: string; contentBlocks?: ConversationMessage["contentBlocks"] }) => {
     event?.preventDefault();
     if (sessionId && !sessionReadReady) return;
     const activeTurn = composerBusy;
@@ -2893,7 +2982,7 @@ export function SessionsPage() {
       }
       return;
     }
-    const content = (queuedFollowUp?.text ?? draft.trim()) || (pendingImages.length ? "Attached image" : "");
+    const content = (resent?.text ?? queuedFollowUp?.text ?? draft.trim()) || (!resent && pendingImages.length ? "Attached image" : "");
     const providerRuntime = runtimeKind === "provider" ? selectedProvider : undefined;
     const harnessRuntime = runtimeKind === "harness" ? selectedHarness : undefined;
     if (!content || (!queueOptions && composerBusy) || !api || coreState !== "online" || !engagement || (!providerRuntime && !harnessRuntime) || !model.trim()) return;
@@ -2945,7 +3034,7 @@ export function SessionsPage() {
 
     let contextAttachments: ChatCompletionRequest["contextAttachments"];
     try {
-      contextAttachments = !queuedFollowUp && assistantDrafts.length
+      contextAttachments = !queuedFollowUp && !resent && assistantDrafts.length
         ? await Promise.all(assistantDrafts.map(createHashedSelectionAttachment))
         : undefined;
     } catch (attachmentError) {
@@ -2969,7 +3058,9 @@ export function SessionsPage() {
     const userId = makeId("user");
     const assistantId = makeId("assistant");
     const durableHistory = messages.filter((message) => message.durable && message.state === "complete");
-    const outgoingContentBlocks = queuedFollowUp
+    const outgoingContentBlocks = resent
+      ? resent.contentBlocks ?? [{ type: "text" as const, text: content }]
+      : queuedFollowUp
       ? [{ type: "text" as const, text: content }]
       : [
         ...(draft.trim() ? [{ type: "text" as const, text: draft.trim() }] : []),
@@ -3048,7 +3139,7 @@ export function SessionsPage() {
       return true;
     }
     setMessages((current) => [...current, userMessage, assistantMessage]);
-    if (!queuedFollowUp) {
+    if (!queuedFollowUp && !resent) {
       if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
       setDraft("");
       pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
@@ -3918,9 +4009,16 @@ export function SessionsPage() {
                     scrollToBottomOnThreadSwitch={!restoredScrollRef.current}
                     turnAnchor="bottom"
                   >
+                {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                 {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
                   const message = messagesById.get(threadMessage.id);
                   if (!message) return null;
+                  const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
+                  const replacedByEdit = editing
+                    ? messages.filter((item) => item.durable && (item.sequence ?? 0) > (editing.sequence ?? 0)).length
+                    : 0;
+                  const pendingReplacement = Boolean(messageEdit && !editing && message.durable && (message.sequence ?? 0) > (messageEdit.sequence ?? 0));
+                  const messageReplacements = anchoredReplacements.get(message.id) ?? [];
                   const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));
                   const commentaryItems = messageActivityItems
                     .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
@@ -3938,7 +4036,7 @@ export function SessionsPage() {
                         : undefined;
                   return (
                   <article
-                    className={`chat-message ${message.role === "user" ? "operator" : "assistant"}`}
+                    className={`chat-message ${message.role === "user" ? "operator" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
                     id={`chat-message-${message.id}`}
                     data-sequence={message.sequence}
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
@@ -3957,7 +4055,30 @@ export function SessionsPage() {
                       {message.role === "assistant" && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
                       {message.content && (message.role === "assistant"
                         ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={assistantRunnableLanguages} onRun={setRunCandidate} onRunInTerminal={runInTerminal} />
-                        : <p>{message.content}</p>)}
+                        : editing
+                          ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void resendEditedMessage();}}>
+                            <textarea
+                              aria-label="Edit message"
+                              value={editing.text}
+                              autoFocus
+                              disabled={editing.busy}
+                              rows={Math.min(12, Math.max(3, editing.text.split("\n").length + 1))}
+                              onChange={event => setMessageEdit(current => current && ({...current, text: event.target.value}))}
+                              onKeyDown={event => {
+                                if (event.key === "Escape") { event.preventDefault(); cancelMessageEdit(); }
+                                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void resendEditedMessage(); }
+                              }}
+                            />
+                            {editing.error && <DiagnosticErrorNotice error={editing.error} fallback="The edited message could not be resent." compact />}
+                            <div className="chat-message-edit-actions">
+                              <small>{replacedByEdit === 0
+                                ? "Resending replaces this message in this conversation."
+                                : `Resending replaces this message and the ${replacedByEdit === 1 ? "reply" : `${replacedByEdit} messages`} below. Nothing new is created.`}</small>
+                              <button className="button quiet" type="button" disabled={editing.busy} onClick={cancelMessageEdit}>Cancel</button>
+                              <button className="button primary" type="submit" disabled={editing.busy || !editing.text.trim()}>{editing.busy ? <><LoaderCircle className="spin" size={13} /> Resending</> : "Resend"}</button>
+                            </div>
+                          </form>
+                          : <p>{message.content}</p>)}
                       {api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={api} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
                       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
                       {message.role === "assistant" && activityLedger && <ActivityLedger
@@ -3999,8 +4120,9 @@ export function SessionsPage() {
                       {api && sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={api} sessionId={sessionId} messageId={message.id} onResults={() => updateSearchParams(next => {next.set("drawer", "results");})} />}
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
                       {message.usage && message.usage.totalTokens > 0 && <details className="chat-message-usage"><summary>{message.usage.totalTokens.toLocaleString()} tokens</summary><span>{message.usage.inputTokens.toLocaleString()} input · {message.usage.outputTokens.toLocaleString()} output</span></details>}
-                      {message.content && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={NotebookPen} label="Save as decision" onClick={event => {const selection = window.getSelection(); const container = event.currentTarget.closest(".chat-message"); const exact = selection && container?.contains(selection.anchorNode) && container.contains(selection.focusNode) ? selection.toString() : ""; const text = exact || message.content; setDecisionSeed({messageId: message.id, text, selection: text}); setSessionInspectorOpen(true); updateSearchParams(next => {next.set("drawer", "context");});}} /><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit and branch" disabled={sending} onClick={() => void editAndBranch(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
+                      {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={NotebookPen} label="Save as decision" onClick={event => {const selection = window.getSelection(); const container = event.currentTarget.closest(".chat-message"); const exact = selection && container?.contains(selection.anchorNode) && container.contains(selection.focusNode) ? selection.toString() : ""; const text = exact || message.content; setDecisionSeed({messageId: message.id, text, selection: text}); setSessionInspectorOpen(true); updateSearchParams(next => {next.set("drawer", "context");});}} /><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
                     </div>
+                    {messageReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                   </article>
                   );
                 }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}

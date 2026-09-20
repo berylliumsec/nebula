@@ -204,7 +204,7 @@ export const guideCatalog: GuideDefinition[] = [
       {
         title: "Act on a message",
         body: [
-          "Under each saved message: Bookmark it, Edit and branch (your messages) to try a different wording in a new branch, Copy, Quote it into the message box, or Fork conversation here to continue separately. Forks share the project files.",
+          "Under each saved message: Bookmark it, Edit (your messages) to change the wording and resend it here, Copy, Quote it into the message box, or Fork conversation here to continue separately. Editing stays in this conversation and replaces the turns below it, which stay readable under “replaced messages”; forking makes a second conversation that shares the project files.",
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "message-actions",
