@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 
 from .database import EntityRow
 from .domain import (
@@ -136,31 +137,53 @@ class HandoffService:
     def _expire(self, envelope: HandoffEnvelope) -> HandoffEnvelope:
         if envelope.status != HandoffStatus.PENDING or envelope.expires_at > utc_now():
             return envelope
-        updated, _ = self.store.update_with_operation_event(
-            HandoffEnvelope,
-            envelope.id,
-            {"status": HandoffStatus.EXPIRED},
-            expected_revision=envelope.revision,
-            operation_id=envelope.id,
-            operation_kind="handoff",
-            engagement_id=envelope.engagement_id,
-            event_type="handoff.expired",
-            event_payload={"handoff_id": envelope.id},
-            actor_id="core",
-            idempotency_key=f"handoff-expired:{envelope.id}",
-        )
+        try:
+            updated, _ = self.store.update_with_operation_event(
+                HandoffEnvelope,
+                envelope.id,
+                {"status": HandoffStatus.EXPIRED},
+                expected_revision=envelope.revision,
+                operation_id=envelope.id,
+                operation_kind="handoff",
+                engagement_id=envelope.engagement_id,
+                event_type="handoff.expired",
+                event_payload={"handoff_id": envelope.id},
+                actor_id="core",
+                idempotency_key=f"handoff-expired:{envelope.id}",
+            )
+        except ConflictError:  # diagnostic-expected: a concurrent reader expired it or a device consumed it first
+            # Every writer moves the envelope out of PENDING, so a read is never
+            # a conflict for its caller: the stored row is the answer.
+            return self.store.get(HandoffEnvelope, envelope.id)
         return updated
 
     def get(self, handoff_id: str) -> HandoffEnvelope:
         return self._expire(self.store.get(HandoffEnvelope, handoff_id))
 
-    def list(self, project_id: str, *, limit: int = 100) -> list[HandoffEnvelope]:
-        return [
-            self._expire(item)
-            for item in self.store.list_entities(
-                HandoffEnvelope, engagement_id=project_id, limit=limit
+    def list(
+        self, project_id: str, *, offset: int = 0, limit: int = 100
+    ) -> list[HandoffEnvelope]:
+        """Page a project's handoffs newest first; the recent ones are the live ones."""
+        if offset < 0:
+            raise ValueError("offset cannot be negative")
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        statement = (
+            select(EntityRow)
+            .where(
+                EntityRow.kind == HandoffEnvelope.entity_kind,
+                EntityRow.engagement_id == project_id,
             )
-        ]
+            .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        with self.store.database.session() as session:
+            envelopes = [
+                HandoffEnvelope.model_validate(row.payload)
+                for row in session.scalars(statement)
+            ]
+        return [self._expire(item) for item in envelopes]
 
     def resolve(
         self, handoff_id: str, *, current_device_id: str | None

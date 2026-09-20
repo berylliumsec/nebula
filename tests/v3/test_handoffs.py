@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import time
+from datetime import timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -224,3 +226,80 @@ def test_handoff_rejects_missing_project_and_unbounded_labels(tmp_path):
         assert "300 characters" in str(exc)
     else:
         raise AssertionError("handoff accepted an unbounded label")
+
+
+def test_handoff_list_pages_newest_first(tmp_path):
+    store, project, _, ref = _fixture(tmp_path)
+    service = HandoffService(store)
+    created = []
+    for index in range(3):
+        created.append(
+            service.create(
+                HandoffCreateRequest(
+                    project_id=project.id,
+                    source_refs=[ref],
+                    action_id=f"action-{index}",
+                    origin_device_id="mac",
+                ),
+                actor_id="operator",
+            )
+        )
+        time.sleep(0.002)
+    newest_first = [item.id for item in reversed(created)]
+    assert [item.id for item in service.list(project.id)] == newest_first
+    assert [item.id for item in service.list(project.id, limit=2)] == newest_first[:2]
+    assert [
+        item.id for item in service.list(project.id, offset=2, limit=2)
+    ] == newest_first[2:]
+    client = TestClient(create_app(store, auth_token="test-token"))
+    response = client.get(
+        "/api/v1/handoffs",
+        params={"project_id": project.id, "offset": 1, "limit": 1},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == newest_first[1:2]
+
+
+def test_expire_on_read_survives_a_concurrent_expiry(tmp_path):
+    store, project, _, ref = _fixture(tmp_path)
+    service = HandoffService(store)
+    envelope = service.create(
+        HandoffCreateRequest(
+            project_id=project.id,
+            source_refs=[ref],
+            action_id="ask_nebula",
+            origin_device_id="mac",
+        ),
+        actor_id="operator",
+    )
+    store.update(
+        HandoffEnvelope,
+        envelope.id,
+        {"expires_at": envelope.created_at + timedelta(microseconds=1)},
+        expected_revision=envelope.revision,
+    )
+    rival = HandoffService(NebulaStore(store.database))
+    real_update = store.update_with_operation_event
+
+    def update_after_rival_expires(*args, **kwargs):
+        store.update_with_operation_event = real_update
+        assert rival.get(envelope.id).status == HandoffStatus.EXPIRED
+        return real_update(*args, **kwargs)
+
+    store.update_with_operation_event = update_after_rival_expires
+    resolved = service.resolve(envelope.id, current_device_id="linux")
+    assert resolved.envelope.status == HandoffStatus.EXPIRED
+    assert resolved.envelope.revision == 3
+    with store.database.session() as session:
+        events = list(
+            session.scalars(
+                select(OperationEventRow).where(
+                    OperationEventRow.operation_id == envelope.id
+                )
+            )
+        )
+    assert [event.event_type for event in events] == [
+        "handoff.created",
+        "handoff.expired",
+    ]

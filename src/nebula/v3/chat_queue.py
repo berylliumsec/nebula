@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-from .chat import ChatCompletionRequest, unarchive_chat_session
+from .chat import ChatCompletionRequest, ChatHistoryConflict, unarchive_chat_session
 from .harnesses import HarnessSkillInvocation
 from .database import EntityRow
 from .domain import (
@@ -92,6 +92,10 @@ class ChatQueueService:
     def __init__(self, store, chat, harness):
         self.store, self.chat, self.harness = store, chat, harness
         self.task = None
+        # Item ids whose dispatch this process is running right now. A "claiming"
+        # row outside this set has no owner: its failure review lost a revision
+        # race, or Core restarted mid-dispatch.
+        self._inflight = set()
 
     def get(self, session_id):
         session = self.store.get(ChatSession, session_id)
@@ -249,11 +253,18 @@ class ChatQueueService:
         elif body.action in {"remove", "clear"}:
             for item in items:
                 if body.action == "clear" or item["id"] == body.item_id:
-                    if item["status"] in EDITABLE:
+                    if item["status"] in EDITABLE or (
+                        item["status"] == "claiming"
+                        and item["id"] not in self._inflight
+                    ):
+                        # An unowned claim is safe to drop: link_queue_turn refuses
+                        # a claim that is no longer "claiming".
                         item["status"] = "cancelled"
                     elif body.action == "remove":
                         raise ConflictError(
-                            "This follow-up has already been dispatched"
+                            "This follow-up is being dispatched"
+                            if item["status"] == "claiming"
+                            else "This follow-up has already been dispatched"
                         )
         elif body.action == "reorder":
             editable = [item for item in items if item["status"] in EDITABLE]
@@ -336,28 +347,82 @@ class ChatQueueService:
             )
         return request
 
+    def _requeue_claim(self, queue_id, item_id):
+        """Return an unlinked claim to the queue so the next poll retries it."""
+        for _ in range(3):
+            current = self.store.get(ChatQueue, queue_id)
+            items = [dict(row) for row in current.items]
+            row = next((row for row in items if row["id"] == item_id), None)
+            if row is None or row["status"] != "claiming":
+                return
+            row["status"] = "queued"
+            try:
+                self.store.update(
+                    ChatQueue,
+                    current.id,
+                    {"items": items},
+                    expected_revision=current.revision,
+                )
+                return
+            except (
+                ConflictError
+            ):  # diagnostic-expected: reread the queue and retry the requeue
+                continue
+
+    def _session_busy(self, session_id, seen):
+        """True when a response the drainer did not start now occupies the session."""
+        current = self.latest_turn(session_id)
+        if current is None:
+            return False
+        if seen is None or current.id != seen.id:
+            return True
+        return current.status.value not in TERMINAL
+
+    def _review_failed_dispatch(self, queue_id, item_id, exc):
+        record_caught_exception(
+            "chat",
+            "chat.queue.dispatch_failed",
+            "A queued follow-up could not be dispatched",
+            exc,
+            stage="queue",
+        )
+        current = self.store.get(ChatQueue, queue_id)
+        self.review(
+            current,
+            item_id,
+            "Follow-up could not be dispatched. Inspect the conversation before retrying",
+        )
+
     async def step(self, queue, recovering=False):
-        # Older releases classified deliberate stops as failures needing review.
-        # Reconcile from the durable turn without re-dispatching its request.
-        stopped = {
-            item["id"]
-            for item in queue.items
-            if item["status"] == "needs_review"
-            and item.get("turn_id")
-            and self.store.get(ChatTurn, item["turn_id"]).status.value == "cancelled"
-        }
-        if stopped:
+        # Older releases classified deliberate stops as failures needing review,
+        # and a review written while a turn was only parked (waiting_callback
+        # across a restart) is stale once that turn finishes. Reconcile from the
+        # durable turn without re-dispatching its request.
+        settled = {}
+        for item in queue.items:
+            if item["status"] == "needs_review" and item.get("turn_id"):
+                status = self.store.get(ChatTurn, item["turn_id"]).status.value
+                if status in {"cancelled", "complete"}:
+                    settled[item["id"]] = status
+        if settled:
+            items = []
+            for item in queue.items:
+                if item["id"] not in settled:
+                    items.append(item)
+                elif settled[item["id"]] == "cancelled":
+                    items.append(
+                        {**item, "status": "cancelled", "detail": "Stopped by operator"}
+                    )
+                else:
+                    completed = {**item, "status": "complete"}
+                    completed.pop("detail", None)
+                    items.append(completed)
             self.store.update(
                 ChatQueue,
                 queue.id,
                 {
-                    "items": [
-                        {**item, "status": "cancelled", "detail": "Stopped by operator"}
-                        if item["id"] in stopped
-                        else item
-                        for item in queue.items
-                    ],
-                    "paused": True,
+                    "items": items,
+                    "paused": queue.paused or "cancelled" in settled.values(),
                 },
                 expected_revision=queue.revision,
             )
@@ -368,11 +433,13 @@ class ChatQueueService:
         )
         if sending:
             if sending["status"] == "claiming":
-                if recovering:
+                if sending["id"] not in self._inflight:
                     self.review(
                         queue,
                         sending["id"],
-                        "Core restarted during dispatch. Review before retrying as a new message",
+                        "Core restarted during dispatch. Review before retrying as a new message"
+                        if recovering
+                        else "Dispatch was interrupted before a response was linked. Review before retrying as a new message",
                     )
                 return
             turn = self.store.get(ChatTurn, sending["turn_id"])
@@ -397,8 +464,9 @@ class ChatQueueService:
                         },
                         expected_revision=queue.revision,
                     )
-            elif turn.status.value == "waiting_approval":
-                # Pending input blocks dispatch; resolving it allows this same turn to finish.
+            elif turn.status.value in {"waiting_approval", "waiting_callback"}:
+                # Pending input or a background result blocks dispatch; resolving
+                # it allows this same turn to finish.
                 return
             elif recovering:
                 self.review(
@@ -426,6 +494,7 @@ class ChatQueueService:
                 "Previous response stopped or failed. Review the next message before resuming",
             )
             return
+        self._inflight.add(item["id"])
         try:
             request = self.authorization_valid(item)
             items = [dict(row) for row in queue.items]
@@ -500,20 +569,19 @@ class ChatQueueService:
                     item["id"],
                     "Runtime authorization changed. Edit the follow-up to review its configuration",
                 )
-        except Exception as exc:
-            record_caught_exception(
-                "chat",
-                "chat.queue.dispatch_failed",
-                "A queued follow-up could not be dispatched",
-                exc,
-                stage="queue",
-            )
-            current = self.store.get(ChatQueue, queue.id)
-            self.review(
-                current,
-                item["id"],
-                "Follow-up could not be dispatched. Inspect the conversation before retrying",
-            )
+        except ChatHistoryConflict as exc:  # diagnostic-expected: a direct Send that won the race is busy, not a failure
+            # The conversation grew a response this drainer did not start: an
+            # operator's direct Send won the race. That is not a failure of the
+            # follow-up, so leave it queued and let a later poll dispatch it once
+            # the response settles instead of parking the queue for review.
+            if self._session_busy(queue.session_id, latest):
+                self._requeue_claim(queue.id, item["id"])
+            else:
+                self._review_failed_dispatch(queue.id, item["id"], exc)
+        except Exception as exc:  # diagnostic-expected: recorded and parked for review by _review_failed_dispatch
+            self._review_failed_dispatch(queue.id, item["id"], exc)
+        finally:
+            self._inflight.discard(item["id"])
 
     def queues(self):
         with self.store.database.session() as database:
