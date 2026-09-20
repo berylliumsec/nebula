@@ -233,3 +233,138 @@ def test_debug_start_api_requires_auth_and_returns_security_boundary(tmp_path) -
     assert response.status_code == 200
     assert response.json()["workspace_access"] == "read-only"
     assert response.json()["network"] == "none"
+
+
+def _resolver():
+    async def resolve(_engagement_id: str):
+        return SimpleNamespace(
+            runner=object(),
+            workspace=Path("/tmp/workspace"),
+            image=SimpleNamespace(
+                installed_packages=("python3", "python3-debugpy"),
+                resolved_reference="sha256:" + "1" * 64,
+                digest="sha256:" + "2" * 64,
+            ),
+        )
+
+    return resolve
+
+
+def test_debug_session_unattached_past_deadline_is_closed_and_frees_project(
+    monkeypatch,
+) -> None:
+    async def exercise() -> None:
+        source = b"print('debug me')\n"
+        backends: list[_Backend] = []
+
+        async def start_backend(launch):
+            backend = _Backend()
+            backends.append(backend)
+            return backend
+
+        monkeypatch.setattr(
+            "nebula.v3.debugger.ContainerRuntimeSession.start", start_backend
+        )
+        monkeypatch.setattr("nebula.v3.debugger.DEBUG_ATTACH_TIMEOUT_SECONDS", 0.02)
+        service = DebugService(
+            workspace_service=_Workspace(source), runtime_resolver=_resolver()
+        )
+
+        abandoned = await service.start("engagement-1", _request(source))
+        await asyncio.sleep(0.15)
+        assert backends[0].closed
+        assert backends[0].process.terminated
+        with pytest.raises(DebuggerError, match="not found"):
+            await service.attach(abandoned.session_id, abandoned.websocket_ticket)
+
+        started = await service.start("engagement-1", _request(source))
+        await service.attach(started.session_id, started.websocket_ticket)
+        await asyncio.sleep(0.15)
+        assert not backends[1].closed
+        await service.close(started.session_id)
+        assert backends[1].closed
+
+    asyncio.run(exercise())
+
+
+def test_debug_session_stop_requires_the_ticket(monkeypatch) -> None:
+    async def exercise() -> None:
+        source = b"print('debug me')\n"
+        backend = _Backend()
+
+        async def start_backend(launch):
+            return backend
+
+        monkeypatch.setattr(
+            "nebula.v3.debugger.ContainerRuntimeSession.start", start_backend
+        )
+        service = DebugService(
+            workspace_service=_Workspace(source), runtime_resolver=_resolver()
+        )
+        started = await service.start("engagement-1", _request(source))
+
+        with pytest.raises(DebuggerError, match="ticket is invalid") as denied:
+            await service.stop(started.session_id, "wrong-ticket")
+        assert denied.value.status_code == 401
+        assert not backend.closed
+
+        await service.stop(started.session_id, started.websocket_ticket)
+        assert backend.closed
+        assert backend.process.terminated
+        with pytest.raises(DebuggerError, match="not found"):
+            await service.stop(started.session_id, started.websocket_ticket)
+
+        again = await service.start("engagement-1", _request(source))
+        await service.close(again.session_id)
+
+    asyncio.run(exercise())
+
+
+def test_debug_stop_api_requires_auth_and_forwards_the_ticket(tmp_path) -> None:
+    stops: list[tuple[str, str]] = []
+
+    class FakeDebugger:
+        async def startup(self) -> None:
+            return None
+
+        async def shutdown(self) -> None:
+            return None
+
+        async def stop(self, session_id: str, ticket: str) -> None:
+            stops.append((session_id, ticket))
+            if session_id != "debug-1":
+                raise DebuggerError(
+                    "session_not_found", "Debug session was not found.", status_code=404
+                )
+
+    app = create_app(
+        NebulaStore(tmp_path / "nebula.db"),
+        auth_token="test-token",
+        debug_service=FakeDebugger(),  # type: ignore[arg-type]
+    )
+    with TestClient(app) as client:
+        assert (
+            client.delete(
+                "/api/v1/debug-sessions/debug-1",
+                headers={"X-Nebula-Debug-Ticket": "ticket-1"},
+            ).status_code
+            == 401
+        )
+        stopped = client.delete(
+            "/api/v1/debug-sessions/debug-1",
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Nebula-Debug-Ticket": "ticket-1",
+            },
+        )
+        assert stopped.status_code == 204, stopped.text
+        missing = client.delete(
+            "/api/v1/debug-sessions/debug-2",
+            headers={
+                "Authorization": "Bearer test-token",
+                "X-Nebula-Debug-Ticket": "ticket-2",
+            },
+        )
+        assert missing.status_code == 404
+        assert missing.json()["code"] == "session_not_found"
+    assert stops == [("debug-1", "ticket-1"), ("debug-2", "ticket-2")]

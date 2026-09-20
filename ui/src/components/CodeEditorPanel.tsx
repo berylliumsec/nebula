@@ -62,13 +62,18 @@ function validWorkspacePath(path: string): boolean {
     && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 }
 
-async function decodeWorkspaceFile(blob: Blob): Promise<{ content: string; sha256: string }> {
+async function decodeWorkspaceFile(blob: Blob): Promise<{ byteOrderMark: boolean; content: string; sha256: string }> {
   if (blob.size > MAX_EDITOR_BYTES) throw new Error("This file is larger than the editor's 1 MiB text limit.");
   const bytes = await blob.arrayBuffer();
   const payload = new Uint8Array(bytes);
-  const content = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+  // Keep the byte order mark out of the editable text but remember it, so a
+  // save re-emits exactly the prefix the file had instead of silently dropping it.
+  const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(payload);
+  const byteOrderMark = decoded.startsWith("\uFEFF");
+  const content = byteOrderMark ? decoded.slice(1) : decoded;
   if (content.includes("\0")) throw new Error("This file appears to be binary and cannot be edited as text.");
   return {
+    byteOrderMark,
     content,
     sha256: sha256Hex(payload),
   };
@@ -249,6 +254,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
             conflicted += 1;
           } else {
             updateBufferRef.current(candidate.id, {
+              byteOrderMark: decoded.byteOrderMark,
               content: decoded.content,
               expectedSha256: decoded.sha256,
               savedContent: decoded.content,
@@ -329,6 +335,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       void api.downloadWorkspaceFile(engagementId, candidate.filePath)
         .then(decodeWorkspaceFile)
         .then((decoded) => updateBufferById(candidate.id, {
+          byteOrderMark: decoded.byteOrderMark,
           content: decoded.content,
           expectedSha256: decoded.sha256,
           restoreFromCore: false,
@@ -364,6 +371,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       const decoded = await decodeWorkspaceFile(await api.downloadWorkspaceFile(engagementId, entry.path));
       setBuffer({
         id: open?.id ?? newEditorBufferId("file"),
+        byteOrderMark: decoded.byteOrderMark,
         content: decoded.content,
         expectedSha256: decoded.sha256,
         existing: true,
@@ -413,7 +421,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       setValidationError("Enter a workspace-relative file path without empty, . or .. segments.");
       return;
     }
-    const payload = new Blob([target.content], { type: "text/plain;charset=utf-8" });
+    const payload = new Blob([target.byteOrderMark ? `\uFEFF${target.content}` : target.content], { type: "text/plain;charset=utf-8" });
     if (payload.size > MAX_EDITOR_BYTES) {
       setValidationError("Editor files may not exceed 1 MiB when encoded as UTF-8.");
       return;
@@ -438,6 +446,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
       );
       const saved: WorkbenchEditorBuffer = {
         id: target.id,
+        byteOrderMark: target.byteOrderMark,
         content: target.content,
         expectedSha256: result.sha256,
         existing: true,

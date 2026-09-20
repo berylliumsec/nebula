@@ -5,6 +5,7 @@ from __future__ import annotations
 from .diagnostics import record_caught_exception
 
 import asyncio
+import codecs
 import errno
 import hashlib
 import hmac
@@ -39,6 +40,7 @@ from .executions import ExecutionServiceError
 
 from .storage import NebulaStore
 from .runtime_platform import RuntimePlatform
+from .tool_results import WORKSPACE_SEARCH_EXCLUDES
 
 MAX_PREVIEW_BYTES = 256 * 1024
 MAX_SEARCH_FILE_BYTES = 1024 * 1024
@@ -86,6 +88,7 @@ class WorkspaceSearchResult(NebulaModel):
     mode: Literal["files", "text"]
     matches: list[WorkspaceSearchMatch]
     scanned_files: int = Field(ge=0)
+    skipped_directories: int = Field(default=0, ge=0)
     truncated: bool = False
 
 
@@ -969,8 +972,12 @@ class WorkspaceService:
                 "binary files cannot be previewed",
                 status_code=415,
             )
+        # A bounded preview may end inside a multi-byte character. Decode only
+        # complete sequences and report the bytes actually decoded; a partial
+        # trailing sequence is invalid only when the file really ends there.
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
         try:
-            text = visible.decode("utf-8", errors="strict")
+            text = decoder.decode(visible, final=len(payload) <= MAX_PREVIEW_BYTES)
         except UnicodeDecodeError as exc:
             record_caught_exception(
                 "workspace",
@@ -984,6 +991,7 @@ class WorkspaceService:
                 "file is not valid UTF-8 plain text",
                 status_code=415,
             ) from exc
+        visible = visible[: len(visible) - len(decoder.getstate()[0])]
         return WorkspacePreview(
             engagement_id=engagement_id,
             path=PurePosixPath(*relative).as_posix(),
@@ -1013,16 +1021,32 @@ class WorkspaceService:
                 status_code=422,
             )
         relative = _relative_parts(path)
-        root_descriptor = self._open_directory(engagement_id, relative)
+        root = self._workspace_root(engagement_id)
+        descriptor: int | None = self._open_directory(engagement_id, relative)
         needle = normalized_query.casefold()
         matches: list[WorkspaceSearchMatch] = []
         scanned_files = 0
+        skipped_directories = 0
         truncated = False
-        pending: list[tuple[tuple[str, ...], int]] = [(relative, root_descriptor)]
+        # Directories wait as relative paths and are opened one at a time when
+        # popped, so the walk never holds one descriptor per pending folder.
+        directory_parts = relative
+        pending: list[tuple[str, ...]] = []
 
         try:
-            while pending and not truncated:
-                directory_parts, descriptor = pending.pop()
+            while not truncated:
+                if descriptor is None:
+                    if not pending:
+                        break
+                    directory_parts = pending.pop()
+                    try:
+                        descriptor = _open_directory_chain(root, directory_parts)
+                    except OSError as exc:
+                        if exc.errno in {errno.EMFILE, errno.ENFILE}:
+                            truncated = True
+                            break
+                        # diagnostic-expected: skip raced or unreadable folders.
+                        continue
                 try:
                     with os.scandir(descriptor) as entries:
                         rows = sorted(entries, key=lambda entry: entry.name.casefold())
@@ -1040,18 +1064,10 @@ class WorkspaceService:
                         if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(
                             metadata.st_mode
                         ):
-                            try:
-                                child = os.open(
-                                    entry.name,
-                                    os.O_RDONLY
-                                    | os.O_DIRECTORY
-                                    | getattr(os, "O_NOFOLLOW", 0),
-                                    dir_fd=descriptor,
-                                )
-                            except OSError:
-                                # diagnostic-expected: skip raced or unreadable folders.
+                            if entry.name in WORKSPACE_SEARCH_EXCLUDES:
+                                skipped_directories += 1
                                 continue
-                            pending.append((entry_parts, child))
+                            pending.append(entry_parts)
                             continue
                         if not stat.S_ISREG(metadata.st_mode):
                             continue
@@ -1112,10 +1128,16 @@ class WorkspaceService:
                         if len(matches) >= limit:
                             truncated = True
                             break
+                except OSError as exc:
+                    # diagnostic-expected: a folder that vanished mid-walk is skipped;
+                    # an exhausted descriptor table ends the search as truncated.
+                    if exc.errno in {errno.EMFILE, errno.ENFILE}:
+                        truncated = True
                 finally:
                     os.close(descriptor)
+                    descriptor = None
         finally:
-            for _parts, descriptor in pending:
+            if descriptor is not None:
                 os.close(descriptor)
 
         return WorkspaceSearchResult(
@@ -1124,6 +1146,7 @@ class WorkspaceService:
             mode=mode,
             matches=matches[:limit],
             scanned_files=min(scanned_files, MAX_SEARCH_SCANNED_FILES),
+            skipped_directories=skipped_directories,
             truncated=truncated,
         )
 
@@ -1382,6 +1405,8 @@ class WorkspaceService:
         size = 0
         digest = hashlib.sha256()
         replaced = False
+        created = False
+        consumed = False
         try:
             descriptor = os.open(
                 temporary_name,
@@ -1389,6 +1414,7 @@ class WorkspaceService:
                 0o600,
                 dir_fd=parent,
             )
+            created = True
             async for chunk in chunks:
                 if not chunk:
                     continue
@@ -1406,14 +1432,8 @@ class WorkspaceService:
                 destination = os.stat(
                     relative[-1], dir_fd=parent, follow_symlinks=False
                 )
-            except FileNotFoundError as caught_error:
-                record_caught_exception(
-                    "workspace",
-                    "workspace.workspace.caught_failure_003",
-                    "A handled workspace operation raised an exception.",
-                    caught_error,
-                    stage="workspace",
-                )
+            except FileNotFoundError:
+                # diagnostic-expected: an absent destination is the normal create path.
                 destination = None
             if destination is not None:
                 if not stat.S_ISREG(destination.st_mode):
@@ -1461,6 +1481,7 @@ class WorkspaceService:
                     src_dir_fd=parent,
                     dst_dir_fd=parent,
                 )
+                consumed = True
             else:
                 os.link(
                     temporary_name,
@@ -1470,6 +1491,7 @@ class WorkspaceService:
                     follow_symlinks=False,
                 )
                 os.unlink(temporary_name, dir_fd=parent)
+                consumed = True
             os.fsync(parent)
         except FileExistsError as exc:
             record_caught_exception(
@@ -1487,17 +1509,12 @@ class WorkspaceService:
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-            try:
-                os.unlink(temporary_name, dir_fd=parent)
-            except FileNotFoundError as caught_error:
-                record_caught_exception(
-                    "workspace",
-                    "workspace.workspace.caught_failure_005",
-                    "A handled workspace operation raised an exception.",
-                    caught_error,
-                    stage="workspace",
-                )
-                pass
+            if created and not consumed:
+                try:
+                    os.unlink(temporary_name, dir_fd=parent)
+                except FileNotFoundError:
+                    # diagnostic-expected: the private temporary file is already gone.
+                    pass
             os.close(parent)
 
         normalized = PurePosixPath(*relative).as_posix()
@@ -1947,6 +1964,28 @@ def _parse_porcelain_status(payload: bytes) -> tuple[list[SourceControlFile], bo
             truncated = index < len(records) - 1
             break
     return files, truncated
+
+
+def _open_directory_chain(root: Path, parts: tuple[str, ...]) -> int:
+    """Open ``root/parts`` one ``O_NOFOLLOW`` component at a time.
+
+    Only the final descriptor stays open; every intermediate one is closed
+    before the next component is opened. ``OSError`` propagates unchanged so
+    the caller can tell a raced folder from an exhausted descriptor table.
+    """
+
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, flags)
+    try:
+        for part in parts:
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    except OSError:
+        # diagnostic-expected: the partially opened chain is released before the failure propagates.
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def _relative_parts(path: str, *, require_value: bool = False) -> tuple[str, ...]:

@@ -2,6 +2,7 @@ import { createStore, del, get, set } from "idb-keyval";
 
 export interface PersistedEditorBuffer {
   id: string;
+  byteOrderMark?: boolean;
   content: string;
   expectedSha256?: string;
   existing: boolean;
@@ -54,6 +55,7 @@ function normalizeBuffer(value: unknown): PersistedEditorBuffer | undefined {
   ) return undefined;
   return {
     id: candidate.id,
+    ...(candidate.byteOrderMark === true ? { byteOrderMark: true } : {}),
     content: candidate.content,
     expectedSha256: candidate.expectedSha256,
     existing: candidate.existing,

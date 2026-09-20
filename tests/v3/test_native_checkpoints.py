@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -170,3 +173,112 @@ def test_checkpoint_http_capture_uses_json_body(tmp_path):
     )
     assert captured.status_code == 200, captured.text
     assert captured.json()["label"] == "notes"
+
+
+def _checkpoint_fixture(tmp_path, workspace):
+    store = NebulaStore(tmp_path / "checkpoints.db")
+    store.create(
+        Engagement(id="project", name="Project", workspace_path=str(workspace))
+    )
+    store.create(
+        ProviderProfile(
+            id="provider", name="Provider", provider_type="vllm", is_local=True
+        )
+    )
+    store.create(
+        ChatSession(
+            id="session",
+            engagement_id="project",
+            title="Checkpoint chat",
+            provider_profile_id="provider",
+            model="model",
+        )
+    )
+    return store
+
+
+def test_checkpoint_restore_never_writes_through_a_dangling_symlink(tmp_path):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = workspace / "notes.md"
+    target.write_text("original\n", encoding="utf-8")
+    store = _checkpoint_fixture(tmp_path, workspace)
+    service = NativeCheckpointService(store, lambda _: workspace)
+    checkpoint = service.capture("session", label="Before", paths=["notes.md"])
+
+    target.unlink()
+    os.symlink(outside / "victim.txt", target)
+
+    assert [item.status for item in service.preview(checkpoint.id)] == ["conflict"]
+    with pytest.raises(ConflictError, match="later edits conflict"):
+        service.restore(checkpoint.id)
+    assert not (outside / "victim.txt").exists()
+    assert target.is_symlink()
+
+
+def test_checkpoint_restore_never_writes_through_a_symlinked_parent(tmp_path):
+    workspace = tmp_path / "project"
+    (workspace / "docs").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "docs" / "notes.md").write_text("original\n", encoding="utf-8")
+    store = _checkpoint_fixture(tmp_path, workspace)
+    service = NativeCheckpointService(store, lambda _: workspace)
+    checkpoint = service.capture("session", label="Before", paths=["docs/notes.md"])
+
+    shutil.rmtree(workspace / "docs")
+    os.symlink(outside, workspace / "docs")
+
+    assert [item.status for item in service.preview(checkpoint.id)] == ["conflict"]
+    with pytest.raises(ConflictError, match="later edits conflict"):
+        service.restore(checkpoint.id)
+    assert list(outside.iterdir()) == []
+
+
+def test_checkpoint_restore_recreates_missing_files_and_directories(tmp_path):
+    workspace = tmp_path / "project"
+    (workspace / "docs").mkdir(parents=True)
+    (workspace / "docs" / "notes.md").write_text("original\n", encoding="utf-8")
+    store = _checkpoint_fixture(tmp_path, workspace)
+    service = NativeCheckpointService(store, lambda _: workspace)
+    checkpoint = service.capture("session", label="Before", paths=["docs/notes.md"])
+
+    shutil.rmtree(workspace / "docs")
+    assert [item.status for item in service.preview(checkpoint.id)] == ["missing"]
+
+    restored = service.restore(checkpoint.id)
+    assert [item.status for item in restored] == ["unchanged"]
+    assert (workspace / "docs" / "notes.md").read_bytes() == b"original\n"
+    assert not (workspace / "docs" / "notes.md").is_symlink()
+    assert not list((workspace / "docs").glob(".*"))
+
+
+def test_checkpoint_http_preview_maps_checkpoint_errors_to_409(tmp_path, monkeypatch):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("original\n", encoding="utf-8")
+    store = _checkpoint_fixture(tmp_path, workspace)
+    client = TestClient(
+        create_app(store, auth_token="test-token"), raise_server_exceptions=False
+    )
+    headers = {"Authorization": "Bearer test-token"}
+    captured = client.post(
+        "/api/v1/chat/sessions/session/checkpoints",
+        headers=headers,
+        json={"label": "notes", "paths": ["notes.md"]},
+    )
+    assert captured.status_code == 200, captured.text
+
+    def failing_preview(self, checkpoint_id):
+        raise NativeCheckpointError(
+            f"checkpoint path escapes the workspace: {checkpoint_id}"
+        )
+
+    monkeypatch.setattr(NativeCheckpointService, "preview", failing_preview)
+    preview = client.get(
+        f"/api/v1/chat/checkpoints/{captured.json()['id']}/preview", headers=headers
+    )
+    assert preview.status_code == 409, preview.text
+    assert "escapes the workspace" in preview.json()["detail"]

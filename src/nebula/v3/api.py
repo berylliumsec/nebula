@@ -5805,8 +5805,12 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=1000),
     ) -> WorkspaceListing:
-        return require_workspace_service().list(
-            engagement_id, path, offset=offset, limit=limit
+        return await asyncio.to_thread(
+            require_workspace_service().list,
+            engagement_id,
+            path,
+            offset=offset,
+            limit=limit,
         )
 
     @app.get(
@@ -5822,8 +5826,13 @@ def create_app(
         path: str = Query(default="", max_length=4096),
         limit: int = Query(default=100, ge=1, le=200),
     ) -> WorkspaceSearchResult:
-        return require_workspace_service().search(
-            engagement_id, query, mode=mode, path=path, limit=limit
+        return await asyncio.to_thread(
+            require_workspace_service().search,
+            engagement_id,
+            query,
+            mode=mode,
+            path=path,
+            limit=limit,
         )
 
     @app.get(
@@ -5861,6 +5870,23 @@ def create_app(
         engagement_id: str, request: DebugStartRequest
     ) -> DebugStartResponse:
         return await require_debug_service().start(engagement_id, request)
+
+    @app.delete(
+        f"{API_PREFIX}/debug-sessions/{{session_id}}",
+        status_code=204,
+        tags=["workspace"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def stop_debug_session(
+        session_id: str,
+        ticket: str = Header(
+            alias="X-Nebula-Debug-Ticket", min_length=1, max_length=256
+        ),
+    ) -> Response:
+        # Lets the client release a session whose websocket never attached
+        # instead of holding the project until the attach deadline.
+        await require_debug_service().stop(session_id, ticket)
+        return Response(status_code=204)
 
     @app.websocket(f"{API_PREFIX}/debug-sessions/{{session_id}}/ws")
     async def debug_session_socket(websocket: WebSocket, session_id: str) -> None:
@@ -6141,7 +6167,9 @@ def create_app(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
     ) -> WorkspacePreview:
-        return require_workspace_service().preview(engagement_id, path)
+        return await asyncio.to_thread(
+            require_workspace_service().preview, engagement_id, path
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/download",
@@ -6268,7 +6296,9 @@ def create_app(
     async def rename_workspace_entry(
         engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
-        return require_workspace_service().rename(engagement_id, request)
+        return await asyncio.to_thread(
+            require_workspace_service().rename, engagement_id, request
+        )
 
     @app.delete(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/entry",
@@ -6280,7 +6310,9 @@ def create_app(
         engagement_id: str,
         path: str = Query(min_length=1, max_length=4096),
     ) -> WorkspaceMutationResult:
-        return require_workspace_service().delete(engagement_id, path)
+        return await asyncio.to_thread(
+            require_workspace_service().delete, engagement_id, path
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/promote",
@@ -6292,7 +6324,9 @@ def create_app(
     async def promote_workspace_file(
         engagement_id: str, request: WorkspacePromotionRequest
     ) -> Evidence:
-        return require_workspace_service().promote(engagement_id, request)
+        return await asyncio.to_thread(
+            require_workspace_service().promote, engagement_id, request
+        )
 
     @app.post(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset",
@@ -6306,11 +6340,11 @@ def create_app(
         workspace = require_workspace_service()
         if container_terminals is not None:
             async with container_terminals.guard_workspace_operation(engagement_id):
-                return workspace.reset(engagement_id, request)
+                return await asyncio.to_thread(workspace.reset, engagement_id, request)
         if executions is not None:
             async with executions.engagement_lock(engagement_id):
-                return workspace.reset(engagement_id, request)
-        return workspace.reset(engagement_id, request)
+                return await asyncio.to_thread(workspace.reset, engagement_id, request)
+        return await asyncio.to_thread(workspace.reset, engagement_id, request)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/workspace/reset-status",
@@ -9571,7 +9605,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def preview_chat_checkpoint(checkpoint_id: str):
-        return checkpoint_service.preview(checkpoint_id)
+        try:
+            return checkpoint_service.preview(checkpoint_id)
+        except NativeCheckpointError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post(
         f"{API_PREFIX}/chat/checkpoints/{{checkpoint_id}}/restore",
