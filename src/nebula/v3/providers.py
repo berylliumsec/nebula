@@ -1393,7 +1393,11 @@ class OpenAICompatibleProvider(ModelProvider):
             return await self._openrouter_health()
         try:
             async with self._client(self._headers()) as client:
-                response = await client.get(self._path("/v1/models"))
+                response = await _send_with_retry(
+                    self.config,
+                    lambda: client.get(self._path("/v1/models")),
+                    operation="model_discovery",
+                )
             if response.is_error:
                 raise _safe_error(response)
             models = [item["id"] for item in response.json().get("data", [])]
@@ -1417,7 +1421,11 @@ class OpenAICompatibleProvider(ModelProvider):
         try:
             async with asyncio.timeout(30):
                 async with self._client(self._headers()) as client:
-                    key_response = await client.get(self._path("/v1/key"), timeout=10.0)
+                    key_response = await _send_with_retry(
+                        self.config,
+                        lambda: client.get(self._path("/v1/key"), timeout=10.0),
+                        operation="openrouter_credential_verification",
+                    )
                     if key_response.is_error:
                         return ProviderHealth(
                             provider_id=self.config.id,
@@ -1436,8 +1444,10 @@ class OpenAICompatibleProvider(ModelProvider):
                     )
                     if not isinstance(key_data, dict):
                         raise ValueError("Invalid OpenRouter key response")
-                    response = await client.get(
-                        self._path("/v1/models/user"), timeout=10.0
+                    response = await _send_with_retry(
+                        self.config,
+                        lambda: client.get(self._path("/v1/models/user"), timeout=10.0),
+                        operation="openrouter_model_discovery",
                     )
                     directory: httpx.Response | None = None
                     try:
@@ -1526,7 +1536,10 @@ class OpenAICompatibleProvider(ModelProvider):
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=False,
-                detail="OpenRouter model discovery failed. Check the connection and refresh.",
+                detail=(
+                    "OpenRouter model discovery failed after bounded retries. "
+                    "Check the connection and refresh."
+                ),
             )
 
     async def _openrouter_public_catalog(

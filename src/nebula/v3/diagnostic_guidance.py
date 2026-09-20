@@ -203,6 +203,8 @@ def reason_code_for(
         token in code for token in ("transport", "disconnect", "closed", "endofstream")
     ):
         return "transport_closed"
+    if "connecterror" in code:
+        return "dependency_unavailable"
     if any(token in code for token in ("protocol", "malformed", "decode", "parse")):
         return "protocol_invalid"
     if (
