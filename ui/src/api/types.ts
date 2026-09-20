@@ -1887,6 +1887,7 @@ export type ChatStreamEvent =
       turnId: Identifier;
       toolCallId: Identifier;
       capability: string;
+      displayName?: string;
       arguments: Record<string, unknown>;
       step: number;
     }
@@ -1895,6 +1896,7 @@ export type ChatStreamEvent =
       turnId: Identifier;
       toolCallId: Identifier;
       capability: string;
+      displayName?: string;
       status: string;
       summary: string;
       evidenceIds: Identifier[];
@@ -2370,6 +2372,8 @@ export interface ChatSessionRewind {
 export interface ChatToolResult {
   toolCallId: Identifier;
   capability: string;
+  /** Readable identity Core records for a brokered MCP call. */
+  displayName?: string;
   status: string;
   summary?: string;
   evidenceIds: Identifier[];

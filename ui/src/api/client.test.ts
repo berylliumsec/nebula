@@ -2232,6 +2232,32 @@ describe("ApiClient", () => {
     );
   });
 
+  it("keeps the MCP server a replayed harness tool call reached", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      events: [{
+        schema_version: "nebula.harness-activity/v2",
+        id: "event-8",
+        sequence: 8,
+        type: "tool_started",
+        vendor: "claude_agent_sdk",
+        harness_turn_id: "turn-1",
+        item_id: "tool-1",
+        item_kind: "tool",
+        item_status: "running",
+        title: "create_issue",
+        server_id: "tracker",
+        artifact_ids: [],
+        payload: {},
+      }],
+      next_sequence: 8,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const page = await client.getHarnessTurnEvents("turn-1");
+
+    expect(page.events[0]).toMatchObject({ title: "create_issue", serverId: "tracker" });
+  });
+
   it("maps bounded workspace search results and encodes the project path", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       engagement_id: "project/one",

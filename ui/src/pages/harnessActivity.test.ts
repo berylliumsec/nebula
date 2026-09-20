@@ -184,6 +184,33 @@ describe("harness activity presentation", () => {
     expect(summarizeHarnessActivity(items)).toBe("1 action · commentary · 3.2s");
   });
 
+  it("keeps the MCP server a tool call reached across its later updates", () => {
+    const started = reduceHarnessActivity([], {
+      ...activity("tool_started"),
+      sequence: 1,
+      vendor: "claude_agent_sdk",
+      harnessTurnId: "turn-mcp",
+      itemId: "tool-1",
+      itemKind: "tool",
+      itemStatus: "running",
+      title: "create_issue",
+      serverId: "tracker",
+    }, "assistant-mcp");
+    // The completion carries the outcome, not the identity, so the item keeps it.
+    const [item] = reduceHarnessActivity(started, {
+      ...activity("tool_completed"),
+      sequence: 2,
+      vendor: "claude_agent_sdk",
+      harnessTurnId: "turn-mcp",
+      itemId: "tool-1",
+      itemKind: "tool",
+      itemStatus: "completed",
+      title: "create_issue",
+    }, "assistant-mcp");
+
+    expect(item).toMatchObject({ title: "create_issue", serverId: "tracker", status: "completed" });
+  });
+
   it("keeps negotiated mode, plan, and goal state on normalized activity items", () => {
     const [item] = reduceHarnessActivity([], {
       ...activity("item_upsert"),

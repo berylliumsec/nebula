@@ -43,6 +43,8 @@ export interface HarnessActivityItem {
   status?: string;
   title: string;
   summary?: string;
+  /** MCP server a tool call reached, or the harness itself for its own tools. */
+  serverId?: string;
   sequence: number;
   streams: Record<string, string>;
   payload: Record<string, unknown>;
@@ -326,6 +328,7 @@ export function reduceHarnessActivity(
     status: event.itemStatus ?? existing?.status,
     title: event.title ?? existing?.title ?? event.type.replaceAll("_", " "),
     summary: event.summary ?? event.message ?? existing?.summary,
+    serverId: event.serverId ?? existing?.serverId,
     sequence: Math.max(sequence, existing?.sequence ?? 0),
     streams,
     payload,
@@ -340,7 +343,7 @@ export function reduceHarnessActivity(
   if (event.vendor === "grok_acp" && next.kind === "tool") {
     // Old saved ACP envelopes retain enough identity to repair anonymous labels.
     const presentation = grokToolPresentation({ ...event, payload, itemStatus: stale ? existing?.status as HarnessActivityEvent["itemStatus"] : event.itemStatus }, existing);
-    Object.assign(next, { title: presentation.title, summary: presentation.summary, status: presentation.status });
+    Object.assign(next, { title: presentation.title, summary: presentation.summary, status: presentation.status, serverId: String(presentation.server_id) });
     Object.assign(payload, { tool_name: presentation.tool_name, server_id: presentation.server_id });
     if (stale && existing) {
       next.status = existing.status;

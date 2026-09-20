@@ -128,6 +128,7 @@ from .mcp import (
     MAX_MCP_MESSAGE_BYTES,
     McpGatewaySession,
     McpProbeService,
+    mcp_tool_display_name,
     mcp_tool_runtime_name,
     resolve_mcp_profiles,
 )
@@ -9827,6 +9828,7 @@ class HarnessRuntimeService:
             output_schema={"type": "object", "additionalProperties": True},
             risk_class=risk,
             source_id=f"mcp:{profile.id}",
+            display_name=mcp_tool_display_name(profile.name, tool.name),
             parser_contract=None,
         )
         raw_result = ToolExecutionResult(

@@ -1,22 +1,29 @@
 {
-  "change_digest": "7d23582aa70ff9e6041e4ac3868cb10425d6ecf172538252e658ab14771723d0",
-  "reviewed_by": "Claude review of ranking connected servers alongside tools, and reusing a Jev ranking when the same request recurs",
-  "reason": "tool_suggestions.py stops asking Jev the two gate questions and instead ranks the selected MCP servers in the same call as the tools. build_questions now emits sources_<i> choice questions built by source_criteria() -- a server's label plus the instructions it returned at the MCP handshake, or its tool names when it returned none -- and interpret_answers returns a JevRanking carrying per-tool probabilities, per-source probabilities and the none_of_these probability of each tool's question. rank() multiplies a tool's probability by a bounded prior from its source (floor 0.5, so a source can halve a tool's score but never silence it, and a tool whose source was not ranked stays at full weight), keeps at most MAX_PICKS=3 tools, and preloads at most two of them -- only those that also beat their question's none option, which is what now stands in for the removed gate. chat.py passes mcp_sources(mcp_profiles) and copies the ranked source labels into CatalogReceipt.source_hints; catalog_instructions names them in the per-turn text. test_tool_suggestions covers the handshake-instruction and tool-name descriptions, a source rank deciding which of two equally rated tools is preloaded, the three-pick cap, the none option holding a schema back without hiding the hint, and the prepare path recording source_hints; test_tool_catalog re-runs because it shares that fixture and owns catalog_instructions. A second commit adds SuggestionCache: ChatService holds one and suggest_tools consults it before calling out, keyed by request_key() -- a sha256 over the model name, the state (operator request, earlier messages, selected skill instructions) and the questions (every tool name and summary, every source criterion). The catalog alone cannot be the key because a ranking answers one request, so the next message misses, as does a new MCP server or a re-probed description. Unavailable receipts are never stored, a hit is marked cached and reports input_tokens None, and the OrderedDict keeps the newest 64 entries in-process. Tests cover the hit, the four ways to miss, that a failed call is not cached, LRU eviction, and that ChatService.prepare populates the cache. Rebased onto #417 and #416; the selected suites were re-run on that base (75 passed).",
-  "exclusions": "No frontend unit tests and no UI change: ToolSuggestionChip reads status/preloaded/suggested, which keep their meaning, and the new sources key is ignored by the client type until a chip mockup is approved. No native tests: no Tauri or Rust change. No screenshot baselines: no rendered surface changes. Playwright is area:tool-suggestions only (its four catalogued entries, 7 tests). The impact rules would also pull area:assistant, area:chat-edit-in-place and area:provider-thinking for chat.py, but the change there is three lines inside the Jev-only block that neither the chat stream, message editing nor thinking rendering touches; area:core-api is excluded because no request or response schema changes -- the turn snapshot and the chip payload only gain optional keys. tests/v3/test_chat.py, test_chat_api.py and test_mcp_probe.py were run locally (76 passed) and are excluded as unaffected.",
+  "change_digest": "7e3289dd22368fe6a0dff86112fe5f5d6abb68213b6793f4668b61c4e7dec4ed",
+  "reviewed_by": "Claude review of naming MCP tool calls by their server and tool wherever an operator reads one",
+  "reason": "An MCP call reached the conversation under the name that routes it. Core's broker builds mcp_tool_runtime_name() as mcp.<profile digest>.<tool> so two servers can expose the same tool, and that digest was the label on the activity-ledger entry and on the approval card. ToolSpec gains an optional display_name beside the runtime name; the new mcp_tool_display_name() sets it to \"<server> \u00b7 <tool>\" for every plugin build_mcp_tool_plugins() freezes and for the spec harnesses.py builds when Core brokers an MCP call for a harness; StoreToolLedger copies it into the approval's exact_request. chat.py sends it with tool_started and every tool_completed (live and on the three resume paths), stores it on the durable tool_history step when the spec has one, and copies it into the assistant message's tool_results, so a reloaded conversation reads the same name without re-deriving it. test_chat_tool_loop covers both directions: an MCP spec's readable name on both lifecycle events, the durable step and the stored message, and a fixed capability carrying no second name; test_mcp_probe covers the plugin's two names and the helper's bounds. test_harnesses re-runs because the harness MCP spec changed, test_action_broker because approvals now carry the extra key. On the UI side the new ui/src/mcpTools.ts decodes what a tool name alone allows -- Claude's mcp__<server>__<tool>, kept in step with _parse_claude_mcp_name, and Core's digest form, whose server is not recoverable -- so conversations recorded before display_name existed stop showing the digest. activityLedgerModel prefers the name Core sent, then the harness's own server_id (which client.ts now maps onto the activity event, and the reducer keeps on the item), then meaningfulLabel. The approval card prefers exact_request.display_name. Playwright is area:activity-ledger, the new narrow area for the one test that renders a ledger; it was run locally on the desktop project and passed.",
+  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: entry text changes only where an MCP tool is called, which no baseline fixture does; the ledger's layout, rows and controls are untouched. The impact rules also match area:assistant, area:chat-edit-in-place and area:provider-thinking for chat.py, harnesses.py and SessionsPage.tsx: the chat changes are additive payload keys on the tool lifecycle events plus one card field, and neither message editing, thinking rendering nor the conversation surface itself changes, so the ledger test covers what moved. area:mcp-import (8 real-core entries) is excluded because mcp.py gains a pure helper and one spec field while the import dialog, the probe and the handshake are untouched; tests/v3/test_mcp_import.py was run locally and is unaffected. area:core-api is excluded because no request or response schema changes -- ToolSpec and the approval's exact_request only gain optional keys. area:desktop-interface and area:mobile-layout were the fallback for harnessActivity.ts, activityLedgerModel.ts and the new mcpTools.ts, which the added activity-ledger rule now maps directly; that rule also clears the unmapped review blocker on mcpTools.ts. ui/src/api/client.ts and types.ts stay unmapped, as they are for every change: the mapping added there is one optional field each, covered by client.test.ts. ui/src/App.test.tsx is excluded: its \"keeps diagnostics out of the advanced view while preserving legacy hashes\" test fails the same way on a pristine origin/main at 48d2562 with this branch stashed, so it is a pre-existing failure and not this change.",
   "expected_tests": {
-    "python": 75,
-    "frontend": 0,
+    "python": 126,
+    "frontend": 106,
     "native": 0,
-    "playwright": 7
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_chat_tool_loop.py"
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_mcp_probe.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_action_broker.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/mcpTools.test.ts",
+    "ui/src/components/activityLedgerModel.test.ts",
+    "ui/src/components/AssistantApprovalDetails.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/pages/harnessActivity.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "area:tool-suggestions"
+    "area:activity-ledger"
   ]
 }

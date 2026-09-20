@@ -2980,6 +2980,7 @@ class ChatService:
                         "turn_id": turn.id,
                         "tool_call_id": durable_call_id,
                         "capability": call.name,
+                        "display_name": spec.display_name,
                         "arguments": call.arguments,
                         "step": step,
                     },
@@ -3005,6 +3006,9 @@ class ChatService:
                     "name": call.name,
                     "arguments": call.arguments,
                     "budget_class": spec.budget_class,
+                    **(
+                        {"display_name": spec.display_name} if spec.display_name else {}
+                    ),
                 }
                 if provider_call is not None:
                     entry["provider_call"] = provider_call
@@ -3147,6 +3151,7 @@ class ChatService:
                         "turn_id": turn.id,
                         "tool_call_id": durable_call_id,
                         "capability": call.name,
+                        "display_name": spec.display_name,
                         "status": entry["status"],
                         "summary": entry.get("result_summary")
                         or entry["provider_result"],
@@ -3926,6 +3931,7 @@ class ChatService:
                 "turn_id": turn.id,
                 "tool_call_id": entry["tool_call_id"],
                 "capability": entry["name"],
+                "display_name": entry.get("display_name"),
                 "status": entry["status"],
                 "summary": entry.get("result_summary") or entry["provider_result"],
                 "evidence_ids": entry.get("evidence_ids", []),
@@ -4034,6 +4040,7 @@ class ChatService:
                 "turn_id": turn.id,
                 "tool_call_id": entry["tool_call_id"],
                 "capability": entry["name"],
+                "display_name": entry.get("display_name"),
                 "status": entry["status"],
                 "summary": entry.get("result_summary") or entry["provider_result"],
                 "evidence_ids": entry.get("evidence_ids", []),
@@ -4095,6 +4102,7 @@ class ChatService:
                 "turn_id": turn.id,
                 "tool_call_id": entry["tool_call_id"],
                 "capability": entry["name"],
+                "display_name": entry.get("display_name"),
                 "status": entry["status"],
                 "summary": entry["result_summary"],
                 "evidence_ids": [],
@@ -6305,6 +6313,7 @@ class ChatService:
                             {
                                 "tool_call_id": item.get("tool_call_id"),
                                 "capability": item.get("name"),
+                                "display_name": item.get("display_name"),
                                 "status": item.get("status"),
                                 "summary": item.get("result_summary"),
                                 "evidence_ids": item.get("evidence_ids", []),

@@ -2233,6 +2233,7 @@ export function SessionsPage() {
             assistantId: message.id,
             toolCallId: result.toolCallId,
             capability: result.capability,
+            displayName: result.displayName,
             status: result.status,
             summary: result.summary,
             evidenceIds: result.evidenceIds,
@@ -2728,12 +2729,13 @@ export function SessionsPage() {
       setHarnessProgress((current) => request.backend === "harness" ? {
         ...current,
         phase: "tool",
-        detail: `Running ${streamEvent.capability}.`,
+        detail: `Running ${streamEvent.displayName ?? streamEvent.capability}.`,
       } : current);
       setToolCards((current) => [...current.filter((item) => item.toolCallId !== streamEvent.toolCallId), {
         assistantId,
         toolCallId: streamEvent.toolCallId,
         capability: streamEvent.capability,
+        displayName: streamEvent.displayName,
         status: "running",
         evidenceIds: [],
         artifacts: [],
@@ -2748,7 +2750,7 @@ export function SessionsPage() {
           itemStatus: "running",
           title: streamEvent.capability,
           artifactIds: [],
-          payload: { arguments: streamEvent.arguments },
+          payload: { arguments: streamEvent.arguments, display_name: streamEvent.displayName },
         }, assistantId));
       }
     }
@@ -2762,6 +2764,7 @@ export function SessionsPage() {
           assistantId,
           toolCallId: streamEvent.toolCallId,
           capability: streamEvent.capability,
+          displayName: streamEvent.displayName,
           status: streamEvent.status,
           summary: streamEvent.summary,
           evidenceIds: streamEvent.evidenceIds,
@@ -2780,7 +2783,7 @@ export function SessionsPage() {
           title: streamEvent.capability,
           summary: streamEvent.summary,
           artifactIds: streamEvent.artifacts.map((artifact) => artifact.artifactId),
-          payload: { receipt: streamEvent.receipt ?? {}, result_artifact_id: streamEvent.resultArtifactId },
+          payload: { receipt: streamEvent.receipt ?? {}, result_artifact_id: streamEvent.resultArtifactId, display_name: streamEvent.displayName },
         }, assistantId));
       }
     }
