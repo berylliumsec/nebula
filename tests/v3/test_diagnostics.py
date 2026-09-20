@@ -847,3 +847,94 @@ def test_operator_detail_drops_os_error_codes_and_host_paths(
     assert "Errno" not in detail
     exported = json.dumps(DiagnosticManager._sanitize_export_record(record))
     assert "/home/operator" not in exported
+
+
+def test_unreadable_aggregate_line_is_skipped_and_reported_once_per_launch(
+    manager: DiagnosticManager,
+) -> None:
+    manager.record("error", "api", "api.test.before_tear", "An error before the tear.")
+    assert manager.flush()
+    aggregate = manager.log_dir / "errors.log"
+    intact = aggregate.read_text(encoding="utf-8")
+    # A torn write leaves a fragment of a record behind, and a rotation can also
+    # leave a blank line: neither may cost the reader the rest of the file.
+    aggregate.write_text(
+        f"{intact}{intact.splitlines()[0][:200]}\n\n", encoding="utf-8"
+    )
+    manager.record("error", "api", "api.test.after_tear", "An error after the tear.")
+    assert manager.flush()
+
+    first = manager.recent_errors(limit=100)
+    assert any(item["event_code"] == "api.test.after_tear" for item in first)
+    second = manager.recent_errors(limit=100)
+
+    codes = [str(item["event_code"]) for item in second]
+    assert "api.test.before_tear" in codes
+    assert "api.test.after_tear" in codes
+    assert manager.flush()
+    # One report for the launch, not one per malformed line per read: the report
+    # lands in the aggregate the reader just read.
+    written = aggregate.read_text(encoding="utf-8")
+    assert written.count("diagnostics.viewer_record_invalid") == 1
+    assert manager.status()["unreadable_record_count"] == 1
+    report = next(
+        item
+        for item in second
+        if item["event_code"] == "diagnostics.viewer_record_invalid"
+    )
+    assert report["reason_code"] == "integrity_failed"
+    assert report["metadata"] == {"component": "errors.log", "count": 1}
+    assert "skipped" in str(report["impact"])
+
+
+def test_short_appends_are_completed_instead_of_losing_the_record(
+    manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    aggregate = manager.log_dir / "errors.log"
+    line = b'{"event_code":"api.test.short_write","level":"ERROR"}\n'
+    real_write = os.write
+    chunks: list[int] = []
+
+    def chunked_write(descriptor: int, data: bytes) -> int:
+        chunks.append(len(data))
+        return real_write(descriptor, data[:20])
+
+    monkeypatch.setattr(diagnostics.os, "write", chunked_write)
+    manager._append(aggregate, line)
+    monkeypatch.undo()
+
+    # A short write must be finished here. Buffered writers keep the remainder
+    # in a buffer that is discarded if a later write raises, which is how a
+    # record lost its tail and left a torn line behind.
+    assert aggregate.read_bytes() == line
+    assert len(chunks) == -(-len(line) // 20)
+
+
+def test_a_failed_append_closes_the_torn_line_so_the_next_record_survives(
+    manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    aggregate = manager.log_dir / "errors.log"
+    line = b'{"event_code":"api.test.torn_write","level":"ERROR"}\n'
+    real_write = os.write
+    state = {"partial": False}
+
+    def failing_write(descriptor: int, data: bytes) -> int:
+        if not state["partial"]:
+            state["partial"] = True
+            return real_write(descriptor, data[:20])
+        if data == b"\n":
+            return real_write(descriptor, data)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(diagnostics.os, "write", failing_write)
+    with pytest.raises(OSError):
+        manager._append(aggregate, line)
+    monkeypatch.undo()
+
+    # The fragment owns its own line, so the next record is still readable.
+    assert aggregate.read_bytes() == line[:20] + b"\n"
+    manager.record("error", "api", "api.test.after_torn_write", "A later error.")
+    assert manager.flush()
+    codes = [str(item["event_code"]) for item in manager.recent_errors(limit=100)]
+    assert "api.test.after_torn_write" in codes
+    assert manager.status()["unreadable_record_count"] == 1

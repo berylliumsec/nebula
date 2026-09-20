@@ -458,6 +458,10 @@ class DiagnosticManager:
         # disk holds the durable copy, so it is bounded rather than unbounded.
         self._memory_errors: deque[dict[str, Any]] = deque(maxlen=MAX_MEMORY_ERRORS)
         self._dropped_count = 0
+        # Unreadable log lines are counted per file so the viewer can report a
+        # torn write once per launch instead of once per read.
+        self._unreadable_lines: dict[str, int] = {}
+        self._unreadable_reported: dict[str, int] = {}
         self._last_drop_notice = 0.0
         self._last_sink_failure_notice = 0.0
         self._last_rotation: str | None = None
@@ -1166,14 +1170,23 @@ class DiagnosticManager:
         self._rotate_if_needed(path, len(line))
         descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
         try:
-            with os.fdopen(descriptor, "ab", closefd=True) as handle:
-                handle.write(line)
-                handle.flush()
-                if b'"level":"ERROR"' in line or b'"level":"CRITICAL"' in line:
-                    os.fsync(handle.fileno())
+            written = 0
+            while written < len(line):
+                try:
+                    written += os.write(descriptor, line[written:])
+                except OSError:
+                    # A partially written record must not swallow the next one:
+                    # close the torn line so only the fragment is unreadable.
+                    if written and not line[:written].endswith(b"\n"):
+                        with contextlib.suppress(OSError):
+                            # diagnostic-expected: the raised failure is reported
+                            # by the caller's sink-failure path.
+                            os.write(descriptor, b"\n")
+                    raise
+            if b'"level":"ERROR"' in line or b'"level":"CRITICAL"' in line:
+                os.fsync(descriptor)
         finally:
-            # fdopen owns the descriptor on the successful path.
-            pass
+            os.close(descriptor)
 
     def _rotate_if_needed(self, path: Path, incoming_bytes: int) -> None:
         try:
@@ -1373,6 +1386,7 @@ class DiagnosticManager:
             "disk_usage_bytes": self._disk_usage(),
             "last_rotation": self._last_rotation,
             "dropped_record_count": self._dropped_count,
+            "unreadable_record_count": sum(self._unreadable_lines.values()),
             "queued_record_count": len(self._queue) + self._in_flight,
             "last_failure": self._last_failure,
             "sensitive_detail_capture": self._settings.sensitive_detail_capture,
@@ -1400,6 +1414,64 @@ class DiagnosticManager:
             )
         return files
 
+    def _read_log_records(self, path: Path) -> list[dict[str, Any]]:
+        """Return the JSON records held by one diagnostic log file.
+
+        Blank lines and lines that are not a single JSON object are skipped, so
+        one torn write cannot make the surrounding records unreadable.  Skipped
+        lines are counted per file and reported once per launch rather than once
+        per read: a report is itself a record, and an error-level report lands in
+        the aggregate the reader just read, so reporting per read turned a single
+        corrupt line into a new error on every viewer refresh.
+        """
+
+        records: list[dict[str, Any]] = []
+        skipped = 0
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    # diagnostic-expected: skipped lines are counted here and
+                    # reported by _report_unreadable_lines.
+                    skipped += 1
+                    continue
+                if isinstance(payload, dict):
+                    records.append(payload)
+                else:
+                    skipped += 1
+        self._unreadable_lines[path.name] = skipped
+        return records
+
+    def _report_unreadable_lines(
+        self, path: Path, *, event_code: str, stage: str
+    ) -> None:
+        skipped = self._unreadable_lines.get(path.name, 0)
+        if skipped <= self._unreadable_reported.get(path.name, 0):
+            return
+        self._unreadable_reported[path.name] = skipped
+        self.record(
+            "error",
+            "diagnostics",
+            event_code,
+            "Unreadable lines in a local diagnostic log were skipped.",
+            outcome="degraded",
+            stage=stage,
+            retryable=False,
+            reason_code="integrity_failed",
+            operator_detail=(
+                "A local diagnostic log holds lines that are not valid "
+                "diagnostic JSON, which a failed or torn write leaves behind."
+            ),
+            impact=(
+                "The unreadable lines were skipped. Every other record in the "
+                "file was read normally."
+            ),
+            metadata={"component": path.name, "count": skipped},
+        )
+
     def recent_errors(
         self,
         *,
@@ -1426,26 +1498,10 @@ class DiagnosticManager:
             ] + [aggregate]
         for path in paths:
             try:
-                with path.open("r", encoding="utf-8") as handle:
-                    for line in handle:
-                        try:
-                            payload = json.loads(line)
-                        except json.JSONDecodeError as exc:
-                            self.record(
-                                "error",
-                                "diagnostics",
-                                "diagnostics.viewer_record_invalid",
-                                "A local diagnostic error record was malformed.",
-                                outcome="failure",
-                                stage="viewer-read",
-                                retryable=False,
-                                exception=exc,
-                            )
-                            continue
-                        if isinstance(payload, dict):
-                            records.append(payload)
+                records.extend(self._read_log_records(path))
             except FileNotFoundError:
                 # diagnostic-expected: a retained rotation need not exist.
+                self._unreadable_lines.pop(path.name, None)
                 continue
             except OSError as exc:
                 self.record(
@@ -1459,6 +1515,12 @@ class DiagnosticManager:
                     exception=exc,
                 )
                 break
+        for path in paths:
+            self._report_unreadable_lines(
+                path,
+                event_code="diagnostics.viewer_record_invalid",
+                stage="viewer-read",
+            )
         with self._writer_lock:
             records.extend(
                 dict(item)
@@ -1543,23 +1605,7 @@ class DiagnosticManager:
                         continue
                     sanitized_lines: list[str] = []
                     try:
-                        for line in path.read_text(encoding="utf-8").splitlines():
-                            try:
-                                payload = json.loads(line)
-                            except json.JSONDecodeError as exc:
-                                self.record(
-                                    "error",
-                                    "diagnostics",
-                                    "diagnostics.export_record_invalid",
-                                    "A malformed diagnostic record was excluded from export.",
-                                    outcome="failure",
-                                    stage="export-validation",
-                                    retryable=False,
-                                    exception=exc,
-                                )
-                                continue
-                            if not isinstance(payload, dict):
-                                continue
+                        for payload in self._read_log_records(path):
                             sanitized = self._sanitize_export_record(payload)
                             sanitized_lines.append(
                                 json.dumps(
@@ -1579,6 +1625,11 @@ class DiagnosticManager:
                             metadata={"count": 1},
                         )
                         continue
+                    self._report_unreadable_lines(
+                        path,
+                        event_code="diagnostics.export_record_invalid",
+                        stage="export-validation",
+                    )
                     data = (
                         "\n".join(sanitized_lines) + ("\n" if sanitized_lines else "")
                     ).encode("utf-8")
