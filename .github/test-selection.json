@@ -1,19 +1,19 @@
 {
-  "change_digest": "490f17f9529ea9a9bf8806ddcbe74cf88cc547f00bb850fa0faf919b13cbf9fb",
-  "reviewed_by": "Claude review of companion stream and fork edge cases",
-  "reason": "Two api.py routes mishandled predictable failures. companion_stream called browser_companion.session(session_id) inside a try whose except tuple did not include NotFoundError, so a stale tab opening the stream for a removed companion session raised out of the handler before accept: an ASGI denial instead of the 4404 close every other websocket route sends for a missing record. fork_chat_session created the vendor HarnessSession branch (status starting) before ChatService.fork_session validated the request, so a fork rejected for an active turn or a boundary from another conversation answered 409 and left one orphaned HarnessSession per attempt. The stream now closes 4404 for a missing session, and a failed conversation fork deletes the vendor branch it created before re-raising. test_api gains the 4404 case (a WebSocketDenialResponse on main); test_chat_api gains a harness fork with a foreign boundary asserting 409 and exactly the original vendor session left (two on main). Both files' existing cases cover the neighbouring websocket auth, run-event and chat session routes.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py) is the real-Core journey suite and does not open a stream for a removed companion session or fork a harness conversation with a foreign boundary; the Python tests drive both routes through TestClient. No full suites.",
+  "change_digest": "967fa3e344cf8809410a2b35c0c6a98fa0c89c1c79f2484e9d5869dd6be073e4",
+  "reviewed_by": "Claude review of Workbench side-panel reliability",
+  "reason": "Two Workbench panels misbehaved on ordinary use. PostToolAssistant's polling effect depended on the config object; each tick ended with refresh(), which stored a fresh config object from Core, so the effect re-armed and ran tick again immediately: with Suggest next steps or Take notes enabled the panel issued executions, runs and post-tool-results requests back to back with no 3 s gap (the new unit test measures 17,510 listExecutions calls in three seconds on main, one after the fix). The effect now depends on the primitive fields it gates on and reads the latest config through a ref. NotesPanel's draft-sync effect depended on the selected note's object identity; every list reload (Refresh notes, or a reload after another change) produced a new object for the same note and reset the editor to the saved copy, discarding unsaved edits, and a reload while a new note was being drafted moved the selection to the first note so Delete targeted it. The sync now keys on note id and revision, and a reload keeps the selection untouched while a note is being created. Frontend tests cover both (unsaved body survives Refresh notes; polling issues one request per interval); the files' other cases cover enablement, runtime gating, note create/edit/delete and Ask Nebula. npm run build typechecks and bundles.",
+  "exclusions": "No Python tests: no backend change. No native tests: no Tauri or Rust change. No Playwright: PostToolAssistant* and NotesPanel* map to the remaining-ui-components areas desktop-interface and mobile-layout, whose mocked journeys open these panels but do not measure the polling cadence or edit a note across a refresh; the unit tests drive both against the rendered components. No screenshot baselines: no rendered change. No real-browser pass was run in this session. No full suites.",
   "expected_tests": {
-    "python": 50,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 8,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/v3/test_api.py",
-    "tests/v3/test_chat_api.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/NotesPanel.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": []
 }

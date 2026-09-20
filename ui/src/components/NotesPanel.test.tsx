@@ -70,6 +70,22 @@ describe("NotesPanel", () => {
     expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "Changed", sourceKind: "note", sourceId: "note-1" }));
   });
 
+  it("keeps unsaved edits when the note list is refreshed", async () => {
+    const user = userEvent.setup();
+    const listObservations = vi.fn().mockImplementation(async () => ({ items: [{ ...note }], total: 1 }));
+    renderPanel({ listObservations });
+
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue("**Useful** context"));
+    await user.clear(body);
+    await user.type(body, "Draft in progress");
+    await user.click(screen.getByRole("button", { name: "Refresh notes" }));
+    await waitFor(() => expect(listObservations).toHaveBeenCalledTimes(2));
+
+    expect(body).toHaveValue("Draft in progress");
+    expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
+  });
+
   it("creates a plaintext Markdown note", async () => {
     const user = userEvent.setup();
     const createObservation = vi.fn().mockResolvedValue({ ...note, id: "note-2", title: "New", body: "# Body" });

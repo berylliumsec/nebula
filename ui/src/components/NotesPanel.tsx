@@ -76,6 +76,9 @@ export function NotesPanel({
   const [deleteBlocker, setDeleteBlocker] = useState<ObservationDependencies>();
   const consumedInitialDraftRef = useRef<SelectionActionDraft | undefined>(undefined);
   const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
+  const creatingRef = useRef(false);
+  creatingRef.current = creating;
+  const syncedNoteRef = useRef<string | undefined>(undefined);
   const createNote = useCallback(
     (request: ObservationCreateRequest) => createObservation ? createObservation(request) : api.createObservation(request),
     [api, createObservation],
@@ -109,7 +112,8 @@ export function NotesPanel({
       const captured = capturedNoteRef.current;
       const merged = captured && !next.some((item) => item.id === captured.id) ? [captured, ...next] : next;
       setNotes(merged);
-      setSelectedId((current) => current && merged.some((item) => item.id === current)
+      // A reload must not steal the selection from a note that is being created.
+      setSelectedId((current) => creatingRef.current || (current && merged.some((item) => item.id === current))
         ? current
         : merged[0]?.id);
     } catch (loadError) {
@@ -129,11 +133,20 @@ export function NotesPanel({
   }, [load]);
 
   useEffect(() => {
-    if (creating || initialDraft) return;
+    if (creating || initialDraft) {
+      syncedNoteRef.current = undefined;
+      return;
+    }
     if (!selected) {
+      syncedNoteRef.current = undefined;
       setDraft(blank);
       return;
     }
+    // A reload returns a new object for the same saved note; only a different
+    // note or a new revision may replace the operator's unsaved edits.
+    const key = `${selected.id}:${selected.revision}`;
+    if (syncedNoteRef.current === key) return;
+    syncedNoteRef.current = key;
     setDraft({
       title: selected.title,
       body: selected.body,
