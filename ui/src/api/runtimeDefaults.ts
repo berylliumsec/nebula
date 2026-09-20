@@ -1,6 +1,7 @@
 import type { HarnessProfile, ProviderHealth } from "./types";
 
-type ProviderCandidate = Pick<ProviderHealth, "enabled" | "id" | "models" | "state">;
+type ProviderCandidate = Pick<ProviderHealth, "defaultModel" | "effectiveDefaultModel" | "enabled" | "id" | "models" | "state">;
+type ProviderModelCandidate = Pick<ProviderHealth, "defaultModel" | "effectiveDefaultModel" | "models">;
 type HarnessCandidate = Pick<HarnessProfile, "enabled" | "healthy" | "id" | "models" | "defaultModel">;
 
 export type DefaultModelRuntime =
@@ -12,8 +13,20 @@ function firstModel(models: readonly string[]): string | undefined {
 }
 
 /**
+ * The model a provider should start with: the profile's saved default whenever the
+ * runtime still reports it, otherwise the first discovered model. Selecting a
+ * provider must not silently replace the default its operator saved in Settings.
+ */
+export function providerDefaultModel(provider?: ProviderModelCandidate): string {
+  const models = provider?.models ?? [];
+  const saved = (provider?.defaultModel ?? provider?.effectiveDefaultModel)?.trim();
+  if (saved && models.some((model) => model.trim() === saved)) return saved;
+  return firstModel(models) ?? "";
+}
+
+/**
  * Selects a usable runtime for a new chat or mission. Harnesses win when both
- * runtime kinds are ready. A configured harness default takes precedence over discovery.
+ * runtime kinds are ready. A configured runtime default takes precedence over discovery.
  */
 export function defaultModelRuntime(
   providers: readonly ProviderCandidate[],
@@ -27,7 +40,7 @@ export function defaultModelRuntime(
   }
 
   for (const provider of providers) {
-    const model = firstModel(provider.models);
+    const model = providerDefaultModel(provider);
     if (
       provider.enabled
       && (provider.state === "healthy" || provider.state === "unchecked")

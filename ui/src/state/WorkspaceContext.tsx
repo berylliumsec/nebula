@@ -11,6 +11,7 @@ import {
 import { ApiClient } from "../api/client";
 import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
+import { providerWithDiscoveredModels, providersWithDiscoveredModels } from "../api/providerRuntime";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
@@ -277,8 +278,10 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         }
         if (!nextEngagement) localStorage.removeItem("nebula.engagement");
 
-        if (providerResult.status === "fulfilled") setProviders(providerResult.value.items);
-        else {
+        if (providerResult.status === "fulfilled") {
+          const items = providerResult.value.items;
+          setProviders((current) => providersWithDiscoveredModels(current, items));
+        } else {
           setProviders([]);
           loadErrors.push("model providers");
         }
@@ -519,7 +522,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     try {
       let count = 1;
       if (resource === "projects") { const value = await api.listEngagements(); setEngagements(value.items); count = value.items.length; }
-      else if (resource === "providers") { const value = await api.listProviders(); setProviders(value.items); count = value.items.length; }
+      else if (resource === "providers") { const value = await api.listProviders(); setProviders((current) => providersWithDiscoveredModels(current, value.items)); count = value.items.length; }
       else if (resource === "harnesses") { const value = await api.listHarnesses(); setHarnesses(value); count = value.length; }
       else if (resource === "library") { const value = await api.listLibraryItems(); setLibraryItems(value.items); count = value.items.length; }
       else if (resource === "providerCatalog") { const value = await api.listProviderCatalog(); setProviderCatalog(value); count = value.length; }
@@ -624,7 +627,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
                 : provider.models;
               return {
                 ...provider,
-                revision: result.providerRevision ?? provider.revision,
+                // A health check reads the profile it started with, so a late response
+                // must never move the cached revision behind a newer mutation.
+                revision: Math.max(result.providerRevision ?? 0, provider.revision),
                 state: result.healthy ? "healthy" : "offline",
                 models: selectableModels,
                 // Core returns allowlisted models and unlisted discoveries separately.
@@ -678,7 +683,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to update a provider.");
     }
     const updated = await api.updateProvider(id, request);
-    setProviders((current) => current.map((provider) => provider.id === id ? updated : provider));
+    setProviders((current) => current.map((provider) => provider.id === id ? providerWithDiscoveredModels(provider, updated) : provider));
     void refreshProvider(id);
     return updated;
   }, [api, coreState, refreshProvider]);
@@ -703,7 +708,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const model = requestedModel?.trim() || providerVerificationModel(current);
     if (!current || !model) throw new Error("Configure an exact model before verification.");
     const updated = await api.verifyProviderCapabilities(id, model, current.revision);
-    setProviders((items) => items.map((provider) => provider.id === id ? updated : provider));
+    setProviders((items) => items.map((provider) => provider.id === id ? providerWithDiscoveredModels(provider, updated) : provider));
   }, [api, coreState, providers]);
 
   const setProviderEnabled = useCallback(async (id: string, enabled: boolean, expectedRevision: number) => {
@@ -711,7 +716,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to change a provider.");
     }
     const updated = await api.setProviderEnabled(id, enabled, expectedRevision);
-    setProviders((current) => current.map((provider) => provider.id === id ? updated : provider));
+    setProviders((current) => current.map((provider) => provider.id === id ? providerWithDiscoveredModels(provider, updated) : provider));
     return updated;
   }, [api, coreState]);
 

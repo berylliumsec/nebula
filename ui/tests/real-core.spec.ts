@@ -139,7 +139,7 @@ interface LocalModelStub {
   fail: boolean;
 }
 
-async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; models?: string[] } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
@@ -147,7 +147,7 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
     if (request.method === "GET" && request.url === "/v1/models") {
       response.end(JSON.stringify({
         object: "list",
-        data: [{ id: "security-model", object: "model", created: 1, owned_by: "local-acceptance" }],
+        data: (options.models ?? ["security-model"]).map((id) => ({ id, object: "model", created: 1, owned_by: "local-acceptance" })),
       }));
       return;
     }
@@ -3370,7 +3370,8 @@ for (const runtime of ["provider", "harness"] as const) {
   test(`stabilization real Core ${runtime} settings separate saving from health recovery`, async ({page}, testInfo) => {
     test.setTimeout(100_000);
     page.setDefaultTimeout(10_000);
-    const stub = runtime === "provider" ? await startLocalModelStub() : undefined;
+    // Two discovered models keep the saved default distinguishable from the first one.
+    const stub = runtime === "provider" ? await startLocalModelStub({models: ["security-model", "security-model-reasoning"]}) : undefined;
     const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
     const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
     const name = `Local ${runtime} acceptance`;
@@ -3421,6 +3422,11 @@ for (const runtime of ["provider", "harness"] as const) {
       const persisted = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(`/api/v1/${collection}`));
       await save.click();
       const saved = await (await persisted).json();
+      // Capability verification re-reads the saved profile once the chat selects a model.
+      const profileReads: string[] = [];
+      page.on("response", response => {
+        if (response.request().method() === "GET" && new URL(response.url()).pathname.endsWith(`/api/v1/${collection}/${saved.id}`)) profileReads.push(response.url());
+      });
       await expect.poll(() => failedHealth).toBe(true);
       await expect(dialog).toHaveCount(0);
       const card = page.locator("article.provider-card").filter({has: page.getByRole("heading", {name, exact: true})});
@@ -3439,9 +3445,12 @@ for (const runtime of ["provider", "harness"] as const) {
       expect(profiles.find((p: {name: string}) => p.name === name).id).toBe(saved.id);
       await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
       const models = dialog.getByRole("combobox", {name: "Default model", exact: true});
-      const available = await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean));
-      const model = available.find(value => value !== "grok-build");
+      const available = (await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean)))
+        .filter(value => value !== "grok-build");
+      // The last discovered model proves the saved default wins over the runtime's first one.
+      const model = available.at(-1);
       expect(model, "Health must expose the fixture's discovered model").toBeTruthy();
+      if (runtime === "provider") expect(available, "Discovery must offer a model the operator would not get by default").toHaveLength(2);
       await models.selectOption(model!);
       await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
       await expect(dialog).toHaveCount(0);
@@ -3469,6 +3478,14 @@ for (const runtime of ["provider", "harness"] as const) {
       await page.getByRole("combobox", {name: runtime === "provider" ? "Chat provider" : "Chat harness", exact: true}).selectOption(saved.id);
       const chatModel = page.getByRole("combobox", {name: runtime === "provider" ? "Chat model" : "Chat harness model", exact: true});
       await expect(chatModel).toHaveValue(model!);
+      if (runtime === "provider") {
+        // A profile read carries the allowed models only; it must not empty the discovered picker.
+        await expect.poll(() => profileReads.length, {timeout: 20_000}).toBeGreaterThan(0);
+        await expect(chatModel).toBeEnabled();
+        await expect(chatModel).toHaveValue(model!);
+        expect((await chatModel.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean))).sort())
+          .toEqual([...available].sort());
+      }
       await page.getByRole("button", {name: "Close assistant settings", exact: true}).click();
       await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Disposable unsent setup acceptance draft. No tool runs.", {timeout: 10_000});
       await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
