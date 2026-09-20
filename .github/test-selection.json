@@ -1,9 +1,21 @@
 {
-  "change_digest": "4fd6769cf670dcd6cd3d15c7af27438347b220ae76966aea5b664bdc82a2fb56",
+  "change_digest": "dfe316dfd94a72572c17eb8b23a0b224d1dadb6e68bba124214a3a4be58b7eb8",
   "reviewed_by": "Claude review of execution-cancellation-cleanup",
   "reason": "Six verified defects in the execution sandbox and execution services. (1) sandbox.py: cancelling an execution (or Core shutdown) during the egress helper readiness wait, or while feeding the worker's stdin, leaked the privileged nebula-exec-<id>-egress helper and the worker container because acquire() and stdin.drain() sat outside the cleanup scope; _await_ready now kills and removes the helper on any interrupting exception and run_stream's lease acquisition and stdin feeding run inside the try whose CancelledError handler force-removes the container and whose finally closes the lease. (2) executions.py: a cancel after the runner finished but during the unbounded 'after' workspace walk discarded the spooled stdout/stderr and leaked the spool; the walk, persistence and spool removal now run as one shielded task that is awaited to completion before the cancellation propagates, and _workspace_snapshot skips entries removed mid-walk instead of failing the execution with runner_unavailable. (3) sandbox.py _validate only rejected comma/CR/LF in --mount values although docker/podman CSV-parse them, so a linked folder containing a double quote broke every execution and terminal of the project; double quotes are now rejected with a clear message. (4) execution_ai.py: dismissing a GENERATING draft bumped its revision so the provider's READY update conflicted and the finished result was recorded as FAILED; dismiss is now a 409 unless the draft is READY or ACCEPTED. (5) automation_runtime.py: _store_stream_artifacts read up to 100 MiB per stream three times and ran regex redaction on the event loop, and per-command mkdtemp capture directories were never removed; the stream is now read and redacted once under asyncio.to_thread, the capture directory is removed once every retained byte was delivered (or at session close) and stale ones are swept at startup. (6) automation_runtime.py host mode: asyncio Process.wait() never resolves while a detached grandchild (setsid nohup daemon) holds the inherited stdout/stderr pipes, so foreground run_command, terminate, close_session and Core shutdown hung; HostRuntimeProcess now detects the child's own exit, kills the process group, bounds the pipe wait and closes the transport, and _finalize_process bounds the drain gather. Nine new tests in the four listed files fail on origin/main for exactly these reasons and pass with the fix; the four files are run in full (108 tests). tests/v3/test_execution_ai.py::test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_inert fails identically on pristine origin/main (chat attachment wording) and is unrelated to this change.",
   "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/sandbox.py, executions.py, execution_ai.py and automation_runtime.py) does not exercise cancellation mid-startup, host-mode grandchild pipes, capture cleanup or draft dismissal races; the Python tests drive them directly with fake processes and a real host bash. No full suites.",
-  "expected_tests": {"python": 108, "frontend": 0, "native": 0, "playwright": 0},
-  "python": ["tests/v3/test_sandbox.py", "tests/v3/test_executions.py", "tests/v3/test_execution_ai.py", "tests/v3/test_automation_runtime.py"],
-  "frontend": [], "native": [], "playwright": []
+  "expected_tests": {
+    "python": 108,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python": [
+    "tests/v3/test_sandbox.py",
+    "tests/v3/test_executions.py",
+    "tests/v3/test_execution_ai.py",
+    "tests/v3/test_automation_runtime.py"
+  ],
+  "frontend": [],
+  "native": [],
+  "playwright": []
 }
