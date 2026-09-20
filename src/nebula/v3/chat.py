@@ -2478,10 +2478,15 @@ class ChatService:
                     # lose sight of the work, so publishing belongs to it. It
                     # writes only this project's own records and adds no
                     # runtime digest.
+                    if self.artifact_store is None:
+                        raise ChatConfigurationError(
+                            "goal dashboard publishing requires an artifact store"
+                        )
                     tool_components = combine_tool_components(
                         tool_components,
                         dashboard_components(
                             self.store,
+                            self.artifact_store,
                             tool_components.scope,
                             Path(tool_components.workspace),
                             goal,
@@ -5151,10 +5156,15 @@ class ChatService:
             if components is not None and resumed_goal is not None:
                 # The same capability the turn was created with, so a resumed
                 # goal turn offers the model exactly the tools it already had.
+                if self.artifact_store is None:
+                    raise ChatConfigurationError(
+                        "goal dashboard publishing requires an artifact store"
+                    )
                 components = combine_tool_components(
                     components,
                     dashboard_components(
                         self.store,
+                        self.artifact_store,
                         components.scope,
                         Path(components.workspace),
                         resumed_goal,

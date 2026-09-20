@@ -140,7 +140,11 @@ class OperatorRuntimeResolution:
 
 
 def dashboard_components(
-    store: NebulaStore, scope: ScopePolicy, workspace: Path, goal: ChatGoal
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    scope: ScopePolicy,
+    workspace: Path,
+    goal: ChatGoal,
 ) -> RuntimeToolComponents:
     """Publishing to the result dashboard, for one running goal.
 
@@ -160,6 +164,7 @@ def dashboard_components(
         runner=AnalysisOnlyRunner(),
         ledger=StoreToolLedger(store),
         workspace_resolver=lambda _engagement_id: workspace,
+        evidence_recorder=StoreToolEvidenceRecorder(store, artifact_store),
     )
     return RuntimeToolComponents(
         broker=broker,

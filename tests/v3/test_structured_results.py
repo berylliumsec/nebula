@@ -7,13 +7,18 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatTurn,
     Engagement,
+    ScopePolicy,
     StructuredResult,
+    ToolCallOrigin,
 )
+from nebula.v3.runtime_platform import dashboard_components
 from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.structured_results import (
     DASHBOARD_PUBLISH_TOOL_NAME,
@@ -276,6 +281,50 @@ def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path)
     assert "hosts" not in str(result.output)
 
 
+def test_goal_dashboard_broker_records_publish_execution_as_immutable_evidence(
+    tmp_path,
+):
+    store, _ = fixture(tmp_path)
+    goal = running_goal(store)
+    scope = store.create(ScopePolicy(id="scope", engagement_id="project"))
+    store.create(
+        ChatTurn(
+            id="run",
+            engagement_id="project",
+            session_id="session",
+            goal_id=goal.id,
+            provider_profile_id="provider",
+            model="model-a",
+            tools_enabled=True,
+        )
+    )
+    components = dashboard_components(
+        store,
+        ArtifactStore(tmp_path / "artifacts"),
+        scope,
+        tmp_path,
+        goal,
+    )
+    invocation = ToolInvocation(
+        engagement_id="project",
+        run_id="run",
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id="session",
+        chat_turn_id="run",
+        tool_name=DASHBOARD_PUBLISH_TOOL_NAME,
+        workspace=tmp_path,
+        arguments={"title": "Inventory", "result": {"hosts": 1}},
+    )
+
+    result = asyncio.run(components.broker.execute(invocation, scope))
+
+    assert result.exit_code == 0
+    assert result.receipt is not None
+    assert len(result.receipt.artifacts) == 3
+    assert len(result.evidence_ids) == 1
+    assert store.count(StructuredResult, engagement_id="project") == 1
+
+
 def test_publish_tool_reports_a_refusal_instead_of_raising(tmp_path):
     store, _ = fixture(tmp_path)
     tool = PublishResultTool(store)
@@ -523,7 +572,11 @@ def test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else(
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
-    service = ChatService(store, workspace_resolver=lambda _: workspace)
+    service = ChatService(
+        store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        workspace_resolver=lambda _: workspace,
+    )
 
     def prepare(session_id="session", **extra):
         return service.prepare(

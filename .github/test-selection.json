@@ -1,28 +1,19 @@
 {
-  "change_digest": "06407ad5b0724f93b6115b50d880c4f62cb157563a0bc93a06279980863773ed",
-  "reviewed_by": "Codex review of provider-goal creation, stop, failure, refresh, resume, and autonomous continuation lifecycle",
-  "reason": "Provider goals could only be created after the first message persisted a conversation, and Start or Resume changed status without dispatching work, forcing the operator to send a bootstrap message. Cancelling a turn could then leave the conversation's goal running because the turn had no goal_id or had already reached cancelled before the stop handler ran. A successful goal-linked turn also released its worker and left the goal marked running without dispatching the next turn. The browser could discard the final cancelled stream event while Stop aborted its viewer, leaving a terminal conversation visibly stuck on Waiting for provider. The selected backend tests cover atomic empty-conversation plus goal creation, explicit lifecycle revisions, live elapsed reads, linked and late-created cancellation, initial dispatch without a composer message, and successful-turn auto-continuation through the step-budget boundary. Focused frontend tests cover goal creation before a session exists, revision refresh behavior, and deterministic settlement of a live assistant bubble. The real-Core production LAN journey covers the operator path before the first message, Start and Resume dispatch, first-turn linkage, stop-to-pause, authoritative idle state, removal of the stale provider wait, durable paired-browser reload, automatic next-turn dispatch, budget pause, accessibility, desktop, emulated mobile Chromium, and emulated mobile WebKit.",
-  "exclusions": "No native tests because Rust and the desktop shell are unchanged. Harness-native goals, schedules as independent triggers, child-agent execution internals, unrelated provider transports, MCP execution, workspace behavior, and full suites are excluded. The selected real-Core journey uses the permanent desktop and 390 px Chromium/WebKit projects; 320 and 430 px profiles are excluded because this change reuses the existing responsive goal panel without CSS changes. A focused production build is performed separately from the test selection.",
+  "change_digest": "c95c5988297db724642dd974085ccba1b316a6ebcf5ca1d547c0446e78e157d1",
+  "reviewed_by": "Codex review of goal dashboard publication and immutable tool evidence wiring",
+  "reason": "Goal-mode chat exposed dashboard.publish through a ToolBroker that had no evidence recorder. The tool could commit its structured result and then fail after execution when the broker enforced immutable evidence. The selected regression executes the real dashboard broker with Core storage and ArtifactStore and verifies a successful receipt with three immutable artifacts. The existing goal-tool integration test verifies fresh goal turns still expose dashboard.publish when the required artifact store is configured.",
+  "exclusions": "No frontend, native, or Playwright tests because the UI, desktop shell, browser behavior, and API contract are unchanged. Container runners, network tools, unrelated chat lifecycle behavior, and full suites are excluded. The focused Python tests use an in-process Core database and real filesystem-backed ArtifactStore without network access.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 17,
+    "python": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message",
-    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
-    "tests/v3/test_chat.py::test_cancelled_turn_pauses_the_session_goal_even_when_created_late",
-    "tests/v3/test_chat_goals.py::test_goal_requires_explicit_start_and_revision_safe_lifecycle",
-    "tests/v3/test_chat_goals.py::test_running_goal_read_reports_live_elapsed_without_changing_revision",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
+    "tests/v3/test_structured_results.py::test_goal_dashboard_broker_records_publish_execution_as_immutable_evidence",
+    "tests/v3/test_structured_results.py::test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else"
   ],
-  "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/pages/chatMessageReconciliation.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:provider-goal-lifecycle-core"
-  ]
+  "playwright": []
 }
