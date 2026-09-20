@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import nebula.v3.chat as chat_module
+from nebula.v3.chat_subagents import is_subagent_session
 from nebula.v3.chat import (
     ChatCompletionRequest,
     ChatCompactionError,
@@ -2787,5 +2788,237 @@ def test_retryable_stream_error_surfaces_as_a_provider_overload(tmp_path):
         # provider; a ChatError would blame chat and forbid a retry.
         with pytest.raises(ProviderOverloadedError, match="overloaded"):
             [event async for event in service.stream(prepared)]
+
+    asyncio.run(scenario())
+
+
+def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
+    class BlockingProvider(FakeProvider):
+        def __init__(self, provider_id: str, *, local: bool) -> None:
+            super().__init__(provider_id, local=local)
+            self.started = asyncio.Event()
+
+        async def stream(self, request: ModelRequest):
+            del request
+            self.started.set()
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta="Working. ")
+            await asyncio.Event().wait()
+            raise AssertionError("provider stream resumed after Core stopped")
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "chat-shutdown-recovery.db")
+        engagement = store.create(Engagement(id="eng-shutdown", name="Shutdown"))
+        profile = store.create(_profile(local=True))
+        provider = BlockingProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "Keep going through a deploy."}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "started"
+        assert (await anext(follower))[0] == "delta"
+        await asyncio.wait_for(provider.started.wait(), 2)
+
+        # Core stopping (a deploy restart), not an operator Stop.
+        await service.shutdown()
+
+        remaining = [event async for event in follower]
+        assert [name for name, _ in remaining] == ["error"]
+        assert remaining[0][1]["turn_id"] == turn_id
+        assert "Core stopped" in remaining[0][1]["detail"]
+        interrupted = store.get(ChatTurn, turn_id)
+        assert interrupted.status == ChatTurnStatus.INTERRUPTED
+        assert interrupted.error == (
+            "Core stopped before this response completed. Review and resume it."
+        )
+        assert interrupted.request_snapshot["recovery"]["required"] is True
+        assert interrupted.execution_claim_id is None
+
+        # The next boot finds the same recoverable state a crash would leave.
+        restarted = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker-2"
+        )
+        await restarted.startup()
+        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.INTERRUPTED
+        pending = restarted.pending_turn(interrupted.session_id)
+        assert pending is not None and pending.id == turn_id
+        resumed = restarted.prepare_resume(turn_id)
+        assert resumed.turn is not None
+        assert resumed.turn.status == ChatTurnStatus.ROUTING
+        await restarted.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_fork_drops_subagent_and_temporary_markers(tmp_path):
+    store = NebulaStore(tmp_path / "chat-fork-markers.db")
+    store.create(Engagement(id="eng-fork", name="Fork markers"))
+    profile = store.create(_profile(local=True))
+    service = ChatService(store)
+    child = store.create(
+        ChatSession(
+            id="child",
+            engagement_id="eng-fork",
+            title="Subagent · Count routes",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id="parent",
+            metadata={
+                "subagent_id": "sub-1",
+                "subagent_parent_session_id": "parent",
+                "subagent_parent_turn_id": "turn-1",
+                "tools_enabled": True,
+            },
+        )
+    )
+    popup = store.create(
+        ChatSession(
+            id="popup",
+            engagement_id="eng-fork",
+            title="Ask Nebula",
+            provider_profile_id=profile.id,
+            model="model-a",
+            metadata={"temporary_assistant": True},
+        )
+    )
+    forks: dict[str, ChatSession] = {}
+    for source in (child, popup):
+        message = store.create(
+            ChatMessage(
+                engagement_id="eng-fork",
+                session_id=source.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="hi",
+            )
+        )
+        forks[source.id] = service.fork_session(
+            source.id, through_message_id=message.id
+        )
+
+    # A branch of a subagent conversation is an ordinary conversation again.
+    assert is_subagent_session(forks["child"]) is False
+    assert not any(key.startswith("subagent_") for key in forks["child"].metadata)
+    assert forks["child"].metadata["tools_enabled"] is True
+    assert forks["child"].metadata["forked_from_session_id"] == "child"
+    # A branch of a temporary popup is neither hidden nor swept.
+    assert "temporary_assistant" not in forks["popup"].metadata
+    listed = {item.id for item in store.list_entities(ChatSession)}
+    assert forks["popup"].id in listed and forks["child"].id in listed
+
+
+def test_persist_turn_inputs_refuses_a_waiting_callback_turn(tmp_path):
+    store = NebulaStore(tmp_path / "chat-waiting-callback-guard.db")
+    engagement = store.create(Engagement(id="eng-guard", name="Guard"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-guard",
+            engagement_id=engagement.id,
+            title="Guard",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create(
+        ChatTurn(
+            id="parked",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.WAITING_CALLBACK,
+        )
+    )
+    service = ChatService(
+        store, provider_factory=lambda _: FakeProvider(profile.id, local=True)
+    )
+    # The turn parked between prepare_async's pending_turn check and the
+    # persist; the write-time guard must catch it on its own.
+    service.pending_turn = lambda session_id: None
+
+    with pytest.raises(ChatHistoryConflict, match="already has an active response"):
+        service.prepare(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                session_id=session.id,
+                messages=[{"role": "user", "content": "Second send"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+
+    assert [
+        item.status for item in store.list_session_entities(ChatTurn, session.id)
+    ] == [ChatTurnStatus.WAITING_CALLBACK]
+    assert store.list_session_entities(ChatMessage, session.id) == []
+
+
+def test_persist_turn_inputs_retries_against_a_session_written_during_prepare(
+    tmp_path,
+):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "chat-stale-session.db")
+        engagement = store.create(Engagement(id="eng-stale", name="Stale session"))
+        profile = store.create(_profile(local=True))
+        provider = FakeProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        first = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "First"}],
+                include_knowledge=False,
+            )
+        )
+        session_id = (await service.complete(first)).session_id
+        assert session_id is not None
+
+        # A Core-side writer (naming task, subagent report, popup keepalive)
+        # lands after prepare_async read the session and before it persists.
+        original = service._verify_openrouter_route_limits
+
+        async def verify_then_touch(profile_, provider_, model):
+            current = store.get(ChatSession, session_id)
+            store.update(
+                ChatSession,
+                current.id,
+                {"metadata": {**current.metadata, "touched": True}},
+            )
+            return await original(profile_, provider_, model)
+
+        service._verify_openrouter_route_limits = verify_then_touch
+
+        second = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                session_id=session_id,
+                messages=[{"role": "user", "content": "Second"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+
+        session = store.get(ChatSession, session_id)
+        assert session.metadata["touched"] is True
+        assert second.session is not None
+        assert second.session.revision == session.revision
+        assert [
+            message.content for message in service.session_messages(session_id)
+        ] == ["First", "Evidence-backed answer [source-a:chunk-a].", "Second"]
+        assert session.metadata["last_sequence"] == 3
+        assert second.turn is not None
+        assert store.get(ChatTurn, second.turn.id).status == ChatTurnStatus.ROUTING
+        await service.shutdown()
 
     asyncio.run(scenario())

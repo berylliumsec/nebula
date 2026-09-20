@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 from nebula.v3.chat import ChatCompletionRequest, ChatService
@@ -623,6 +624,250 @@ def test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent(
             for item in messages
         )
         await restarted.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_failed_parent_resume_fails_the_turn_and_posts_reports(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Count the route files.",
+                    name="Count routes",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+            ],
+            child=[_response(text="Found 3 route files.")],
+        )
+        store, project, profile, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Split the work.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        assert (
+            store.get(ChatTurn, parent_turn_id).status
+            == ChatTurnStatus.WAITING_CALLBACK
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(lambda: bool(provider.child_requests))
+        # The provider is disabled while the parent waits, so the automatic
+        # resume cannot rebuild the turn when the child reports back.
+        latest_profile = store.get(ProviderProfile, profile.id)
+        store.update(
+            ProviderProfile,
+            latest_profile.id,
+            {"enabled": False},
+            expected_revision=latest_profile.revision,
+        )
+        provider.child_gate.set()
+
+        await _until(
+            lambda: store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.FAILED
+        )
+
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert "no longer enabled" in (parent.error or "")
+        assert parent.execution_claim_id is None
+        # The conversation is free again and the report was not withheld.
+        assert chat.pending_turn(parent.session_id) is None
+        finished = store.get(ChatSubagent, record.id)
+        assert finished.status == ChatSubagentStatus.COMPLETED
+        assert finished.result_message_id is not None
+        messages = _messages(store, parent.session_id)
+        assert messages[-1].metadata.get("kind") == "subagent_result"
+        assert "Found 3 route files." in messages[-1].content
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stopping_an_interrupted_parent_posts_finished_reports(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+            ],
+            child=[_response(text="Child report.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Go.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(lambda: bool(provider.child_requests))
+        # A restart interrupted the waiting parent (recovery pending), so the
+        # finishing child cannot resume it and its report stays undelivered.
+        parent = store.get(ChatTurn, parent_turn_id)
+        store.update(
+            ChatTurn,
+            parent.id,
+            {
+                "status": ChatTurnStatus.INTERRUPTED,
+                "error": "Core restarted before this response completed.",
+                "request_snapshot": {
+                    **parent.request_snapshot,
+                    "recovery": {
+                        "required": True,
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            },
+            expected_revision=parent.revision,
+        )
+        provider.child_gate.set()
+        await _until(
+            lambda: (
+                store.get(ChatSubagent, record.id).status
+                == ChatSubagentStatus.COMPLETED
+            )
+        )
+        assert store.get(ChatSubagent, record.id).result_message_id is None
+
+        await chat.stop_provider_turn(parent_turn_id)
+
+        assert store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.CANCELLED
+        delivered = store.get(ChatSubagent, record.id)
+        assert delivered.result_message_id is not None
+        messages = _messages(store, parent.session_id)
+        assert messages[-1].metadata.get("kind") == "subagent_result"
+        assert messages[-1].metadata["subagent_status"] == "completed"
+        assert "Child report." in messages[-1].content
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_shutdown_interrupts_an_inflight_parent_tool_turn(tmp_path: Path) -> None:
+    class GatedParentProvider(RoutedProvider):
+        """Hold the parent's second routing step so Core stops mid tool loop."""
+
+        def __init__(self, parent, child) -> None:
+            super().__init__(parent, child)
+            self.parent_gate = asyncio.Event()
+            self.parent_blocked = asyncio.Event()
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if (
+                CHILD_MARKER not in (request.instructions or "")
+                and request.metadata.get("operation") != "conversation_naming"
+                and self.parent_requests
+            ):
+                self.parent_blocked.set()
+                await self.parent_gate.wait()
+            return await super().complete(request)
+
+    async def scenario() -> None:
+        provider = GatedParentProvider(
+            parent=[
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                )
+            ],
+            child=[],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Go.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await asyncio.wait_for(provider.parent_blocked.wait(), 5)
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(lambda: bool(provider.child_requests))
+
+        await chat.shutdown()
+
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert parent.status == ChatTurnStatus.INTERRUPTED
+        assert parent.error == (
+            "Core stopped before this response completed. Review and resume it."
+        )
+        assert parent.request_snapshot["recovery"]["required"] is True
+        assert parent.execution_claim_id is None
+        assert parent.tool_history[0]["name"] == "start_subagent"
+        interrupted = store.get(ChatSubagent, record.id)
+        assert interrupted.status == ChatSubagentStatus.INTERRUPTED
+        assert interrupted.error == "Core shut down while this subagent was running."
+        assert (
+            store.get(ChatTurn, record.child_turn_id).status
+            == ChatTurnStatus.INTERRUPTED
+        )
+        # The next boot offers the parent for resume instead of a dead end.
+        restarted = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker-2"
+        )
+        await restarted.startup()
+        assert store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.INTERRUPTED
+        pending = restarted.pending_turn(parent.session_id)
+        assert pending is not None and pending.id == parent_turn_id
+        await restarted.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Review auth.",
+                    name="Auth review",
+                    context=None,
+                ),
+                _finish("p2"),
+                _response(text="Delegation failed; reviewing inline."),
+            ],
+            child=[],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Review auth.", allow_subagents=True)
+        )
+        parent_session_id = prepared.session.id
+        original = chat.prepare_async
+
+        async def child_prepare_fails(request):
+            if request.session_id != parent_session_id:
+                raise RuntimeError("child provider offline")
+            return await original(request)
+
+        chat.prepare_async = child_prepare_fails
+        parent_turn_id = chat.start_provider_turn(prepared)
+        producer = chat._active_provider_turns[parent_turn_id].task
+        await _drain(chat, parent_turn_id)
+        await producer
+
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert parent.status == ChatTurnStatus.COMPLETE
+        step = parent.tool_history[0]
+        assert step["name"] == "start_subagent"
+        assert "could not start" in json.dumps(step)
+        # No phantom child conversation, no failed record to re-report.
+        assert store.list_entities(ChatSubagent) == []
+        assert [
+            item.id for item in store.list_entities(ChatSession, include_temporary=True)
+        ] == [parent_session_id]
+        messages = _messages(store, parent_session_id)
+        assert [item for item in messages if item.metadata.get("kind")] == []
+        assert messages[-1].content == "Delegation failed; reviewing inline."
         await chat.shutdown()
 
     asyncio.run(scenario())

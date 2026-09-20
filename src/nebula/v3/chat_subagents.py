@@ -312,6 +312,7 @@ class SubagentService:
                 f"{task}\n\nContext from the delegating assistant:\n{context.strip()}"
             )
         )
+        child_turn_id: str | None = None
         try:
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
@@ -335,10 +336,11 @@ class SubagentService:
             )
             if prepared.turn is None:
                 raise RuntimeError("subagent turn was not created")
+            child_turn_id = prepared.turn.id
             record = self.store.update(
                 ChatSubagent,
                 record.id,
-                {"child_turn_id": prepared.turn.id},
+                {"child_turn_id": child_turn_id},
                 expected_revision=record.revision,
             )
             self.chat.start_provider_turn(prepared)
@@ -350,18 +352,58 @@ class SubagentService:
                 exc,
                 stage="subagent-start",
             )
-            latest = self.get(record.id)
-            return self.store.update(
+            error = _bounded(f"Subagent could not start: {exc}", 1_000)
+            self._discard_unstarted(record, child_session, child_turn_id, error)
+            raise InvalidToolArguments(error) from exc
+        return record
+
+    def _discard_unstarted(
+        self,
+        record: ChatSubagent,
+        child_session: ChatSession,
+        child_turn_id: str | None,
+        error: str,
+    ) -> None:
+        """Remove what a subagent that never ran left behind.
+
+        The failure goes back to the model as the tool result, so keeping the
+        record would only leave an empty "Subagent · …" conversation in the
+        list and post the same failure again once the parent replies. If the
+        cleanup itself fails the record is kept terminal, so it neither blocks
+        deleting the parent nor counts against the concurrency cap.
+        """
+
+        try:
+            if child_turn_id is not None:
+                self.chat.cancel_turn(child_turn_id)
+            self.store.delete_chat_session(child_session.id)
+            self.store.delete(ChatSubagent, record.id)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.subagent.start_cleanup_failed",
+                "A subagent that could not start left its records behind.",
+                exc,
+                stage="subagent-start",
+            )
+            try:
+                latest = self.get(record.id)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: the record went with the child conversation
+                return
+            if latest.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
+                return
+            self.store.update(
                 ChatSubagent,
                 latest.id,
                 {
                     "status": ChatSubagentStatus.FAILED,
                     "finished_at": utc_now(),
-                    "error": _bounded(f"Subagent could not start: {exc}", 1_000),
+                    "error": error,
                 },
                 expected_revision=latest.revision,
             )
-        return record
 
     # -- stop --------------------------------------------------------------
 
@@ -455,7 +497,7 @@ class SubagentService:
             await self._child_settled(record, turn)
             return
         if turn.status == ChatTurnStatus.WAITING_CALLBACK:
-            self._resume_waiting_parent(turn)
+            await self._resume_waiting_parent(turn)
         elif turn.status in {
             ChatTurnStatus.COMPLETE,
             ChatTurnStatus.FAILED,
@@ -480,7 +522,10 @@ class SubagentService:
             if status == ChatSubagentStatus.COMPLETED
             else (turn.error or status.value)
         )
-        if status == ChatSubagentStatus.STOPPED and self.chat.shutting_down:
+        if self.chat.shutting_down and status in {
+            ChatSubagentStatus.STOPPED,
+            ChatSubagentStatus.INTERRUPTED,
+        }:
             status = ChatSubagentStatus.INTERRUPTED
             error = "Core shut down while this subagent was running."
         try:
@@ -525,9 +570,9 @@ class SubagentService:
         if pending is None:
             await self.deliver_pending(record.parent_session_id)
         elif pending.status == ChatTurnStatus.WAITING_CALLBACK:
-            self._resume_waiting_parent(pending)
+            await self._resume_waiting_parent(pending)
 
-    def _resume_waiting_parent(self, turn: ChatTurn) -> None:
+    async def _resume_waiting_parent(self, turn: ChatTurn) -> None:
         wait = self.pending_wait(turn)
         if wait is None or not self.wait_satisfied(wait["ids"], wait["mode"]):
             return
@@ -543,6 +588,46 @@ class SubagentService:
                 exc,
                 stage="subagent-deliver",
             )
+            await self._fail_unresumable_parent(turn, exc)
+
+    async def _fail_unresumable_parent(self, turn: ChatTurn, exc: Exception) -> None:
+        """Fail a waiting parent visibly instead of leaving it parked forever.
+
+        Nothing retries the resume once the wait is satisfied, and the
+        operator's own Resume repeats the same failure. A failed turn frees
+        the conversation for a new message and lets the reports post now.
+        """
+
+        try:
+            latest = self.store.get(ChatTurn, turn.id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the turn was deleted with its conversation
+            return
+        if (
+            latest.status != ChatTurnStatus.WAITING_CALLBACK
+            or latest.execution_claim_id is not None
+        ):
+            return
+        try:
+            self.store.update(
+                ChatTurn,
+                latest.id,
+                {
+                    "status": ChatTurnStatus.FAILED,
+                    "error": _bounded(
+                        "Subagent reports are ready but the response could not "
+                        f"resume: {exc}",
+                        1_000,
+                    ),
+                },
+                expected_revision=latest.revision,
+            )
+        except (
+            ConflictError
+        ):  # diagnostic-expected: another worker took the turn over; its state stands
+            return
+        await self.deliver_pending(latest.session_id)
 
     @staticmethod
     def pending_wait(turn: ChatTurn) -> dict[str, Any] | None:

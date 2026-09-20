@@ -1359,3 +1359,56 @@ def test_following_a_completed_turn_replays_its_timing_and_reasoning(tmp_path):
     assert done["elapsed_ms"] == 4321
     assert done["approval_wait_ms"] == 1200
     assert done["message"]["reasoning"] == "Weighed both readings first."
+
+
+def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "follow-storage-failure.db")
+    store.create(Engagement(id="project", name="Project"))
+    chat = store.create(
+        ChatSession(
+            id="chat",
+            engagement_id="project",
+            title="Follow",
+            backend="provider",
+            model="model-a",
+            provider_profile_id="provider",
+        )
+    )
+    detail = "chat_messages entity not found: missing"
+    store.create(
+        ChatTurn(
+            id="turn",
+            engagement_id="project",
+            session_id=chat.id,
+            backend="provider",
+            provider_profile_id="provider",
+            model="model-a",
+            status=ChatTurnStatus.FAILED,
+            error=detail,
+        )
+    )
+
+    # The producer stored a storage failure (not a ChatError) as the turn's
+    # error; a follower that was attached when it died re-raises it.
+    async def failing_follow(self, turn_id, *, after_sequence=0):
+        del self, turn_id, after_sequence
+        raise RuntimeError(detail)
+        yield  # pragma: no cover - keeps this an async generator
+
+    monkeypatch.setattr(
+        chat_module.ChatService, "has_active_provider_turn", lambda self, turn_id: True
+    )
+    monkeypatch.setattr(chat_module.ChatService, "follow_provider_turn", failing_follow)
+    with TestClient(create_app(store, auth_token="test-token")) as client:
+        response = client.get("/api/v1/chat/turns/turn/events", headers=_auth())
+
+    assert response.status_code == 200
+    frames = [
+        json.loads(line[6:])
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert frames[-1]["type"] == "error"
+    assert frames[-1]["detail"] == detail
