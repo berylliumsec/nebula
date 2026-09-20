@@ -4,8 +4,18 @@ from fastapi.testclient import TestClient
 from nebula.v3.api import create_app
 from nebula.v3.chat import ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
-from nebula.v3.domain import ChatGoalStatus, ChatSession, Engagement, ProviderProfile
-from nebula.v3.native_checkpoints import NativeCheckpointService
+from nebula.v3.domain import (
+    ChatGoalStatus,
+    ChatSession,
+    Engagement,
+    NativeCheckpoint,
+    ProviderProfile,
+)
+from nebula.v3.native_checkpoints import (
+    MAX_CHECKPOINT_FILE_BYTES,
+    NativeCheckpointError,
+    NativeCheckpointService,
+)
 from nebula.v3.storage import ConflictError, NebulaStore
 
 
@@ -41,6 +51,43 @@ def test_checkpoint_restore_rejects_later_edits(tmp_path):
     with pytest.raises(ConflictError, match="later edits conflict"):
         service.restore(checkpoint.id)
     assert target.read_text(encoding="utf-8") == "operator edit\n"
+
+
+def test_checkpoint_capture_rejection_leaves_no_partial_files(tmp_path):
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    (workspace / "notes.md").write_text("original\n", encoding="utf-8")
+    (workspace / "dump.bin").write_bytes(b"\0" * (MAX_CHECKPOINT_FILE_BYTES + 1))
+    store = NebulaStore(tmp_path / "checkpoints.db")
+    store.create(
+        Engagement(id="project", name="Project", workspace_path=str(workspace))
+    )
+    store.create(
+        ProviderProfile(
+            id="provider", name="Provider", provider_type="vllm", is_local=True
+        )
+    )
+    store.create(
+        ChatSession(
+            id="session",
+            engagement_id="project",
+            title="Checkpoint chat",
+            provider_profile_id="provider",
+            model="model",
+        )
+    )
+    service = NativeCheckpointService(store, lambda _: workspace)
+
+    with pytest.raises(NativeCheckpointError, match="exceeds"):
+        service.capture("session", label="Partial", paths=["notes.md", "dump.bin"])
+
+    checkpoints = workspace / ".agents" / "checkpoints"
+    assert not checkpoints.exists() or list(checkpoints.iterdir()) == []
+    assert store.list_entities(NativeCheckpoint) == []
+
+    checkpoint = service.capture("session", label="Complete", paths=["notes.md"])
+    assert [path.name for path in checkpoints.iterdir()] == [checkpoint.id]
+    assert (checkpoints / checkpoint.id / "notes.md").read_bytes() == b"original\n"
 
 
 def test_fork_copies_goal_as_independent_draft_without_running_state(tmp_path):

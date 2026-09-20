@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from pydantic import Field
 
+from .diagnostics import record_caught_exception
 from .domain import NativeCheckpoint, NebulaModel, utc_now
 from .storage import ConflictError, NebulaStore, NotFoundError
 
@@ -66,6 +68,24 @@ def _copy_bounded(source: Path, destination: Path) -> dict[str, Any]:
     }
 
 
+def _discard(path: Path) -> None:
+    """Remove a staged or record-less checkpoint directory during cleanup."""
+
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        # diagnostic-expected: the directory was never created or is already gone.
+        return
+    except OSError as caught_error:
+        record_caught_exception(
+            "chat",
+            "chat.native_checkpoints.cleanup_failed",
+            "A partial native checkpoint directory could not be removed.",
+            caught_error,
+            stage="checkpoint-cleanup",
+        )
+
+
 class NativeCheckpointService:
     def __init__(self, store: NebulaStore, workspace_resolver) -> None:
         self.store = store
@@ -95,25 +115,48 @@ class NativeCheckpointService:
         if len(unique) > MAX_CHECKPOINT_FILES:
             raise NativeCheckpointError("checkpoint is limited to 64 files")
         workspace = Path(self.workspace_resolver(session.engagement_id)).resolve()
-        checkpoint_id = str(uuid4())
-        stored: list[dict[str, Any]] = []
+        # Validate every path and size before writing anything, then copy
+        # into a staging directory that only becomes the checkpoint once all
+        # files are in place. A rejected entry therefore never leaves a
+        # partial copy behind in the workspace.
+        sources: list[tuple[str, Path]] = []
         for relative in unique:
             source = _safe_file(workspace, relative)
-            copied = _copy_bounded(
-                source,
-                workspace / CHECKPOINT_ROOT / checkpoint_id / Path(relative),
+            if source.stat().st_size > MAX_CHECKPOINT_FILE_BYTES:
+                raise NativeCheckpointError(
+                    f"{source.name} exceeds {MAX_CHECKPOINT_FILE_BYTES} bytes"
+                )
+            sources.append((relative, source))
+        checkpoint_id = str(uuid4())
+        checkpoint_root = workspace / CHECKPOINT_ROOT
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
+        staging = checkpoint_root / f".{checkpoint_id}.partial"
+        staging.mkdir()
+        stored: list[dict[str, Any]] = []
+        try:
+            for relative, source in sources:
+                copied = _copy_bounded(source, staging / Path(relative))
+                copied["path"] = relative
+                stored.append(copied)
+            staging.rename(checkpoint_root / checkpoint_id)
+        except BaseException:
+            # diagnostic-expected: the staged copy is removed and the failure re-raised unchanged.
+            _discard(staging)
+            raise
+        try:
+            return self.store.create(
+                NativeCheckpoint(
+                    id=checkpoint_id,
+                    engagement_id=session.engagement_id,
+                    chat_session_id=session.id,
+                    label=label.strip() or utc_now().isoformat(),
+                    files=stored,
+                )
             )
-            copied["path"] = relative
-            stored.append(copied)
-        return self.store.create(
-            NativeCheckpoint(
-                id=checkpoint_id,
-                engagement_id=session.engagement_id,
-                chat_session_id=session.id,
-                label=label.strip() or utc_now().isoformat(),
-                files=stored,
-            )
-        )
+        except BaseException:
+            # diagnostic-expected: a checkpoint without its record is removed and the failure re-raised unchanged.
+            _discard(checkpoint_root / checkpoint_id)
+            raise
 
     def preview(self, checkpoint_id: str) -> list[CheckpointFileStatus]:
         checkpoint = self.store.get(NativeCheckpoint, checkpoint_id)

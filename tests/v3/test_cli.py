@@ -1,7 +1,9 @@
 import hashlib
 import json
 import re
+import socket
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import httpx
 from typer.testing import CliRunner
@@ -373,6 +375,62 @@ def test_cli_imports_legacy_side_by_side_then_exports_bundle(tmp_path, monkeypat
     assert export_report["engagement_id"] == engagement.id
     assert export_report["entity_counts"]["engagements"] == 1
     assert destination.is_file()
+
+
+def test_export_reports_known_failures_without_tracebacks(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEBULA_V3_DATABASE_URL", raising=False)
+    monkeypatch.delenv("NEBULA_V3_ARTIFACT_DIR", raising=False)
+    data_dir = tmp_path / "v3-data"
+    destination = tmp_path / "bundle.zip"
+    runner = CliRunner()
+    arguments = ["export", "project", str(destination), "--data-dir", str(data_dir)]
+
+    missing = runner.invoke(app, arguments)
+    assert missing.exit_code == 1
+    assert isinstance(missing.exception, SystemExit)
+    assert "entity not found: project" in missing.output
+    assert "Traceback" not in missing.output
+
+    NebulaStore(data_dir / "nebula.db").create(Engagement(id="project", name="P"))
+    first = runner.invoke(app, arguments)
+    assert first.exit_code == 0, first.output
+    assert destination.is_file()
+
+    second = runner.invoke(app, arguments)
+    assert second.exit_code == 1
+    assert isinstance(second.exception, SystemExit)
+    assert "destination already exists" in second.output
+    assert "Traceback" not in second.output
+
+
+def test_serve_reports_a_busy_port_without_a_traceback(tmp_path, monkeypatch):
+    busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen(1)
+        port = busy.getsockname()[1]
+        monkeypatch.setattr(
+            "nebula.v3.cli._services",
+            lambda value=None, *, diagnostics_level=None: (tmp_path, None, None),
+        )
+        monkeypatch.setattr("nebula.v3.cli.ChromaKnowledgeIndex", lambda path: None)
+        monkeypatch.setattr(
+            "nebula.v3.cli.default_runtime_platform", lambda **_kwargs: None
+        )
+        monkeypatch.setattr(
+            "nebula.v3.cli.create_app",
+            lambda *_args, **_kwargs: SimpleNamespace(state=SimpleNamespace()),
+        )
+        result = CliRunner().invoke(
+            app, ["serve", "--host", "127.0.0.1", "--port", str(port)]
+        )
+    finally:
+        busy.close()
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert f"127.0.0.1:{port}" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_cli_run_uses_an_explicit_vllm_profile_without_tools(tmp_path, monkeypatch):
