@@ -464,11 +464,19 @@ class BrowserAssessmentService:
         if request.action in {"start", "retry"}:
             self._require_frozen_scope(assessment)
         managed = await self.engines.adapter("managed-chromium")
-        if request.action in {"start", "pause", "resume", "stop", "complete", "revoke"}:
-            if managed is None:
-                raise BrowserWorkflowError(
-                    "Managed Chromium is unavailable; manual legacy browsing remains usable. Prepare the runtime and retry."
-                )
+        requires_engine = request.action in {"start", "pause", "resume"}
+        if requires_engine and managed is None:
+            raise BrowserWorkflowError(
+                "Managed Chromium is unavailable; manual legacy browsing remains usable. Prepare the runtime and retry."
+            )
+        # Stopping must stay reachable when the engine is gone or never ran: a
+        # draft created without Chromium and a running assessment whose
+        # browserd died both end here, so the engine call is best-effort.
+        stops_engine = (
+            request.action in {"stop", "complete", "revoke"}
+            and assessment.started_at is not None
+        )
+        if managed is not None and (requires_engine or stops_engine):
             try:
                 if request.action == "start":
                     await managed.ensure_identity(assessment.primary_identity_id)

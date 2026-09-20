@@ -98,6 +98,9 @@ class BrowserEngineAdapter(ABC):
 
 
 BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS = 30.0
+# browserd runs guided actions with Playwright's default per-operation timeout
+# and fingerprints the page before and after; the client deadline covers that.
+BROWSER_ACTION_TIMEOUT_SECONDS = 30.0
 
 
 class LocalBrowserdAdapter(BrowserEngineAdapter):
@@ -139,15 +142,21 @@ class LocalBrowserdAdapter(BrowserEngineAdapter):
         self._client = client
         self._timeout = timeout_seconds
 
+    def _deadline(self, path: str) -> float:
+        # Page work outlives the short readiness/lifecycle budget: a guided
+        # action or a navigation plus capture may legitimately take Playwright's
+        # full operation timeout, and a shorter client deadline would fabricate
+        # an ambiguous receipt for work browserd then completes.
+        if path == "/v1/actions":
+            return max(self._timeout, BROWSER_ACTION_TIMEOUT_SECONDS + 5)
+        if path.startswith("/v1/companion/"):
+            return max(self._timeout, BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS + 5)
+        return self._timeout
+
     async def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> httpx.Response:
-        # Navigation plus capture outlives the short readiness/lifecycle budget.
-        timeout = (
-            max(self._timeout, BROWSER_COMPANION_OPERATION_TIMEOUT_SECONDS + 5)
-            if path.startswith("/v1/companion/")
-            else self._timeout
-        )
+        timeout = self._deadline(path)
         headers = {
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/json",

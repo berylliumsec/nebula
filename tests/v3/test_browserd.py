@@ -268,6 +268,9 @@ def test_companion_tabs_success_preserves_identity_and_page_contents(
     class Page:
         url = "https://example.test/"
 
+        def is_closed(self):
+            return False
+
         async def title(self):
             return "Account protected-secret"
 
@@ -302,3 +305,166 @@ def test_companion_tabs_success_preserves_identity_and_page_contents(
             ]
         }
         assert "protected-secret" in response.text
+
+
+def verified_runtime(configured: BrowserdSettings):
+    executable = configured.runtime_root / "chromium-test" / "chrome-linux" / "chrome"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"verified full chromium")
+    (configured.runtime_root / "nebula-playwright-runtime.json").write_text(
+        json.dumps(
+            {
+                "browser": "chromium",
+                "playwright_version": "1.61.0",
+                "executables": ["chromium-test/chrome-linux/chrome"],
+                "executable_sha256": {
+                    "chromium-test/chrome-linux/chrome": hashlib.sha256(
+                        executable.read_bytes()
+                    ).hexdigest()
+                },
+                "sbom": "nebula-playwright-sbom.spdx.json",
+                "provenance": {"installer": "python -m playwright install chromium"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return executable
+
+
+class FakePage:
+    """Mimics the Playwright page surface browserd touches for tab bookkeeping."""
+
+    def __init__(self, context, url: str = "about:blank") -> None:
+        self.context = context
+        self.url = url
+        self.closed = False
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event: str, handler) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    def is_closed(self) -> bool:
+        return self.closed
+
+    async def title(self) -> str:
+        if self.closed:
+            raise RuntimeError("Target page, context or browser has been closed")
+        return f"Title of {self.url}"
+
+    async def close(self) -> None:
+        # Mirrors Ctrl+W in the headed window: the page closes and Playwright
+        # emits ``close`` for it.
+        self.closed = True
+        self.context.pages.remove(self)
+        for handler in self._handlers.get("close", []):
+            handler(self)
+
+
+class FakeTracing:
+    async def start(self, **kwargs) -> None:
+        return None
+
+
+class FakeContext:
+    def __init__(self) -> None:
+        self.pages: list[FakePage] = []
+        self.tracing = FakeTracing()
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event: str, handler) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    async def new_page(self) -> FakePage:
+        return self.open_page("about:blank")
+
+    def open_page(self, url: str) -> FakePage:
+        # A site-opened popup and ``context.new_page`` both surface through the
+        # context ``page`` event before the opener observes the new page.
+        page = FakePage(self, url)
+        self.pages.append(page)
+        for handler in self._handlers.get("page", []):
+            handler(page)
+        return page
+
+
+class LaunchingFakeChromium(FakeChromium):
+    def __init__(self, executable_path: str) -> None:
+        super().__init__(executable_path)
+        self.contexts: list[FakeContext] = []
+
+    async def launch_persistent_context(self, profile: str, **kwargs) -> FakeContext:
+        context = FakeContext()
+        self.contexts.append(context)
+        return context
+
+
+class LaunchingFakePlaywright(FakePlaywright):
+    def __init__(self, executable_path: str) -> None:
+        super().__init__(executable_path)
+        self.chromium = LaunchingFakeChromium(executable_path)
+
+
+def test_closed_tabs_are_forgotten_and_popups_are_listed(tmp_path):
+    from nebula.v3.browser_companion import CompanionRequest
+    from nebula.v3.browser_companion_runtime import operate
+
+    configured = settings(tmp_path)
+    executable = verified_runtime(configured)
+    playwright = LaunchingFakePlaywright(str(executable))
+    starter = FakePlaywrightStarter(str(executable))
+    starter.playwright = playwright
+    manager = BrowserdManager(configured, playwright_factory=lambda: starter)
+
+    async def exercise():
+        await manager.start()
+        assert (await manager.readiness()).state == BrowserEngineState.READY
+        receipt = await manager.ensure_identity("identity-1")
+        (first_id,) = receipt.tab_ids
+        context = playwright.chromium.contexts[0]
+
+        opened = await operate(
+            manager, "identity-1", CompanionRequest(operation="new_tab")
+        )
+        second_id = opened["active_tab_id"]
+        assert [tab["id"] for tab in opened["tabs"]] == [first_id, second_id]
+        assert len(context.pages) == 2
+
+        # The operator closes the second tab from the Chromium window.
+        await manager._tabs[("identity-1", second_id)].close()
+        listed = await operate(
+            manager, "identity-1", CompanionRequest(operation="tabs")
+        )
+        assert [tab["id"] for tab in listed["tabs"]] == [first_id]
+        assert ("identity-1", second_id) not in manager._tabs
+
+        # A site-opened popup is registered and listed alongside the opener.
+        popup = context.open_page("https://popup.example.test/")
+        listed = await operate(
+            manager, "identity-1", CompanionRequest(operation="tabs")
+        )
+        assert [tab["url"] for tab in listed["tabs"]] == [
+            "about:blank",
+            "https://popup.example.test/",
+        ]
+        popup_id = listed["tabs"][1]["id"]
+        assert manager._tabs[("identity-1", popup_id)] is popup
+
+        # A page whose close event has not been delivered yet is skipped, not
+        # allowed to wedge the listing.
+        popup.closed = True
+        listed = await operate(
+            manager, "identity-1", CompanionRequest(operation="tabs")
+        )
+        assert [tab["id"] for tab in listed["tabs"]] == [first_id]
+        with pytest.raises(ValueError, match="does not belong"):
+            await manager.page_for_screencast("identity-1", popup_id)
+
+        # Opening a tab after all of this still yields exactly one new id.
+        opened = await operate(
+            manager, "identity-1", CompanionRequest(operation="new_tab")
+        )
+        assert len(opened["tabs"]) == 2
+        assert len({tab["id"] for tab in opened["tabs"]}) == 2
+        await manager.close()
+
+    asyncio.run(exercise())

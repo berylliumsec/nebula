@@ -1021,3 +1021,115 @@ def test_automatic_browser_model_workflow_reaches_provider_and_harness():
         vendor="test",
     )
     assert BROWSER_MODEL_WORKFLOW in instructions
+
+
+@pytest.mark.parametrize("failure", ["transport", "timeout", "page_timeout", "error"])
+def test_preflight_tab_check_failure_is_sanitized_like_the_operation(
+    tmp_path, monkeypatch, failure
+):
+    import httpx
+
+    _, _, _, session, service = setup(tmp_path)
+    calls = []
+
+    class Adapter:
+        async def _request(self, method, path, payload):
+            calls.append(payload["operation"])
+            if failure == "transport":
+                raise httpx.ConnectError("private endpoint")
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private endpoint")
+            return httpx.Response(
+                504 if failure == "page_timeout" else 500,
+                request=httpx.Request(method, "http://fixture.test" + path),
+                json={"detail": "private upstream details"},
+            )
+
+    async def adapter():
+        return Adapter()
+
+    monkeypatch.setattr(service, "adapter", adapter)
+    with pytest.raises(ValueError, match="[Rr]econnect|[Rr]etry") as error:
+        asyncio.run(
+            service.request(
+                session.id, CompanionRequest(operation="capture", tab_id="tab")
+            )
+        )
+    assert calls == ["tabs"]
+    assert "private" not in str(error.value)
+
+
+def test_cancelled_decision_leaves_a_terminal_action(tmp_path, monkeypatch):
+    store, _, _, session, service = setup(tmp_path)
+    action = service.propose(
+        session.id, CompanionRequest(operation="click", page_revision="old")
+    )
+    dispatched = asyncio.Event()
+
+    async def request(*args, **kwargs):
+        dispatched.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(service, "request", request)
+
+    async def run():
+        task = asyncio.create_task(service.decide(session.id, action.id, "approve"))
+        await dispatched.wait()
+        assert store.get(CompanionAction, action.id).status == "running"
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(run())
+    assert store.get(CompanionAction, action.id).status == "failed"
+    with pytest.raises(ValueError, match="already been decided"):
+        asyncio.run(service.decide(session.id, action.id, "approve"))
+
+
+def test_invalidating_approvals_sweeps_stale_running_actions_only(tmp_path):
+    from nebula.v3.domain import ChatTurn, ChatTurnStatus
+
+    store, project, _, session, service = setup(tmp_path)
+
+    def turn():
+        return store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id="chat",
+                model="fixture",
+                provider_profile_id="provider",
+            )
+        )
+
+    def running(chat_turn_id=None, **changes):
+        action = service.propose(
+            session.id,
+            CompanionRequest(operation="click", page_revision="old"),
+            chat_turn_id=chat_turn_id,
+        )
+        return store.update(
+            CompanionAction, action.id, {"status": "running", **changes}
+        )
+
+    ended = turn()
+    interrupted = running(ended.id)
+    store.update(
+        ChatTurn,
+        ended.id,
+        {"status": ChatTurnStatus.CANCELLED},
+        expected_revision=ended.revision,
+    )
+    lapsed = running(
+        expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+    )
+    live = running(turn().id)
+    pending = service.propose(
+        session.id, CompanionRequest(operation="click", page_revision="old")
+    )
+
+    service.invalidate_pending_actions(session.id)
+
+    assert store.get(CompanionAction, interrupted.id).status == "failed"
+    assert store.get(CompanionAction, lapsed.id).status == "failed"
+    assert store.get(CompanionAction, live.id).status == "running"
+    assert store.get(CompanionAction, pending.id).status == "revoked"
