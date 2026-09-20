@@ -1002,3 +1002,38 @@ def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
         ).status_code
         == 404
     )
+
+
+def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
+    from nebula.v3.domain import HarnessSession
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Harness"))
+    vendor = store.create(
+        HarnessSession(
+            id="vendor-1",
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="model-a",
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Harness chat",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=vendor.id,
+            model="model-a",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.post(
+        f"/api/v1/chat/sessions/{session.id}/fork",
+        headers=_auth(),
+        json={"through_message_id": "not-a-message"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert [item.id for item in store.list_entities(HarnessSession)] == [vendor.id]

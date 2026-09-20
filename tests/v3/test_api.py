@@ -1,3 +1,4 @@
+import base64
 from datetime import datetime, timedelta
 import json
 
@@ -1665,3 +1666,15 @@ def test_openrouter_upstream_directory_failure_is_reported(tmp_path):
     )
     assert response.status_code == 502
     assert "provider directory is unavailable" in response.text
+
+
+def test_companion_stream_closes_with_4404_for_a_missing_session(api):
+    client, _, _ = api
+    token = base64.urlsafe_b64encode(b"test-token").decode("ascii").rstrip("=")
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/api/v1/browser-companion/missing/tabs/tab-1/stream",
+            subprotocols=[f"nebula.auth.{token}"],
+        ):
+            pass
+    assert exc_info.value.code == 4404
