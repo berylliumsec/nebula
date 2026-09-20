@@ -36,7 +36,7 @@ from pypdf import PdfReader
 from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
-from .storage import NebulaStore
+from .storage import EntityT, NebulaStore
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 4 * 1024 * 1024
@@ -307,9 +307,13 @@ def build_chunks(
 
     chunks: list[dict[str, Any]] = []
     for section in document.sections:
+        # Spreadsheet rows repeat verbatim across sheets (shared headers, the
+        # same host on two tabs); the location keeps their ids distinct so the
+        # vector index accepts the whole document instead of rejecting it.
+        location = section.location or ""
         for text in _split_text(section.text):
             identity = hashlib.sha256(
-                f"{source_id}\0{section.page or 0}\0{text}".encode("utf-8")
+                f"{source_id}\0{section.page or 0}\0{location}\0{text}".encode("utf-8")
             ).hexdigest()[:24]
             chunk: dict[str, Any] = {
                 "id": identity,
@@ -984,27 +988,19 @@ def library_item_summary(item: LibraryItem) -> LibraryItem:
 def migrate_inline_knowledge_indexes(
     *, store: NebulaStore, knowledge_index: KnowledgeIndex
 ) -> int:
-    """Move pre-Chroma inline chunks into the persistent vector index."""
+    """Move pre-Chroma inline chunks into the persistent vector index.
 
-    sources: list[KnowledgeSource] = []
-    offset = 0
-    while True:
-        page = store.list_entities(KnowledgeSource, offset=offset, limit=1_000)
-        sources.extend(page)
-        if len(page) < 1_000:
-            break
-        offset += len(page)
+    Project sources and global Library items both kept their chunks inline in
+    ``metadata["chunks"]`` before a vector index existed; both are migrated so
+    neither stays ``ready`` yet unretrievable.
+    """
+
     migrated = 0
-    for source in sources:
-        if source.status.casefold() != "ready":
+    for source in _all_entities(store, KnowledgeSource):
+        chunks = _inline_chunks(source.status, source.metadata)
+        if chunks is None:
             continue
-        chunks = source.metadata.get("chunks")
-        if not isinstance(chunks, list) or not chunks:
-            continue
-        valid_chunks = [chunk for chunk in chunks if isinstance(chunk, dict)]
-        if not valid_chunks:
-            continue
-        knowledge_index.upsert_source(source, valid_chunks)
+        knowledge_index.upsert_source(source, chunks)
         metadata = dict(source.metadata)
         metadata.pop("chunks", None)
         metadata.update(knowledge_index.descriptor)
@@ -1015,7 +1011,48 @@ def migrate_inline_knowledge_indexes(
             expected_revision=source.revision,
         )
         migrated += 1
+    for item in _all_entities(store, LibraryItem):
+        chunks = _inline_chunks(item.status, item.metadata)
+        if chunks is None:
+            continue
+        knowledge_index.upsert_library_item(item, chunks)
+        metadata = dict(item.metadata)
+        metadata.pop("chunks", None)
+        metadata.update(knowledge_index.library_descriptor)
+        store.update(
+            LibraryItem,
+            item.id,
+            {"metadata": metadata},
+            expected_revision=item.revision,
+        )
+        migrated += 1
     return migrated
+
+
+def _all_entities(store: NebulaStore, model: type[EntityT]) -> list[EntityT]:
+    entities: list[EntityT] = []
+    offset = 0
+    while True:
+        page = store.list_entities(model, offset=offset, limit=1_000)
+        entities.extend(page)
+        if len(page) < 1_000:
+            break
+        offset += len(page)
+    return entities
+
+
+def _inline_chunks(
+    status: str, metadata: dict[str, Any]
+) -> list[dict[str, Any]] | None:
+    """Return the legacy inline chunks of a ready record, or None to skip it."""
+
+    if status.casefold() != "ready":
+        return None
+    chunks = metadata.get("chunks")
+    if not isinstance(chunks, list) or not chunks:
+        return None
+    valid_chunks = [chunk for chunk in chunks if isinstance(chunk, dict)]
+    return valid_chunks or None
 
 
 def _index_metadata(

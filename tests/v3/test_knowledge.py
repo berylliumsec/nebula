@@ -16,6 +16,7 @@ from nebula.v3.knowledge import (
     FetchedUrlDocument,
     InvalidSourceUrlError,
     SourceFetchError,
+    build_chunks,
     extract_document,
     fetch_url_document,
     ingest_document,
@@ -588,6 +589,52 @@ def test_xlsx_extraction_preserves_sheet_rows_and_never_executes_formulas():
     assert "B7: 192.0.2.7" in extracted.sections[0].text
     assert '=HYPERLINK("https://example.test")' in extracted.sections[0].text
     assert extracted.sections[1].location == "Excluded (hidden), row 2"
+
+
+def test_repeated_spreadsheet_rows_get_distinct_chunk_ids():
+    workbook = b"""<?xml version="1.0"?>
+    <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+      xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <sheets><sheet name="EMEA" sheetId="1" r:id="rId1"/>
+      <sheet name="APAC" sheetId="2" r:id="rId2"/></sheets>
+    </workbook>"""
+    relationships = b"""<?xml version="1.0"?>
+    <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+      <Relationship Id="rId1" Target="worksheets/sheet1.xml"/>
+      <Relationship Id="rId2" Target="worksheets/sheet2.xml"/>
+    </Relationships>"""
+    # Both sheets carry the same rows, so each row text repeats across sheets.
+    sheet = b"""<?xml version="1.0"?>
+    <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Host</t></is></c>
+      <c r="B1" t="inlineStr"><is><t>Port</t></is></c></row>
+      <row r="2"><c r="A2" t="inlineStr"><is><t>Host</t></is></c>
+      <c r="B2" t="inlineStr"><is><t>Port</t></is></c></row></sheetData>
+    </worksheet>"""
+    archive_buffer = io.BytesIO()
+    with zipfile.ZipFile(archive_buffer, "w") as archive:
+        archive.writestr("xl/workbook.xml", workbook)
+        archive.writestr("xl/_rels/workbook.xml.rels", relationships)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet)
+        archive.writestr("xl/worksheets/sheet2.xml", sheet)
+    extracted = extract_document(archive_buffer.getvalue(), filename="assets.xlsx")
+    assert len(extracted.sections) == 4
+    assert len({section.text for section in extracted.sections}) == 2
+
+    chunks = build_chunks(extracted, source_id="source-1", artifact_id="artifact-1")
+
+    # Every row is its own chunk: the vector index rejects duplicate ids, which
+    # used to leave the whole workbook stuck in "error" with nothing retrievable.
+    assert [chunk["location"] for chunk in chunks] == [
+        "EMEA, row 1",
+        "EMEA, row 2",
+        "APAC, row 1",
+        "APAC, row 2",
+    ]
+    assert len({chunk["id"] for chunk in chunks}) == 4
+    # Identity stays deterministic across reindexes of the same document.
+    again = build_chunks(extracted, source_id="source-1", artifact_id="artifact-1")
+    assert [chunk["id"] for chunk in again] == [chunk["id"] for chunk in chunks]
 
 
 def test_pdf_extraction_stops_when_the_text_budget_is_exceeded(monkeypatch):

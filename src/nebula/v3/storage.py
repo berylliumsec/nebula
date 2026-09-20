@@ -13,7 +13,18 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from .application_model.service import ApplicationModelService
 
-from sqlalchemy import and_, delete, exists, func, insert, or_, select, text, update
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    delete,
+    exists,
+    func,
+    insert,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -39,6 +50,20 @@ from .domain import (
 )
 
 EntityT = TypeVar("EntityT", bound=Entity)
+
+
+def not_temporary_chat_session() -> ColumnElement[bool]:
+    """SQL predicate that excludes "Ask Nebula" popup sessions from chat rows.
+
+    ``list_entities``, ``count``, ``overview`` and the federated search
+    projection all share this definition so a temporary conversation is either
+    hidden everywhere or nowhere.
+    """
+
+    return func.coalesce(
+        EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
+        False,
+    ).is_(False)
 
 
 def _check_model_update(model):
@@ -759,12 +784,7 @@ class NebulaStore:
             raise ValueError("limit must be between 1 and 1000")
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
         if model.entity_kind == "chat_sessions" and not include_temporary:
-            statement = statement.where(
-                func.coalesce(
-                    EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
-                    False,
-                ).is_(False)
-            )
+            statement = statement.where(not_temporary_chat_session())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         if automation_run_id is not None:
@@ -835,17 +855,18 @@ class NebulaStore:
                 return
             offset += scanned
 
-    def count(self, model: type[Entity], *, engagement_id: str | None = None) -> int:
+    def count(
+        self,
+        model: type[Entity],
+        *,
+        engagement_id: str | None = None,
+        include_temporary: bool = False,
+    ) -> int:
         statement = select(func.count(EntityRow.id)).where(
             EntityRow.kind == model.entity_kind
         )
-        if model.entity_kind == "chat_sessions":
-            statement = statement.where(
-                func.coalesce(
-                    EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
-                    False,
-                ).is_(False)
-            )
+        if model.entity_kind == "chat_sessions" and not include_temporary:
+            statement = statement.where(not_temporary_chat_session())
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
         with self.database.session() as session:
@@ -1489,8 +1510,12 @@ class NebulaStore:
             return bool(session.scalar(select(exists().where(predicate))))
 
     def overview(self, engagement_id: str | None = None) -> dict[str, Any]:
-        statement = select(EntityRow.kind, func.count(EntityRow.id)).group_by(
-            EntityRow.kind
+        # Temporary "Ask Nebula" sessions are hidden from the conversation list,
+        # so the conversation count must leave them out as well.
+        statement = (
+            select(EntityRow.kind, func.count(EntityRow.id))
+            .where(or_(EntityRow.kind != "chat_sessions", not_temporary_chat_session()))
+            .group_by(EntityRow.kind)
         )
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
