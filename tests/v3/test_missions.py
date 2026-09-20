@@ -1,6 +1,7 @@
 import asyncio
 import threading
 import time
+from contextlib import asynccontextmanager
 from datetime import timedelta
 
 import pytest
@@ -14,6 +15,8 @@ from nebula.v3.api import (
 from nebula.v3.domain import (
     AgentAttempt,
     AgentRun,
+    Approval,
+    ApprovalStatus,
     Engagement,
     ProviderProfile,
     RiskClass,
@@ -27,6 +30,7 @@ from nebula.v3.domain import (
     ToolCallStatus,
     utc_now,
 )
+from nebula.v3 import missions as missions_module
 from nebula.v3.missions import MissionService
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -35,6 +39,7 @@ from nebula.v3.providers import (
     ModelResponse,
     ModelUsage,
     ProviderConfig,
+    ProviderError,
     ProviderFlavor,
     ProviderHealth,
     ProviderKind,
@@ -913,3 +918,321 @@ def test_failure_cleanup_paginates_all_run_tasks_and_attempts(tmp_path):
     events = store.replay_events(run.id, limit=10_000)
     assert len(events) == 1_001
     assert events[-1].payload["task_id"] == "task-1000"
+
+
+class GatedRuntime:
+    """A mission runtime whose work blocks until the test releases it."""
+
+    def __init__(self, store, gates: dict[str, asyncio.Event], stats: dict[str, int]):
+        self.store = store
+        self.gates = gates
+        self.stats = stats
+
+    def _complete(self, run_id: str) -> None:
+        run = self.store.get(AgentRun, run_id)
+        self.store.update(
+            AgentRun,
+            run.id,
+            {"status": RunStatus.COMPLETE, "completed_at": utc_now()},
+            expected_revision=run.revision,
+        )
+
+    async def start(self, **kwargs) -> dict:
+        run_id = kwargs["run_id"]
+        self.stats["active"] += 1
+        self.stats["max_active"] = max(self.stats["max_active"], self.stats["active"])
+        try:
+            gate = self.gates.setdefault(run_id, asyncio.Event())
+            self.gates.setdefault("started", asyncio.Event()).set()
+            await gate.wait()
+        finally:
+            self.stats["active"] -= 1
+        self._complete(run_id)
+        return {}
+
+    async def resume(self, run_id: str, response: dict) -> dict:
+        self.stats["resumed"] += 1
+        self._complete(run_id)
+        return {}
+
+
+def _gated_runtime_factory(store, gates, stats):
+    @asynccontextmanager
+    async def factory(**kwargs):
+        yield GatedRuntime(store, gates, stats)
+
+    return factory
+
+
+def _waiting_run_with_approval(store, engagement, profile):
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Review the bounded scope after approval",
+            status=RunStatus.WAITING_APPROVAL,
+            supervisor_provider_id=profile.id,
+            supervisor_model="security-model",
+            budget=RunBudget(
+                max_duration_seconds=30,
+                max_tokens=2_000,
+                max_tool_calls=0,
+                max_delegation_depth=0,
+            ),
+            metadata={"origin": "api", "waiting_approval": True},
+        )
+    )
+    approval = store.create(
+        Approval(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            status=ApprovalStatus.APPROVED,
+            risk_class=RiskClass.LOCAL_READ,
+            exact_request={"tool_name": "http_get", "arguments": {}},
+            policy_rationale="operator confirmation required",
+            requested_by="system",
+            decided_by="operator",
+            decided_at=utc_now(),
+        )
+    )
+    return run, approval
+
+
+def test_approval_resume_is_not_blocked_by_mission_capacity(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "approval-capacity.db")
+        engagement = store.create(Engagement(name="Approval capacity"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        gates: dict[str, asyncio.Event] = {}
+        stats = {"active": 0, "max_active": 0, "resumed": 0}
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "approval-checkpoints.db",
+            provider_factory=lambda selected: provider,
+            runtime_factory=_gated_runtime_factory(store, gates, stats),
+            max_active_missions=1,
+            cancellation_timeout_seconds=2,
+        )
+        blocker = await service.start_mission(
+            engagement_id=engagement.id,
+            name="Blocker",
+            objective="Occupy the only mission slot",
+            provider_id=profile.id,
+            model="security-model",
+            budget=RunBudget(
+                max_duration_seconds=30,
+                max_tokens=2_000,
+                max_tool_calls=0,
+                max_delegation_depth=0,
+            ),
+        )
+        await asyncio.wait_for(gates.setdefault("started", asyncio.Event()).wait(), 5)
+        assert len(service._tasks) == 1
+
+        waiting, approval = _waiting_run_with_approval(store, engagement, profile)
+        # The waiting run already holds a logical slot: the persisted APPROVED
+        # decision must never leave it stranded in WAITING_APPROVAL.
+        resumed = await service.resume_after_approval(approval, actor_id="operator")
+        assert resumed.status == RunStatus.RUNNING
+        assert waiting.id in service._tasks
+        await asyncio.wait_for(service._tasks[waiting.id], 5)
+        assert store.get(AgentRun, waiting.id).status == RunStatus.COMPLETE
+        assert stats["resumed"] == 1
+
+        gates[blocker.id].set()
+        await asyncio.wait_for(service._tasks[blocker.id], 5)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_reposting_an_approval_decision_resumes_a_stranded_run(tmp_path):
+    store = NebulaStore(tmp_path / "approval-redrive.db")
+    engagement = store.create(Engagement(name="Approval redrive"))
+    profile = _profile(store)
+    provider = RecordingProvider(profile)
+    gates: dict[str, asyncio.Event] = {}
+    stats = {"active": 0, "max_active": 0, "resumed": 0}
+    failures = {"remaining": 1}
+
+    def flaky_factory(selected):
+        if failures["remaining"]:
+            failures["remaining"] -= 1
+            raise ProviderError("provider credentials are locked")
+        return provider
+
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "approval-checkpoints.db",
+        provider_factory=flaky_factory,
+        runtime_factory=_gated_runtime_factory(store, gates, stats),
+        cancellation_timeout_seconds=2,
+    )
+    app = create_app(store, auth_token="test-token", mission_service=service)
+    with TestClient(app) as client:
+        run, _ = _waiting_run_with_approval(store, engagement, profile)
+        approval = store.get(Approval, store.list_entities(Approval, limit=10)[0].id)
+        approval = store.update(
+            Approval,
+            approval.id,
+            {"status": ApprovalStatus.PENDING, "decided_by": None, "decided_at": None},
+            expected_revision=approval.revision,
+        )
+
+        first = client.post(
+            f"/api/v1/approvals/{approval.id}/decision",
+            headers=_auth(),
+            json={"decision": "approve"},
+        )
+        assert first.status_code == 502
+        assert store.get(Approval, approval.id).status == ApprovalStatus.APPROVED
+        assert store.get(AgentRun, run.id).status == RunStatus.WAITING_APPROVAL
+
+        second = client.post(
+            f"/api/v1/approvals/{approval.id}/decision",
+            headers=_auth(),
+            json={"decision": "approve"},
+        )
+        assert second.status_code == 200
+        assert second.json()["status"] == "approved"
+        _wait_for_status(client, run.id, "complete")
+        assert stats["resumed"] == 1
+
+
+def test_recurrence_scheduling_failure_is_recorded_on_the_completed_run(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "recurrence.db")
+        engagement = store.create(Engagement(name="Recurring"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "recurrence-checkpoints.db",
+            provider_factory=lambda selected: provider,
+        )
+        run = await service.start_mission(
+            engagement_id=engagement.id,
+            name="Daily review",
+            objective="Review the bounded scope",
+            provider_id=profile.id,
+            model="security-model",
+            budget=RunBudget(
+                max_duration_seconds=30,
+                max_tokens=2_000,
+                max_tool_calls=0,
+                max_delegation_depth=0,
+            ),
+            repeat_interval_seconds=3_600,
+        )
+        # The operator disables the profile while the occurrence is running, so
+        # the next occurrence cannot be validated when this one completes.
+        latest_profile = store.get(ProviderProfile, profile.id)
+        store.update(
+            ProviderProfile,
+            profile.id,
+            {"enabled": False},
+            expected_revision=latest_profile.revision,
+        )
+        await asyncio.wait_for(service._tasks[run.id], 10)
+
+        completed = store.get(AgentRun, run.id)
+        assert completed.status == RunStatus.COMPLETE
+        assert "disabled" in str(completed.metadata.get("recurrence_error"))
+        assert store.count(AgentRun) == 1
+        events = [event.event_type for event in store.replay_events(run.id)]
+        assert events[-1] == "run.recurrence_failed"
+        await service.shutdown()
+
+        # Once the profile is usable again, a restart re-drives the series.
+        latest_profile = store.get(ProviderProfile, profile.id)
+        store.update(
+            ProviderProfile,
+            profile.id,
+            {"enabled": True},
+            expected_revision=latest_profile.revision,
+        )
+        restored = MissionService(
+            store,
+            checkpoint_path=tmp_path / "recurrence-checkpoints.db",
+            provider_factory=lambda selected: provider,
+        )
+        await restored.startup()
+        successors = [
+            item
+            for item in store.list_entities(AgentRun, limit=10)
+            if item.metadata.get("recurrence_of_run_id") == run.id
+        ]
+        assert len(successors) == 1
+        assert successors[0].status == RunStatus.QUEUED
+        assert successors[0].id in restored._scheduled_tasks
+        assert "recurrence_error" not in store.get(AgentRun, run.id).metadata
+        await restored.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_missions_wait_for_capacity_before_running(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        missions_module, "SCHEDULED_CAPACITY_RETRY_SECONDS", 0.05, raising=False
+    )
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "scheduled-capacity.db")
+        engagement = store.create(Engagement(name="Scheduled capacity"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        gates: dict[str, asyncio.Event] = {}
+        stats = {"active": 0, "max_active": 0, "resumed": 0}
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "scheduled-checkpoints.db",
+            provider_factory=lambda selected: provider,
+            runtime_factory=_gated_runtime_factory(store, gates, stats),
+            max_active_missions=1,
+            cancellation_timeout_seconds=2,
+        )
+        runs = []
+        for index in range(2):
+            runs.append(
+                await service.start_mission(
+                    engagement_id=engagement.id,
+                    name=f"Scheduled {index}",
+                    objective="Review the bounded scope",
+                    provider_id=profile.id,
+                    model="security-model",
+                    budget=RunBudget(
+                        max_duration_seconds=30,
+                        max_tokens=2_000,
+                        max_tool_calls=0,
+                        max_delegation_depth=0,
+                    ),
+                    scheduled_for=utc_now() + timedelta(seconds=0.2),
+                )
+            )
+        await asyncio.wait_for(gates.setdefault("started", asyncio.Event()).wait(), 5)
+        # Give the second occurrence ample time past its scheduled start.
+        await asyncio.sleep(0.5)
+        assert stats["max_active"] == 1
+        assert len(service._tasks) == 1
+        running = [
+            item
+            for item in runs
+            if store.get(AgentRun, item.id).status != RunStatus.QUEUED
+        ]
+        deferred = [item for item in runs if item not in running]
+        assert len(running) == 1 and len(deferred) == 1
+        assert store.get(AgentRun, deferred[0].id).status == RunStatus.QUEUED
+
+        gates[running[0].id].set()
+        await asyncio.wait_for(service._tasks[running[0].id], 5)
+        deadline = asyncio.get_running_loop().time() + 5
+        while deferred[0].id not in gates:
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.02)
+        gates[deferred[0].id].set()
+        await asyncio.wait_for(service._tasks[deferred[0].id], 5)
+        assert stats["max_active"] == 1
+        assert store.get(AgentRun, deferred[0].id).status == RunStatus.COMPLETE
+        await service.shutdown()
+
+    asyncio.run(scenario())

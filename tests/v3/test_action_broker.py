@@ -4,7 +4,9 @@ from datetime import timedelta
 
 import pytest
 
+from nebula.v3 import action_broker as action_broker_module
 from nebula.v3.action_broker import (
+    INTENT_EXPIRY_MINUTES,
     ActionBroker,
     ActionIntentClaimRequest,
     ActionIntentCommitRequest,
@@ -225,3 +227,80 @@ def test_native_failure_compensates_or_requires_reconciliation(tmp_path):
     )
     assert intent.status == ActionIntentStatus.RECONCILE_REQUIRED
     assert intent.error == "native apply failed"
+
+
+def _committed_intent(store, broker, *, core_mutation_committed: bool, key: str):
+    project, source = _source(store)
+    device = _device(store, name=f"Mac {key}")
+    ref = ResourceRef(project_id=project.id, kind=ResourceKind.SOURCE, id=source.id)
+    device = broker.heartbeat(
+        device.id,
+        DeviceCapabilitySnapshot(
+            platform="macos",
+            app_version="3.0.0",
+            capabilities=["browser.navigate"],
+            expected_revision=device.revision,
+        ),
+    )
+    intent = broker.create(
+        ActionIntentCreateRequest(
+            project_id=project.id,
+            resources=[ref],
+            action_id="navigate",
+            requester="operator-1",
+            preferred_device_id=device.id,
+            idempotency_key=key,
+        )
+    )
+    intent = broker.claim(
+        intent.id,
+        ActionIntentClaimRequest(
+            device_id=device.id, expected_revision=intent.revision
+        ),
+    )
+    intent = broker.prepare(
+        intent.id,
+        ActionIntentPrepareRequest(
+            device_id=device.id,
+            expected_revision=intent.revision,
+            preflight_succeeded=True,
+        ),
+    )
+    intent = broker.commit(
+        intent.id,
+        ActionIntentCommitRequest(
+            expected_revision=intent.revision,
+            core_mutation_committed=core_mutation_committed,
+        ),
+    )
+    assert intent.status == ActionIntentStatus.COMMITTED
+    return intent
+
+
+def test_committed_core_mutation_without_device_result_requires_reconciliation(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "broker-silent-device.db")
+    broker = ActionBroker(store)
+
+    committed = _committed_intent(
+        store, broker, core_mutation_committed=True, key="silent-committed"
+    )
+    plain = _committed_intent(
+        store, broker, core_mutation_committed=False, key="silent-plain"
+    )
+    # The device never reports: both the lease and the intent expiry lapse.
+    later = utc_now() + timedelta(minutes=INTENT_EXPIRY_MINUTES + 1)
+    monkeypatch.setattr(action_broker_module, "utc_now", lambda: later)
+
+    expired = broker.get(committed.id)
+    assert expired.status == ActionIntentStatus.RECONCILE_REQUIRED
+    assert expired.lease_expires_at is None
+    assert "reconcil" in str(expired.error)
+    events = store.list_operation_events(committed.engagement_id, limit=100)
+    assert events[-1].event_type == "action_intent.reconcile_required"
+    # Terminal state is stable on later reads.
+    assert broker.get(committed.id).status == ActionIntentStatus.RECONCILE_REQUIRED
+
+    # Without a committed Core mutation there is nothing to reconcile.
+    assert broker.get(plain.id).status == ActionIntentStatus.EXPIRED

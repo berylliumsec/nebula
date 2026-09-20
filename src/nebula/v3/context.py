@@ -43,6 +43,9 @@ CONTEXT_TARGET_FRACTION = 0.75
 COMPACTOR_INPUT_FRACTION = 0.60
 COMPACTOR_OUTPUT_FRACTION = 0.05
 COMPACTOR_MIN_OUTPUT_TOKENS = 32
+# Instructions, message framing, and the JSON envelope around each compactor
+# request; reserved together with the objective before segments are budgeted.
+COMPACTOR_PROMPT_OVERHEAD_TOKENS = 64
 CONTEXT_PROMPT_VERSION = "nebula-context-v1"
 
 _HOSTED_MODEL_PREFIX = re.compile(
@@ -637,9 +640,15 @@ class ContextCompactor:
                 "model context leaves too little room for a faithful compaction summary"
             )
         complete_prompt_capacity = limits.input_capacity - summary_output_tokens
-        segment_budget = max(
-            1, math.floor(complete_prompt_capacity * COMPACTOR_INPUT_FRACTION)
-        )
+        # Every compactor request (each segment and every roll-up) embeds the
+        # objective beside the sources, so the segment budget is carved from
+        # what remains after that reservation rather than the whole capacity.
+        segment_capacity = complete_prompt_capacity - self._objective_reserve(objective)
+        if segment_capacity < COMPACTOR_MIN_OUTPUT_TOKENS:
+            raise ContextCapacityError(
+                "compaction objective leaves too little room for context segments"
+            )
+        segment_budget = max(1, math.floor(segment_capacity * COMPACTOR_INPUT_FRACTION))
         pending = self._split_sources(sources, segment_budget)
         total = ChatTokenUsage()
         while len(pending) > 1:
@@ -716,6 +725,19 @@ class ContextCompactor:
             exc.usage = self._add_usage(total, exc.usage)
             raise
         return memory, self._add_usage(total, call_usage)
+
+    @staticmethod
+    def _objective_reserve(objective: str | None) -> int:
+        return (
+            estimate_tokens(
+                json.dumps(
+                    {"objective": objective},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+            + COMPACTOR_PROMPT_OVERHEAD_TOKENS
+        )
 
     @classmethod
     def _split_sources(

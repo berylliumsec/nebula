@@ -53,11 +53,14 @@ from .orchestration import (
 from .providers import ModelProvider, ProviderError, provider_from_profile
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, NotFoundError
 
 MAX_API_MISSION_TOKENS = 200_000
 MAX_API_MISSION_COST_USD = 100.0
 MAX_API_MISSION_RETRIES = 2
+# A scheduled occurrence that fires at capacity re-checks this often. The run
+# stays QUEUED (and cancellable) rather than running past the concurrency cap.
+SCHEDULED_CAPACITY_RETRY_SECONDS = 5.0
 
 _TERMINAL_RUN_STATUSES = {
     RunStatus.COMPLETE,
@@ -217,10 +220,18 @@ class MissionService:
             owned_run_ids = set(self._tasks)
 
         offset = 0
+        stalled_series: list[AgentRun] = []
         while True:
             page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
             for run in page:
                 if run.backend != RunBackend.NATIVE:
+                    continue
+                if (
+                    run.metadata.get("origin") == "api"
+                    and run.status == RunStatus.COMPLETE
+                    and run.metadata.get("recurrence_error")
+                ):
+                    stalled_series.append(run)
                     continue
                 scheduled_for = run.metadata.get("scheduled_for")
                 if (
@@ -261,6 +272,23 @@ class MissionService:
             if len(page) < 1_000:
                 break
             offset += len(page)
+        for run in stalled_series:
+            # The previous Core could not schedule the next occurrence (capacity,
+            # configuration, or a missing profile). Retry now that the series
+            # owner is known to be idle; a persistent failure is recorded again.
+            series_id = str(run.metadata.get("series_id") or run.id)
+            if self._active_series_runs(series_id, exclude_run_id=run.id):
+                continue
+            try:
+                await self._schedule_recurrence(run)
+            except Exception as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.recurrence.startup_retry_failed",
+                    "A stalled recurring mission series could not be retried at startup.",
+                    exc,
+                    stage="startup",
+                )
 
     async def start_mission(
         self,
@@ -580,14 +608,7 @@ class MissionService:
                 return
             series_id = str(run.metadata.get("series_id") or "")
             if series_id:
-                active = [
-                    item
-                    for item in self.store.list_entities(AgentRun, limit=1_000)
-                    if str(item.metadata.get("series_id") or "") == series_id
-                    and item.id != run.id
-                    and item.status
-                    in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
-                ]
+                active = self._active_series_runs(series_id, exclude_run_id=run.id)
                 if active:
                     self._finalize_cancelled(
                         run_id,
@@ -608,9 +629,25 @@ class MissionService:
                         expected_revision=latest.revision,
                     )
                     return
-            async with self._lock:
-                self._scheduled_tasks.pop(run_id, None)
-                self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
+            deferred = False
+            while True:
+                async with self._lock:
+                    if self._closed:
+                        return
+                    self._discard_finished_tasks()
+                    if len(self._tasks) < self.max_active_missions:
+                        self._scheduled_tasks.pop(run_id, None)
+                        self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
+                        break
+                # Scheduled occurrences are not counted against the cap while
+                # they sleep, so the cap must be enforced when they fire.
+                if not deferred:
+                    deferred = True
+                    self._record_capacity_deferral(run_id)
+                await asyncio.sleep(SCHEDULED_CAPACITY_RETRY_SECONDS)
+                run = self.store.get(AgentRun, run_id)
+                if run.status != RunStatus.QUEUED or self._closed:
+                    return
             await self._execute(run, provider)
         except asyncio.CancelledError:
             # diagnostic-expected: cancellation is translated into durable mission state below.
@@ -722,6 +759,10 @@ class MissionService:
             )
         if not run.supervisor_provider_id:
             raise MissionStateError("approval run has no provider profile")
+        if self._approval_resume_recorded(run.id, approval.id):
+            raise MissionStateError(
+                f"approval {approval.id} already resumed run {run.id}"
+            )
         profile = self.store.get(ProviderProfile, run.supervisor_provider_id)
         provider = self.provider_factory(profile)
         response: dict[str, object] = {
@@ -738,10 +779,9 @@ class MissionService:
             self._discard_finished_tasks()
             if run.id in self._tasks:
                 raise MissionStateError("mission already has active work")
-            if len(self._tasks) >= self.max_active_missions:
-                raise MissionCapacityError(
-                    "local mission concurrency limit has been reached"
-                )
+            # A waiting run already holds its logical slot: it was admitted
+            # under the cap when it started. Refusing the resume here would
+            # strand a run whose operator decision is already durable.
             resumed, _ = self.store.update_with_event(
                 AgentRun,
                 run.id,
@@ -765,6 +805,27 @@ class MissionService:
             )
             self._tasks[run.id] = task
             return resumed
+
+    def approval_resume_pending(self, approval: Approval) -> bool:
+        """True while the run still waits and this decision never resumed it."""
+
+        run = self.store.get(AgentRun, approval.run_id)
+        if run.status != RunStatus.WAITING_APPROVAL:
+            return False
+        return not self._approval_resume_recorded(run.id, approval.id)
+
+    def _approval_resume_recorded(self, run_id: str, approval_id: str) -> bool:
+        key = f"run:{run_id}:approval:{approval_id}:resume"
+        after_sequence = 0
+        while True:
+            page = self.store.replay_events(
+                run_id, after_sequence=after_sequence, limit=1_000
+            )
+            if any(event.idempotency_key == key for event in page):
+                return True
+            if len(page) < 1_000:
+                return False
+            after_sequence = page[-1].sequence
 
     async def shutdown(self) -> None:
         """Request cancellation for every owned task and wait only a bounded time."""
@@ -932,7 +993,24 @@ class MissionService:
         interval = prior.metadata.get("repeat_interval_seconds")
         if not isinstance(interval, int) or interval < 3_600:
             return
-        await self.start_mission(
+        try:
+            successor = await self._start_recurrence(prior, interval)
+        except (MissionServiceError, NotFoundError) as exc:
+            # The occurrence itself completed; a scheduling failure must end the
+            # series visibly on that run instead of failing the finished task.
+            record_caught_exception(
+                "missions",
+                "missions.recurrence.schedule_failed",
+                "The next occurrence of a recurring mission could not be scheduled.",
+                exc,
+                stage="recurrence",
+            )
+            self._record_recurrence_failure(prior.id, self._safe_error(exc))
+            return
+        self._clear_recurrence_failure(prior.id, successor.id)
+
+    async def _start_recurrence(self, prior: AgentRun, interval: int) -> AgentRun:
+        return await self.start_mission(
             engagement_id=prior.engagement_id,
             name=str(prior.metadata.get("name") or prior.objective),
             objective=prior.objective,
@@ -1080,6 +1158,83 @@ class MissionService:
                 else StaticSupervisor()
             ),
             specialists={SpecialistRole.SCOPE_PLANNING: specialist},
+        )
+
+    def _active_series_runs(
+        self, series_id: str, *, exclude_run_id: str
+    ) -> list[AgentRun]:
+        return [
+            item
+            for item in self.store.list_entities(AgentRun, limit=1_000)
+            if str(item.metadata.get("series_id") or "") == series_id
+            and item.id != exclude_run_id
+            and item.status
+            in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
+        ]
+
+    def _record_capacity_deferral(self, run_id: str) -> None:
+        latest = self.store.get(AgentRun, run_id)
+        if latest.status != RunStatus.QUEUED:
+            return
+        try:
+            self.store.update_with_event(
+                AgentRun,
+                latest.id,
+                {"metadata": {**latest.metadata, "capacity_deferred": True}},
+                expected_revision=latest.revision,
+                run_id=latest.id,
+                event_type="run.scheduled_start_deferred",
+                event_payload={
+                    "reason": "local mission concurrency limit has been reached"
+                },
+                actor_id="system",
+                idempotency_key="run:scheduled_start_deferred",
+            )
+        except ConflictError as exc:
+            # A concurrent stop request wins; the deferral note is only advisory.
+            record_caught_exception(
+                "missions",
+                "missions.scheduled.deferral_note_conflict",
+                "A scheduled mission changed while its capacity deferral was recorded.",
+                exc,
+                stage="scheduled",
+            )
+
+    def _record_recurrence_failure(self, run_id: str, error: str) -> None:
+        latest = self.store.get(AgentRun, run_id)
+        if latest.metadata.get("recurrence_error") == error:
+            return
+        self.store.update_with_event(
+            AgentRun,
+            latest.id,
+            {"metadata": {**latest.metadata, "recurrence_error": error}},
+            expected_revision=latest.revision,
+            run_id=latest.id,
+            event_type="run.recurrence_failed",
+            event_payload={"error": error},
+            actor_id="system",
+            idempotency_key=f"run:recurrence_failed:{latest.revision}",
+        )
+
+    def _clear_recurrence_failure(self, run_id: str, successor_run_id: str) -> None:
+        latest = self.store.get(AgentRun, run_id)
+        if "recurrence_error" not in latest.metadata:
+            return
+        metadata = {
+            key: value
+            for key, value in latest.metadata.items()
+            if key != "recurrence_error"
+        }
+        self.store.update_with_event(
+            AgentRun,
+            latest.id,
+            {"metadata": metadata},
+            expected_revision=latest.revision,
+            run_id=latest.id,
+            event_type="run.recurrence_scheduled",
+            event_payload={"successor_run_id": successor_run_id},
+            actor_id="system",
+            idempotency_key=f"run:recurrence_scheduled:{successor_run_id}",
         )
 
     def _finalize_cancelled(self, run_id: str, reason: str, actor_id: str) -> AgentRun:
