@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import ipaddress
+import secrets
 import signal
 import socket
 import struct
@@ -21,6 +22,7 @@ ENABLE_REQUEST = Path("/run/nebula-egress-enable")
 ENABLE_ACK = Path("/run/nebula-egress-enabled")
 POLICY_RESOLVER = "127.0.0.53"
 DNS_PORT = 53
+UPSTREAM_DNS_TIMEOUT_SECONDS = 3.0
 SIOCGIFFLAGS = 0x8913
 SIOCSIFFLAGS = 0x8914
 IFF_UP = 0x1
@@ -457,6 +459,12 @@ def _upstream_resolvers() -> list[str]:
     return result
 
 
+def _transaction_id() -> bytes:
+    """Return an unpredictable DNS transaction id for one upstream query."""
+
+    return secrets.token_bytes(2)
+
+
 def _recv_exact(connection: socket.socket, count: int) -> bytes:
     chunks: list[bytes] = []
     remaining = count
@@ -521,13 +529,29 @@ class PolicyResolver:
                     DNS_PORT,
                 )
             )
+            # The requester chose the transaction id in ``request`` and shares
+            # this network namespace, so a matching reply could be forged and
+            # sent straight to the helper's port. Query upstream with a private
+            # random id over a connected socket, so the kernel drops datagrams
+            # from any other peer, and map the genuine answer back afterwards.
+            identifier = _transaction_id()
+            outgoing = identifier + request[2:]
             try:
                 with socket.socket(family, socket.SOCK_DGRAM) as client:
-                    client.settimeout(3)
-                    client.sendto(request, destination)
-                    response = client.recv(65_535)
-                if len(response) >= 4 and response[:2] == request[:2]:
-                    return response
+                    client.settimeout(UPSTREAM_DNS_TIMEOUT_SECONDS)
+                    client.connect(destination)
+                    client.send(outgoing)
+                    deadline = time.monotonic() + UPSTREAM_DNS_TIMEOUT_SECONDS
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("upstream DNS resolver timed out")
+                        client.settimeout(remaining)
+                        response = client.recv(65_535)
+                        if len(response) >= 4 and response[:2] == identifier:
+                            return request[:2] + response[2:]
+                        # Anything else is a stray or forged datagram; keep
+                        # waiting for the reply that echoes our own id.
             except OSError as exc:
                 # diagnostic-expected: try the next configured upstream resolver.
                 last_error = exc

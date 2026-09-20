@@ -8,7 +8,16 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import MetaData, Table, create_engine, delete, inspect, select, update
+from sqlalchemy import (
+    MetaData,
+    Table,
+    create_engine,
+    delete,
+    event,
+    inspect,
+    select,
+    update,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
 
@@ -103,30 +112,32 @@ def test_sqlite_upgrade_downgrade_and_immutable_operation_events(tmp_path):
     _exercise_migration_cycle(f"sqlite+pysqlite:///{tmp_path / 'migrations.db'}")
 
 
-def test_relation_migration_backfills_legacy_arrays_and_rejects_dangling_ids(tmp_path):
+def _legacy_row(entity_id: str, kind: str, project_id: str, payload: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    envelope = {
+        "id": entity_id,
+        "revision": 1,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+        **payload,
+    }
+    return {
+        "id": entity_id,
+        "kind": kind,
+        "engagement_id": project_id,
+        "revision": 1,
+        "payload": envelope,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def test_relation_migration_backfills_legacy_arrays_and_skips_dangling_ids(tmp_path):
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'relations.db'}")
     _run_migration(engine, command.upgrade, "0010_browser_automation_indexes")
     metadata = MetaData()
     entities = Table("entities", metadata, autoload_with=engine)
-    now = datetime.now(timezone.utc)
-
-    def row(entity_id: str, kind: str, project_id: str, payload: dict):
-        envelope = {
-            "id": entity_id,
-            "revision": 1,
-            "created_at": now.isoformat(),
-            "updated_at": now.isoformat(),
-            **payload,
-        }
-        return {
-            "id": entity_id,
-            "kind": kind,
-            "engagement_id": project_id,
-            "revision": 1,
-            "payload": envelope,
-            "created_at": now,
-            "updated_at": now,
-        }
+    row = _legacy_row
 
     with engine.begin() as connection:
         connection.execute(
@@ -159,17 +170,67 @@ def test_relation_migration_backfills_legacy_arrays_and_rejects_dangling_ids(tmp
         connection.execute(
             entities.insert(),
             [
+                row("asset-2", "assets", "project-1", {"name": "Gateway"}),
                 row(
                     "finding-2",
                     "findings",
                     "project-1",
-                    {"title": "Issue", "asset_ids": ["missing"]},
-                )
+                    {"title": "Issue", "asset_ids": ["missing", "asset-2"]},
+                ),
             ],
         )
-    with pytest.raises(RuntimeError, match="dangling legacy relation"):
-        _run_migration(dangling, command.upgrade, "head")
+    # A Finding may still name an Asset that was deleted before the upgrade.
+    # The backfill skips that reference instead of wedging every later start.
+    _run_migration(dangling, command.upgrade, "head")
+    relations = Table("resource_relations", MetaData(), autoload_with=dangling)
+    with dangling.connect() as connection:
+        targets = connection.execute(select(relations.c.target_id)).scalars().all()
+    assert targets == ["asset-2"]
     dangling.dispose()
+
+
+def test_sqlite_migration_failure_leaves_no_partial_schema_and_can_retry(tmp_path):
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'atomic.db'}")
+    _run_migration(engine, command.upgrade, "0010_browser_automation_indexes")
+    entities = Table("entities", MetaData(), autoload_with=engine)
+    with engine.begin() as connection:
+        connection.execute(
+            entities.insert(),
+            [
+                _legacy_row("asset-1", "assets", "project-1", {"name": "Gateway"}),
+                _legacy_row(
+                    "finding-1",
+                    "findings",
+                    "project-1",
+                    {"title": "Issue", "asset_ids": ["asset-1"]},
+                ),
+            ],
+        )
+
+    def fail_backfill(_connection, _cursor, statement, *_rest):
+        if statement.lstrip().upper().startswith("INSERT INTO RESOURCE_RELATIONS"):
+            raise RuntimeError("simulated mid-migration failure")
+
+    # Fail only after 0011 has already issued its CREATE TABLE/INDEX statements.
+    event.listen(engine, "before_cursor_execute", fail_backfill)
+    with pytest.raises(RuntimeError, match="simulated mid-migration failure"):
+        _run_migration(engine, command.upgrade, "head")
+    event.remove(engine, "before_cursor_execute", fail_backfill)
+
+    assert "resource_relations" not in inspect(engine).get_table_names()
+    with engine.connect() as connection:
+        version = connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one()
+    assert version == "0010_browser_automation_indexes"
+
+    # Once the cause is gone the same upgrade succeeds on the untouched schema.
+    _run_migration(engine, command.upgrade, "head")
+    relations = Table("resource_relations", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        edge = connection.execute(select(relations)).mappings().one()
+    assert (edge["source_id"], edge["target_id"]) == ("finding-1", "asset-1")
+    engine.dispose()
 
 
 @pytest.mark.skipif(

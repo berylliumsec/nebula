@@ -6,6 +6,7 @@ Revises: 0010_browser_automation_indexes
 
 from __future__ import annotations
 
+import logging
 from uuid import uuid4
 
 import sqlalchemy as sa
@@ -15,6 +16,9 @@ revision = "0011_resource_relations"
 down_revision = "0010_browser_automation_indexes"
 branch_labels = None
 depends_on = None
+
+LOGGER = logging.getLogger("alembic.runtime.migration")
+SKIPPED_REFERENCES_SHOWN = 20
 
 RESOURCE_KINDS = {
     "engagements": "project",
@@ -66,18 +70,31 @@ def _backfill() -> None:
     rows = list(bind.execute(sa.select(entities)).mappings())
     by_id = {str(row["id"]): row for row in rows}
     candidates: list[dict[str, object]] = []
+    skipped: list[str] = []
 
-    def endpoint(entity_id: str, expected_kind: str, project_id: str):
+    def endpoint(
+        entity_id: str, expected_kind: str, project_id: str
+    ) -> tuple[str, str, int] | None:
+        # Legacy id arrays were never scrubbed when their target was deleted
+        # or moved. Such a reference has nothing to point at, so the edge is
+        # left out and reported rather than wedging every later start.
         row = by_id.get(entity_id)
         if row is None or row["kind"] != expected_kind:
-            raise RuntimeError(
-                f"dangling legacy relation: expected {expected_kind}/{entity_id}"
-            )
+            skipped.append(f"missing {expected_kind}/{entity_id}")
+            return None
         if row["engagement_id"] != project_id:
-            raise RuntimeError(
-                f"cross-project legacy relation: {entity_id} does not belong to {project_id}"
-            )
+            skipped.append(f"{entity_id} does not belong to {project_id}")
+            return None
         return (RESOURCE_KINDS[expected_kind], entity_id, int(row["revision"]))
+
+    def relate(
+        project_id: str,
+        source: tuple[str, str, int] | None,
+        predicate: str,
+        target: tuple[str, str, int] | None,
+    ) -> None:
+        if source is not None and target is not None:
+            candidates.append(_edge(project_id, source, predicate, target))
 
     for row in rows:
         project_id = row["engagement_id"]
@@ -90,45 +107,32 @@ def _backfill() -> None:
         source = (source_kind, str(row["id"]), int(row["revision"]))
         if row["kind"] == "findings":
             for target_id in payload.get("asset_ids", []):
-                candidates.append(
-                    _edge(
-                        project_id,
-                        source,
-                        "affects",
-                        endpoint(target_id, "assets", project_id),
-                    )
-                )
+                target = endpoint(target_id, "assets", project_id)
+                relate(project_id, source, "affects", target)
             for evidence_id in payload.get("evidence_ids", []):
                 evidence = endpoint(evidence_id, "evidence", project_id)
-                candidates.append(_edge(project_id, evidence, "supports", source))
+                relate(project_id, evidence, "supports", source)
         elif row["kind"] == "evidence" and payload.get("finding_id"):
-            candidates.append(
-                _edge(
-                    project_id,
-                    source,
-                    "supports",
-                    endpoint(payload["finding_id"], "findings", project_id),
-                )
-            )
+            finding = endpoint(payload["finding_id"], "findings", project_id)
+            relate(project_id, source, "supports", finding)
         elif row["kind"] == "reports":
             for finding_id in payload.get("finding_ids", []):
-                candidates.append(
-                    _edge(
-                        project_id,
-                        source,
-                        "includes",
-                        endpoint(finding_id, "findings", project_id),
-                    )
-                )
+                finding = endpoint(finding_id, "findings", project_id)
+                relate(project_id, source, "includes", finding)
             for note_id in payload.get("observation_ids", []):
-                candidates.append(
-                    _edge(
-                        project_id,
-                        source,
-                        "includes",
-                        endpoint(note_id, "observations", project_id),
-                    )
-                )
+                note = endpoint(note_id, "observations", project_id)
+                relate(project_id, source, "includes", note)
+
+    if skipped:
+        shown = "; ".join(skipped[:SKIPPED_REFERENCES_SHOWN])
+        if len(skipped) > SKIPPED_REFERENCES_SHOWN:
+            shown += f"; and {len(skipped) - SKIPPED_REFERENCES_SHOWN} more"
+        LOGGER.warning(
+            "resource relation backfill skipped %d legacy reference(s) with no "
+            "matching entity: %s",
+            len(skipped),
+            shown,
+        )
 
     unique: dict[tuple[object, ...], dict[str, object]] = {}
     for item in candidates:

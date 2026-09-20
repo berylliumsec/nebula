@@ -59,7 +59,7 @@ from .mcp_import import (
     import_mcp_config,
     mcp_config_json_schema,
 )
-from .exporter import export_engagement
+from .exporter import ExportError, export_engagement
 from .importer import import_2x_engagement
 from .knowledge_index import ChromaKnowledgeIndex
 from .orchestration import (
@@ -71,7 +71,7 @@ from .orchestration import (
 )
 from .providers import ProviderRegistry, provider_from_profile
 from .sandbox import ContainerSandboxRunner
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 from .runtime_platform import default_runtime_platform
 from .terminal_history import TerminalCommandRow
 from .version import build_metadata
@@ -509,7 +509,19 @@ def serve(
     )
     listener = socket.socket(family, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind((host, port))
+    try:
+        listener.bind((host, port))
+    except OSError as exc:
+        record_caught_exception(
+            "diagnostics",
+            "diagnostics.cli.caught_failure_011",
+            "A handled diagnostics operation raised an exception.",
+            exc,
+            stage="cli",
+        )
+        listener.close()
+        typer.echo(f"cannot bind {host}:{port}: {exc.strerror or exc}", err=True)
+        raise typer.Exit(code=1) from exc
     listener.listen(2048)
     port = int(listener.getsockname()[1])
     runtime = getattr(api.state, "automation_runtime", None)
@@ -734,13 +746,18 @@ def export_command(
     """Export an integrity-manifested engagement bundle."""
 
     _, store, artifacts = _services(data_dir)
-    manifest = export_engagement(
-        engagement_id=engagement_id,
-        destination=destination,
-        store=store,
-        artifact_store=artifacts,
-        overwrite=overwrite,
-    )
+    try:
+        manifest = export_engagement(
+            engagement_id=engagement_id,
+            destination=destination,
+            store=store,
+            artifact_store=artifacts,
+            overwrite=overwrite,
+        )
+    except (ExportError, NotFoundError) as exc:
+        # diagnostic-expected: known export failures become a bounded operator message and exit status.
+        typer.echo(f"export failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
     _print(manifest.model_dump(mode="json"))
 
 

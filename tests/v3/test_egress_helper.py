@@ -1,5 +1,7 @@
 import ipaddress
+import socket
 import struct
+import threading
 
 from nebula.v3 import egress_helper
 
@@ -106,6 +108,66 @@ def test_policy_dns_opens_only_configured_ports_for_public_answers(monkeypatch):
     assert installed == [("8.8.4.4/32", "443")]
     resolver.resolve(_query("api.example.test"))
     assert installed == [("8.8.4.4/32", "443")]
+
+
+def test_policy_dns_forwarder_accepts_only_the_upstream_reply_with_its_own_id(
+    monkeypatch,
+):
+    upstream = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    attacker = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        upstream.bind(("127.0.0.1", 0))
+        upstream.settimeout(5)
+        attacker.bind(("127.0.0.1", 0))
+        monkeypatch.setattr(egress_helper, "DNS_PORT", upstream.getsockname()[1])
+        monkeypatch.setattr(egress_helper, "_upstream_resolvers", lambda: ["127.0.0.1"])
+        monkeypatch.setattr(
+            egress_helper, "_transaction_id", lambda: b"\xab\xcd", raising=False
+        )
+        installed: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            egress_helper,
+            "_install_rule",
+            lambda network, port, interface=None: installed.append(
+                (str(network), port)
+            ),
+        )
+        resolver = egress_helper.PolicyResolver(
+            domains=["api.example.test"],
+            ports=[443],
+            explicit_networks=[],
+            enabled=True,
+        )
+        request = _query("api.example.test")
+        forwarded: list[bytes] = []
+
+        def upstream_server() -> None:
+            query, client = upstream.recvfrom(65_535)
+            forwarded.append(query)
+            # 1. A worker sharing the namespace forges an answer that carries
+            #    the requester's transaction id, from its own socket.
+            attacker.sendto(_response("api.example.test", "8.8.4.4"), client)
+            # 2. The upstream address answers with an id the helper never sent.
+            upstream.sendto(_response("api.example.test", "9.9.9.9"), client)
+            # 3. The genuine answer echoes the id the helper chose.
+            genuine = query[:2] + _response("api.example.test", "1.1.1.1")[2:]
+            upstream.sendto(genuine, client)
+
+        server = threading.Thread(target=upstream_server, daemon=True)
+        server.start()
+        response = resolver.resolve(request)
+        server.join(5)
+    finally:
+        upstream.close()
+        attacker.close()
+
+    assert installed == [("1.1.1.1/32", "443")]
+    assert egress_helper._answers(response, "api.example.test") == [
+        ipaddress.ip_address("1.1.1.1")
+    ]
+    assert response[:2] == request[:2]
+    assert forwarded[0][:2] == b"\xab\xcd"
+    assert forwarded[0][2:] == request[2:]
 
 
 def test_policy_dns_blocks_private_rebinding_unless_cidr_is_explicit(monkeypatch):
