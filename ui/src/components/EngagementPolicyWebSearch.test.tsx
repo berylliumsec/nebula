@@ -58,7 +58,7 @@ describe("web search opt-in on a project", () => {
     fixture.api.getEngagementScope.mockResolvedValue(scope({localOnly: true, webSearch: true}));
     render(view());
     const toggle = await screen.findByRole("checkbox", {name: /Web search/});
-    await waitFor(() => expect(fixture.api.getEngagementScope).toHaveBeenCalled());
+    await screen.findByText(/every search query leaves this machine/);
     expect(toggle).toBeDisabled();
     expect(toggle).not.toBeChecked();
     expect(toggle).toHaveAccessibleDescription(/every search query leaves this machine/);

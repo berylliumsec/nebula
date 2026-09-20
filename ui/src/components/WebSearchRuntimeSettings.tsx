@@ -25,7 +25,7 @@ export const WEB_SEARCH_ENGINES: { id: WebSearchEngine; label: string }[] = [
 type Health = { label: string; tone: "muted" | "good" | "bad" };
 
 export function runtimeHealth(status: WebSearchRuntime | undefined): Health {
-  if (!status) return { label: "Unknown", tone: "muted" };
+  if (!status) return { label: "Checking\u2026", tone: "muted" };
   if (!status.runtimeAvailable) return { label: "No container runtime", tone: "bad" };
   switch (status.containerState) {
     case "ready": return { label: "Ready", tone: "good" };
@@ -148,7 +148,7 @@ export function WebSearchRuntimeSettings() {
       <footer className="web-search-footer">
         <span>The test sends one fixed sample query, never project data.</span>
         <span className="web-search-actions">
-          {!installed && <button className="button primary" type="button" disabled={disabled} onClick={() => void run("install", () => api!.installWebSearchRuntime(), "Search runtime installed")}>{busy === "install" ? "Installing…" : "Install"}</button>}
+          {status && !installed && <button className="button primary" type="button" disabled={disabled} onClick={() => void run("install", () => api!.installWebSearchRuntime(), "Search runtime installed")}>{busy === "install" ? "Installing…" : "Install"}</button>}
           {installed && !running && <button className="button primary" type="button" disabled={disabled} onClick={() => void run("start", () => api!.startWebSearchRuntime(), "Search runtime started")}>{busy === "start" ? "Starting…" : "Start"}</button>}
           {installed && <button className="button secondary" type="button" disabled={disabled} onClick={() => void run("test", () => api!.testWebSearchRuntime())}>{busy === "test" ? "Testing…" : "Test"}</button>}
           {running && <button className="button secondary" type="button" disabled={disabled} onClick={() => void run("stop", () => api!.stopWebSearchRuntime(), "Search runtime stopped")}>{busy === "stop" ? "Stopping…" : "Stop"}</button>}
