@@ -1,19 +1,24 @@
 {
-  "change_digest": "b28bce28503c9b8531235d96b3c961120d676f185e1b3f8f8e94856f01f38b92",
-  "reviewed_by": "Claude review of chat-queue-handoffs",
-  "reason": "Four audit findings in the Core follow-up queue and the handoff service. (8) A follow-up drainer that lost the dispatch race to an operator's direct Send got ChatHistoryConflict from prepare_async, which the generic handler treated as a dispatch failure: the item went needs_review, the queue paused and a failure diagnostic was recorded for what was merely a busy conversation. step() now catches ChatHistoryConflict, checks whether a turn the drainer did not start now occupies the session, and if so returns the claim to queued without pausing so a later poll dispatches it once the direct response settles; a genuine history conflict still parks the item for review. (12) A claiming item whose review write lost a revision race stayed claiming forever because the non-recovering step returned on any claiming item and remove/clear refused it. The service now tracks in-flight claim ids; a claiming item nobody is dispatching is reviewed on the next poll, and remove/clear cancel it, while a claim being dispatched is still protected. (14) The startup pass reviewed a sending item whose turn was parked in waiting_callback as 'Delivery is uncertain' and that review never cleared when the results webhook finished the turn. waiting_callback is now treated like waiting_approval, and the reconcile pass marks a needs_review item complete once its turn completes. (21) HandoffService.list could not page and returned oldest first, and expire-on-read used a revision guard so two concurrent GETs of a just-expired envelope turned one into a 409. list now pages newest first with offset/limit (the route gained an offset query parameter), and _expire returns the stored row when a concurrent writer already moved the envelope out of PENDING. Tests: test_follow_up_losing_a_race_to_a_direct_send_waits_instead_of_parking, test_orphaned_claim_is_reviewed_on_the_next_poll_without_a_restart, test_stuck_claim_can_be_removed_or_cleared_but_not_while_dispatching, the new waiting_callback case of test_restart_after_durable_turn_creation_reconciles_without_replay, test_saved_uncertain_review_is_reconciled_when_its_turn_completes, test_handoff_list_pages_newest_first and test_expire_on_read_survives_a_concurrent_expiry each fail on main and pass here; the existing queue and handoff tests still pass.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: src/nebula/v3/api.py matches area:core-api, but the only route change is an additive offset query parameter on GET /handoffs whose default keeps the existing behaviour, and test_handoff_list_pages_newest_first drives that route through TestClient; the real-Core journey suite does not exercise the follow-up queue's dispatch race, orphaned claims or handoff expiry, which the Python tests drive directly against ChatQueueService and HandoffService. No full suites.",
+  "change_digest": "6d98aa18f16dc0f93b1fa054ab0c896677e7366a0a47882f56e89fb0aa32f32b",
+  "reviewed_by": "Codex review of Thinking layout and durable assistant-selection coverage",
+  "reason": "The change removes the duplicate whitespace authority that inflated Markdown paragraph gaps and makes provider MCP server and lifecycle-hook choices durable chat-session settings. The selected unit tests cover Markdown paragraph semantics and API mapping; the API test covers validated durable metadata; the browser matrix covers the Thinking disclosure; and the production/LAN real-Core matrix proves MCP and hook selections survive reload, Core process replacement, reconnection, and subsequent conversation use.",
+  "exclusions": "Full Python, frontend, and Playwright suites are explicitly excluded. Unrelated provider, harness, workspace, and chat journeys are unchanged. No native tests are selected because no Rust code changed. No live OpenRouter or external MCP transport call is selected: Thinking layout is provider-independent, and the MCP change concerns persisted selection identity rather than server probing or tool execution.",
   "expected_tests": {
-    "python": 24,
-    "frontend": 0,
+    "python": 1,
+    "frontend": 2,
     "native": 0,
-    "playwright": 0
+    "playwright": 9
   },
   "python": [
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_handoffs.py"
+    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/client.test.ts",
+    "ui/src/components/HarnessThinking.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:provider-thinking",
+    "area:provider-native-hooks-core"
+  ]
 }

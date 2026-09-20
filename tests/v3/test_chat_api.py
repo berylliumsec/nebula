@@ -24,6 +24,8 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    McpServerProfile,
+    McpTransport,
     ProviderProfile,
     RunBackend,
     Task,
@@ -555,6 +557,28 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert renamed.json()["title"] == "Renamed API conversation"
     assert renamed.json()["revision"] == sessions.json()[0]["revision"] + 1
     assert store.get(ChatSession, session_id).title == "Renamed API conversation"
+    mcp = store.create(
+        McpServerProfile(
+            id="persisted-mcp",
+            name="persisted-mcp",
+            transport=McpTransport.STREAMABLE_HTTP,
+            url="http://127.0.0.1:8766/mcp",
+            enabled=True,
+        )
+    )
+    settings = client.patch(
+        f"/api/v1/chat-sessions/{session_id}",
+        headers=_auth(),
+        json={
+            "mcp_server_ids": [mcp.id],
+            "hook_ids": ["audit"],
+            "expected_revision": renamed.json()["revision"],
+        },
+    )
+    assert settings.status_code == 200, settings.text
+    assert settings.json()["metadata"]["mcp_server_ids"] == [mcp.id]
+    assert settings.json()["metadata"]["hook_ids"] == ["audit"]
+    assert store.get(ChatSession, session_id).metadata["mcp_server_ids"] == [mcp.id]
     stale_rename = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
@@ -564,7 +588,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     archived = client.patch(
         f"/api/v1/chat-sessions/{session_id}",
         headers=_auth(),
-        json={"archived": True, "expected_revision": renamed.json()["revision"]},
+        json={"archived": True, "expected_revision": settings.json()["revision"]},
     )
     assert archived.status_code == 200
     assert archived.json()["title"] == "Renamed API conversation"

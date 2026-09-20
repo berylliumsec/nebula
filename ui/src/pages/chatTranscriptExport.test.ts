@@ -12,6 +12,8 @@ const session: ChatSessionSummary = {
   forkedFromMessageId: "message-parent",
   model: "gpt-test",
   toolsEnabled: true,
+  mcpServerIds: [],
+  hookIds: [],
   createdAt: "2026-08-24T10:00:00Z",
   updatedAt: "2026-08-24T10:01:00Z",
   revision: 1,

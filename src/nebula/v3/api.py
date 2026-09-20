@@ -774,15 +774,28 @@ def _observation_dependencies(
     )
 
 
-class ChatSessionRenameRequest(NebulaModel):
+class ChatSessionUpdateRequest(NebulaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     archived: bool | None = None
+    mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
+    hook_ids: list[str] | None = Field(default=None, max_length=32)
     expected_revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
-    def changes_something(self) -> "ChatSessionRenameRequest":
-        if self.title is None and self.archived is None:
-            raise ValueError("Provide a title or an archived state")
+    def changes_something(self) -> "ChatSessionUpdateRequest":
+        if (
+            self.title is None
+            and self.archived is None
+            and self.mcp_server_ids is None
+            and self.hook_ids is None
+        ):
+            raise ValueError("Provide a title, archived state, or assistant settings")
+        for name, values in (
+            ("MCP server", self.mcp_server_ids),
+            ("hook", self.hook_ids),
+        ):
+            if values is not None and len(values) != len(set(values)):
+                raise ValueError(f"{name} selection contains duplicates")
         return self
 
 
@@ -9778,8 +9791,8 @@ def create_app(
         tags=["chat-sessions"],
         dependencies=[Depends(require_auth)],
     )
-    async def rename_chat_session(
-        session_id: str, request: ChatSessionRenameRequest
+    async def update_chat_session(
+        session_id: str, request: ChatSessionUpdateRequest
     ) -> ChatSession:
         current = store.get(ChatSession, session_id)
         if chat_service().pending_turn(session_id) is not None:
@@ -9795,6 +9808,16 @@ def create_app(
             metadata.setdefault("archived_at", utc_now().isoformat())
         elif request.archived is False:
             metadata.pop("archived_at", None)
+        if request.mcp_server_ids is not None:
+            for profile_id in request.mcp_server_ids:
+                profile = store.get(McpServerProfile, profile_id)
+                if not profile.enabled:
+                    raise ConflictError(
+                        f"MCP server {profile.name!r} is disabled and cannot be selected"
+                    )
+            metadata["mcp_server_ids"] = request.mcp_server_ids
+        if request.hook_ids is not None:
+            metadata["hook_ids"] = request.hook_ids
         changes["metadata"] = metadata
         updated = store.update(
             ChatSession,

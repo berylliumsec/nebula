@@ -776,6 +776,8 @@ export function SessionsPage() {
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   useGuideAction("open-assistant-settings", () => setAssistantSettingsOpen(true));
   const [assistantSettingsStatus, setAssistantSettingsStatus] = useState("");
+  const [assistantSettingsError, setAssistantSettingsError] = useState<string>();
+  const [assistantSettingsBusy, setAssistantSettingsBusy] = useState(false);
   const [discoveringProviderId, setDiscoveringProviderId] = useState<string>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const streamBackendRef = useRef<ChatCompletionRequest["backend"] | undefined>(undefined);
@@ -980,6 +982,12 @@ export function SessionsPage() {
       .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
   }, [sessionActivity, visibleSessions]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
+  const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
+  useEffect(() => {
+    if (!activeChatSession || activeChatSession.backend !== "provider") return;
+    setSelectedMcpIds(activeChatSession.mcpServerIds);
+    setSelectedHookIds(activeChatSession.hookIds);
+  }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
     ? Math.min(100, Math.round((activeContextStatus.estimatedInputTokens / activeContextStatus.targetInputTokens) * 100))
@@ -1047,6 +1055,7 @@ export function SessionsPage() {
     setModel(defaultRuntime.model);
     setHarnessSessionId("");
     setSelectedMcpIds([]);
+    setSelectedHookIds([]);
     if (defaultRuntime.kind === "harness") setHarnessId(defaultRuntime.id);
     else setProviderId(defaultRuntime.id);
     return true;
@@ -1720,6 +1729,7 @@ export function SessionsPage() {
     setSending(false);
     setLoadingHistory(false);
     setAssistantSettingsOpen(false);
+    setAssistantSettingsError(undefined);
     setSessionId("");
     runtimeSwitchGenerationRef.current += 1;
     setRuntimeSwitchConfirmation(undefined);
@@ -1953,6 +1963,39 @@ export function SessionsPage() {
     setProviderId(id);
     setModel(providerDefaultModel(provider));
     setRuntimeSwitchConfirmation(undefined);
+  };
+
+  const saveProviderAssistantSelections = async (
+    nextMcpServerIds: string[],
+    nextHookIds: string[],
+  ) => {
+    setSelectedMcpIds(nextMcpServerIds);
+    setSelectedHookIds(nextHookIds);
+    setAssistantSettingsError(undefined);
+    if (!api || !sessionId || runtimeKind !== "provider") return;
+    const current = sessions.find((item) => item.id === sessionId);
+    if (!current || assistantSettingsBusy) return;
+    setAssistantSettingsStatus("Saving assistant settings…");
+    setAssistantSettingsBusy(true);
+    try {
+      const updated = await api.updateChatSessionAssistantSettings(sessionId, {
+        mcpServerIds: nextMcpServerIds,
+        hookIds: nextHookIds,
+        expectedRevision: current.revision,
+      });
+      setSessions((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setSelectedMcpIds(updated.mcpServerIds);
+      setSelectedHookIds(updated.hookIds);
+      setAssistantSettingsStatus("Assistant settings saved.");
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions.assistant_settings_save_failed", "Assistant settings could not be saved.", error, "assistant_settings");
+      setSelectedMcpIds(current.mcpServerIds);
+      setSelectedHookIds(current.hookIds);
+      setAssistantSettingsStatus("");
+      setAssistantSettingsError(error instanceof Error ? error.message : "Could not save assistant settings.");
+    } finally {
+      setAssistantSettingsBusy(false);
+    }
   };
 
   const proposeProviderRuntime = async (nextProviderId: string, nextModel: string) => {
@@ -2213,6 +2256,10 @@ export function SessionsPage() {
       setHarnessId(summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
       setModel(summary.model ?? "");
+      if (summary.backend === "provider") {
+        setSelectedMcpIds(summary.mcpServerIds);
+        setSelectedHookIds(summary.hookIds);
+      }
     }
     try {
       const [history, pendingTurn] = await Promise.all([
@@ -2636,6 +2683,10 @@ export function SessionsPage() {
       setHarnessId(summary.harnessProfileId ?? "");
       setHarnessSessionId(summary.harnessSessionId ?? "");
       setModel(summary.model ?? "");
+      if (summary.backend === "provider") {
+        setSelectedMcpIds(summary.mcpServerIds);
+        setSelectedHookIds(summary.hookIds);
+      }
     }
     // Selecting through selectSession advances the selection generation and
     // aborts any in-flight load, so an earlier selection cannot overwrite it.
@@ -4015,6 +4066,7 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => setHarnessMode(event.target.value)}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}
+                {assistantSettingsError && <p className="provider-dialog-note error" role="alert">{assistantSettingsError}</p>}
                 {runtimeKind === "harness" && <details className="chat-advanced-session"><summary>Resume existing session</summary><label><span>Filter by name</span><input type="search" aria-label="Filter resumable sessions by name" value={externalSessionQuery} placeholder="Search Codex or Grok sessions" onChange={(event) => setExternalSessionQuery(event.target.value)} /></label><label><span>Session</span><select aria-label="Chat harness session" value={harnessSessionId} disabled={sending || Boolean(sessionId) || externalSessionsLoading} onChange={(event) => void selectHarnessSession(event.target.value)}><option value="">New session</option>{harnessSessions.filter((item) => (item.harnessProfileId === harnessId || item.id === harnessSessionId) && (item.id === harnessSessionId || item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase()))).map((item) => <option value={item.id} key={item.id}>{item.displayName} · {item.model}{item.reasoningEffort ? ` · ${item.reasoningEffort}` : ""}{item.serviceTier ? ` · ${item.serviceTier}` : ""} · {item.status} · {new Date(item.lastActivityAt).toLocaleString()}</option>)}{externalHarnessSessions.filter((item) => !item.internalSessionId && item.displayName.toLocaleLowerCase().includes(externalSessionQuery.trim().toLocaleLowerCase())).map((item) => <option value={`external:${item.externalSessionId}`} key={`external:${item.externalSessionId}`}>{item.displayName}{item.model ? ` · ${item.model}` : ""}{item.updatedAt ? ` · ${new Date(item.updatedAt).toLocaleString()}` : ""}</option>)}</select></label>{externalSessionsLoading && <p className="provider-dialog-note" role="status">Loading resumable sessions…</p>}{externalSessionsError && <p className="provider-dialog-note error" role="alert">{externalSessionsError}</p>}</details>}
                 {sessionId && <p className="provider-dialog-note">Changes apply to your next message. Conversation history is kept.</p>}
                 <div className="chat-settings-capabilities">
@@ -4022,9 +4074,9 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && selectedHarness && !selectedHarness.capabilities?.skillInvocation && <div className="chat-knowledge-toggle" role="status"><ShieldCheck size={15} /><span>Skills unavailable<small>This harness did not advertise structured skill invocation.</small></span></div>}
                 {runtimeKind === "harness" && selectedHarness?.capabilities?.skillInvocation && selectedHarness.nativeCapabilities.skills && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project and installed skills…" : harnessSkills.length ? "Type $ in the composer to invoke a skill for one turn." : "No project or installed skills were discovered.")}</small></span></div>}
                 {runtimeKind === "provider" && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project skills…" : harnessSkills.length ? "Type $ in the composer to select a skill. Running goals keep its immutable snapshot." : "No project skills were discovered.")}</small></span></div>}
-                {runtimeKind === "provider" && <div className="chat-harness-mcp" data-guide="lifecycle-hooks"><span>Lifecycle hooks</span>{nativeHookError ? <><small role="alert">{nativeHookError}</small><ShowMeHow guide="lifecycle-hooks" step={1} label="Fix with guide" /></> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy} onChange={(event) => setSelectedHookIds(current => event.target.checked ? [...current, hook.id] : current.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <><small>No project hooks found in .agents/hooks.</small><ShowMeHow guide="lifecycle-hooks" /></>}</div>}
+                {runtimeKind === "provider" && <div className="chat-harness-mcp" data-guide="lifecycle-hooks"><span>Lifecycle hooks</span>{nativeHookError ? <><small role="alert">{nativeHookError}</small><ShowMeHow guide="lifecycle-hooks" step={1} label="Fix with guide" /></> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void saveProviderAssistantSelections(selectedMcpIds, event.target.checked ? [...selectedHookIds, hook.id] : selectedHookIds.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <><small>No project hooks found in .agents/hooks.</small><ShowMeHow guide="lifecycle-hooks" /></>}</div>}
                 <div className="chat-knowledge-toggle" role="status" data-guide="knowledge-status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
-                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
+                {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveProviderAssistantSelections(event.target.checked ? [...selectedMcpIds, server.id] : selectedMcpIds.filter((id) => id !== server.id), selectedHookIds)} /><span>{server.name}<small>{server.tools.length} tools · Core-captured</small></span></label>) : <small>No enabled MCP profiles</small>}</div></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
                   { entry: settingCatalogEntry(runtimeKind === "provider" ? "settings.providers" : "settings.harnesses"), icon: runtimeKind === "provider" ? Settings2 : Bot, label: runtimeKind === "provider" ? "Model providers" : "Assistant harnesses", detail: runtimeKind === "provider" ? `${enabledProviders.length} enabled` : `${harnesses.filter((item) => item.enabled).length} enabled` },
