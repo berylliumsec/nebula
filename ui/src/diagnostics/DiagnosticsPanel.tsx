@@ -661,7 +661,8 @@ export function DiagnosticsPanel({ hidden = false }: { hidden?: boolean } = {}) 
       link.href = url;
       link.download = "nebula-diagnostics.zip";
       link.click();
-      URL.revokeObjectURL(url);
+      // Firefox and WebKit start the download after click() returns.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
       void logDiagnostic({
         level: "info",
         eventCode: "interface.diagnostics.export_downloaded",

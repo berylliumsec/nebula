@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect } from "react";
 import { WorkspaceProvider, useWorkspace } from "./WorkspaceContext";
 
-const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined }));
+const fixture = vi.hoisted(() => ({ methods: {} as Record<string, ReturnType<typeof vi.fn>>, streams: [] as Array<any>, onCommit: undefined as (() => void) | undefined, errors: [] as string[] }));
 vi.mock("../api/runtime", () => ({ resolveApiRuntime: async () => ({ state: "ready", baseUrl: "http://core/api/v1" }) }));
 vi.mock("../api/client", () => ({ ApiClient: class {
   baseUrl = "http://core/api/v1";
@@ -25,8 +25,10 @@ function Probe() {
     workspace: value.workspaceState, status: value.resourceStatus,
     library: value.libraryItems, harnesses: value.harnesses,
     run: value.run, runs: value.runs, events: value.events,
+    approvals: value.approvals, engagement: value.engagement?.id,
   })}</output>{(["library", "harnesses", "activity"] as const).map((resource) =>
-    <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}</>;
+    <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
+  <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
 }
 const state = () => JSON.parse(screen.getByTestId("state").textContent!);
 const mount = async () => {
@@ -37,6 +39,8 @@ const mount = async () => {
 beforeEach(() => {
   fixture.onCommit = undefined;
   fixture.streams.length = 0;
+  fixture.errors.length = 0;
+  vi.restoreAllMocks();
   localStorage.clear();
   window.history.replaceState({}, "", "/");
   localStorage.setItem("nebula.engagement", "project");
@@ -155,5 +159,42 @@ describe("mission snapshot and replay integration", () => {
     fixture.methods.listRuns.mockResolvedValue({ items: [run("run-1", 4)] });
     await act(async () => finish({ items: [run("run-1", 3)] }));
     await waitFor(() => expect(state().run.completedTasks).toBe(4));
+  });
+});
+
+describe("offline and stale-link safety", () => {
+  it("keeps an approval card when the decision cannot reach Core", async () => {
+    fixture.methods.listApprovals.mockResolvedValue({ items: [{ id: "approval-1", status: "pending", toolName: "nmap" }] });
+    fixture.methods.decideApproval = vi.fn().mockResolvedValue({ id: "approval-1", status: "approved" });
+    await mount();
+    expect(state().approvals).toHaveLength(1);
+    act(() => window.dispatchEvent(new Event("offline")));
+    await waitFor(() => expect(state().workspace).toBe("failed"));
+
+    fireEvent.click(screen.getByText("Approve first"));
+
+    await waitFor(() => expect(fixture.errors).toEqual(["Nebula Core must be online to decide an approval."]));
+    expect(state().approvals).toHaveLength(1);
+    expect(fixture.methods.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("keeps the remembered project when a link names an archived project", async () => {
+    window.history.replaceState({}, "", "/projects/archived/findings");
+    fixture.methods.listEngagements.mockResolvedValue({ items: [
+      { id: "project", name: "Project", status: "active" },
+      { id: "archived", name: "Archived", status: "archived" },
+    ] });
+    await mount();
+    expect(state().engagement).toBeUndefined();
+    expect(localStorage.getItem("nebula.engagement")).toBe("project");
+  });
+
+  it("starts without browser storage", async () => {
+    const blocked = () => { throw new DOMException("Storage is blocked.", "SecurityError"); };
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(blocked);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(blocked);
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(blocked);
+    await mount();
+    expect(state().engagement).toBe("project");
   });
 });

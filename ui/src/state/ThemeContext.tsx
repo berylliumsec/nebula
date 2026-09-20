@@ -7,6 +7,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { readStorage, writeStorage } from "./browserStorage";
 
 export type ThemePreference = "light" | "dark" | "zero-light" | "zero-dark";
 
@@ -29,9 +30,9 @@ function normalizePreference(value: string | null): ThemePreference | undefined 
 }
 
 function initialPreference(): ThemePreference {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = readStorage(STORAGE_KEY);
   const normalized = normalizePreference(saved) ?? DEFAULT_PREFERENCE;
-  if (saved && saved !== normalized) localStorage.setItem(STORAGE_KEY, normalized);
+  if (saved && saved !== normalized) writeStorage(STORAGE_KEY, normalized);
   return normalized;
 }
 
@@ -44,7 +45,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       if (event.key !== STORAGE_KEY) return;
       const normalized = normalizePreference(event.newValue);
       if (normalized) {
-        if (event.newValue !== normalized) localStorage.setItem(STORAGE_KEY, normalized);
+        if (event.newValue !== normalized) writeStorage(STORAGE_KEY, normalized);
         setPreferenceState(normalized);
       }
     };
@@ -61,7 +62,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   }, [resolvedTheme]);
 
   const setPreference = useCallback((value: ThemePreference) => {
-    localStorage.setItem(STORAGE_KEY, value);
+    writeStorage(STORAGE_KEY, value);
     setPreferenceState(value);
   }, []);
 

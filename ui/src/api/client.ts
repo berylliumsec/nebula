@@ -1327,6 +1327,7 @@ interface WireChatStreamEvent extends JsonObject {
     | "checkpoint"
     | "notice"
     | "done"
+    | "cancelled"
     | "error";
   schema_version?: "nebula.harness-activity/v1" | "nebula.harness-activity/v2";
   id?: string;
@@ -2121,6 +2122,9 @@ function page<T>(items: T[]): Page<T> {
 }
 
 const MAX_LIST_LIMIT = 1_000;
+/** Longest provider call Core may make while preparing a turn before it answers. */
+const CHAT_ACCEPTANCE_TIMEOUT_MS = 15 * 60_000;
+const CHAT_RECONNECT_HEADER_TIMEOUT_MS = 45_000;
 
 function engagementQuery(engagementId: string, offset: number): string {
   return `engagement_id=${encodeURIComponent(engagementId)}&limit=${MAX_LIST_LIMIT}&offset=${offset}`;
@@ -4829,14 +4833,18 @@ export class ApiClient {
         },
       );
     } catch (error) {
+      // A request the interface abandoned (view change, project switch, health
+      // deadline) is a cancellation: Core was never shown to be unreachable.
+      const cancelled = init.signal?.aborted === true
+        || (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "AbortError");
       void logDiagnostic({
-        level: "error",
-        eventCode: "interface.api.transport_failed",
-        message: "The interface could not reach Nebula Core.",
-        outcome: "failure",
+        level: cancelled ? "debug" : "error",
+        eventCode: cancelled ? "interface.api.request_cancelled" : "interface.api.transport_failed",
+        message: cancelled ? "The interface cancelled a Nebula Core request." : "The interface could not reach Nebula Core.",
+        outcome: cancelled ? "cancelled" : "failure",
         stage: "request",
-        retryable: true,
-        safeFailureCause: "The local API transport was unavailable.",
+        retryable: !cancelled,
+        safeFailureCause: cancelled ? "The caller abandoned the request before it completed." : "The local API transport was unavailable.",
         exception: error,
         metadata: { method: init.method ?? "GET" },
       });
@@ -7224,7 +7232,7 @@ export class ApiClient {
   }
 
   listLibraryItems(signal?: AbortSignal): Promise<Page<LibraryItem>> {
-    return this.request<WireLibraryItem[]>("library/items", { signal })
+    return this.listAll<WireLibraryItem>("library/items", signal)
       .then((items) => page(items.map(mapLibraryItem)));
   }
 
@@ -8786,6 +8794,7 @@ export class ApiClient {
     let protocolFailure = false;
     let completed: ChatCompletionResponse | undefined;
     let pausedForApproval = false;
+    let cancelled = false;
 
     const processBlock = (block: string) => {
       const lines = block.replace(/\r/g, "").split("\n");
@@ -8828,6 +8837,13 @@ export class ApiClient {
         };
         onEvent(event);
         throw new ApiError(event.detail, 502, undefined, wire);
+      }
+      if (wire.type === "cancelled") {
+        // Core ends a follower of a stopped turn with this terminal frame; the
+        // turn is over, so the viewer must settle instead of reconnecting.
+        cancelled = true;
+        onEvent({ type: "cancelled", turnId: wire.turn_id ?? turnId, detail: wire.detail || "response stopped" });
+        return;
       }
       if (wire.type === "started") {
         onEvent({
@@ -9039,7 +9055,11 @@ export class ApiClient {
       const attemptController = new AbortController();
       const abortAttempt = () => attemptController.abort();
       signal?.addEventListener("abort", abortAttempt, {once: true});
-      const headerTimer = setTimeout(abortAttempt, 45_000);
+      // Core prepares a new or resumed turn (retrieval planning, compaction and
+      // route verification, each a model call) before it answers with headers,
+      // so acceptance gets the longest provider budget; a reconnect only
+      // attaches to a running turn and keeps the short one.
+      const headerTimer = setTimeout(abortAttempt, recovering ? CHAT_RECONNECT_HEADER_TIMEOUT_MS : CHAT_ACCEPTANCE_TIMEOUT_MS);
       try {
         if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
         const headers = new Headers({Accept: "text/event-stream", "Content-Type": "application/json"});
@@ -9072,15 +9092,18 @@ export class ApiClient {
             processBlock(block);
             separator = buffer.search(/\r?\n\r?\n/);
           }
-          if (completed || pausedForApproval) return completed;
+          if (completed || pausedForApproval || cancelled) return completed;
           if (done) break;
         }
         if (buffer.trim()) processBlock(buffer);
-        if (completed || pausedForApproval) return completed;
+        if (completed || pausedForApproval || cancelled) return completed;
         throw new Error("The chat connection ended before the turn completed.");
       } catch (error) {
         if (signal?.aborted || protocolFailure) throw error;
         if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) throw error;
+        // Core answered before accepting the message, so that answer (and its
+        // error reference) is the definitive outcome: nothing is uncertain.
+        if (!turnId && error instanceof ApiError) throw error;
         // A lost initial acceptance response is uncertain: never POST again.
         if (!turnId) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
         if (attempts >= 8) throw new Error("Could not reconnect to this turn. Reload the conversation to read its saved state; the message has not been resubmitted.");

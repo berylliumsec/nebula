@@ -182,3 +182,50 @@ describe("Add context to chat conversation navigation", () => {
     expect(destination.searchParams.get("browserEngine")).toBe("native");
     expect(destination.searchParams.get("session")).toBe("conversation-1");
  });
+
+function SelectionActions() {
+  const navigate = useNavigate();
+  const { requestNoteDraft, requestChatContext } = useWorkbenchDrafts();
+  const request = { text: "Selected text", sourceKind: "conversation", sourceId: "message-1", sourceLabel: "Conversation" };
+  return <>
+    <button onClick={() => requestNoteDraft(request)}>Take note</button>
+    <button onClick={() => requestChatContext(request)}>Add to context</button>
+    <button onClick={() => navigate("/settings")}>Open settings</button>
+  </>;
+}
+
+describe("selection handoffs after the operator moves on", () => {
+  beforeEach(() => {
+    state.createHandoff.mockReset();
+    state.cancelHandoff.mockClear();
+  });
+
+  it("attaches the note handoff while the operator stays on the Workbench", async () => {
+    state.createHandoff.mockResolvedValue({ id: "handoff-note", revision: 1 });
+    render(<MemoryRouter initialEntries={["/projects/project-1/findings"]}>
+      <WorkbenchDraftProvider><LocationProbe /><SelectionActions /></WorkbenchDraftProvider>
+    </MemoryRouter>);
+    await userEvent.click(screen.getByRole("button", { name: "Take note" }));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/projects/project-1/workbench?view=notes&handoff=handoff-note"));
+  });
+
+  it.each([["Take note", "notes"], ["Add to context", "chat"]])(
+    "does not pull the operator back to the Workbench after %s once they left",
+    async (action, view) => {
+      let resolve: (value: { id: string; revision: number }) => void = () => {};
+      state.createHandoff.mockReturnValue(new Promise((value) => { resolve = value; }));
+      render(<MemoryRouter initialEntries={["/projects/project-1/findings"]}>
+        <WorkbenchDraftProvider><LocationProbe /><SelectionActions /></WorkbenchDraftProvider>
+      </MemoryRouter>);
+      await userEvent.click(screen.getByRole("button", { name: action }));
+      expect(screen.getByTestId("location")).toHaveTextContent(`/projects/project-1/workbench?view=${view}`);
+      await userEvent.click(screen.getByRole("button", { name: "Open settings" }));
+      expect(screen.getByTestId("location")).toHaveTextContent("/settings");
+
+      await act(async () => resolve({ id: "late-handoff", revision: 3 }));
+
+      expect(screen.getByTestId("location")).toHaveTextContent("/settings");
+      expect(screen.getByTestId("location")).not.toHaveTextContent("handoff=");
+    },
+  );
+});

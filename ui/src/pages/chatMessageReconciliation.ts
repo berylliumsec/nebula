@@ -1,5 +1,6 @@
 import type { ChatCitation, ChatMessage, ChatUsage, ToolSuggestionSummary } from "../api/types";
 import { finalAssistantContent } from "./harnessActivity";
+import { elapsedSince } from "./turnElapsed";
 
 export type ConversationMessageState = "complete" | "streaming" | "waiting_approval" | "error" | "cancelled";
 
@@ -35,6 +36,18 @@ interface CompletedAssistantMessage {
   harnessTurnId?: string;
   toolSuggestions?: ToolSuggestionSummary;
   createdAt: string;
+}
+
+/** Settles the live response Core reported as stopped, keeping the partial content it streamed. */
+export function cancelStreamingAssistantMessage<T extends ReconciledConversationMessage>(
+  messages: T[],
+  assistantId: string,
+  detail = "Response stopped by the operator.",
+  now = Date.now(),
+): T[] {
+  return messages.map((message) => message.id === assistantId
+    ? { ...message, state: "cancelled" as const, elapsedMs: elapsedSince(message.createdAt, now), detail }
+    : message);
 }
 
 export function reconcileCompletedAssistantMessage(

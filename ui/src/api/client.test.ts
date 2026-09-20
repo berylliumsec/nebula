@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, chatRequestBody } from "./client";
-import type { ProviderHealth } from "./types";
+import type { ChatStreamEvent, ProviderHealth } from "./types";
+
+const diagnostics = vi.hoisted(() => ({ logDiagnostic: vi.fn() }));
+vi.mock("../diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../diagnostics")>()),
+  logDiagnostic: diagnostics.logDiagnostic,
+}));
 
 describe("ApiClient", () => {
   it("sends MCP imports as snake_case and maps the preview report", async () => {
@@ -2493,5 +2499,122 @@ describe("project scope tool pinning", () => {
 
     await client.updateEngagementScope("project", { ...loaded, alwaysLoadedTools: [], expectedRevision: 3 });
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({ always_loaded_tools: [] });
+  });
+});
+
+describe("chat transport and list paging", () => {
+  const request = {
+    providerId: "provider-1",
+    engagementId: "engagement-1",
+    model: "model-1",
+    messages: [{ role: "user" as const, content: "hello" }],
+  };
+  const sse = (frames: string[]) => {
+    const encoder = new TextEncoder();
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        frames.forEach((frame) => controller.enqueue(encoder.encode(frame)));
+        controller.close();
+      },
+    });
+  };
+  const hanging = () => vi.fn<typeof fetch>().mockImplementation((_input, init) => new Promise((_resolve, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+  }));
+
+  it("surfaces Core's rejection of a new message instead of an uncertain acceptance", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      detail: "conversation exceeds the model context window even after compaction",
+      error_id: "err_ctx1",
+    }), { status: 503, headers: { "content-type": "application/json" } }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const events: string[] = [];
+
+    const error = await client.streamChat(request, (event) => events.push(event.type)).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 503, errorId: "err_ctx1" });
+    expect((error as Error).message).toBe("conversation exceeds the model context window even after compaction Reference: err_ctx1.");
+    expect(events).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not record a cancelled request as a Core transport failure", async () => {
+    diagnostics.logDiagnostic.mockClear();
+    const fetchMock = hanging();
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const controller = new AbortController();
+    const pending = client.health(controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(diagnostics.logDiagnostic.mock.calls.filter(([record]) => record.level === "error")).toEqual([]);
+
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    await expect(client.health()).rejects.toThrow("Failed to fetch");
+    expect(diagnostics.logDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      eventCode: "interface.api.transport_failed",
+    }));
+  });
+
+  it("pages the Library through the shared list helper", async () => {
+    const item = (id: string) => ({
+      id, name: id, source_type: "document", status: "ready", document_count: 1,
+      created_at: "2026-09-20T10:00:00Z", updated_at: "2026-09-20T10:00:00Z", revision: 1, metadata: {},
+    });
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(Array.from({ length: 1000 }, (_, index) => item(`library-${index}`))), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([item("library-1000")]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const result = await client.listLibraryItems();
+
+    expect(result.total).toBe(1001);
+    expect(result.items.at(-1)?.id).toBe("library-1000");
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "http://127.0.0.1:8765/api/v1/library/items?limit=1000&offset=0",
+      "http://127.0.0.1:8765/api/v1/library/items?limit=1000&offset=1000",
+    ]);
+  });
+
+  it("waits for Core to prepare a new turn far longer than a reconnect header budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = hanging();
+      const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+      let settled: unknown;
+      const attempt = client.streamChat(request, () => undefined)
+        .then(() => { settled = "resolved"; }, (error: unknown) => { settled = error; });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(settled).toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await attempt;
+      expect(settled).toBeInstanceOf(Error);
+      expect((settled as Error).message).toContain("lost before acceptance");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends a followed turn cleanly when Core reports it was stopped", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(sse([
+        'event: started\ndata: {"type":"started","turn_id":"turn-1","provider_id":"provider-1","model":"model-1","session_id":"session-1","sequence":1}\n\n',
+        'event: delta\ndata: {"type":"delta","turn_id":"turn-1","provider_id":"provider-1","model":"model-1","delta":"partial","sequence":2}\n\n',
+        'event: cancelled\ndata: {"type":"cancelled","turn_id":"turn-1","detail":"response stopped"}\n\n',
+      ]), { status: 200 }))
+      .mockRejectedValue(new Error("no reconnect expected"));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const events: ChatStreamEvent[] = [];
+
+    const result = await client.followChatTurn("turn-1", request, (event) => events.push(event));
+
+    expect(result).toBeUndefined();
+    expect(events.map((event) => event.type)).toEqual(["connection", "started", "delta", "cancelled"]);
+    expect(events.at(-1)).toEqual({ type: "cancelled", turnId: "turn-1", detail: "response stopped" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

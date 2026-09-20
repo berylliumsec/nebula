@@ -2008,6 +2008,8 @@ export type ChatStreamEvent =
       payload?: Record<string, unknown>;
     }
   | ({ type: "done" } & ChatCompletionResponse)
+  /** Core stopped the turn (from this or another viewer); the stream ended cleanly. */
+  | { type: "cancelled"; turnId?: Identifier; detail: string }
   | { type: "error"; detail: string };
 
 export interface ChatTurn {
