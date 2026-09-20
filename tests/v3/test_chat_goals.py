@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from fastapi import HTTPException
 
 import nebula.v3.chat_goals as chat_goals_module
 from nebula.v3.chat import ChatCompletionRequest, ChatConfigurationError, ChatService
@@ -414,3 +415,42 @@ def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypa
 
     assert paused.elapsed_seconds == pytest.approx(5)
     assert paused_again.elapsed_seconds == pytest.approx(8)
+
+
+def test_block_reports_wrong_status_and_missing_reason_distinctly(tmp_path):
+    store, service = setup_goal(tmp_path)
+    goal = service.create(
+        "session",
+        GoalCreate(objective="Investigate", completion_criteria=["Evidence retained"]),
+    )
+    running = service.write(
+        "session", GoalWrite(expected_revision=goal.revision, action="start")
+    )
+
+    # A running goal blocked without a reason is a validation failure (422).
+    with pytest.raises(HTTPException) as missing_reason:
+        service.write(
+            "session",
+            GoalWrite(expected_revision=running.revision, action="block"),
+        )
+    assert missing_reason.value.status_code == 422
+    assert "reason" in missing_reason.value.detail
+
+    paused = service.write(
+        "session", GoalWrite(expected_revision=running.revision, action="pause")
+    )
+
+    # A paused goal blocked WITH a reason is a state conflict (409), and the
+    # message must name the status, not the reason the caller already supplied.
+    with pytest.raises(ConflictError) as wrong_status:
+        service.write(
+            "session",
+            GoalWrite(
+                expected_revision=paused.revision,
+                action="block",
+                reason="Three unchanged failures",
+            ),
+        )
+    assert "running" in str(wrong_status.value)
+    assert "reason" not in str(wrong_status.value)
+    assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED

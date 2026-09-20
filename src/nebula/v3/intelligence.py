@@ -223,6 +223,9 @@ def _range_is_comparable(
         affected.end_including,
         affected.end_excluding,
     ]
+    if all(value is None for value in bounds):
+        # A range with no bounds is "no version data", not "every version".
+        return False
     values: list[str] = [
         version,
         *(value for value in bounds if value is not None and value != "0"),
@@ -617,9 +620,12 @@ class CorrelationEngine:
                 if not product.cpe:
                     continue
                 try:
-                    expected_part, expected_vendor, expected_product, _ = parse_cpe(
-                        product.cpe
-                    )
+                    (
+                        expected_part,
+                        expected_vendor,
+                        expected_product,
+                        expected_version,
+                    ) = parse_cpe(product.cpe)
                 except ValueError as caught_error:
                     record_caught_exception(
                         "missions",
@@ -636,6 +642,23 @@ class CorrelationEngine:
                 ):
                     continue
                 identity_seen = (observed_value, observed_version)
+                if observed_version is None:
+                    return (
+                        CorrelationStatus.CANDIDATE,
+                        "exact CPE product match; observed version is missing",
+                        {"cpe": observed_value},
+                    )
+                if expected_version is not None:
+                    # An advisory CPE naming a concrete version applies to that
+                    # version alone, whatever else the entry carries.
+                    has_version_data = True
+                    if observed_version.casefold() != expected_version:
+                        continue
+                    return (
+                        CorrelationStatus.CONFIRMED,
+                        "exact CPE vendor/product/version match",
+                        {"cpe": observed_value, "version": observed_version},
+                    )
                 has_version_data = has_version_data or _has_comparable_version_data(
                     observed_version, product
                 )
@@ -643,16 +666,7 @@ class CorrelationEngine:
                     return (
                         CorrelationStatus.CONFIRMED,
                         "exact CPE vendor/product and affected version range match",
-                        {
-                            "cpe": observed_value,
-                            "version": observed_version or "unknown",
-                        },
-                    )
-                if observed_version is None:
-                    return (
-                        CorrelationStatus.CANDIDATE,
-                        "exact CPE product match; observed version is missing",
-                        {"cpe": observed_value},
+                        {"cpe": observed_value, "version": observed_version},
                     )
         if identity_seen and identity_seen[1] and has_version_data:
             return (
@@ -758,6 +772,22 @@ def _parse_time(value: str | None) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _cpe_version(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return parse_cpe(value)[3]
+    except ValueError as caught_error:
+        record_caught_exception(
+            "missions",
+            "missions.intelligence.caught_failure_009",
+            "A handled missions operation raised an exception.",
+            caught_error,
+            stage="intelligence",
+        )
+        return None
+
+
 def normalize_nvd(record: dict[str, Any]) -> Advisory:
     cve = record.get("cve", record)
     descriptions = cve.get("descriptions", [])
@@ -771,15 +801,24 @@ def normalize_nvd(record: dict[str, Any]) -> Advisory:
             for match in node.get("cpeMatch", []):
                 if not match.get("vulnerable", True):
                     continue
-                ranges = [
-                    {
-                        "start_including": match.get("versionStartIncluding"),
-                        "start_excluding": match.get("versionStartExcluding"),
-                        "end_including": match.get("versionEndIncluding"),
-                        "end_excluding": match.get("versionEndExcluding"),
-                    }
-                ]
-                affected.append({"cpe": match.get("criteria"), "ranges": ranges})
+                criteria = match.get("criteria")
+                bounds = {
+                    "start_including": match.get("versionStartIncluding"),
+                    "start_excluding": match.get("versionStartExcluding"),
+                    "end_including": match.get("versionEndIncluding"),
+                    "end_excluding": match.get("versionEndExcluding"),
+                }
+                entry: dict[str, Any] = {"cpe": criteria}
+                if any(value is not None for value in bounds.values()):
+                    entry["ranges"] = [bounds]
+                else:
+                    # No bounds: the CPE's own version field is the only
+                    # applicability data. A concrete value means that
+                    # version alone; a wildcard means no version data.
+                    cpe_version = _cpe_version(criteria)
+                    if cpe_version is not None:
+                        entry["versions"] = [cpe_version]
+                affected.append(entry)
     return Advisory(
         advisory_id=cve["id"],
         source="nvd",
@@ -875,10 +914,14 @@ def normalize_cve_v5(record: dict[str, Any]) -> Advisory:
         published_at=_parse_time(metadata.get("datePublished")),
         modified_at=_parse_time(metadata.get("dateUpdated")),
         cvss={"metrics": metrics},
-        cwes=[
-            item.get("description", [{}])[0].get("cweId", "")
-            for item in cna.get("problemTypes", [])
-        ],
+        cwes=list(
+            dict.fromkeys(
+                cwe_id
+                for item in cna.get("problemTypes", [])
+                for entry in item.get("descriptions") or item.get("description") or []
+                if (cwe_id := entry.get("cweId"))
+            )
+        ),
         affected=affected,
         references=[item.get("url", "") for item in cna.get("references", [])],
         kev=kev,

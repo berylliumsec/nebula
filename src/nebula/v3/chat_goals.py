@@ -128,8 +128,10 @@ class ChatGoalService:
             }
             self._propagate_parent_stop(goal, ChatGoalStatus.CANCELLED)
         elif body.action == "block":
-            if goal.status != ChatGoalStatus.RUNNING or not body.reason:
-                raise HTTPException(422, "blocking a running goal requires a reason")
+            if goal.status != ChatGoalStatus.RUNNING:
+                raise ConflictError("only a running goal can be blocked")
+            if not body.reason:
+                raise HTTPException(422, "blocking a goal requires a reason")
             changes = {
                 "status": ChatGoalStatus.BLOCKED,
                 "blocked_reason": body.reason,
