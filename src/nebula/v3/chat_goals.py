@@ -42,11 +42,7 @@ class ChatGoalService:
 
     def get(self, session_id: str) -> ChatGoal:
         self.store.get(ChatSession, session_id)
-        goals = [
-            item
-            for item in self.store.list_entities(ChatGoal, limit=1_000)
-            if item.session_id == session_id
-        ]
+        goals = self.store.list_session_entities(ChatGoal, session_id)
         if not goals:
             raise NotFoundError(f"chat goal not found for session: {session_id}")
         if len(goals) > 1:

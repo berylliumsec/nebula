@@ -451,11 +451,10 @@ class ToolOutputService:
     def _call_artifacts(self, call: ToolCall) -> list[Artifact]:
         artifacts = [
             artifact
-            for artifact in self.store.list_entities(
-                Artifact, engagement_id=call.engagement_id, limit=1000
+            for artifact in self.store.list_tool_call_artifacts(
+                call.engagement_id, call.id
             )
-            if artifact.metadata.get("tool_call_id") == call.id
-            and artifact.metadata.get("kind") != "receipt"
+            if artifact.metadata.get("kind") != "receipt"
         ]
         return sorted(artifacts, key=lambda item: (item.created_at, item.id))
 

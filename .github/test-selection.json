@@ -1,29 +1,22 @@
 {
-  "change_digest": "8fad872e23040aed71ead81a532454f94f6a5dcbd0e81ea6cf92c4c2841daa5d",
-  "reviewed_by": "Claude review of per-turn elapsed time in the transcript",
-  "reason": "The transcript never said how long a turn took. Core now records the wall clock from the turn's creation to the message it produced (elapsed_ms on ChatMessage, mirrored on ChatCompletionResponse so a streaming client and a reloaded transcript agree), plus approval_wait_ms summed from the decided approvals bound to the turn's tool calls; a turnless completion falls back to the prepare timestamp. ChatTurnSummary gained started_at so a reload keeps counting from the real start instead of restarting at zero. The transcript shows a counting pill while the turn runs, appends the elapsed to the existing token summary once it lands, adds the elapsed split when that summary is expanded, and reports the duration on a stopped turn. The selection runs test_chat for the timing helper and the persisted message, test_api for started_at on the pending-turn payload, test_harnesses because harness chat turns now persist the same field, and the three frontend suites that own the formatter, the view-model reconciliation and the mid-turn restore fixture.",
-  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: the compared snapshots (critical workspaces, zero dark) capture freshly opened workspaces with no completed assistant turn, so the new line never enters them; the elapsed rendering is asserted by text in the assistant journey instead. Playwright is limited to the mocked assistant entries plus the narrow chat-edit-in-place entry, because the changed view model feeds both; the real-core entries are excluded since they need a live Core and this change adds no Core interaction a mock cannot model. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites.",
+  "change_digest": "67310dfcae2066f28ba5637999ca21c928b97875ecb37094a0eac90793419d11",
+  "reviewed_by": "Claude review of per-conversation record lookups",
+  "reason": "ChatService.pending_turn, ChatGoalService.get, ChatScheduleService.get and ToolOutputService._call_artifacts each read the first 1,000-row page of a whole entity kind (list_entities orders oldest first) and filtered by session or tool call in Python. Once Core holds more than 1,000 chat turns in total, pending_turn stops seeing any newer conversation's active turn, so the guards on sending, editing in place, scheduling and subagent delivery silently stop working; past 1,000 goals or schedules a newer conversation's goal or schedule is reported missing (GET 404, POST creates a duplicate, schedules skip with 'No conversation goal'); past ~1,000 artifacts in a project tool_output.search returns no matches for newer calls. NebulaStore.list_session_entities and list_tool_call_artifacts now filter on the JSON payload in SQL, and _persist_turn_inputs uses the same query. test_session_record_lookups pins each lookup beyond the first thousand rows; the goal, schedule, storage and specialist-batch suites cover the callers (the specialist loop reads tool output through _call_artifacts).",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through storage.py) is the real-Core journey suite; no HTTP contract or rendered state changes, and the defect only appears past 1,000 rows, which the Python tests build directly. No full suites.",
   "expected_tests": {
-    "python": 169,
-    "frontend": 53,
+    "python": 44,
+    "frontend": 0,
     "native": 0,
-    "playwright": 124
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_api.py",
-    "tests/v3/test_harnesses.py"
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_schedules.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_specialist_tool_batches.py"
   ],
-  "frontend": [
-    "ui/src/pages/turnElapsed.test.ts",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "entry:chat-edit-in-place/mobile-chromium-small"
-  ]
+  "playwright": []
 }

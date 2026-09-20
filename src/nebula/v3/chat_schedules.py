@@ -31,11 +31,7 @@ class ChatScheduleService:
 
     def get(self, session_id: str) -> ChatSchedule:
         self.store.get(ChatSession, session_id)
-        matches = [
-            item
-            for item in self.store.list_entities(ChatSchedule, limit=1_000)
-            if item.session_id == session_id
-        ]
+        matches = self.store.list_session_entities(ChatSchedule, session_id)
         if not matches:
             raise NotFoundError(f"chat schedule not found for session: {session_id}")
         return matches[0]

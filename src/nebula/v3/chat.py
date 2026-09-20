@@ -4328,20 +4328,19 @@ class ChatService:
         self.store.get(ChatSession, session_id)
         active = [
             item
-            for item in self.store.list_entities(ChatTurn, limit=1_000)
-            if item.session_id == session_id
-            and item.status
-            in {
-                ChatTurnStatus.ROUTING,
-                ChatTurnStatus.WAITING_APPROVAL,
-                ChatTurnStatus.WAITING_CALLBACK,
-                ChatTurnStatus.FINALIZING,
-                ChatTurnStatus.INTERRUPTED,
-            }
-            and (
-                item.status != ChatTurnStatus.INTERRUPTED
-                or bool(item.request_snapshot.get("recovery", {}).get("required"))
+            for item in self.store.list_session_entities(
+                ChatTurn,
+                session_id,
+                statuses=[
+                    ChatTurnStatus.ROUTING.value,
+                    ChatTurnStatus.WAITING_APPROVAL.value,
+                    ChatTurnStatus.WAITING_CALLBACK.value,
+                    ChatTurnStatus.FINALIZING.value,
+                    ChatTurnStatus.INTERRUPTED.value,
+                ],
             )
+            if item.status != ChatTurnStatus.INTERRUPTED
+            or bool(item.request_snapshot.get("recovery", {}).get("required"))
         ]
         if len(active) > 1:
             raise ChatHistoryConflict("chat session has multiple active turns")
@@ -5916,17 +5915,13 @@ class ChatService:
         }
         active = [
             item
-            for item in self.store.list_entities(
+            for item in self.store.list_session_entities(
                 ChatTurn,
-                engagement_id=prepared.engagement_id,
-                limit=1_000,
+                turn.session_id,
+                statuses=[status.value for status in active_statuses],
             )
-            if item.session_id == turn.session_id
-            and item.status in active_statuses
-            and (
-                item.status != ChatTurnStatus.INTERRUPTED
-                or bool(item.request_snapshot.get("recovery", {}).get("required"))
-            )
+            if item.status != ChatTurnStatus.INTERRUPTED
+            or bool(item.request_snapshot.get("recovery", {}).get("required"))
         ]
         if active:
             raise ChatHistoryConflict("chat session already has an active response")
