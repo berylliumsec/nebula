@@ -1,16 +1,18 @@
 {
-  "change_digest": "889f54cfe8a789de49a2af02032c219579e4d2295654d347e999d4c9d652d697",
-  "reviewed_by": "Claude review of autonomous browser commands",
-  "reason": "BrowserAutomationBroker's fallback for the browser.* and proxy.replay tools validated the flat tool arguments ({tab_id, url, page_url, ...}, already schema-checked with additionalProperties false and no kind) against BrowserCommandCreateRequest, whose kind field is required, so pydantic rejected every call before enqueue_command ran: an autonomous browser mission could never navigate, observe, control, interact, extract, replay or capture evidence; only the research and proxy-config tools worked. The broker now builds the request with the tool name as kind, tab_id and page_url lifted out, and the remaining arguments nested. Separately, BrowserAutomationService.enqueue_command checked only expected_page_url when it was present, so a command whose arguments.url pointed outside the lease's target subset (or the engagement scope) was queued and dispatched as long as expected_page_url was in scope; both targets are now checked. test_browser_automation gains a broker call for browser.navigate that asserts the queued command's kind, tab, arguments and expected page (ValidationError on main) and an enqueue with an in-scope expected_page_url and an out-of-lease url that must be refused (queued on main); the file's other cases cover leases, claims, results, scope expansion and the research tools.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:browser-complete and area:core-api do not run an autonomous browser mission through the broker; the Python tests drive the broker and service directly. No full suites.",
+  "change_digest": "b249c513d07642551b511aa8367e4035320d0a1814be12d01a657d940f87e1e3",
+  "reviewed_by": "Claude review of device lookup and language-server diagnostics",
+  "reason": "_device_for_token in api.py scanned the first 1,000 PairedDeviceSession rows (list_entities orders oldest first) for the presented cookie's token hash, so once a Core had recorded that many pairings over its lifetime every newer device got 401 on every request and was missing from the device list. NebulaStore.find_entity now looks the hash up in SQL; the revocation and expiry checks are unchanged. Separately, every record_caught_exception call in language_server.py named the feature 'language_server', which diagnostics._normalize_feature rejects because it is not in FEATURE_FILES; with a diagnostics manager configured (production, not pytest) the except blocks themselves raised, turning a ruff timeout into a JSON-RPC error for formatting, suppressing published diagnostics, and closing the LSP socket with 1011 from the catch-all handler. The calls now use the registered 'workspace' feature. test_api gains a request authenticated by a device paired after 1,000 older sessions (401 on main, 200 now); the new test_language_server_diagnostics asserts every feature named in language_server.py is registered (fails on main); test_language_server covers the handler paths that record those diagnostics.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py and storage.py) is the real-Core journey suite and pairs at most one device; the Python tests create the thousand sessions directly and exercise the language-server handlers in process. No full suites.",
   "expected_tests": {
-    "python": 8,
+    "python": 44,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_browser_automation.py"
+    "tests/v3/test_api.py",
+    "tests/v3/test_language_server.py",
+    "tests/v3/test_language_server_diagnostics.py"
   ],
   "frontend": [],
   "native": [],

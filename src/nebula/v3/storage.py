@@ -418,6 +418,28 @@ class NebulaStore:
         with self.database.session() as session:
             return bool(session.scalar(statement))
 
+    def find_entity(
+        self, model: type[EntityT], field: str, value: str
+    ) -> EntityT | None:
+        """Return the oldest ``model`` row whose top-level ``field`` equals ``value``.
+
+        Filtered in SQL so the lookup does not depend on how many rows of the
+        kind exist; a first-page scan stops seeing newer rows past 1,000.
+        """
+
+        statement = (
+            select(EntityRow)
+            .where(
+                EntityRow.kind == model.entity_kind,
+                EntityRow.payload[field].as_string() == value,
+            )
+            .order_by(EntityRow.created_at, EntityRow.id)
+            .limit(1)
+        )
+        with self.database.session() as session:
+            row = session.scalar(statement)
+            return model.model_validate(row.payload) if row is not None else None
+
     def create_many(self, entities: list[Entity]) -> list[Entity]:
         with self.transaction() as transaction:
             transaction.add_all(entities)
