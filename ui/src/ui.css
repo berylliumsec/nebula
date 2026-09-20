@@ -12,6 +12,7 @@
 @import url("./components-typography.css") layer(components);
 @import url("./components.css") layer(components);
 @import url("./guides.css") layer(components);
+@import url("./structured-results.css") layer(components);
 @import url("./calm-themes.css") layer(themes);
 @import url("./calm-responsive.css") layer(responsive);
 @import url("./vendor-canvas.css") layer(vendor-canvas);

@@ -39,6 +39,8 @@ from .artifacts import ArtifactStore
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
+from .runtime_platform import dashboard_components
+from .structured_results import goal_snapshot_instruction
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .browser_companion import BrowserCompanion
 from .browser_engine import BrowserEngineRegistry
@@ -1912,6 +1914,7 @@ class ChatService:
                 },
                 ensure_ascii=False,
             )
+            instructions += goal_snapshot_instruction(self.store, goal)
         project_instructions = self._project_instructions(engagement_id)
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
@@ -2272,6 +2275,20 @@ class ChatService:
                                 ).resolve()
                             ),
                             scope=tool_components.scope if tool_components else None,
+                        ),
+                    )
+                if tool_components is not None and goal is not None:
+                    # Goal mode is what runs long enough for an operator to
+                    # lose sight of the work, so publishing belongs to it. It
+                    # writes only this project's own records and adds no
+                    # runtime digest.
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        dashboard_components(
+                            self.store,
+                            tool_components.scope,
+                            Path(tool_components.workspace),
+                            goal,
                         ),
                     )
             except Exception as exc:
@@ -4874,6 +4891,21 @@ class ChatService:
                         engagement_id=turn.engagement_id,
                         workspace=workspace,
                         scope=components.scope if components else None,
+                    ),
+                )
+            resumed_goal = (
+                self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
+            )
+            if components is not None and resumed_goal is not None:
+                # The same capability the turn was created with, so a resumed
+                # goal turn offers the model exactly the tools it already had.
+                components = combine_tool_components(
+                    components,
+                    dashboard_components(
+                        self.store,
+                        components.scope,
+                        Path(components.workspace),
+                        resumed_goal,
                     ),
                 )
             if components is None:

@@ -1815,7 +1815,10 @@ export interface ChatGoal {
   timeBudgetSeconds?: number;
   stepBudget?: number;
   childBudget?: number;
+  /** Active seconds Core has banked. A running goal is still accruing more. */
   elapsedSeconds: number;
+  /** When the current active stretch began, while the goal is running. */
+  activeSince?: string;
   childrenStarted: number;
   usage: ChatUsage;
   linkedTurnIds: Identifier[];
@@ -3209,4 +3212,45 @@ export type GuideStarterKind = "hook" | "skill" | "agents_md";
 export interface GuideStarterFiles {
   kind: GuideStarterKind;
   paths: string[];
+}
+
+/** Shape facts Core reports about a published result, before it is opened. */
+export interface StructuredResultStats {
+  byteSize: number;
+  nodeCount: number;
+  maxDepth: number;
+  rootType: "object" | "array" | "string" | "number" | "boolean" | "null";
+  topLevelCount: number;
+}
+
+/** A list row: enough to recognise a result without carrying its payload. */
+export interface StructuredResultSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  summary: string;
+  producer: string;
+  origin: "agent" | "tool" | "operator" | "api";
+  labels: string[];
+  createdAt: string;
+  updatedAt: string;
+  revision: number;
+  stats: StructuredResultStats;
+  hasHints: boolean;
+  preview: { key: string; value: unknown; truncated: boolean }[];
+  /** Stable key for a series of snapshots; a goal's identity when in goal mode. */
+  stream?: string;
+  /** What an operator reads for that series, e.g. the goal's objective. */
+  streamLabel?: string;
+  sequence: number;
+  chatSessionId?: string;
+  toolCallId?: string;
+}
+
+/** One published result, with the authoritative value and optional hints. */
+export interface StructuredResultRecord extends StructuredResultSummary {
+  /** Exactly what the producer published. */
+  result: unknown;
+  /** Optional presentation advice, kept separate from the result. */
+  hints?: unknown;
 }

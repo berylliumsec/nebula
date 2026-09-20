@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import type { ApiClient } from "../api/client";
+import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal } from "../api/types";
 import { DialogProvider } from "./DialogSystem";
-import { ProviderGoalPanel } from "./ProviderGoalPanel";
+import { activeSeconds, ProviderGoalPanel } from "./ProviderGoalPanel";
 
 const draft: ChatGoal = {
   id: "goal", engagementId: "project", sessionId: "session",
@@ -139,4 +139,63 @@ it("confirms before cancelling a goal because cancellation is final", async () =
   fireEvent.click(within(await screen.findByRole("dialog", { name: "Cancel this goal?" })).getByRole("button", { name: "Cancel goal" }));
   await waitFor(() => expect(writeChatGoal).toHaveBeenCalledWith("session", { expectedRevision: 2, action: "cancel" }));
   expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "cancelled" }));
+});
+
+it("cancels a goal whose revision moved while the model was working", async () => {
+  // Core advances a goal on every turn, so the revision an operator is looking
+  // at is stale the moment the model works. Their decision still stands.
+  const running: ChatGoal = { ...draft, status: "running", revision: 2 };
+  const advanced: ChatGoal = { ...running, currentStep: 3, revision: 7 };
+  const cancelled: ChatGoal = { ...advanced, status: "cancelled", revision: 8 };
+  const conflict = new ApiError("goal changed on another device; reload before retrying", 409);
+  const writeChatGoal = vi.fn().mockRejectedValueOnce(conflict).mockResolvedValueOnce(cancelled);
+  const getChatGoal = vi.fn().mockResolvedValue(advanced);
+  const onChange = vi.fn();
+  const api = { writeChatGoal, getChatGoal } as unknown as ApiClient;
+
+  render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel goal" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.click(within(dialog).getByRole("button", { name: "Cancel goal" }));
+
+  await waitFor(() => expect(writeChatGoal).toHaveBeenCalledTimes(2));
+  // The retry carries the revision Core actually holds, not the stale one.
+  expect(writeChatGoal.mock.calls[0][1]).toMatchObject({ expectedRevision: 2, action: "cancel" });
+  expect(writeChatGoal.mock.calls[1][1]).toMatchObject({ expectedRevision: 7, action: "cancel" });
+  expect(onChange).toHaveBeenLastCalledWith(cancelled);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("says what a goal already is instead of silently failing a transition", async () => {
+  const running: ChatGoal = { ...draft, status: "running", revision: 2 };
+  const completed: ChatGoal = { ...running, status: "completed", revision: 9 };
+  const conflict = new ApiError("goal changed on another device; reload before retrying", 409);
+  const writeChatGoal = vi.fn().mockRejectedValue(conflict);
+  const getChatGoal = vi.fn().mockResolvedValue(completed);
+  const onChange = vi.fn();
+  const api = { writeChatGoal, getChatGoal } as unknown as ApiClient;
+
+  render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("already completed");
+  // The panel shows what Core holds rather than leaving a stale goal on screen.
+  expect(onChange).toHaveBeenCalledWith(completed);
+  expect(writeChatGoal).toHaveBeenCalledTimes(1);
+});
+
+it("counts the active stretch a running goal is still accruing", () => {
+  const since = new Date("2026-09-20T12:00:00Z");
+  const now = since.getTime() + 90_000;
+  const running: ChatGoal = { ...draft, status: "running", elapsedSeconds: 30, activeSince: since.toISOString() };
+
+  // Core banks elapsed time on a transition, so the stored value alone would
+  // report the time this goal had when it was last paused.
+  expect(activeSeconds(running, now)).toBeCloseTo(120);
+  expect(activeSeconds({ ...running, status: "paused" }, now)).toBe(30);
+  expect(activeSeconds({ ...running, activeSince: undefined }, now)).toBe(30);
+  expect(activeSeconds({ ...running, activeSince: "not a date" }, now)).toBe(30);
+
+  render(<DialogProvider><ProviderGoalPanel api={{} as unknown as ApiClient} sessionId="session" goal={running} onChange={vi.fn()} /></DialogProvider>);
+  expect(screen.getByRole("region", { name: "Conversation goal" })).toHaveTextContent(/\ds active/);
 });

@@ -1,24 +1,40 @@
 {
-  "change_digest": "55aa34ad712880f43500fc4d0cc3ca00c3e00cf4354b3a4e8f2de6b1902661e6",
-  "reviewed_by": "Codex review of project goal-skill shared-rule persistence",
-  "reason": "Project-owned skills intentionally share instructions through the project's .agents/rules tree, but goal skill snapshots rejected every reference outside the individual skill directory. The resolver now derives a source-aware boundary from the discovered catalog entry: project skills may snapshot exact, digested resources within the same .agents tree, while installed skills remain confined to their own directory. Focused unit tests cover successful shared-rule reads, traversal rejection, and symlink rejection; API coverage proves durable goal mutation; provider chat tests cover snapshot use; the real-Core browser journey proves save and reload from the operator entry point on desktop and emulated Chromium/WebKit mobile profiles.",
-  "exclusions": "No frontend unit test is selected because UI request construction and local interaction are unchanged; the existing production real-Core Playwright journey exercises the exact Save skills control, API mutation, visible count, reload, retained source-loss state, and subsequent provider use. No native tests because Rust and the desktop shell are unchanged. Provider transport, unrelated chat lifecycle, harness-native goals, MCP, workspace mutation, and full suites are excluded. No CSS audit is selected because no styles or rendered copy changed.",
+  "change_digest": "c8cfb149e1c5687c52fd7d84418e054890c5b94d27ad553b82d41d638b1fc4eb",
+  "reviewed_by": "Claude review of goal-mode structured results and the goal revision-sync fix",
+  "reason": "Publishing is now tied strictly to goal mode: dashboard.publish is offered only to a turn dispatched under a running goal, Core owns that goal's snapshot series, and a running goal is asked in its instructions to show where the work stands whenever its series has been quiet for more than ten minutes. The same change fixes two operator-reported goal defects: the panel read the goal once at open, so its step, usage and revision went stale as soon as the model worked, which both froze the numbers and made Pause/Cancel fail on a stale revision; and a running goal reported the active time it had at its last pause, usually zero. The Python selection covers the goal binding, the interval ask, the strict gate on a real chat turn (test_structured_results.py) and the goal lifecycle and turn accounting it rides on (test_chat_goals.py, test_chat.py, test_chat_api.py); test_tool_catalog.py and test_tool_suggestions.py prove the tool stays absent outside goal mode. The frontend selection covers every layer of the explorer, the goal panel's revision recovery and live active time, and the API mapping. The Playwright selection proves the operator journeys end to end on desktop, narrow, mobile Chromium and mobile WebKit, including the goal panel following Core's revision \u2014 that test fails without the fix.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. The broad area:assistant selection is excluded: the conversation change is one composer control, one drawer tab and the goal panel's own refresh, all exercised by the selected journeys, while streaming, queueing, harness and provider journeys are untouched. No native tests are selected because no Rust code changed. No real-Core or live provider entry is selected: goal transitions and published results are read and written through ordinary Core routes covered by the Python tests, and no provider, harness or container behaviour changed. The real-Core goal journeys (area:provider-goal-skills-core) remain unrun.",
   "expected_tests": {
-    "python": 12,
-    "frontend": 0,
+    "python": 175,
+    "frontend": 149,
     "native": 0,
-    "playwright": 3
+    "playwright": 32
   },
   "python": [
-    "tests/v3/test_skill_catalog.py",
-    "tests/v3/test_api.py::test_provider_chat_goal_api_persists_explicit_lifecycle",
-    "tests/v3/test_chat.py::test_provider_skill_is_snapshotted_on_turn_and_running_goal",
-    "tests/v3/test_chat.py::test_provider_skill_resources_are_exposed_only_through_bounded_reader",
-    "tests/v3/test_chat_goals.py::test_goal_skills_are_explicitly_replaced_only_at_safe_revision"
+    "tests/v3/test_structured_results.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/structured-result/normalize.test.ts",
+    "ui/src/components/structured-result/analyze.test.ts",
+    "ui/src/components/structured-result/format.test.ts",
+    "ui/src/components/structured-result/hints.test.ts",
+    "ui/src/components/structured-result/rawText.test.ts",
+    "ui/src/components/structured-result/StructuredResultDashboard.test.tsx",
+    "ui/src/components/structured-result/ViewBoundary.test.tsx",
+    "ui/src/components/structured-result/ChatResultStream.test.tsx",
+    "ui/src/pages/ResultsPage.test.tsx",
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "area:provider-goal-skills-core"
+    "area:structured-results",
+    "entry:phone-shell/mobile-chromium",
+    "entry:phone-shell/mobile-webkit",
+    "entry:workbench-view-authority/desktop"
   ]
 }

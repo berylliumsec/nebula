@@ -4502,8 +4502,50 @@ class CompanionAction(Entity):
     result: dict[str, Any] | None = None
 
 
+class StructuredResultStats(NebulaModel):
+    """Shape facts the explorer shows before it materialises a large payload."""
+
+    byte_size: int = Field(default=0, ge=0)
+    node_count: int = Field(default=0, ge=0)
+    max_depth: int = Field(default=0, ge=0)
+    root_type: Literal["object", "array", "string", "number", "boolean", "null"] = (
+        "null"
+    )
+    top_level_count: int = Field(default=0, ge=0)
+
+
+class StructuredResult(Entity):
+    """A producer's JSON-compatible output, retained exactly as it was published.
+
+    ``result`` is authoritative and is never rewritten: the dashboard derives
+    every view from it. ``hints`` is optional presentation advice kept beside
+    the payload so presentation metadata never contaminates the result itself.
+    """
+
+    entity_kind: ClassVar[str] = "structured_results"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=200)
+    summary: str = Field(default="", max_length=2_000)
+    producer: str = Field(default="", max_length=200)
+    origin: Literal["agent", "tool", "operator", "api"] = "api"
+    chat_session_id: str | None = Field(default=None, max_length=200)
+    chat_turn_id: str | None = Field(default=None, max_length=200)
+    tool_call_id: str | None = Field(default=None, max_length=200)
+    labels: list[str] = Field(default_factory=list, max_length=12)
+    # Snapshots a producer publishes as it works share a stream key, which
+    # orders them into one series without changing any published value. The
+    # key is stable (a goal's id); the label is what an operator reads.
+    stream: str | None = Field(default=None, max_length=200)
+    stream_label: str = Field(default="", max_length=200)
+    sequence: int = Field(default=1, ge=1)
+    result: Any = None
+    hints: dict[str, Any] | None = None
+    stats: StructuredResultStats = Field(default_factory=StructuredResultStats)
+
+
 ENTITY_MODELS: tuple[type[Entity], ...] = (
     CompanionAction,
+    StructuredResult,
     GuideProgress,
     Engagement,
     ScopePolicy,

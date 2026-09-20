@@ -12,6 +12,7 @@ const authoritative = [
   "src/components.css",
   "src/calm-responsive.css",
   "src/guides.css",
+  "src/structured-results.css",
 ];
 const allowedFontSizes = new Set(["11", "12", "13", "14", "15", "16", "20", "28"]);
 const allowedRadii = new Set(["0", "8", "10", "16", "999"]);

@@ -172,6 +172,9 @@ import type {
   WritingTransformResponse,
   CodeCompletionItem,
   UpstreamProviderOption,
+  StructuredResultRecord,
+  StructuredResultStats,
+  StructuredResultSummary,
 } from "./types";
 import { websocketAuthProtocol } from "./events";
 import {
@@ -3371,6 +3374,9 @@ function mapChatGoal(value: Record<string, any>): ChatGoal {
     stepBudget: typeof value.step_budget === "number" ? value.step_budget : undefined,
     childBudget: typeof value.child_budget === "number" ? value.child_budget : undefined,
     elapsedSeconds: Number(value.elapsed_seconds ?? 0),
+    // Core banks elapsed time on a transition, so a running goal's active
+    // stretch is only readable from when it started.
+    activeSince: typeof value.active_since === "string" ? value.active_since : undefined,
     childrenStarted: Number(value.children_started ?? 0),
     usage: {
       inputTokens: Number(value.usage?.input_tokens ?? 0),
@@ -3780,6 +3786,79 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     unresolvedHookExecutionIds: value.unresolved_hook_execution_ids ?? [],
     resultsUrl: typeof value.results_url === "string" ? value.results_url : undefined,
     processId: typeof value.process_id === "string" ? value.process_id : undefined,
+  };
+}
+
+interface WireStructuredResultSummary {
+  id: string;
+  engagement_id: string;
+  title: string;
+  summary: string;
+  producer: string;
+  origin: string;
+  labels: string[];
+  created_at: string;
+  updated_at: string;
+  revision: number;
+  stats: {
+    byte_size: number;
+    node_count: number;
+    max_depth: number;
+    root_type: StructuredResultStats["rootType"];
+    top_level_count: number;
+  };
+  has_hints: boolean;
+  preview: { key: string; value: unknown; truncated: boolean }[];
+  stream?: string | null;
+  stream_label?: string | null;
+  sequence: number;
+  chat_session_id?: string | null;
+  tool_call_id?: string | null;
+}
+
+interface WireStructuredResult extends Omit<WireStructuredResultSummary, "has_hints" | "preview"> {
+  result: unknown;
+  hints?: unknown;
+  stats: WireStructuredResultSummary["stats"];
+}
+
+function mapStructuredResultSummary(value: WireStructuredResultSummary): StructuredResultSummary {
+  // Deliberately tolerant: a published result is producer-shaped data, and a
+  // Core that adds or renames a descriptive field must not stop one opening.
+  const stats = value.stats ?? ({} as WireStructuredResultSummary["stats"]);
+  return {
+    id: value.id,
+    projectId: value.engagement_id,
+    title: value.title,
+    summary: value.summary ?? "",
+    producer: value.producer ?? "",
+    origin: (["agent", "tool", "operator", "api"].includes(value.origin) ? value.origin : "api") as StructuredResultSummary["origin"],
+    labels: value.labels ?? [],
+    createdAt: value.created_at,
+    updatedAt: value.updated_at,
+    revision: value.revision,
+    stats: {
+      byteSize: stats.byte_size ?? 0,
+      nodeCount: stats.node_count ?? 0,
+      maxDepth: stats.max_depth ?? 0,
+      rootType: stats.root_type ?? "null",
+      topLevelCount: stats.top_level_count ?? 0,
+    },
+    hasHints: value.has_hints ?? false,
+    preview: value.preview ?? [],
+    stream: value.stream ?? undefined,
+    streamLabel: value.stream_label || undefined,
+    sequence: value.sequence ?? 1,
+    chatSessionId: value.chat_session_id ?? undefined,
+    toolCallId: value.tool_call_id ?? undefined,
+  };
+}
+
+function mapStructuredResult(value: WireStructuredResult): StructuredResultRecord {
+  return {
+    ...mapStructuredResultSummary({ ...value, has_hints: value.hints !== null && value.hints !== undefined, preview: [] }),
+    result: value.result,
+    hints: value.hints ?? undefined,
   };
 }
 
@@ -7229,6 +7308,61 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapKnowledgeSource)));
+  }
+
+  listStructuredResults(
+    projectId: string,
+    options: { stream?: string; chatSessionId?: string; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ): Promise<StructuredResultSummary[]> {
+    const query = new URLSearchParams();
+    if (options.stream) query.set("stream", options.stream);
+    if (options.chatSessionId) query.set("chat_session_id", options.chatSessionId);
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    const suffix = query.toString();
+    return this.request<WireStructuredResultSummary[]>(
+      `projects/${encodeURIComponent(projectId)}/structured-results${suffix ? `?${suffix}` : ""}`,
+      { signal },
+    ).then((items) => items.map(mapStructuredResultSummary));
+  }
+
+  getStructuredResult(projectId: string, resultId: string, signal?: AbortSignal): Promise<StructuredResultRecord> {
+    return this.request<WireStructuredResult>(
+      `projects/${encodeURIComponent(projectId)}/structured-results/${encodeURIComponent(resultId)}`,
+      { signal },
+    ).then(mapStructuredResult);
+  }
+
+  publishStructuredResult(
+    projectId: string,
+    body: { title: string; result: unknown; summary?: string; producer?: string; stream?: string; labels?: string[]; hints?: unknown },
+    signal?: AbortSignal,
+  ): Promise<StructuredResultRecord> {
+    return this.request<{ result: WireStructuredResult }>(
+      `projects/${encodeURIComponent(projectId)}/structured-results`,
+      {
+        method: "POST",
+        signal,
+        body: JSON.stringify({
+          title: body.title,
+          result: body.result,
+          summary: body.summary ?? "",
+          producer: body.producer ?? "",
+          origin: "operator",
+          stream: body.stream,
+          labels: body.labels ?? [],
+          hints: body.hints ?? null,
+        }),
+      },
+    ).then((value) => mapStructuredResult(value.result));
+  }
+
+  async deleteStructuredResult(projectId: string, resultId: string, signal?: AbortSignal): Promise<void> {
+    await this.request<void>(
+      `projects/${encodeURIComponent(projectId)}/structured-results/${encodeURIComponent(resultId)}`,
+      { method: "DELETE", signal },
+    );
   }
 
   listLibraryItems(signal?: AbortSignal): Promise<Page<LibraryItem>> {
