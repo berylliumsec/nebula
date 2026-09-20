@@ -16,7 +16,7 @@ import re
 import secrets
 import tempfile
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Literal, Mapping
@@ -9480,13 +9480,21 @@ def create_app(
                 source.harness_session_id,
                 reason=f"conversation fork through {request.through_message_id}",
             ).id
-        return chat_service().fork_session(
-            session_id,
-            through_message_id=request.through_message_id,
-            before_message_id=request.before_message_id,
-            title=request.title,
-            harness_session_id=harness_session_id,
-        )
+        try:
+            return chat_service().fork_session(
+                session_id,
+                through_message_id=request.through_message_id,
+                before_message_id=request.before_message_id,
+                title=request.title,
+                harness_session_id=harness_session_id,
+            )
+        except Exception:  # diagnostic-expected: the failure is re-raised once the vendor branch is discarded
+            # The vendor branch was created before the conversation fork was
+            # validated; do not leave it behind as an orphan "starting" session.
+            if harness_session_id is not None:
+                with suppress(NotFoundError):
+                    store.delete(HarnessSession, harness_session_id)
+            raise
 
     @app.delete(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
@@ -10866,7 +10874,11 @@ def create_app(
             await websocket.close(code=4401, reason="valid authentication required")
             return
         try:
-            session = browser_companion.session(session_id)
+            try:
+                session = browser_companion.session(session_id)
+            except NotFoundError:  # diagnostic-expected: a stale tab streams a companion session that was removed
+                await websocket.close(code=4404, reason="companion session not found")
+                return
             adapter = await browser_companion.adapter()
             endpoint = adapter.base_url.replace("http://", "ws://", 1)
             endpoint += f"/v1/identities/{quote(session.identity_id, safe='')}/tabs/{quote(tab_id, safe='')}/screencast"

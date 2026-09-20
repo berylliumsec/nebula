@@ -1,16 +1,17 @@
 {
-  "change_digest": "34b09d9bf87d4758eb4b85fc6d17cb12056b4e411ad70ae4a99dafa75b8c1da0",
-  "reviewed_by": "Claude review of exported browser headers",
-  "reason": "exporter._credential_free blanked every key named headers regardless of shape, so the recorded request headers of BrowserInterceptItem and BrowserRepeaterTab (list[tuple[str, str]] fields) were written as null in every project bundle: captured browser evidence lost its headers, and the record no longer matched its own model. The helper's purpose is to strip machine-local auth bindings, which are dict-shaped; list-shaped headers are recorded traffic. The list case now keeps the (name, value) pairs and redacts values for credential-bearing names (authorization, proxy-authorization, cookie, set-cookie, x-api-key, x-auth-token, x-csrf-token, and any name containing token or secret); the dict case is unchanged. test_exporter gains a bundle round trip asserting the intercept's host header survives and its authorization and cookie values are redacted (null on main); the file's other cases cover manifests, blobs, events, snapshots and reference handling.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for exporter.py) is the real-Core journey suite and does not export a project with intercept records; the Python test writes and reads the bundle directly. No full suites.",
+  "change_digest": "490f17f9529ea9a9bf8806ddcbe74cf88cc547f00bb850fa0faf919b13cbf9fb",
+  "reviewed_by": "Claude review of companion stream and fork edge cases",
+  "reason": "Two api.py routes mishandled predictable failures. companion_stream called browser_companion.session(session_id) inside a try whose except tuple did not include NotFoundError, so a stale tab opening the stream for a removed companion session raised out of the handler before accept: an ASGI denial instead of the 4404 close every other websocket route sends for a missing record. fork_chat_session created the vendor HarnessSession branch (status starting) before ChatService.fork_session validated the request, so a fork rejected for an active turn or a boundary from another conversation answered 409 and left one orphaned HarnessSession per attempt. The stream now closes 4404 for a missing session, and a failed conversation fork deletes the vendor branch it created before re-raising. test_api gains the 4404 case (a WebSocketDenialResponse on main); test_chat_api gains a harness fork with a foreign boundary asserting 409 and exactly the original vendor session left (two on main). Both files' existing cases cover the neighbouring websocket auth, run-event and chat session routes.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py) is the real-Core journey suite and does not open a stream for a removed companion session or fork a harness conversation with a foreign boundary; the Python tests drive both routes through TestClient. No full suites.",
   "expected_tests": {
-    "python": 8,
+    "python": 50,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_exporter.py"
+    "tests/v3/test_api.py",
+    "tests/v3/test_chat_api.py"
   ],
   "frontend": [],
   "native": [],
