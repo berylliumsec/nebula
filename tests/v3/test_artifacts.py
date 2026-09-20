@@ -116,3 +116,40 @@ def test_explicit_media_type_wins_over_filename_inference(tmp_path):
     )
 
     assert stored.artifact.media_type == "application/x-custom"
+
+
+def test_blob_write_fsyncs_the_shard_directory_after_the_file(tmp_path, monkeypatch):
+    import os
+    import stat
+
+    synced: list[tuple[bool, int]] = []
+    original_fsync = os.fsync
+
+    def recording_fsync(descriptor):
+        info = os.fstat(descriptor)
+        synced.append((stat.S_ISDIR(info.st_mode), info.st_ino))
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    store = ArtifactStore(tmp_path / "artifacts")
+    artifact = store.put_bytes(b"durable evidence", engagement_id="eng-1")
+
+    shard_directory = store.path_for(artifact).parent
+    directory_syncs = [index for index, (is_dir, _) in enumerate(synced) if is_dir]
+    file_syncs = [index for index, (is_dir, _) in enumerate(synced) if not is_dir]
+    assert file_syncs, "the blob file itself must be fsynced"
+    assert (True, shard_directory.stat().st_ino) in synced
+    assert min(directory_syncs) > min(file_syncs)
+
+
+def test_verify_reports_a_corrupt_storage_path_as_unverified(tmp_path):
+    store = ArtifactStore(tmp_path / "artifacts")
+    artifact = store.put_bytes(b"verified", engagement_id="eng-1")
+    other = store.put_bytes(b"different", engagement_id="eng-1")
+
+    escaped = artifact.model_copy(update={"storage_path": "../outside"})
+    mismatched = artifact.model_copy(update={"storage_path": other.storage_path})
+
+    assert store.verify(escaped) is False
+    assert store.verify(mismatched) is False
+    assert store.verify(artifact) is True

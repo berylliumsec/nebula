@@ -62,6 +62,16 @@ class StoredArtifact:
     created_blob: bool
 
 
+def _fsync_directory(path: Path) -> None:
+    """Flush a directory so a freshly linked entry survives power loss."""
+
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 class ArtifactStore:
     """Store bytes once and address them by their verified SHA-256 digest."""
 
@@ -230,7 +240,9 @@ class ArtifactStore:
 
             digest_value = digest.hexdigest()
             destination_path = self.path_for_digest(digest_value)
-            destination_path.parent.mkdir(parents=True, exist_ok=True)
+            shard_directory = destination_path.parent
+            shard_existed = shard_directory.is_dir()
+            shard_directory.mkdir(parents=True, exist_ok=True)
             created = False
             try:
                 # Hard-linking within the same store atomically refuses to replace
@@ -267,6 +279,14 @@ class ArtifactStore:
                     stage="artifacts",
                     metadata={"byte_count": size},
                 )
+            if created:
+                # The bytes were fsynced above, but the new directory entry (and
+                # any shard directories created for it) must reach disk too, or
+                # the Artifact row committed next can outlive its blob.
+                _fsync_directory(shard_directory)
+                if not shard_existed:
+                    _fsync_directory(shard_directory.parent)
+                    _fsync_directory(self._blob_root)
 
             relative_path = destination_path.relative_to(self.root).as_posix()
             artifact = Artifact(
@@ -306,7 +326,20 @@ class ArtifactStore:
             return stream.read()
 
     def verify(self, artifact: Artifact) -> bool:
-        path = self.path_for(artifact)
+        try:
+            path = self.path_for(artifact)
+        except ArtifactStoreError as exc:
+            # A row whose storage_path escapes the store or disagrees with its
+            # digest is unverifiable; callers turn False into their own
+            # structured integrity failure instead of an unexpected 500.
+            record_caught_exception(
+                "storage",
+                "storage.artifacts.caught_failure_002",
+                "An artifact row's storage path failed verification.",
+                exc,
+                stage="artifacts",
+            )
+            return False
         if not path.is_file() or path.stat().st_size != artifact.size:
             return False
         digest = hashlib.sha256()

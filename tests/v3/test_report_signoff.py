@@ -20,7 +20,7 @@ from nebula.v3.evidence import EvidenceUploadRequest, upload_evidence
 from nebula.v3.operators import OperatorProfileService
 from nebula.v3.reporting import ReportRenderService
 from nebula.v3.report_signoff import ReportSignoffRequest, sign_off_report
-from nebula.v3.storage import ConflictError, NebulaStore
+from nebula.v3.storage import ConflictError, NebulaStore, StoreTransaction
 
 
 def test_signoff_finalizes_review_with_active_operator_and_validated_findings(tmp_path):
@@ -119,7 +119,7 @@ def test_signoff_rolls_back_finalization_when_audit_event_cannot_be_created(
     def fail_event(*_args, **_kwargs):
         raise RuntimeError("injected operation-event failure")
 
-    monkeypatch.setattr(store, "_next_operation_event", fail_event)
+    monkeypatch.setattr(StoreTransaction, "append_operation_event", fail_event)
     with pytest.raises(RuntimeError, match="injected operation-event failure"):
         sign_off_report(
             store,
@@ -249,3 +249,115 @@ def test_evidence_validation_signoff_and_pdf_workflow(tmp_path):
     assert "Signed validation report" in pdf_text
     assert "FINAL" in pdf_text
     assert "Evidence-backed issue" in pdf_text
+
+
+def test_signoff_records_one_signed_revision_in_metadata_and_ledger(tmp_path):
+    store = NebulaStore(tmp_path / "signed-revision.db")
+    engagement = store.create(Engagement(name="Ledger project"))
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="Ledger report",
+            status=ReportStatus.REVIEW,
+        )
+    )
+    operator = OperatorProfileService(store).create_profile(
+        display_name="Ledger Reviewer"
+    )
+
+    signed = sign_off_report(
+        store,
+        report.id,
+        ReportSignoffRequest(
+            expected_revision=report.revision, operator_id=operator.id
+        ),
+    )
+
+    events = store.replay_operation_events(report.id)
+    assert [event.event_type for event in events] == ["report.signed_off"]
+    assert signed.metadata["signoff"]["report_revision"] == signed.revision
+    assert events[0].payload["report_revision"] == signed.revision
+
+
+def test_signoff_conflicts_when_a_selected_finding_changes_before_commit(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "late-finding.db")
+    engagement = store.create(Engagement(name="Late finding project"))
+    deleted = store.create(
+        Finding(
+            engagement_id=engagement.id,
+            title="Deleted later",
+            status=FindingStatus.VALIDATED,
+        )
+    )
+    flipped = store.create(
+        Finding(
+            engagement_id=engagement.id,
+            title="Flipped later",
+            status=FindingStatus.VALIDATED,
+        )
+    )
+    operator = OperatorProfileService(store).create_profile(display_name="Reviewer")
+    references_deleted = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="References a deleted finding",
+            status=ReportStatus.REVIEW,
+            finding_ids=[deleted.id],
+        )
+    )
+    references_flipped = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="References a finding flipped late",
+            status=ReportStatus.REVIEW,
+            finding_ids=[flipped.id],
+        )
+    )
+
+    # A finding removed after it was selected is a workflow conflict, not a 404.
+    store.delete(Finding, deleted.id)
+    with pytest.raises(ConflictError, match="deleted finding"):
+        sign_off_report(
+            store,
+            references_deleted.id,
+            ReportSignoffRequest(
+                expected_revision=references_deleted.revision,
+                operator_id=operator.id,
+            ),
+        )
+
+    # The sign-off timestamp is taken right before the committing transaction
+    # opens; a status change landing at that moment must still be caught by the
+    # validation that runs inside the transaction.
+    import nebula.v3.report_signoff as signoff_module
+
+    real_utc_now = signoff_module.utc_now
+
+    def flip_finding_then_now():
+        current = store.get(Finding, flipped.id)
+        if current.status == FindingStatus.VALIDATED:
+            store.update(
+                Finding,
+                flipped.id,
+                {"status": FindingStatus.FALSE_POSITIVE},
+                expected_revision=current.revision,
+            )
+        return real_utc_now()
+
+    monkeypatch.setattr(signoff_module, "utc_now", flip_finding_then_now)
+    with pytest.raises(ConflictError, match="must be validated"):
+        sign_off_report(
+            store,
+            references_flipped.id,
+            ReportSignoffRequest(
+                expected_revision=references_flipped.revision,
+                operator_id=operator.id,
+            ),
+        )
+
+    unchanged = store.get(Report, references_flipped.id)
+    assert unchanged.status == ReportStatus.REVIEW
+    assert unchanged.signed_off_by is None
+    assert store.replay_operation_events(references_flipped.id) == []

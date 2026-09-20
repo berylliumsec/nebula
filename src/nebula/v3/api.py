@@ -6428,7 +6428,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def download_report_pdf(render_id: str) -> FileResponse:
-        artifact, path = require_report_render_service().pdf(render_id)
+        # pdf() re-hashes the rendered PDF; keep that off the event loop.
+        artifact, path = await asyncio.to_thread(
+            require_report_render_service().pdf, render_id
+        )
         return FileResponse(
             path,
             media_type="application/pdf",
