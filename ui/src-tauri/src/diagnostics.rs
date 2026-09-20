@@ -369,6 +369,11 @@ struct Diagnostics {
     last_failure: Option<String>,
     last_rotation: Option<String>,
     dropped_records: u64,
+    // Unreadable log lines are counted so a torn write is reported once per
+    // launch instead of once per read: the report itself lands in the aggregate
+    // the reader just read.
+    unreadable_records: u64,
+    reported_unreadable_records: u64,
     memory_errors: VecDeque<Value>,
     sensitive_dir: PathBuf,
     sensitive_key: Option<[u8; 32]>,
@@ -600,6 +605,8 @@ impl Diagnostics {
             last_failure: Some("native diagnostic storage is unavailable".to_string()),
             last_rotation: None,
             dropped_records: 0,
+            unreadable_records: 0,
+            reported_unreadable_records: 0,
             memory_errors: VecDeque::from([Value::Object(record)]),
             sensitive_dir: app_data_dir.join("diagnostic-details").join("desktop"),
             sensitive_key: None,
@@ -641,6 +648,8 @@ impl Diagnostics {
             last_failure: None,
             last_rotation: None,
             dropped_records: 0,
+            unreadable_records: 0,
+            reported_unreadable_records: 0,
             memory_errors: VecDeque::new(),
             sensitive_dir: app_data_dir.join("diagnostic-details").join("desktop"),
             sensitive_key: None,
@@ -1098,11 +1107,17 @@ impl Diagnostics {
             self.last_failure = Some("a native diagnostic log is unavailable".to_string());
             format!("cannot append native diagnostics: {error}")
         })?;
-        file.write_all(line)
-            .and_then(|_| file.write_all(b"\n"))
+        let mut frame = Vec::with_capacity(line.len() + 1);
+        frame.extend_from_slice(line);
+        frame.push(b'\n');
+        file.write_all(&frame)
             .and_then(|_| file.flush())
             .and_then(|_| if sync { file.sync_data() } else { Ok(()) })
             .map_err(|error| {
+                // A partially written record must not swallow the next one: close
+                // the torn line so only the fragment becomes unreadable.
+                let _ = file.write_all(b"\n"); // diagnostic-expected: the write failure below is reported.
+                let _ = file.flush(); // diagnostic-expected: the write failure below is reported.
                 self.degraded = true;
                 self.last_failure = Some("a native diagnostic write failed".to_string());
                 format!("cannot write native diagnostics: {error}")
@@ -1258,6 +1273,9 @@ impl Diagnostics {
                     invalid_records = invalid_records.saturating_add(1);
                     continue;
                 };
+                if line.trim().is_empty() {
+                    continue;
+                }
                 let Ok(value) = serde_json::from_str::<Value>(&line) else {
                     invalid_records = invalid_records.saturating_add(1);
                     continue;
@@ -1299,16 +1317,25 @@ impl Diagnostics {
             });
             feature_matches && after_matches
         });
-        if invalid_records > 0 {
+        self.unreadable_records = invalid_records;
+        if invalid_records > self.reported_unreadable_records {
+            self.reported_unreadable_records = invalid_records;
             if let Err(error) = self.record(
                 DiagnosticLevel::Error,
                 "desktop",
                 "desktop.diagnostics.viewer_record_invalid",
-                "A local diagnostic error record was malformed.",
+                "Unreadable lines in a local diagnostic log were skipped.",
                 DiagnosticFields {
-                    outcome: Some("failure"),
+                    outcome: Some("degraded"),
                     stage: Some("viewer-read"),
                     retryable: Some(false),
+                    reason_code: Some("integrity_failed"),
+                    operator_detail: Some(
+                        "A local diagnostic log holds lines that are not valid diagnostic JSON, which a failed or torn write leaves behind.",
+                    ),
+                    impact: Some(
+                        "The unreadable lines were skipped. Every other record in the file was read normally.",
+                    ),
                     metadata: Map::from_iter([("count".to_string(), Value::from(invalid_records))]),
                     ..DiagnosticFields::default()
                 },
@@ -1383,6 +1410,7 @@ impl Diagnostics {
             "disk_usage_bytes": disk_usage,
             "last_rotation": self.last_rotation,
             "dropped_record_count": self.dropped_records,
+            "unreadable_record_count": self.unreadable_records,
             "last_failure": self.last_failure,
             "sensitive_detail_capture": self.settings.sensitive_detail_capture,
             "sensitive_detail_persistence": self.sensitive_persistence,
@@ -2398,6 +2426,95 @@ mod tests {
                 0o600
             );
         }
+        fs::remove_dir_all(directory).expect("test directory should be removed");
+    }
+
+    #[test]
+    fn native_viewer_skips_unreadable_lines_and_reports_them_once_per_launch() {
+        let directory = temporary_directory("unreadable");
+        let mut manager = Diagnostics::new(&directory).expect("diagnostics should initialize");
+        manager
+            .load_settings()
+            .expect("default settings should load");
+        manager
+            .record(
+                DiagnosticLevel::Error,
+                "desktop",
+                "desktop.test.before_tear",
+                "An error before the tear.",
+                DiagnosticFields::default(),
+            )
+            .expect("error should be written");
+        let aggregate = manager.log_dir.join("errors.log");
+        let intact = fs::read_to_string(&aggregate).expect("aggregate should be readable");
+        let fragment: String = intact.chars().take(120).collect();
+        // A torn write leaves a fragment behind, and a rotation can leave a blank
+        // line: neither may cost the viewer the rest of the file.
+        fs::write(&aggregate, format!("{intact}{fragment}\n\n")).expect("aggregate should write");
+        manager
+            .record(
+                DiagnosticLevel::Error,
+                "desktop",
+                "desktop.test.after_tear",
+                "An error after the tear.",
+                DiagnosticFields::default(),
+            )
+            .expect("error should be written");
+
+        let first = manager
+            .recent_errors(None, None, 100)
+            .expect("recent errors should read");
+        let second = manager
+            .recent_errors(None, None, 100)
+            .expect("recent errors should read");
+        let codes: Vec<&str> = second
+            .iter()
+            .filter_map(|record| record.get("event_code").and_then(Value::as_str))
+            .collect();
+
+        assert!(
+            first
+                .iter()
+                .any(|record| record.get("event_code").and_then(Value::as_str)
+                    == Some("desktop.test.after_tear"))
+        );
+        assert!(codes.contains(&"desktop.test.before_tear"));
+        assert!(codes.contains(&"desktop.test.after_tear"));
+        // One report for the launch, not one per read: the report lands in the
+        // aggregate the reader just read.
+        let written = fs::read_to_string(&aggregate).expect("aggregate should be readable");
+        assert_eq!(
+            written
+                .matches("desktop.diagnostics.viewer_record_invalid")
+                .count(),
+            1
+        );
+        let report = second
+            .iter()
+            .find(|record| {
+                record.get("event_code").and_then(Value::as_str)
+                    == Some("desktop.diagnostics.viewer_record_invalid")
+            })
+            .expect("the skipped line should be reported once");
+        assert_eq!(
+            report.get("reason_code").and_then(Value::as_str),
+            Some("integrity_failed")
+        );
+        assert_eq!(
+            report
+                .get("metadata")
+                .and_then(Value::as_object)
+                .and_then(|metadata| metadata.get("count"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            manager
+                .status()
+                .get("unreadable_record_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
         fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
