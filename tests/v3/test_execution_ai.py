@@ -505,7 +505,9 @@ async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_in
     )
     assert attachment.session.engagement_id == engagement.id
     assert attachment.context_message.role == "user"
-    assert "JSON DATA ONLY" in attachment.context_message.content
+    # The attachment is fenced as data, never as instructions.
+    assert "BEGIN EXECUTION ATTACHMENT (JSON)" in attachment.context_message.content
+    assert "END EXECUTION ATTACHMENT" in attachment.context_message.content
     assert "supersecret123" not in attachment.context_message.content
     assert store.count(ChatSession, engagement_id=engagement.id) == 1
 
