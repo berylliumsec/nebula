@@ -327,7 +327,7 @@ export interface EngagementScopePolicy {
   notAfter?: string;
   prohibitedActions: string[];
   localOnly: boolean;
-  /** Opt-in: send redacted operator messages and tool names to TypeSafe Jev. */
+  /** Opt-in: send redacted operator messages, selected skills and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
   /** Runtime names of connected-source tools kept in every request. */
   alwaysLoadedTools: string[];

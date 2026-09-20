@@ -1,21 +1,24 @@
 {
-  "change_digest": "0f7b3284a9b2161a19a02b72d10821a256a438838850a29f9115e57dbd5fd127",
-  "reviewed_by": "Claude review of batched specialist routing actions",
-  "reason": "The mission specialist loop in src/nebula/v3/agent_tooling.py accepted exactly one routing action per provider response and raised \"specialist must request exactly one sequential routing action\" on anything else, so a model that batched independent actions lost the whole task; OpenRouter routes cannot honour parallel_tool_calls=false, so batching reaches Core in practice. A routing response may now carry several actions: _routing_batch validates the whole response first (prose, empty response, repeated call ids, unavailable tools), then the specialist brokers the calls one at a time, in order, each with its own durable invocation, idempotency key, budget slot and approval. src/nebula/v3/orchestration.py gains the matching mission-side pieces: SpecialistApprovalRequired carries the calls a paused batch already completed, MissionRuntime._dispatch persists that partial turn and its tokens, cost and tool-call count before pausing, call_records reads either turn shape, and _model_safe_specialist_result sanitizes every call in a batch rather than only the first. tests/v3/test_specialist_tool_batches.py is new and covers both files end to end; tests/v3/test_missions.py, tests/v3/test_approval_continuation.py and tests/v3/test_approval_handoff.py are the suites that drive mission turns and the approval checkpoint this change touches.",
-  "exclusions": "No frontend, native or Playwright change: missions emit the same task, attempt and approval records, and no ui/src file is touched. tests/v3/test_orchestration.py is deliberately not selected: two of its tests (test_mission_compacts_only_model_facing_dependency_context_and_charges_usage and test_mission_rejects_compaction_before_call_when_budget_is_insufficient) fail identically on pristine origin/main, where a 600-token stub context window now trips the context-capacity rejection in ContextService._hierarchical_memory (\"model context leaves too little room for a faithful compaction summary\", a FAILED task) before the token-budget rejection the tests assert (\"insufficient mission token budget\", a BLOCKED task). That rot predates this branch (COMPACTOR_MIN_OUTPUT_TOKENS changed in #332) and belongs to context compaction, not to this change; the rest of that file passes on this branch. The orchestration paths this branch does touch are covered by the new file, which runs a full MissionRuntime through a batched approval pause and resume. No live mission was run: the specialist loop is exercised here with a scripted provider and a recording broker, which is the only way to pin call order, per-call idempotency keys and the partial-result hand-off deterministically.",
+  "change_digest": "5a8576762d6c94b166d3397b011fb947114f3900ce71c2f68c3fb5d2a73deabd",
+  "reviewed_by": "Claude review of selected-skill instructions in the Jev request",
+  "reason": "Jev ranked the deferred catalog from the operator's messages alone: a turn driven by a selected skill sent the skill's name only if the operator happened to type it, while the skill body - the steps that say which tools the turn needs - stayed in the system instructions. build_state now carries the newest selected skills as operator_selected_skills, redacted with the same redact_text pass as messages and bounded to 4 skills, 6k chars each and 12k chars total so state plus the longest choice question stays inside Jev's 32k window; the gate and choice questions gain a clause naming that key only when it is present, so skill-free turns keep byte-identical wording and the tuned thresholds. The receipt records which skills were sent, including on a failed call, so the turn snapshot documents the egress. The selection runs test_tool_suggestions for the new state, questions, receipt and the prepare-level wiring, and test_chat because chat.py now passes its snapshots into that call.",
+  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: the only rendered change is one sentence of consent copy inside the existing #tool-suggestions-option label, which the area's journeys screenshot as an output artifact, not a compared baseline. ui/src/api/types.ts is unmapped by ui/playwright-impact.json but the change there is a doc comment, so it selects nothing on its own. area:assistant (matched through src/nebula/v3/chat.py) is excluded: chat.py's only change is the skills= argument on the Jev call, with no transcript, routing or rendering behaviour touched, and tests/v3/test_chat.py plus area:tool-suggestions cover that path. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites.",
   "expected_tests": {
-    "python": 49,
-    "frontend": 0,
+    "python": 69,
+    "frontend": 9,
     "native": 0,
-    "playwright": 0
+    "playwright": 7
   },
   "python": [
-    "tests/v3/test_specialist_tool_batches.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/v3/test_approval_handoff.py"
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_chat.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/EngagementPolicySettings.test.ts",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:tool-suggestions"
+  ]
 }
