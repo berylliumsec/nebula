@@ -97,6 +97,8 @@ const allowedMetadata = new Set([
 ]);
 const deniedMetadata = /secret|credential|authorization|cookie|header|body|prompt|content|source|command|argv|stdout|stderr|document|terminal_(?:bytes|output)|evidence_bytes|private_key|password|passwd|api_key|access_token|refresh_token|filename|file_path|path|query|sql|payload|selected_text/i;
 const maxFallbackRecords = 250;
+/** Error-level records retained while the sink is down, including the drop notice. */
+const maxFallbackErrors = 1_000;
 const maxErrorPresentations = 250;
 
 export interface DiagnosticErrorPresentation {
@@ -278,9 +280,49 @@ function setAvailability(available: boolean, reason?: string, occurrence = false
   }
 }
 
+function isErrorLevel(level: DiagnosticRecord["level"]): boolean {
+  return ["error", "critical", "ERROR", "CRITICAL"].includes(level);
+}
+
+let droppedErrors = 0;
+let errorDropNotice: DiagnosticRecord | undefined;
+
+/** Keeps the newest error-level records within the bound and counts what was dropped in one notice. */
+function boundErrors(records: DiagnosticRecord[]): DiagnosticRecord[] {
+  const droppable = records.filter((item) => isErrorLevel(item.level) && item !== errorDropNotice);
+  const overflow = droppable.length - (maxFallbackErrors - 1);
+  if (overflow <= 0) return records;
+  const dropped = new Set(droppable.slice(0, overflow));
+  droppedErrors += overflow;
+  const kept = records.filter((item) => !dropped.has(item));
+  if (errorDropNotice && kept.includes(errorDropNotice)) {
+    errorDropNotice.metadata = { dropped_count: droppedErrors };
+    return kept;
+  }
+  errorDropNotice = {
+    schema: "nebula.diagnostic/v1",
+    level: "error",
+    feature: "interface",
+    event_code: "interface.diagnostics.records_dropped",
+    message: "Older interface error diagnostics were dropped while the local sink was unavailable.",
+    error_id: identifier("err"),
+    outcome: "degraded",
+    stage: "fallback-queue",
+    retryable: true,
+    safe_failure_cause: "The bounded interface diagnostics fallback reached its error capacity.",
+    metadata: { dropped_count: droppedErrors },
+  };
+  return [errorDropNotice, ...kept];
+}
+
 function remember(record: DiagnosticRecord): void {
-  const error = ["error", "critical", "ERROR", "CRITICAL"].includes(record.level);
-  if (!error && fallback.length >= maxFallbackRecords) {
+  const error = isErrorLevel(record.level);
+  if (error) {
+    fallback = boundErrors([...fallback, record]);
+    setAvailability(false, "The local diagnostics sink is temporarily unavailable.", true);
+    return;
+  }
+  if (fallback.length >= maxFallbackRecords) {
     const lowerIndex = fallback.findIndex((item) => !["error", "critical", "ERROR", "CRITICAL"].includes(item.level));
     if (lowerIndex >= 0) fallback.splice(lowerIndex, 1);
     else {
@@ -392,14 +434,19 @@ async function flushFallback(): Promise<void> {
   } catch {
     // diagnostic-expected: sink failure is retained in the no-error-drop fallback.
     const restored = [...pending.slice(cursor), ...fallback];
-    const retainedErrors = restored.filter((record) => ["error", "critical", "ERROR", "CRITICAL"].includes(record.level));
+    const retainedErrors = boundErrors(restored.filter((record) => isErrorLevel(record.level)));
     const retainedLower = restored
-      .filter((record) => !["error", "critical", "ERROR", "CRITICAL"].includes(record.level))
+      .filter((record) => !isErrorLevel(record.level))
       .slice(-maxFallbackRecords);
     fallback = [...retainedErrors, ...retainedLower];
     setAvailability(false, "Buffered diagnostics could not be flushed.");
   } finally {
     flushing = false;
+    // Once the notice has been delivered (or lost with its batch) a new run of drops starts a fresh count.
+    if (errorDropNotice && !fallback.includes(errorDropNotice)) {
+      errorDropNotice = undefined;
+      droppedErrors = 0;
+    }
     if (completed && fallback.length > 0) void flushFallback();
   }
 }
@@ -539,7 +586,7 @@ export function setDiagnosticSettings(next: DiagnosticSettings): void {
 }
 
 export function diagnosticsFallbackErrors(): DiagnosticRecord[] {
-  return fallback.filter((record) => ["error", "critical", "ERROR", "CRITICAL"].includes(record.level));
+  return fallback.filter((record) => isErrorLevel(record.level));
 }
 
 export function isDiagnosticsAvailable(): boolean {

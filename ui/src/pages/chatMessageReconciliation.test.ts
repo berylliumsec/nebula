@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   type ReconciledConversationMessage,
@@ -61,5 +62,15 @@ describe("recoverHarnessHistory", () => {
     expect(result).toHaveLength(4);
     expect(result[1]).toEqual({...temporary, harnessTurnId: "saved"});
     expect(result[3]).toMatchObject({state: "error", detail: "Runtime unavailable"});
+  });
+});
+
+describe("cancelStreamingAssistantMessage", () => {
+  it("settles the live response as stopped with its elapsed time and partial content", () => {
+    const result = cancelStreamingAssistantMessage([user, temporary], "assistant-temp", undefined, Date.parse("2026-01-01T00:00:31Z"));
+    expect(result[1]).toMatchObject({
+      id: "assistant-temp", content: "Partial", state: "cancelled", elapsedMs: 30_000, detail: "Response stopped by the operator.",
+    });
+    expect(result[0]).toBe(user);
   });
 });

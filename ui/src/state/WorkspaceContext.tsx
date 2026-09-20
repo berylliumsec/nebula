@@ -15,6 +15,7 @@ import { providerWithDiscoveredModels, providersWithDiscoveredModels } from "../
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
 import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
+import { readStorage, removeStorage, writeStorage } from "./browserStorage";
 import type {
   AgentRunSummary,
   ApprovalDecisionRequest,
@@ -156,6 +157,13 @@ interface WorkspaceContextValue {
 
 const WorkspaceContext = createContext<WorkspaceContextValue | undefined>(undefined);
 
+const ENGAGEMENT_STORAGE_KEY = "nebula.engagement";
+
+/** The project the operator last worked in, if browser storage remembers one. */
+export function rememberedProjectId(): string | undefined {
+  return readStorage(ENGAGEMENT_STORAGE_KEY) ?? undefined;
+}
+
 export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [runtime, setRuntime] = useState<ApiRuntime>();
   const [api, setApi] = useState<ApiClient>();
@@ -185,9 +193,9 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [attempt, setAttempt] = useState(0);
   const [selectedEngagementId, setSelectedEngagementId] = useState(() => (
-    projectIdFromPath(window.location.pathname) ?? localStorage.getItem("nebula.engagement") ?? ""
+    projectIdFromPath(window.location.pathname) ?? readStorage(ENGAGEMENT_STORAGE_KEY) ?? ""
   ));
-  const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || localStorage.getItem("nebula.mission") || "");
+  const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || readStorage("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
   const connectionLost = useRef(false);
 
@@ -268,15 +276,18 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         if (engagementResult.status === "rejected") loadErrors.push("projects");
         setEngagements(engagementItems);
         const urlProjectId = projectIdFromPath(window.location.pathname);
-        const rememberedId = urlProjectId || selectedEngagementId || localStorage.getItem("nebula.engagement") || "";
+        const storedProjectId = readStorage(ENGAGEMENT_STORAGE_KEY) || "";
+        const rememberedId = urlProjectId || selectedEngagementId || storedProjectId;
         const availableEngagements = engagementItems.filter((item) => item.status !== "archived");
         const nextEngagement = availableEngagements.find((item) => item.id === rememberedId)
           ?? (urlProjectId ? undefined : availableEngagements[0]);
         if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
           setSelectedEngagementId(nextEngagement.id);
-          localStorage.setItem("nebula.engagement", nextEngagement.id);
+          writeStorage(ENGAGEMENT_STORAGE_KEY, nextEngagement.id);
         }
-        if (!nextEngagement) localStorage.removeItem("nebula.engagement");
+        // A stale link to an archived or unknown project is refused without
+        // substitution, but it must not forget the project the operator was using.
+        if (!nextEngagement && !availableEngagements.some((item) => item.id === storedProjectId)) removeStorage(ENGAGEMENT_STORAGE_KEY);
 
         if (providerResult.status === "fulfilled") {
           const items = providerResult.value.items;
@@ -469,7 +480,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
   const selectMission = useCallback((id: string) => {
     if (!id || id === selectedMissionId) return;
-    localStorage.setItem("nebula.mission", id);
+    writeStorage("nebula.mission", id);
     writeMissionIdToUrl(id, "push");
     setRun(runs.find((item) => item.id === id));
     setEvents([]);
@@ -556,7 +567,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
   const selectEngagement = useCallback((id: string) => {
     if (!id || id === selectedEngagementId) return;
-    localStorage.setItem("nebula.engagement", id);
+    writeStorage(ENGAGEMENT_STORAGE_KEY, id);
     setSelectedEngagementId(id);
     setWorkspaceState("starting");
     setCoreError(undefined);
@@ -568,7 +579,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     }
     const created = await api.createEngagement(request);
     setEngagements((current) => [created, ...current.filter((item) => item.id !== created.id)]);
-    localStorage.setItem("nebula.engagement", created.id);
+    writeStorage(ENGAGEMENT_STORAGE_KEY, created.id);
     setSelectedEngagementId(created.id);
     setWorkspaceState("starting");
     return created;
@@ -589,8 +600,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     const available = refreshed.items.filter((item) => item.status !== "archived");
     const nextId = available.find((item) => item.id === selectedEngagementId)?.id ?? available[0]?.id;
     if (archived && id === selectedEngagementId) {
-      if (nextId) localStorage.setItem("nebula.engagement", nextId);
-      else localStorage.removeItem("nebula.engagement");
+      if (nextId) writeStorage(ENGAGEMENT_STORAGE_KEY, nextId);
+      else removeStorage(ENGAGEMENT_STORAGE_KEY);
       setSelectedEngagementId(nextId ?? "");
       setEngagement(available.find((item) => item.id === nextId));
     }
@@ -599,16 +610,14 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
   const resolveApproval = useCallback(
     async (id: string, request: ApprovalDecisionRequest) => {
-      if (coreState === "online" && api) {
-        const updated = await api.decideApproval(id, request);
-        setApprovals((current) =>
-          current
-            .map((item) => (item.id === id ? updated : item))
-            .filter((item) => item.status === "pending"),
-        );
-        return;
-      }
-      setApprovals((current) => current.filter((item) => item.id !== id));
+      // Core still holds the approval; the card stays until a decision reaches it.
+      if (coreState !== "online" || !api) throw new Error("Nebula Core must be online to decide an approval.");
+      const updated = await api.decideApproval(id, request);
+      setApprovals((current) =>
+        current
+          .map((item) => (item.id === id ? updated : item))
+          .filter((item) => item.status === "pending"),
+      );
     },
     [api, coreState],
   );
@@ -804,7 +813,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to start a mission.");
     }
     const created = await api.createMission(request);
-    localStorage.setItem("nebula.mission", created.id);
+    writeStorage("nebula.mission", created.id);
     writeMissionIdToUrl(created.id);
     setSelectedMissionId(created.id);
     setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
@@ -829,7 +838,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       throw new Error("Nebula Core must be online to retry a mission.");
     }
     const created = await api.retryMission(id, allowCloudToolResults);
-    localStorage.setItem("nebula.mission", created.id);
+    writeStorage("nebula.mission", created.id);
     writeMissionIdToUrl(created.id);
     setSelectedMissionId(created.id);
     setRuns((current) => [created, ...current.filter((item) => item.id !== created.id)]);
@@ -846,7 +855,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     await api.deleteRun(id);
     setRuns((current) => current.filter((item) => item.id !== id));
     if (selectedMissionId === id) {
-      localStorage.removeItem("nebula.mission");
+      removeStorage("nebula.mission");
       writeMissionIdToUrl("");
       setSelectedMissionId("");
     }

@@ -265,4 +265,22 @@ describe("interface diagnostics", () => {
     expect(body.events[0].error_id).toBe((failure as Error & { errorId: string }).errorId);
     expect(body.events[0].safe_failure_cause).toBe("The interface operation raised Error.");
   });
+
+  it("bounds retained errors while the sink stays unavailable and counts the drop", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(new Error("offline")));
+    const logger = await freshLogger();
+    logger.configureBrowserDiagnostics("/api/v1");
+
+    for (let index = 0; index < 1_050; index += 1) {
+      await logger.logDiagnostic({ level: "error", eventCode: "interface.api.transport_failed", message: `Failure ${index}.` });
+    }
+
+    const retained = logger.diagnosticsFallbackErrors();
+    expect(retained.length).toBeLessThanOrEqual(1_000);
+    expect(retained.at(-1)?.message).toBe("Failure 1049.");
+    expect(retained.some((record) => record.message === "Failure 0.")).toBe(false);
+    const notice = retained.find((record) => record.event_code === "interface.diagnostics.records_dropped");
+    expect(notice?.metadata).toMatchObject({ dropped_count: expect.any(Number) });
+    expect((notice?.metadata?.dropped_count as number) >= 50).toBe(true);
+  });
 });

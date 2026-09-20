@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, type ReactNode } from "react";
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { projectRoot, projectSurface, type ProjectSurface } from "./resourceRoutes";
-import { useWorkspace } from "./state/WorkspaceContext";
+import { rememberedProjectId, useWorkspace } from "./state/WorkspaceContext";
 import { useChrome } from "./state/ChromeContext";
 
 const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => ({ default: module.SessionsPage })));
@@ -27,7 +27,11 @@ function CanonicalProjectBoundary() {
 
   if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening project…</div>;
   if (!requested) {
-    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{engagement && <Link className="button primary" to={projectRoot(engagement.id)}>Open {engagement.name}</Link>}</div></section>;
+    // Nothing is substituted, but the operator still needs a way back: the
+    // project they were using, or any active one.
+    const rememberedId = rememberedProjectId();
+    const escape = engagement ?? engagements.find((item) => item.id === rememberedId) ?? engagements[0];
+    return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
   }
   if (engagement?.id !== requested.id) return <div className="route-loading" role="status">Switching project…</div>;
   return <Outlet />;

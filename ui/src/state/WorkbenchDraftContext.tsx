@@ -288,6 +288,10 @@ export function WorkbenchDraftProvider({ children }: PropsWithChildren) {
         navigate(`${current.pathname}?${parameters}`, { replace: true });
         return;
       }
+      // The caller already moved the operator to this Workbench view before the
+      // handoff was saved; attach its reference only if they are still there.
+      const current = locationRef.current;
+      if (current.pathname !== projectSurface(engagement.id, "workbench") || new URLSearchParams(current.search).get("view") !== view) return;
       if (view === "chat") {
         navigate(assistantHandoffPath(engagement.id, assistantSessionId, envelope.id, view), { replace: true });
         return;

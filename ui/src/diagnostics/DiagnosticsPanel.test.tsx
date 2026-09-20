@@ -397,4 +397,21 @@ describe("DiagnosticsPanel", () => {
     expect(screen.getByText("Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.")).toBeVisible();
     expect(screen.getByText("Review the technical evidence and correlation identifiers in this incident.")).toBeVisible();
   });
+
+  it("keeps the export URL alive until the browser has started the download", async () => {
+    const user = userEvent.setup();
+    const revoke = URL.revokeObjectURL as ReturnType<typeof vi.fn>;
+    let revokedDuringClick: number | undefined;
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+      queueMicrotask(() => { revokedDuringClick = revoke.mock.calls.length; });
+    });
+    render(<DiagnosticsPanel />);
+    await screen.findByText("A chat stream could not complete.");
+    await user.click(screen.getByText("Advanced diagnostics and logging"));
+
+    await user.click(screen.getByRole("button", { name: "Export diagnostics ZIP" }));
+
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith("blob:test"));
+    expect(revokedDuringClick).toBe(0);
+  });
 });

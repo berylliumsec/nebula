@@ -163,6 +163,7 @@ import {
 import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
 import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
+  cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   type ReconciledConversationMessage,
@@ -2705,7 +2706,7 @@ export function SessionsPage() {
     }
     // Events invalidate the durable snapshot; they never independently resolve
     // an approval. Polling/visibility recovery also covers missed stream events.
-    if (["started", "status", "turn_status", "approval", "interaction", "done", "error"].includes(streamEvent.type)) {
+    if (["started", "status", "turn_status", "approval", "interaction", "done", "cancelled", "error"].includes(streamEvent.type)) {
       refreshSessionState();
       void refreshSessionActivity();
     }
@@ -2927,6 +2928,14 @@ export function SessionsPage() {
         toolSuggestions: streamEvent.toolSuggestions,
         createdAt: new Date().toISOString(),
       }));
+    }
+    if (streamEvent.type === "cancelled") {
+      // Core ended this viewer's stream because the turn was stopped (here or
+      // from another tab): settle the bubble instead of waiting on a reconnect.
+      setChatReconnecting(false);
+      if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
+      setPendingResponse(undefined);
+      setMessages((current) => cancelStreamingAssistantMessage(current, assistantId));
     }
     if (streamEvent.type === "interrupted" && request.backend === "harness") {
       setHarnessProgress((current) => ({ ...current, phase: "interrupted", detail: "The harness turn was interrupted." }));
