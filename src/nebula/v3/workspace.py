@@ -302,7 +302,10 @@ class WorkspaceService:
             rows: list[WorkspaceEntry] = []
             with os.scandir(descriptor) as entries:
                 for entry in entries:
-                    metadata = entry.stat(follow_symlinks=False)
+                    try:
+                        metadata = entry.stat(follow_symlinks=False)
+                    except OSError:  # diagnostic-expected: a terminal or execution removed the entry while it was being listed
+                        continue
                     mode = metadata.st_mode
                     kind: Literal["file", "directory", "symlink", "other"]
                     if stat.S_ISLNK(mode):
@@ -1626,7 +1629,7 @@ class WorkspaceService:
         self, engagement_id: str, request: WorkspaceRenameRequest
     ) -> WorkspaceMutationResult:
         self.store.get(Engagement, engagement_id)
-        relative = _relative_parts(request.path)
+        relative = _relative_parts(request.path, require_value=True)
         if (
             "/" in request.new_name
             or "\\" in request.new_name
@@ -1673,7 +1676,7 @@ class WorkspaceService:
 
     def delete(self, engagement_id: str, path: str) -> WorkspaceMutationResult:
         self.store.get(Engagement, engagement_id)
-        relative = _relative_parts(path)
+        relative = _relative_parts(path, require_value=True)
         parent = self._open_directory(engagement_id, relative[:-1])
         try:
             metadata = os.stat(relative[-1], dir_fd=parent, follow_symlinks=False)
