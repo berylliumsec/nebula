@@ -5,6 +5,22 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 // tests exercise mocked Core state, so preserve that authority on navigation.
 const reloadTest = test.extend({ serviceWorkers: "block" });
 
+/** Smallest comfortable touch target, in CSS pixels. */
+const MIN_TOUCH_TARGET = 44;
+
+/**
+ * Assert a control is at least {@link MIN_TOUCH_TARGET} across.
+ *
+ * Mobile emulation scales the layout by the device pixel ratio, so a control
+ * the stylesheet sizes at 44px can measure 43.999969482421875. Comparing the
+ * raw float makes a correctly sized control fail on some viewports only, so
+ * measurements are rounded to hundredths first: a genuinely small control
+ * (40px, 43.9px) still fails.
+ */
+function expectTouchTarget(measurement: number | undefined, label?: string): void {
+  expect(Math.round((measurement ?? 0) * 100) / 100, label).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
+}
+
 async function installCoreQueueFixture(page: Page) {
   const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; turn_id?: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
   const actions: string[] = [];
@@ -166,6 +182,11 @@ async function installTruthfulCore(page: Page) {
           browser_event_ingress: "enabled",
         },
       };
+    } else if (path.endsWith("/credentials/vault")) {
+      // A healthy host keyring. Without this branch the catch-all answers an
+      // array, which reads as an unavailable vault and silently downgrades
+      // every credential dialog to session-only storage.
+      body = { state: "available" };
     } else if (path.endsWith("/diagnostics/settings")) {
       body = {
         schema: "nebula.diagnostics-settings/v1",
@@ -2263,8 +2284,8 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await expect(toggle).toBeVisible();
   await expect(toggle.locator("svg.lucide-panel-left")).toBeVisible();
   const box = await toggle.boundingBox();
-  expect(box!.width).toBeGreaterThanOrEqual(44);
-  expect(box!.height).toBeGreaterThanOrEqual(44);
+  expectTouchTarget(box!.width);
+  expectTouchTarget(box!.height);
   if (!mobile) expect(await toggle.evaluate(element => element.parentElement?.firstElementChild === element)).toBe(true);
   await toggle.focus();
   await page.keyboard.press("Enter");
@@ -2368,8 +2389,8 @@ test("conversation More actions remain usable on mobile Workbench navigation", a
 
   if ((page.viewportSize()?.width ?? 1_000) <= 760) {
     const triggerBox = await trigger.boundingBox();
-    expect(triggerBox?.width).toBeGreaterThanOrEqual(44);
-    expect(triggerBox?.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(triggerBox?.width);
+    expectTouchTarget(triggerBox?.height);
   }
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
@@ -2599,9 +2620,9 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
       expect(geometry.composerBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.panelBottom);
       expect(geometry.searchToggleTop, JSON.stringify(geometry)).toBeGreaterThanOrEqual(0);
       expect(geometry.searchToggleBottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.boundary);
-      expect(geometry.height).toBeGreaterThanOrEqual(44);
-      expect(geometry.width).toBeGreaterThanOrEqual(44);
-      expect(geometry.summaryHeight).toBeGreaterThanOrEqual(44);
+      expectTouchTarget(geometry.height);
+      expectTouchTarget(geometry.width);
+      expectTouchTarget(geometry.summaryHeight);
       expect(geometry.hit, JSON.stringify(geometry)).toBe(true);
       await send.focus();
       await expect(send).toBeFocused();
@@ -4481,7 +4502,7 @@ test("assistant settings expose provider metadata and harness model options", as
     };
   });
   expect(settingsGeometry.width).toBeLessThanOrEqual(721);
-  expect(settingsGeometry.headerHeight).toBeGreaterThanOrEqual(44);
+  expectTouchTarget(settingsGeometry.headerHeight);
   expect(settingsGeometry.headerHeight).toBeLessThanOrEqual(64);
   expect(settingsGeometry.columns).toBe(settingsGeometry.width >= 430 ? 2 : 1);
   expect(settingsGeometry.controlHeight).toBeGreaterThanOrEqual(43.5);
@@ -5045,7 +5066,7 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   const showActivity = ledger.getByRole("button", { name: "Show activity" });
   if (testInfo.project.name.startsWith("mobile-") || testInfo.project.name === "narrow") {
     const bounds = await showActivity.boundingBox();
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(bounds?.height);
   }
   const geometry = await ledger.evaluate((element) => ({
     left: element.getBoundingClientRect().left,
@@ -5358,7 +5379,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   if ((page.viewportSize()?.width ?? 0) >= 1024) expect(planGeometry.width).toBeLessThanOrEqual(841);
   if (testInfo.project.name.startsWith("mobile-")) {
     const planToggleBounds = await collapsePlan.boundingBox();
-    expect(planToggleBounds?.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(planToggleBounds?.height);
   }
   const planAccessibility = await new AxeBuilder({ page }).include(".harness-status-rail").analyze();
   expect(planAccessibility.violations).toEqual([]);
@@ -5413,8 +5434,8 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect(forkAction).toBeInViewport();
   if (testInfo.project.name.startsWith("mobile-")) {
     const bounds = await forkAction.boundingBox();
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(bounds?.width);
+    expectTouchTarget(bounds?.height);
   } else {
     const actionWidths = await completedMessage.locator(".chat-message-actions > button").evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().width));
     expect(actionWidths.every(width => width <= 32)).toBe(true);
@@ -5704,7 +5725,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
       const bounds = element.getBoundingClientRect();
       return { bottom: bounds.bottom, height: bounds.height, left: bounds.left, right: bounds.right, top: bounds.top };
     }));
-    optionBounds.forEach((bounds) => expect(bounds.height).toBeGreaterThanOrEqual(44));
+    optionBounds.forEach((bounds) => expectTouchTarget(bounds.height));
     for (let first = 0; first < optionBounds.length; first += 1) {
       for (let second = first + 1; second < optionBounds.length; second += 1) {
         const left = optionBounds[first];
@@ -5739,7 +5760,7 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
       const control = page.getByRole("button", { name, exact: true });
       await expect(control).toBeVisible();
       const box = await control.boundingBox();
-      expect(box?.height, name).toBeGreaterThanOrEqual(44);
+      expectTouchTarget(box?.height, name);
     }
     const controls = await page.locator(".code-editor-toolbar input:visible, .code-editor-toolbar button:visible, .code-editor-toolbar .code-editor-dirty:visible").evaluateAll((elements) => elements.map((element) => {
       const box = element.getBoundingClientRect();
@@ -6414,8 +6435,8 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
       const bounds = element.getBoundingClientRect();
       return { width: bounds.width, height: bounds.height };
     });
-    expect(touchBounds.width).toBeGreaterThanOrEqual(44);
-    expect(touchBounds.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(touchBounds.width);
+    expectTouchTarget(touchBounds.height);
   } else {
     await workbenchLink.focus();
     const focusStyle = await workbenchLink.evaluate((element) => {
@@ -7441,8 +7462,8 @@ test(`browser Assistant stays beside the page through an answer and follow-up${d
       return (element.getAttribute("aria-describedby") ?? "").split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim();
     })).toMatch(/.+/);
     const bounds = await action.boundingBox();
-    expect(bounds?.width).toBeGreaterThanOrEqual(44);
-    expect(bounds?.height).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(bounds?.width);
+    expectTouchTarget(bounds?.height);
   }
   const pageSurface = page.locator(".managed-browser-screen");
   const expandedPage = await pageSurface.boundingBox();
@@ -7894,7 +7915,7 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       for (const button of await notice.getByRole("button").all()) {
         await expect(button).toBeInViewport();
         // Browser zoom/scroll transforms can report 43.99998 for a 44px target.
-        expect(Math.round((await button.boundingBox())!.height * 100) / 100).toBeGreaterThanOrEqual(44);
+        expectTouchTarget((await button.boundingBox())!.height);
       }
       const bounds = await notice.boundingBox();
       const composer = await page.locator(".chat-composer").boundingBox();
@@ -7961,8 +7982,8 @@ test("shared actions keep sleek geometry for direct Workbench toolbar icons", as
       await expect(button).toBeVisible();
       await expect(button).toHaveAttribute("title", name);
       const rect = await button.boundingBox();
-      expect(rect!.width).toBeGreaterThanOrEqual(44);
-      expect(rect!.height).toBeGreaterThanOrEqual(44);
+      expectTouchTarget(rect!.width);
+      expectTouchTarget(rect!.height);
     }
     await bar.getByRole("button", { name: "Show session details" }).click();
     await expect(bar.getByRole("button", { name: "Hide session details" })).toHaveAttribute("aria-expanded", "true");
@@ -8013,8 +8034,8 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
       else expect(await tab.innerText()).toBe('');
       await expect(tab).toHaveAttribute('title', /.+/);
       const box = await tab.boundingBox();
-      expect(box!.width).toBeGreaterThanOrEqual(44);
-      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expectTouchTarget(box!.width);
+      expectTouchTarget(box!.height);
     }
     await tabs.getByRole('tab', {name: 'Workspace code editor'}).click();
     await expect(page).toHaveURL(/view=code/);
@@ -8109,7 +8130,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     const geometry = await thinking.evaluate(element => ({ right: element.getBoundingClientRect().right, width: innerWidth, scroll: element.scrollWidth, client: element.clientWidth, target: element.querySelector("summary")!.getBoundingClientRect().height }));
     expect(geometry.right).toBeLessThanOrEqual(geometry.width + 1);
     expect(geometry.scroll).toBeLessThanOrEqual(geometry.client + 1);
-    expect(geometry.target).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(geometry.target);
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
     await composer.fill("/");
     await page.getByRole("button", { name: "/usage Session usage" }).click();
@@ -8120,7 +8141,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       const command = page.getByRole("button", {name: "/vendor-check Check project"});
       await expect(command).toBeVisible();
       const box = await command.boundingBox();
-      expect(box!.height).toBeGreaterThanOrEqual(44);
+      expectTouchTarget(box!.height);
       expect(box!.x + box!.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1);
       await command.focus();
       await page.keyboard.press("Enter");
@@ -8163,7 +8184,7 @@ test("stabilization transcript search has a compact field and usable filters", a
   if (!mobile) await expect(page.locator(".session-toolbar-actions").getByRole("button", {name: "Search messages and bookmarks", exact: true})).toBeVisible();
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   const toggleBox = await toggle.boundingBox();
-  expect(toggleBox!.height).toBeGreaterThanOrEqual(44);
+  expectTouchTarget(toggleBox!.height);
   await openSearch();
   const input = panel.getByRole("searchbox", {name: "Search transcript"});
   await expect(input).toBeFocused();
@@ -8630,7 +8651,7 @@ reloadTest("tool suggestions chip shows the live turn and survives reload", asyn
   await chip.locator("xpath=ancestor::article").screenshot({ path: testInfo.outputPath("tool-suggestion-chip.png") });
   if (testInfo.project.name.startsWith("mobile-")) {
     const box = await chip.locator("summary").boundingBox();
-    expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    expectTouchTarget(box?.height ?? 0);
     const fits = await chip.evaluate((node) => node.getBoundingClientRect().right <= window.innerWidth + 1);
     expect(fits).toBe(true);
   }
