@@ -30,6 +30,15 @@ export const settingCatalog: SettingCatalogEntry[] = [
     keywords: ["provider", "model", "openai", "anthropic", "gemini", "ollama", "vllm", "credential", "api key"],
   },
   {
+    id: "settings.skills",
+    label: "Shared skills",
+    description: "Review the .agents/skills catalogs assistants can call with $",
+    category: "Models",
+    scope: "Project",
+    target: "native-skill-settings",
+    keywords: ["skill", "skills", "skill.md", ".agents", "agents skills", "shared skills", "playbook", "procedure", "catalog"],
+  },
+  {
     id: "settings.follow-up",
     label: "Post-tool assistant",
     description: "Configure automatic follow-up after terminal and tool results",
@@ -99,7 +108,7 @@ export const settingCatalog: SettingCatalogEntry[] = [
     category: "Project Policy",
     scope: "Project",
     target: "engagement-policy-settings",
-    keywords: ["host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions"],
+    keywords: ["host mode", "docker mode", "execution mode", "backup", "network", "scope", "domain", "cidr", "port", "url", "allowlist", "all targets", "approval", "privacy", "timeout", "prohibited actions", "always loaded tools", "pinned tools", "on demand tools", "mcp tools"],
   },
   {
     id: "settings.operators",

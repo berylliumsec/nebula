@@ -1018,6 +1018,82 @@ def test_openrouter_capability_probe_persists_verified_route_limits(api, monkeyp
     assert len(stored.metadata["route_catalog_revision"]) == 64
 
 
+def test_openrouter_capability_probe_measures_the_alias_target(api, monkeypatch):
+    client, store, _ = api
+    profile = store.create(
+        ProviderProfile(
+            id="openrouter-alias",
+            name="OpenRouter",
+            provider_type="openrouter",
+            model_allowlist=["~author/family-latest"],
+            metadata={
+                "default_model": "~author/family-latest",
+                "model_descriptors": [
+                    {
+                        "id": "~author/family-latest",
+                        "name": "Family Latest",
+                        "context_window": 1_048_576,
+                        "max_output_tokens": 262_144,
+                        "alias_target": "author/model-a",
+                    }
+                ],
+            },
+        )
+    )
+
+    async def valid_probe(_runtime, request):
+        nonce = request.tools[0].input_schema["properties"]["nonce"]["enum"][0]
+        return ModelResponse(
+            provider_id=profile.id,
+            model="~author/family-latest",
+            tool_calls=[
+                ToolCall(
+                    id="probe-call",
+                    name="nebula_capability_probe",
+                    arguments={"nonce": nonce},
+                )
+            ],
+            finish_reason="tool_calls",
+        )
+
+    async def routes(_runtime, model):
+        # The alias exposes no endpoints; discovery has to ask its target.
+        assert model == "author/model-a"
+        return [
+            ModelRouteDescriptor(
+                provider_name="Provider A",
+                context_window=1_000_000,
+                max_input_tokens=1_000_000,
+                max_output_tokens=128_000,
+                supported_parameters=["tools"],
+            )
+        ]
+
+    monkeypatch.setattr(OpenAICompatibleProvider, "complete", valid_probe)
+    monkeypatch.setattr(OpenAICompatibleProvider, "openrouter_route_limits", routes)
+
+    response = client.post(
+        f"/api/v1/providers/{profile.id}/capabilities/verify",
+        headers=_auth(),
+        json={
+            "model": "~author/family-latest",
+            "expected_revision": profile.revision,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    stored = store.get(ProviderProfile, profile.id)
+    descriptor = stored.metadata["model_descriptors"][0]
+    assert descriptor["route_limits_verified"] is True
+    assert descriptor["route_limits_source_model"] == "author/model-a"
+    assert descriptor["route_limits_error"] is None
+    limits = resolve_context_limits(
+        stored, model="~author/family-latest", required_parameters={"tools"}
+    )
+    assert limits.context_window == 1_000_000
+    assert limits.route_limits_verified is True
+
+
 def test_capability_probe_never_narrows_an_empty_model_allowlist(api, monkeypatch):
     client, store, _ = api
     models = ["author/first", "author/second"]

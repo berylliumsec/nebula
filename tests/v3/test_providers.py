@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from nebula.v3 import providers
+from nebula.v3.model_catalog import openrouter_models
 from nebula.v3.providers import (
     AnthropicProvider,
     GeminiProvider,
@@ -747,6 +748,99 @@ def test_openrouter_discovers_account_models_with_bounded_metadata():
     assert descriptor.expiration_date == "2027-06-30"
 
 
+def _alias_catalog_handler(public: httpx.Response):
+    """Account catalog with one alias, plus whatever the public catalog answers."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/v1/key":
+            return httpx.Response(200, json={"data": {}})
+        if request.url.path == "/api/v1/providers":
+            return httpx.Response(200, json={"data": []})
+        if request.url.path == "/api/v1/models":
+            return public
+        assert request.url.path == "/api/v1/models/user"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "~author/family-latest",
+                        "name": "Author: Family Latest",
+                        "context_length": 1_048_576,
+                    },
+                    {
+                        "id": "author/model-a",
+                        "name": "Author: Model A",
+                        "context_length": 1_048_576,
+                    },
+                ]
+            },
+        )
+
+    return handler
+
+
+def test_openrouter_health_fills_alias_targets_from_the_public_catalog():
+    # /models/user describes aliases without alias_target; only /models carries it.
+    public = httpx.Response(
+        200,
+        json={
+            "data": [
+                {
+                    "id": "~author/family-latest",
+                    "name": "Author: Family Latest",
+                    "context_length": 1_048_576,
+                    "alias_target": {"name": "Model A", "slug": "author/model-a"},
+                },
+                {
+                    "id": "author/model-b",
+                    "name": "Author: Model B",
+                    "context_length": 1_048_576,
+                },
+            ]
+        },
+    )
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-alias-targets",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+        ),
+        transport=httpx.MockTransport(_alias_catalog_handler(public)),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    # The public catalog fills one field; it never widens account membership.
+    assert health.models == ["~author/family-latest", "author/model-a"]
+    targets = {item.id: item.alias_target for item in health.model_descriptors}
+    assert targets == {
+        "~author/family-latest": "author/model-a",
+        "author/model-a": None,
+    }
+
+
+def test_openrouter_health_survives_an_unreadable_public_catalog():
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-alias-targets-down",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+        ),
+        transport=httpx.MockTransport(
+            _alias_catalog_handler(httpx.Response(500, json={"error": "down"}))
+        ),
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    assert health.models == ["~author/family-latest", "author/model-a"]
+    # Without a target the alias keeps the conservative cap; discovery fails closed.
+    assert all(item.alias_target is None for item in health.model_descriptors)
+
+
 def test_openrouter_discovery_does_not_fall_back_to_public_catalog():
     observed = []
 
@@ -945,6 +1039,54 @@ def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
     assert routes[0].max_input_tokens == 120_000
     assert routes[1].context_window == 65_536
     assert routes[0].supported_parameters == ["tools", "max_tokens"]
+
+
+def test_openrouter_catalog_records_the_model_an_alias_redirects_to():
+    descriptors = openrouter_models(
+        {
+            "data": [
+                {
+                    "id": "~author/family-latest",
+                    "name": "Author: Family Latest",
+                    "canonical_slug": "~author/family-latest",
+                    "context_length": 1_048_576,
+                    "alias_target": {
+                        "name": "Author: Model A",
+                        "slug": "author/model-a",
+                    },
+                },
+                {
+                    "id": "author/model-a",
+                    "name": "Author: Model A",
+                    "context_length": 1_048_576,
+                },
+            ]
+        }
+    )
+
+    alias, exact = descriptors
+    assert alias.alias_target == "author/model-a"
+    assert exact.alias_target is None
+
+
+def test_openrouter_alias_endpoint_discovery_explains_the_empty_route_set():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        # Aliases redirect to another model and publish no endpoints of their own.
+        return httpx.Response(
+            200, json={"data": {"id": "~author/family-latest", "endpoints": []}}
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-routes",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderError, match="alias models publish no endpoints"):
+        asyncio.run(provider.openrouter_route_limits("~author/family-latest"))
 
 
 def test_openrouter_rejects_incomplete_endpoint_limits():

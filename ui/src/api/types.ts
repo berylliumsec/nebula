@@ -329,9 +329,20 @@ export interface EngagementScopePolicy {
   localOnly: boolean;
   /** Opt-in: send redacted operator messages and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
+  /** Runtime names of connected-source tools kept in every request. */
+  alwaysLoadedTools: string[];
   maxConcurrency: number;
   grants: MissionGrant[];
   revision: number;
+}
+
+/** One connected-source tool an operator can keep loaded, as Core names it. */
+export interface ScopeToolCandidate {
+  name: string;
+  serverId: Identifier;
+  serverName: string;
+  toolName: string;
+  description: string;
 }
 
 export interface MissionGrant {
@@ -344,10 +355,15 @@ export interface MissionGrant {
 }
 
 export interface EngagementScopeUpdateRequest
-  extends Omit<EngagementScopePolicy, "engagementId" | "revision" | "toolSuggestions"> {
+  extends Omit<
+    EngagementScopePolicy,
+    "engagementId" | "revision" | "toolSuggestions" | "alwaysLoadedTools"
+  > {
   expectedRevision: number;
   /** Omitted keeps the stored value. */
   toolSuggestions?: boolean;
+  /** Omitted keeps the stored value. */
+  alwaysLoadedTools?: string[];
 }
 
 export interface TypeSafeKeyTest {
@@ -362,8 +378,17 @@ export interface TypeSafeIntegration {
   source?: "vault" | "session" | "environment";
   available: boolean;
   vaultAvailable: boolean;
+  /** A vault can exist and still be locked, which no save can write to. */
+  vaultState: VaultState;
   lastTest?: TypeSafeKeyTest;
   projectsUsing: number;
+}
+
+export type VaultState = "available" | "locked" | "unavailable";
+
+export interface CredentialVaultStatus {
+  state: VaultState;
+  available: boolean;
 }
 
 /** Per-turn Jev summary; probabilities stay in Core's turn record. */
@@ -2318,8 +2343,18 @@ export interface PersistedChatMessage extends ChatMessage {
   harnessTurnId?: Identifier;
   toolResults?: ChatToolResult[];
   toolSuggestions?: ToolSuggestionSummary;
+  /** Set when an in-place edit replaced this turn; it stays readable but leaves the conversation. */
+  replacedAt?: string;
+  /** Groups every message replaced by the same edit. */
+  replacedGroupId?: Identifier;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ChatSessionRewind {
+  session: ChatSessionSummary;
+  messages: PersistedChatMessage[];
+  replaced: PersistedChatMessage[];
 }
 
 export interface ChatToolResult {

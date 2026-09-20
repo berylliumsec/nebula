@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Activity,
+  BookOpen,
   Bot,
   Boxes,
   ChevronRight,
@@ -26,9 +27,11 @@ import { isNebulaShell } from "../hooks/useCompactLayout";
 
 const categoryOrder = ["Setup", "Models", "Automation", "Environments", "Project Policy", "Identity & Security", "Release", "Diagnostics"];
 
-const icons: Record<string, LucideIcon> = {
+/** Row glyph per catalog entry; every entry needs one so no row falls back to the generic terminal. */
+export const settingIcons: Record<string, LucideIcon> = {
   "settings.setup": SquareTerminal,
   "settings.providers": Bot,
+  "settings.skills": BookOpen,
   "settings.follow-up": Sparkles,
   "settings.harnesses": Cpu,
   "settings.mcp": Plug,
@@ -77,7 +80,7 @@ export function CompactSettingsList() {
       <h2 id={`compact-settings-${category.replace(/\W+/g, "-").toLowerCase()}`}>{category}</h2>
       <div>
         {entries.map((entry) => {
-          const Icon = icons[entry.id] ?? SquareTerminal;
+          const Icon = settingIcons[entry.id] ?? SquareTerminal;
           return <button type="button" key={entry.id} disabled={!chrome?.openSetting} onClick={(event) => chrome?.openSetting?.(entry, event.currentTarget)}>
             <span className="compact-settings-icon" aria-hidden="true"><Icon size={16} /></span>
             <span className="compact-settings-label"><strong>{entry.label}</strong><small>{entry.description}</small></span>

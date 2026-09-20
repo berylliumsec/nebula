@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultModelRuntime } from "./runtimeDefaults";
+import { defaultModelRuntime, providerDefaultModel } from "./runtimeDefaults";
 
 describe("defaultModelRuntime", () => {
   it.each([["second", ["first", "second"]], ["configured", []], ["configured", ["stale"]]])("honors configured harness default %s even when discovery is incomplete", (defaultModel, models) => {
@@ -39,5 +39,34 @@ describe("defaultModelRuntime", () => {
       [{ id: "provider-1", enabled: true, state: "healthy", models: [] }],
       [{ id: "harness-1", enabled: false, healthy: true, models: ["model"] }],
     )).toBeUndefined();
+  });
+});
+
+describe("providerDefaultModel", () => {
+  it("keeps the saved default that Settings recorded", () => {
+    expect(providerDefaultModel({
+      defaultModel: "security-model-reasoning",
+      models: ["security-model", "security-model-reasoning"],
+    })).toBe("security-model-reasoning");
+  });
+
+  it("falls back to the first discovered model when no default is saved", () => {
+    expect(providerDefaultModel({ models: ["security-model", "security-model-reasoning"] }))
+      .toBe("security-model");
+  });
+
+  it("uses the allowed model Core reports when the profile saved no default", () => {
+    expect(providerDefaultModel({ effectiveDefaultModel: "allowed-model", models: ["discovered", "allowed-model"] }))
+      .toBe("allowed-model");
+  });
+
+  it("ignores a saved default the runtime no longer reports", () => {
+    expect(providerDefaultModel({ defaultModel: "retired-model", models: ["security-model"] }))
+      .toBe("security-model");
+  });
+
+  it("has no model to offer before discovery", () => {
+    expect(providerDefaultModel({ defaultModel: "security-model", models: [] })).toBe("");
+    expect(providerDefaultModel()).toBe("");
   });
 });

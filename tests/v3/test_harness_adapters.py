@@ -433,7 +433,10 @@ def test_grok_host_session_preserves_native_tools_and_user_bus(monkeypatch, tmp_
         engagement_id="eng-a",
         harness_profile_id=profile.id,
         model="grok-test",
-        metadata={"native_capabilities": native.model_dump(mode="json")},
+        metadata={
+            "execution_mode": "host",
+            "native_capabilities": native.model_dump(mode="json"),
+        },
     )
 
     asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
@@ -2106,6 +2109,83 @@ def test_claude_native_capabilities_exclude_project_files_and_shell(
         allowed = await options["can_use_tool"]("Skill", {"skill": "review"}, None)
         assert allowed.behavior == "allow"
         assert observed_permissions[-1].vendor_name == "Skill"
+        await connection.close()
+
+    asyncio.run(scenario())
+
+
+def test_claude_host_execution_mode_keeps_native_project_tools(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        sdk = SimpleNamespace(
+            ClaudeAgentOptions=FakeClaudeOptions,
+            ClaudeSDKClient=FakeClaudeClient,
+            HookMatcher=FakeHookMatcher,
+            PermissionResultAllow=PermissionResultAllow,
+        )
+        monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+
+        async def permission(_request):
+            future: asyncio.Future[HarnessPermissionDecision] = (
+                asyncio.get_running_loop().create_future()
+            )
+            future.set_result(HarnessPermissionDecision(allowed=True))
+            return PermissionTicket(None, "call-host", future)
+
+        native = HarnessNativeCapabilities(
+            workspace_access=HarnessWorkspaceAccess.WRITE,
+            shell=True,
+            skills=True,
+        )
+        profile = HarnessProfile(
+            id="claude-host",
+            name="Claude host",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            default_model="claude-test",
+            native_capabilities=native,
+        )
+        session = HarnessSession(
+            id="session-host-claude",
+            engagement_id="eng-a",
+            harness_profile_id=profile.id,
+            model="claude-test",
+            metadata={
+                "execution_mode": "host",
+                "native_capabilities": native.model_dump(mode="json"),
+            },
+        )
+        connection = await ClaudeAgentSdkAdapter().open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=permission,
+            )
+        )
+        options = FakeClaudeClient.latest.options.kwargs
+        assert {
+            "Read",
+            "Glob",
+            "Grep",
+            "Write",
+            "Edit",
+            "NotebookEdit",
+            "Bash",
+        }.issubset(set(options["tools"]))
+        assert options["disallowed_tools"] == ["Agent", "WebFetch", "WebSearch"]
+        assert options["enable_file_checkpointing"] is True
+        assert (
+            "Use vendor-native filesystem and shell tools" in options["system_prompt"]
+        )
+
+        pre_tool_use = options["hooks"]["PreToolUse"][0].hooks[0]
+        read_result = await pre_tool_use(
+            {"tool_name": "Read", "tool_input": {"file_path": "README.md"}},
+            None,
+            None,
+        )
+        assert read_result["hookSpecificOutput"]["permissionDecision"] == "ask"
         await connection.close()
 
     asyncio.run(scenario())

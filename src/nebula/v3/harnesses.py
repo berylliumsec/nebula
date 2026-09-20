@@ -116,6 +116,7 @@ from .domain import (
     ToolCall,
     ToolCallOrigin,
     ToolCallStatus,
+    message_is_replaced,
     utc_now,
 )
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
@@ -322,11 +323,12 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 def _container_only_native_capabilities(
     capabilities: HarnessNativeCapabilities,
 ) -> HarnessNativeCapabilities:
-    # Nebula owns project command execution.  The vendor harness may still use
-    # explicitly enabled research/skill capabilities, but it must never receive
-    # a host-backed project filesystem or shell.  Keeping this enforcement at
-    # the permission/config boundary also protects sessions created from legacy
-    # profiles that persisted these flags before the container-only policy.
+    # Outside host execution mode Nebula owns project command execution.  The
+    # vendor harness may still use explicitly enabled research/skill
+    # capabilities, but it must never receive a host-backed project filesystem
+    # or shell.  Keeping this enforcement at the permission/config boundary also
+    # protects sessions created from legacy profiles that persisted these flags
+    # before the container-only policy.
     return capabilities.model_copy(
         update={
             "workspace_access": HarnessWorkspaceAccess.NONE,
@@ -349,6 +351,12 @@ def _native_capabilities_for_execution_mode(
     return _container_only_native_capabilities(capabilities)
 
 
+def _session_execution_mode(session: HarnessSession) -> Literal["docker", "host"]:
+    """Read the mode frozen on the session; anything unknown stays contained."""
+
+    return "host" if session.metadata.get("execution_mode") == "host" else "docker"
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -358,7 +366,13 @@ def _session_native_capabilities(
         if isinstance(raw, dict)
         else profile.native_capabilities
     )
-    return capabilities
+    if _session_execution_mode(session) == "host":
+        return capabilities
+    # Only host sessions run in the linked project workspace, so a session that
+    # carries filesystem or shell flags without that mode is stale or
+    # inconsistent metadata.  Clamp (never grant) so vendor tool config and
+    # native permission decisions match the workspace the session actually got.
+    return _container_only_native_capabilities(capabilities)
 
 
 def _native_capability_names(capabilities: HarnessNativeCapabilities) -> list[str]:
@@ -6565,6 +6579,40 @@ class HarnessRuntimeService:
             )
         return self._fork_session(session, reason=reason)
 
+    def rewind_chat_session(
+        self, chat: ChatSession, *, reason: str = "operator_edit"
+    ) -> ChatSession:
+        """Continue a harness conversation on a fresh vendor session after an edit.
+
+        The vendor transcript cannot drop its tail, so the conversation keeps its
+        identity while the retained messages are replayed into a new session at
+        the next turn.
+        """
+
+        if not chat.harness_session_id:
+            raise HarnessStateError(
+                "harness conversation has no vendor session to rewind"
+            )
+        previous_session_id = chat.harness_session_id
+        replacement = self.fork_session(previous_session_id, reason=reason)
+        chat = self._rebind_chat_session(
+            chat,
+            replacement,
+            previous_session_id=previous_session_id,
+            reason=reason,
+        )
+        return self.store.update(
+            ChatSession,
+            chat.id,
+            {
+                "metadata": {
+                    **chat.metadata,
+                    "harness_context_handoff_pending": True,
+                }
+            },
+            expected_revision=chat.revision,
+        )
+
     def _rebind_chat_session(
         self,
         chat: ChatSession,
@@ -6607,7 +6655,9 @@ class HarnessRuntimeService:
             expected_revision=chat.revision,
         )
 
-    def _chat_messages(self, engagement_id: str, session_id: str) -> list[ChatMessage]:
+    def _chat_messages(
+        self, engagement_id: str, session_id: str, *, include_replaced: bool = False
+    ) -> list[ChatMessage]:
         """Read the complete conversation, not just the first project page."""
         messages: list[ChatMessage] = []
         offset = 0
@@ -6615,7 +6665,12 @@ class HarnessRuntimeService:
             page = self.store.list_entities(
                 ChatMessage, engagement_id=engagement_id, offset=offset, limit=1_000
             )
-            messages.extend(item for item in page if item.session_id == session_id)
+            messages.extend(
+                item
+                for item in page
+                if item.session_id == session_id
+                and (include_replaced or not message_is_replaced(item))
+            )
             if len(page) < 1_000:
                 return sorted(messages, key=lambda item: item.sequence)
             offset += len(page)
@@ -7173,7 +7228,9 @@ class HarnessRuntimeService:
             },
         )
         chat_turn = chat_turn.model_copy(update={"harness_turn_id": harness_turn.id})
-        prior_messages = self._chat_messages(engagement_id, chat.id)
+        prior_messages = self._chat_messages(
+            engagement_id, chat.id, include_replaced=True
+        )
         with self.store.transaction() as transaction:
             transaction.add(chat_turn)
             transaction.add(harness_turn)
@@ -10479,7 +10536,7 @@ class HarnessRuntimeService:
         )
         launch = await gateway.start()
         self._gateways[session.id] = gateway
-        execution_mode = session.metadata.get("execution_mode", "docker")
+        execution_mode = _session_execution_mode(session)
         isolated_workspace = (
             self.workspace_resolver(session.engagement_id)
             if execution_mode == "host" and not analysis_only
@@ -11724,7 +11781,9 @@ class HarnessRuntimeService:
             and turn.chat_session_id
         ):
             chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
-            existing = self._chat_messages(turn.engagement_id, turn.chat_session_id)
+            existing = self._chat_messages(
+                turn.engagement_id, turn.chat_session_id, include_replaced=True
+            )
             message = ChatMessage(
                 id=str(uuid4()),
                 engagement_id=turn.engagement_id,
@@ -11970,7 +12029,9 @@ class HarnessRuntimeService:
         run_id: str,
         usage: ChatTokenUsage | None,
     ) -> ChatMessage:
-        messages = self._chat_messages(chat.engagement_id, chat.id)
+        messages = self._chat_messages(
+            chat.engagement_id, chat.id, include_replaced=True
+        )
         return self.store.create(
             ChatMessage(
                 id=str(uuid4()),

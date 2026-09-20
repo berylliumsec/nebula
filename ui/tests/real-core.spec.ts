@@ -139,7 +139,7 @@ interface LocalModelStub {
   fail: boolean;
 }
 
-async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; models?: string[] } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
@@ -147,7 +147,7 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
     if (request.method === "GET" && request.url === "/v1/models") {
       response.end(JSON.stringify({
         object: "list",
-        data: [{ id: "security-model", object: "model", created: 1, owned_by: "local-acceptance" }],
+        data: (options.models ?? ["security-model"]).map((id) => ({ id, object: "model", created: 1, owned_by: "local-acceptance" })),
       }));
       return;
     }
@@ -906,7 +906,7 @@ test("assistant upgrade conversation switching restores durable Core history pro
     let releaseHistory = () => {};
     let failHistory = false;
     const historyGate = new Promise<void>(resolve => {releaseHistory = resolve;});
-    await page.route(`**/chat/sessions/${sourceId}/messages`, async route => {
+    await page.route(`**/chat/sessions/${sourceId}/messages*`, async route => {
       await historyGate;
       if (failHistory) {
         await route.fulfill({status: 503, json: {detail: "Temporary history outage"}});
@@ -2313,6 +2313,76 @@ test("assistant upgrade real Core retains unresolved operator questions until re
   }
 });
 
+test("assistant upgrade edits a sent message in place on real Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore();
+  const stub = await startLocalModelStub({streamDelayMs: 20});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {
+      name: "Edit in place model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
+      enabled: true, is_local: true, model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const send = async (content: string, sessionId?: string) => {
+      const response = await api.post("chat/completions", {data: {
+        backend: "provider", provider_id: provider.id, model: "security-model",
+        engagement_id: projects[0].id, session_id: sessionId,
+        messages: [{role: "user", content}], include_knowledge: false, stream: false,
+      }});
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as {session_id: string}).session_id;
+    };
+    const sessionId = await send("Summarize the open findings.");
+    expect(await send("Any update on the certificate?", sessionId)).toBe(sessionId);
+    const url = `${core.origin}/?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    const operator = page.locator(".chat-message.operator");
+    const edited = operator.filter({hasText: "Any update on the certificate?"});
+    await expect(edited).toBeVisible({timeout: 20_000});
+    await edited.hover();
+    await edited.getByRole("button", {name: "Edit message"}).click();
+    const editor = page.getByRole("textbox", {name: "Edit message"});
+    await expect(editor).toHaveValue("Any update on the certificate?");
+    await editor.fill("Any update on the certificate and IKEv1?");
+    await page.getByRole("button", {name: "Resend", exact: true}).click();
+
+    await expect(operator).toHaveCount(2, {timeout: 20_000});
+    await expect(operator.last()).toContainText("Any update on the certificate and IKEv1?");
+    await expect(page.getByRole("button", {name: "Open parent"})).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(sessionId);
+    // The retained prefix keeps sequences 1-2 while the edited turn takes the
+    // next free slots, so replaced records can never be overwritten. Wait for
+    // the durable reply before reloading, which would abort a live stream.
+    await expect.poll(async () => (
+      await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number}>
+    ).map(item => item.sequence), {timeout: 20_000}).toEqual([1, 2, 5, 6]);
+
+    // The replaced turns survive a reload: Core owns them, not the browser.
+    await page.goto(url);
+    await expect(operator).toHaveCount(2, {timeout: 20_000});
+    const replacedGroup = page.locator(".chat-replaced-group").first();
+    await expect(replacedGroup.locator("summary")).toContainText("2 replaced messages");
+    await replacedGroup.locator("summary").click();
+    await expect(replacedGroup).toContainText("Any update on the certificate?");
+
+    const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string}>;
+    expect(sessions.map(item => item.id)).toEqual([sessionId]);
+    const live = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number; content: string}>;
+    expect(live[2].content).toBe("Any update on the certificate and IKEv1?");
+    const everything = await (await api.get(`chat/sessions/${sessionId}/messages?include_replaced=true`)).json() as Array<{metadata: Record<string, unknown>}>;
+    expect(everything.filter(item => item.metadata.retracted_at)).toHaveLength(2);
+    const resent = stub.requests.filter(request => JSON.stringify(request.messages).includes("IKEv1"));
+    expect(resent.length).toBeGreaterThan(0);
+    expect(resent.every(request => !JSON.stringify(request.messages).includes("Any update on the certificate?"))).toBe(true);
+    await testInfo.attach("real-core-edit-in-place", {body: await page.screenshot(), contentType: "image/png"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   // WebKit's production-LAN pass can spend more than a minute covering the
   // complete durable-conversation lifecycle on shared CI runners.
@@ -2343,10 +2413,17 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
     await page.goto(url);
     await expect(operator.getByRole("button", {name: "Bookmark", exact: true})).toHaveAttribute("aria-pressed", "true");
-    await page.locator(".assistant-search > summary").click();
+    // Transcript search is a header action; phones reach it from Conversation actions.
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
+      await page.getByRole("menuitem", {name: /Search messages/}).click();
+    } else await page.getByRole("button", {name: "Search messages and bookmarks", exact: true}).click();
+    await expect(page.locator("#assistant-transcript-search")).toBeVisible();
     await page.getByLabel("Search transcript", {exact: true}).fill("Hello");
     await page.getByRole("button", {name: "Search messages", exact: true}).click();
     await expect(page.locator(".assistant-search ol li")).toHaveCount(1);
+    await page.getByRole("button", {name: "Close transcript search", exact: true}).click();
+    await expect(page.locator(".assistant-search")).toHaveCount(0);
     await page.getByRole("button", {name: "Attach files", exact: true}).click();
     await page.locator(".assistant-attachment-dialog input[type=file]").setInputFiles({name: "review.txt", mimeType: "text/plain", buffer: Buffer.from("Exact attachment preview\n")});
     await expect(page.locator(".assistant-attachment-dialog pre")).toContainText("Exact attachment preview");
@@ -2425,10 +2502,11 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     expect(queuedModelRequests.every(request => JSON.stringify(request.messages).includes("Use concise plain language"))).toBe(true);
     const recorded = await (await api.get(`chat/sessions/${chat.session_id}/context-sources`)).json() as {items: {operator_decisions: {text: string; scope: string}[]}[]};
     expect(recorded.items.some(item => item.operator_decisions.some(entry => entry.text === "Use concise plain language" && entry.scope === "project"))).toBe(true);
-    await operator.first().getByRole("button", {name: "Edit and branch"}).click();
-    await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toHaveValue("Hello");
-    await expect(page.locator(".chat-message")).toHaveCount(0);
+    // Branching stays an explicit, separate action from editing in place.
+    await operator.first().getByRole("button", {name: "Fork conversation here"}).click();
     await expect(page.getByRole("button", {name: "Open parent"})).toBeVisible();
+    await expect(operator).toHaveCount(1);
+    await expect(operator.first()).toContainText("Hello");
     await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
@@ -3292,7 +3370,8 @@ for (const runtime of ["provider", "harness"] as const) {
   test(`stabilization real Core ${runtime} settings separate saving from health recovery`, async ({page}, testInfo) => {
     test.setTimeout(100_000);
     page.setDefaultTimeout(10_000);
-    const stub = runtime === "provider" ? await startLocalModelStub() : undefined;
+    // Two discovered models keep the saved default distinguishable from the first one.
+    const stub = runtime === "provider" ? await startLocalModelStub({models: ["security-model", "security-model-reasoning"]}) : undefined;
     const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
     const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
     const name = `Local ${runtime} acceptance`;
@@ -3343,6 +3422,11 @@ for (const runtime of ["provider", "harness"] as const) {
       const persisted = page.waitForResponse(r => r.request().method() === "POST" && new URL(r.url()).pathname.endsWith(`/api/v1/${collection}`));
       await save.click();
       const saved = await (await persisted).json();
+      // Capability verification re-reads the saved profile once the chat selects a model.
+      const profileReads: string[] = [];
+      page.on("response", response => {
+        if (response.request().method() === "GET" && new URL(response.url()).pathname.endsWith(`/api/v1/${collection}/${saved.id}`)) profileReads.push(response.url());
+      });
       await expect.poll(() => failedHealth).toBe(true);
       await expect(dialog).toHaveCount(0);
       const card = page.locator("article.provider-card").filter({has: page.getByRole("heading", {name, exact: true})});
@@ -3361,9 +3445,12 @@ for (const runtime of ["provider", "harness"] as const) {
       expect(profiles.find((p: {name: string}) => p.name === name).id).toBe(saved.id);
       await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
       const models = dialog.getByRole("combobox", {name: "Default model", exact: true});
-      const available = await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean));
-      const model = available.find(value => value !== "grok-build");
+      const available = (await models.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean)))
+        .filter(value => value !== "grok-build");
+      // The last discovered model proves the saved default wins over the runtime's first one.
+      const model = available.at(-1);
       expect(model, "Health must expose the fixture's discovered model").toBeTruthy();
+      if (runtime === "provider") expect(available, "Discovery must offer a model the operator would not get by default").toHaveLength(2);
       await models.selectOption(model!);
       await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
       await expect(dialog).toHaveCount(0);
@@ -3391,6 +3478,14 @@ for (const runtime of ["provider", "harness"] as const) {
       await page.getByRole("combobox", {name: runtime === "provider" ? "Chat provider" : "Chat harness", exact: true}).selectOption(saved.id);
       const chatModel = page.getByRole("combobox", {name: runtime === "provider" ? "Chat model" : "Chat harness model", exact: true});
       await expect(chatModel).toHaveValue(model!);
+      if (runtime === "provider") {
+        // A profile read carries the allowed models only; it must not empty the discovered picker.
+        await expect.poll(() => profileReads.length, {timeout: 20_000}).toBeGreaterThan(0);
+        await expect(chatModel).toBeEnabled();
+        await expect(chatModel).toHaveValue(model!);
+        expect((await chatModel.locator("option").evaluateAll(options => options.map(o => (o as HTMLOptionElement).value).filter(Boolean))).sort())
+          .toEqual([...available].sort());
+      }
       await page.getByRole("button", {name: "Close assistant settings", exact: true}).click();
       await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Disposable unsent setup acceptance draft. No tool runs.", {timeout: 10_000});
       await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();

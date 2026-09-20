@@ -7,11 +7,11 @@ import {EngagementPolicySettings} from "./EngagementPolicySettings";
 const fixture = vi.hoisted(() => ({api: {} as Record<string, ReturnType<typeof vi.fn>>, project: "first"}));
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api: fixture.api, coreState: "online", engagement: {id: fixture.project}, previewMode: false})}));
 const policy = (id: string, approvalPolicy = "on_boundary") => ({engagementId: id, revision: 1, executionMode: "docker", approvalPolicy, networkEnabled: false, maxTimeoutMs: 300000});
-const scope = (id: string) => ({engagementId: id, revision: 1, allowedCidrs: [], allowedDomains: [`${id}.test`], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: true, maxConcurrency: 1, allowAllTargets: false, grants: []});
+const scope = (id: string) => ({engagementId: id, revision: 1, allowedCidrs: [], allowedDomains: [`${id}.test`], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: true, alwaysLoadedTools: [], maxConcurrency: 1, allowAllTargets: false, grants: []});
 function view() { return <MemoryRouter><DialogProvider><EngagementPolicySettings /></DialogProvider></MemoryRouter>; }
 beforeEach(() => {
   fixture.project = "first";
-  fixture.api = {getEngagementScope: vi.fn(async id => scope(id)), getAutomationPolicy: vi.fn(async id => policy(id)), listVpnProfiles: vi.fn(async () => []), getTypeSafeIntegration: vi.fn(async () => ({available: false, vaultAvailable: true, projectsUsing: 0}))};
+  fixture.api = {getEngagementScope: vi.fn(async id => scope(id)), getAutomationPolicy: vi.fn(async id => policy(id)), listVpnProfiles: vi.fn(async () => []), listScopeToolCandidates: vi.fn(async () => []), getTypeSafeIntegration: vi.fn(async () => ({available: false, vaultAvailable: true, vaultState: "available" as const, projectsUsing: 0}))};
 });
 
 describe("project policy hydration", () => {

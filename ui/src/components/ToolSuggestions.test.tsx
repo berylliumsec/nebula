@@ -55,7 +55,7 @@ describe("tool suggestion chip", () => {
   });
 });
 
-const integration = (overrides: Partial<TypeSafeIntegration> = {}): TypeSafeIntegration => ({available: false, vaultAvailable: true, projectsUsing: 0, ...overrides});
+const integration = (overrides: Partial<TypeSafeIntegration> = {}): TypeSafeIntegration => ({available: false, vaultAvailable: true, vaultState: "available", projectsUsing: 0, ...overrides});
 const working = integration({source: "vault", available: true, projectsUsing: 3, lastTest: {testedAt: new Date().toISOString(), ok: true, latencyMs: 412, model: "jev-1.13.0"}});
 
 describe("TypeSafe key settings", () => {
@@ -84,8 +84,18 @@ describe("TypeSafe key settings", () => {
     expect(document.body.textContent).not.toContain("ts-secret");
   });
 
+  it("names the remedy and keeps the key for the session when the host vault is locked", async () => {
+    fixture.api.getTypeSafeIntegration.mockResolvedValue(integration({vaultAvailable: false, vaultState: "locked"}));
+    view();
+    expect(await screen.findByText(/credential vault is locked/)).toBeInTheDocument();
+    expect(screen.getByText(/Unlock the keyring on the Core host/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("TypeSafe API key"), {target: {value: "k"}});
+    fireEvent.click(screen.getByRole("button", {name: "Save and test"}));
+    await waitFor(() => expect(fixture.api.saveTypeSafeKey).toHaveBeenCalledWith("k", "session"));
+  });
+
   it("keeps the key for the session when the vault is unavailable", async () => {
-    fixture.api.getTypeSafeIntegration.mockResolvedValue(integration({vaultAvailable: false}));
+    fixture.api.getTypeSafeIntegration.mockResolvedValue(integration({vaultAvailable: false, vaultState: "unavailable"}));
     view();
     expect(await screen.findByText(/credential vault is unavailable/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("TypeSafe API key"), {target: {value: "k"}});
@@ -116,12 +126,13 @@ describe("TypeSafe key settings", () => {
 });
 
 describe("project opt-in", () => {
-  const scope = (overrides: Record<string, unknown> = {}) => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, maxConcurrency: 1, allowAllTargets: false, grants: [], ...overrides});
+  const scope = (overrides: Record<string, unknown> = {}) => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, alwaysLoadedTools: [], maxConcurrency: 1, allowAllTargets: false, grants: [], ...overrides});
   const setup = (scopeValue: ReturnType<typeof scope>, status: TypeSafeIntegration) => {
     fixture.api = {
       getEngagementScope: vi.fn(async () => scopeValue),
       getAutomationPolicy: vi.fn(async () => ({engagementId: "project", revision: 1, executionMode: "docker", approvalPolicy: "on_boundary", networkEnabled: false, maxTimeoutMs: 300000})),
       listVpnProfiles: vi.fn(async () => []),
+      listScopeToolCandidates: vi.fn(async () => []),
       getTypeSafeIntegration: vi.fn(async () => status),
       updateEngagementScope: vi.fn(async (_id, body) => ({...scopeValue, ...body, revision: 2})),
     };
@@ -165,9 +176,10 @@ describe("key changes reach the project opt-in", () => {
   it("enables the option when a key is saved elsewhere on the page", async () => {
     const {TYPESAFE_CHANGED_EVENT} = await import("./TypeSafeIntegrationSettings");
     fixture.api = {
-      getEngagementScope: vi.fn(async () => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, maxConcurrency: 1, allowAllTargets: false, grants: []})),
+      getEngagementScope: vi.fn(async () => ({engagementId: "project", revision: 1, allowedCidrs: [], allowedDomains: [], allowedUrls: [], allowedPorts: [], prohibitedActions: [], localOnly: false, toolSuggestions: false, alwaysLoadedTools: [], maxConcurrency: 1, allowAllTargets: false, grants: []})),
       getAutomationPolicy: vi.fn(async () => ({engagementId: "project", revision: 1, executionMode: "docker", approvalPolicy: "on_boundary", networkEnabled: false, maxTimeoutMs: 300000})),
       listVpnProfiles: vi.fn(async () => []),
+      listScopeToolCandidates: vi.fn(async () => []),
       getTypeSafeIntegration: vi.fn(async () => integration()),
     };
     render(<MemoryRouter><DialogProvider><EngagementPolicySettings /></DialogProvider></MemoryRouter>);

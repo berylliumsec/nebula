@@ -228,6 +228,7 @@ from .credentials import (
     CredentialStatus,
     CredentialStore,
     CredentialUnavailableError,
+    VaultState,
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
 from .domain import (
@@ -281,6 +282,7 @@ from .domain import (
     HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
+    McpApprovalMode,
     McpServerProfile,
     MissionGrant,
     NebulaModel,
@@ -395,7 +397,12 @@ from .environments import (
     SshEnvironmentService,
     SshEnvironmentSettings,
 )
-from .mcp import McpProbeError, McpProbeReport, McpProbeService
+from .mcp import (
+    McpProbeError,
+    McpProbeReport,
+    McpProbeService,
+    mcp_tool_runtime_name,
+)
 from .mcp_import import (
     McpExportReport,
     McpImportReport,
@@ -409,7 +416,9 @@ from .model_catalog import (
     OPENROUTER_PROVIDER_DIRECTORY_URL,
     ROUTE_LIMIT_FIELDS,
     UpstreamProvider,
+    find_model_descriptor,
     openrouter_upstream_providers,
+    route_discovery_model,
 )
 from .providers import (
     ModelMessage,
@@ -746,6 +755,18 @@ class ChatSessionForkRequest(NebulaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
 
 
+class ChatSessionRewindRequest(NebulaModel):
+    before_message_id: str = Field(min_length=1, max_length=200)
+
+
+class ChatSessionRewind(NebulaModel):
+    """The conversation after an in-place edit retracted the replaced turns."""
+
+    session: ChatSession
+    messages: list[ChatMessage]
+    replaced: list[ChatMessage]
+
+
 class ChatSessionActivity(NebulaModel):
     session_id: str
     state: Literal["working", "waiting", "idle"]
@@ -894,8 +915,16 @@ class TypeSafeIntegrationStatus(NebulaModel):
     source: Literal["vault", "session", "environment"] | None = None
     available: bool = False
     vault_available: bool = False
+    vault_state: VaultState = "unavailable"
     last_test: ToolSuggestionTest | None = None
     projects_using: int = Field(default=0, ge=0)
+
+
+class CredentialVaultStatus(NebulaModel):
+    """Whether Core can store a credential in the OS vault right now."""
+
+    state: VaultState = "unavailable"
+    available: bool = False
 
 
 class VpnProfileCreateRequest(NebulaModel):
@@ -1051,9 +1080,20 @@ class ScopePolicyUpdateRequest(NebulaModel):
     # None keeps the stored value, so clients unaware of the field never clear it.
     tool_suggestions: bool | None = None
     on_demand_tools: bool | None = None
+    always_loaded_tools: list[str] | None = Field(default=None, max_length=500)
     max_concurrency: int = Field(default=1, ge=1, le=256)
     grants: list[MissionGrant] = Field(default_factory=list)
     expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ScopeToolCandidate(NebulaModel):
+    """One connected-source tool, named the way the tool catalog names it."""
+
+    name: str
+    server_id: str
+    server_name: str
+    tool_name: str
+    description: str = ""
 
 
 class RunnerProfileRequest(NebulaModel):
@@ -6742,6 +6782,42 @@ def create_app(
             raise ConflictError("engagement scope policy ownership is inconsistent")
         return scope
 
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/scope/tool-candidates",
+        response_model=list[ScopeToolCandidate],
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def engagement_scope_tool_candidates(
+        engagement_id: str,
+    ) -> list[ScopeToolCandidate]:
+        """Tools an operator can pin to every request, from probed MCP servers."""
+
+        store.get(Engagement, engagement_id)
+        candidates: list[ScopeToolCandidate] = []
+        for profile in store.list_entities(McpServerProfile, limit=1000):
+            if not profile.enabled or profile.capabilities.checked_at is None:
+                continue
+            for tool in profile.capabilities.tools:
+                # The same selection the runtime makes when it builds plugins.
+                if profile.enabled_tools and tool.name not in profile.enabled_tools:
+                    continue
+                if tool.name in profile.disabled_tools:
+                    continue
+                if profile.tool_overrides.get(tool.name) == McpApprovalMode.DENY:
+                    continue
+                candidates.append(
+                    ScopeToolCandidate(
+                        name=mcp_tool_runtime_name(profile.id, tool.name),
+                        server_id=profile.id,
+                        server_name=profile.name,
+                        tool_name=tool.name,
+                        description=" ".join(tool.description.split())[:300],
+                    )
+                )
+        candidates.sort(key=lambda item: (item.server_name, item.tool_name))
+        return candidates
+
     @app.put(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope",
         response_model=ScopePolicy,
@@ -6754,7 +6830,7 @@ def create_app(
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision"})
-        for optional in ("tool_suggestions", "on_demand_tools"):
+        for optional in ("tool_suggestions", "on_demand_tools", "always_loaded_tools"):
             if payload[optional] is None:
                 del payload[optional]
         payload["grants"] = [
@@ -6849,10 +6925,12 @@ def create_app(
             offset += len(page)
         source, available = key_source(store, credentials)
         settings = load_settings(store)
+        vault_state = credentials.vault_state
         return TypeSafeIntegrationStatus(
             source=source,
             available=available,
-            vault_available=credentials.vault_available,
+            vault_available=vault_state == "available",
+            vault_state=vault_state,
             last_test=settings.last_test if settings is not None else None,
             projects_using=projects_using,
         )
@@ -7970,6 +8048,18 @@ def create_app(
         """Probe fixed loopback model endpoints without generating content."""
 
         return await _discover_local_provider_services(provider_factory)
+
+    @app.get(
+        f"{API_PREFIX}/credentials/vault",
+        response_model=CredentialVaultStatus,
+        tags=["credentials"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def credential_vault_status() -> CredentialVaultStatus:
+        """Report the OS vault state; a locked vault cannot accept a secret."""
+
+        state = await asyncio.to_thread(lambda: credentials.vault_state)
+        return CredentialVaultStatus(state=state, available=state == "available")
 
     @app.post(
         f"{API_PREFIX}/credentials",
@@ -9262,8 +9352,12 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_session_messages(session_id: str) -> list[ChatMessage]:
-        return chat_service().session_messages(session_id)
+    async def list_chat_session_messages(
+        session_id: str, include_replaced: bool = False
+    ) -> list[ChatMessage]:
+        return chat_service().session_messages(
+            session_id, include_replaced=include_replaced
+        )
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
@@ -9327,6 +9421,28 @@ def create_app(
             changes,
             expected_revision=request.expected_revision or current.revision,
         )
+
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/rewind",
+        response_model=ChatSessionRewind,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def rewind_chat_session(
+        session_id: str, request: ChatSessionRewindRequest
+    ) -> ChatSessionRewind:
+        """Retract an operator message and its replies without leaving the chat."""
+
+        session, retained, replaced = chat_service().rewind_session(
+            session_id, before_message_id=request.before_message_id
+        )
+        if session.backend == ChatBackend.HARNESS:
+            # The vendor session keeps its own transcript, so the conversation
+            # continues on a fresh one that replays only the retained messages.
+            session = harness_runtime.rewind_chat_session(
+                session, reason="operator_edit"
+            )
+        return ChatSessionRewind(session=session, messages=retained, replaced=replaced)
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/fork",
@@ -11368,6 +11484,10 @@ async def _verify_provider_capability(
     )
     route_limits: list[Any] | None = None
     route_limits_error: str | None = None
+    # An alias carries no endpoints of its own; measure the model it redirects to.
+    discovery_model = route_discovery_model(
+        find_model_descriptor(profile.metadata.get("model_descriptors"), model), model
+    )
     try:
         provider_runtime = (provider_factory or provider_from_profile)(probe_profile)
         response = await asyncio.wait_for(
@@ -11433,7 +11553,7 @@ async def _verify_provider_capability(
             else:
                 try:
                     route_limits = await asyncio.wait_for(
-                        route_loader(model), timeout=15
+                        route_loader(discovery_model), timeout=15
                     )
                 except Exception as route_exc:
                     record_caught_exception(
@@ -11490,6 +11610,7 @@ async def _verify_provider_capability(
                 "route_limits_verified": route_limits is not None,
                 "route_limits_checked_at": checked_at,
                 "route_limits_error": route_limits_error,
+                "route_limits_source_model": discovery_model,
             }
         )
         metadata["model_descriptors"] = descriptors
@@ -11497,6 +11618,7 @@ async def _verify_provider_capability(
             json.dumps(
                 {
                     "model": model,
+                    "measured": discovery_model,
                     "checked_at": checked_at,
                     "routes": descriptor["route_limits"],
                 },

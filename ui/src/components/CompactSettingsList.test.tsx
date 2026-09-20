@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ChromeProvider, type ChromeContextValue } from "../state/ChromeContext";
 import { settingCatalog } from "../settingsCatalog";
-import { CompactSettingsList, groupSettings } from "./CompactSettingsList";
+import { CompactSettingsList, groupSettings, settingIcons } from "./CompactSettingsList";
 
 function chrome(openSetting = vi.fn()): ChromeContextValue {
   return {
@@ -18,6 +18,23 @@ describe("CompactSettingsList", () => {
     expect(groups[0].category).toBe("Setup");
     expect(groups.map((group) => group.category).slice(1, 3)).toEqual(["Models", "Automation"]);
     expect(groups.flatMap((group) => group.entries)).toHaveLength(settingCatalog.length);
+  });
+
+  it("gives every catalog entry its own row glyph", () => {
+    expect(settingCatalog.filter((entry) => !settingIcons[entry.id]).map((entry) => entry.id)).toEqual([]);
+  });
+
+  it("finds shared skills by name and opens the skills section", () => {
+    const openSetting = vi.fn();
+    render(<ChromeProvider value={chrome(openSetting)}><CompactSettingsList /></ChromeProvider>);
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search settings" }), { target: { value: "skills" } });
+    const group = screen.getByRole("region", { name: "Models" });
+    fireEvent.click(within(group).getByRole("button", { name: /Shared skills/ }));
+    expect(openSetting).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "settings.skills", target: "native-skill-settings" }),
+      expect.any(HTMLElement),
+    );
+    expect(screen.queryByText(/No settings match/)).not.toBeInTheDocument();
   });
 
   it("filters by keyword and opens the focused setting", () => {

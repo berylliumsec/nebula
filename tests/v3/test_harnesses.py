@@ -332,6 +332,93 @@ def test_external_harness_session_can_be_discovered_and_imported_once(tmp_path):
     assert len(store.list_entities(HarnessSession, engagement_id=engagement.id)) == 1
 
 
+def test_harness_conversation_rewind_keeps_identity_and_replays_retained_history(
+    tmp_path,
+):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    harness_session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        mcp_server_ids=[],
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Legacy VPN audit",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id=profile.id,
+            harness_session_id=harness_session.id,
+            model="test-model",
+        )
+    )
+    with store.transaction() as transaction:
+        for sequence, (role, content, replaced) in enumerate(
+            [
+                ("user", "Retained question", False),
+                ("assistant", "Retained answer", False),
+                ("user", "Replaced question", True),
+                ("assistant", "Replaced answer", True),
+            ],
+            start=1,
+        ):
+            transaction.add(
+                ChatMessage(
+                    engagement_id=engagement.id,
+                    session_id=chat.id,
+                    sequence=sequence,
+                    role=role,
+                    content=content,
+                    metadata=(
+                        {"retracted_at": "2026-09-19T12:00:00+00:00"}
+                        if replaced
+                        else {}
+                    ),
+                )
+            )
+
+    rewound = runtime.rewind_chat_session(chat, reason="operator_edit")
+
+    assert rewound.id == chat.id
+    assert rewound.harness_session_id != harness_session.id
+    assert rewound.metadata["harness_context_handoff_pending"] is True
+    rollover = rewound.metadata["harness_session_rollovers"][-1]
+    assert rollover["from_session_id"] == harness_session.id
+    assert rollover["to_session_id"] == rewound.harness_session_id
+    assert rollover["reason"] == "operator_edit"
+
+    context = runtime._chat_handoff_context(rewound)
+    assert "Retained question" in context
+    assert "Retained answer" in context
+    assert "Replaced question" not in context
+    assert "Replaced answer" not in context
+
+    chat, _chat_turn, _harness_turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Edited question",
+        chat_session_id=rewound.id,
+        harness_session_id=None,
+        mcp_server_ids=[],
+    )
+    assert chat.id == rewound.id
+    assert chat.metadata["harness_context_handoff_pending"] is False
+    appended = sorted(
+        (
+            item
+            for item in store.list_entities(ChatMessage, engagement_id=engagement.id)
+            if item.session_id == chat.id and not item.metadata.get("retracted_at")
+        ),
+        key=lambda item: item.sequence,
+    )
+    assert [(item.sequence, item.content) for item in appended] == [
+        (1, "Retained question"),
+        (2, "Retained answer"),
+        (5, "Edited question"),
+    ]
+
+
 @pytest.mark.parametrize(
     "other_message_count,chat_message_count", [(1_001, 45), (0, 1_001)]
 )

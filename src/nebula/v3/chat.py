@@ -71,6 +71,7 @@ from .domain import (
     McpServerProfile,
     NativeHookExecution,
     NebulaModel,
+    message_is_replaced,
     ProviderProfile,
     RunBackend,
     SshEnvironment,
@@ -92,6 +93,11 @@ from .context import (
     lexical_score,
     memory_text,
     resolve_context_limits,
+)
+from .model_catalog import (
+    find_model_descriptor,
+    route_discovery_model,
+    route_limits_verified,
 )
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .environments import resolve_ssh_environments
@@ -1972,7 +1978,10 @@ class ChatService:
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
             deferred_specs = (
-                deferrable_specs(tool_components.specs)
+                deferrable_specs(
+                    tool_components.specs,
+                    always_loaded=tool_components.scope.always_loaded_tools,
+                )
                 if on_demand_enabled(tool_components.scope)
                 else {}
             )
@@ -2457,15 +2466,10 @@ class ChatService:
 
         if profile.provider_type != "openrouter":
             return profile
-        descriptor = next(
-            (
-                item
-                for item in profile.metadata.get("model_descriptors", [])
-                if isinstance(item, dict) and item.get("id") == model
-            ),
-            None,
+        descriptor = find_model_descriptor(
+            profile.metadata.get("model_descriptors"), model
         )
-        if isinstance(descriptor, dict) and descriptor.get("route_limits_verified"):
+        if route_limits_verified(descriptor, model):
             return profile
         if getattr(provider, "openrouter_route_limits", None) is None:
             return profile
@@ -2507,8 +2511,10 @@ class ChatService:
                     "the provider rejected the request context and exact endpoint "
                     "limits cannot be refreshed"
                 )
+            # An alias exposes no endpoints; its target carries the real routes.
+            discovery_model = route_discovery_model(descriptor, model)
             try:
-                routes = await asyncio.wait_for(loader(model), 15)
+                routes = await asyncio.wait_for(loader(discovery_model), 15)
             except Exception as exc:
                 raise ChatConfigurationError(
                     "the provider rejected the request context and exact endpoint "
@@ -2520,6 +2526,7 @@ class ChatService:
                     "route_limits_verified": True,
                     "route_limits_checked_at": checked_at,
                     "route_limits_error": None,
+                    "route_limits_source_model": discovery_model,
                 }
             )
             revision_payload: Any = descriptor["route_limits"]
@@ -4605,9 +4612,11 @@ class ChatService:
                 )
         return cancelled
 
-    def session_messages(self, session_id: str) -> list[ChatMessage]:
+    def session_messages(
+        self, session_id: str, *, include_replaced: bool = False
+    ) -> list[ChatMessage]:
         session = self.store.get(ChatSession, session_id)
-        return self._session_messages(session)
+        return self._session_messages(session, include_replaced=include_replaced)
 
     def attach_native_run_to_chat(self, run_id: str) -> ChatSession:
         """Create or return the durable provider chat that continues a mission result."""
@@ -4810,6 +4819,80 @@ class ChatService:
                     )
                 )
         return fork
+
+    def rewind_session(
+        self, session_id: str, *, before_message_id: str
+    ) -> tuple[ChatSession, list[ChatMessage], list[ChatMessage]]:
+        """Retract an operator message and its replies so it can be resent here."""
+
+        session = self.store.get(ChatSession, session_id)
+        if self.pending_turn(session_id) is not None:
+            raise ChatHistoryConflict(
+                "conversation cannot be edited while a response is active"
+            )
+        messages = self._session_messages(session)
+        boundary = next(
+            (message for message in messages if message.id == before_message_id),
+            None,
+        )
+        if boundary is None:
+            raise ChatHistoryConflict(
+                "edited message does not belong to the selected conversation"
+            )
+        if boundary.role != ChatRole.USER:
+            raise ChatHistoryConflict("only operator messages can be edited in place")
+        replaced = [
+            message for message in messages if message.sequence >= boundary.sequence
+        ]
+        retraction_id = str(uuid4())
+        retracted_at = utc_now().isoformat()
+        history = [
+            item
+            for item in session.metadata.get("message_retractions", [])
+            if isinstance(item, dict)
+        ][-31:]
+        history.append(
+            {
+                "id": retraction_id,
+                "at": retracted_at,
+                "reason": "operator_edit",
+                "from_message_id": boundary.id,
+                "from_sequence": boundary.sequence,
+                "message_ids": [message.id for message in replaced],
+            }
+        )
+        with self.store.transaction() as transaction:
+            retracted = [
+                transaction.update(
+                    ChatMessage,
+                    message.id,
+                    {
+                        "metadata": {
+                            **message.metadata,
+                            "retracted_at": retracted_at,
+                            "retraction_id": retraction_id,
+                            "retracted_reason": "operator_edit",
+                        }
+                    },
+                    expected_revision=message.revision,
+                )
+                for message in replaced
+            ]
+            session = transaction.update(
+                ChatSession,
+                session.id,
+                {
+                    "metadata": {
+                        **session.metadata,
+                        "message_retractions": history,
+                    }
+                },
+                expected_revision=session.revision,
+            )
+        retained = [
+            message for message in messages if message.sequence < boundary.sequence
+        ]
+        return session, retained, retracted
 
     def context_status(self, session_id: str) -> ContextStatus:
         session = self.store.get(ChatSession, session_id)
@@ -5026,7 +5109,9 @@ class ChatService:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def _session_messages(self, session: ChatSession) -> list[ChatMessage]:
+    def _session_messages(
+        self, session: ChatSession, *, include_replaced: bool = False
+    ) -> list[ChatMessage]:
         messages: list[ChatMessage] = []
         offset = 0
         while True:
@@ -5037,13 +5122,29 @@ class ChatService:
                 limit=1_000,
             )
             messages.extend(
-                message for message in page if message.session_id == session.id
+                message
+                for message in page
+                if message.session_id == session.id
+                and (include_replaced or not message_is_replaced(message))
             )
             if len(page) < 1_000:
                 break
             offset += len(page)
         return sorted(
             messages, key=lambda item: (item.sequence, item.created_at, item.id)
+        )
+
+    def _next_sequence(self, session: ChatSession) -> int:
+        """Reserve the next transcript slot above every message, replaced or not."""
+
+        stored = self._session_messages(session, include_replaced=True)
+        recorded = session.metadata.get("last_sequence")
+        return (
+            max(
+                [message.sequence for message in stored]
+                + [int(recorded) if isinstance(recorded, int) else 0]
+            )
+            + 1
         )
 
     @staticmethod
@@ -5824,7 +5925,7 @@ class ChatService:
         session = prepared.session or prepared.pending_session
         if session is None:
             raise ChatError("provider chat is missing its durable session")
-        start = len(prepared.stored_messages) + 1
+        start = self._next_sequence(session)
         messages = [
             ChatMessage(
                 engagement_id=prepared.engagement_id,
@@ -5928,7 +6029,7 @@ class ChatService:
         session = prepared.session or prepared.pending_session
         if session is None:
             raise ChatError("engagement chat is missing its durable session")
-        start = len(prepared.stored_messages) + 1
+        start = self._next_sequence(session)
         messages: list[ChatMessage] = [
             ChatMessage(
                 engagement_id=prepared.engagement_id,

@@ -49,6 +49,7 @@ import type {
   ScopeImport,
   ScopeImportApplyResult,
   ScopeImportCreateRequest,
+  ScopeToolCandidate,
   SecurityBrowserAction,
   SecurityBrowserAssessment,
   SecurityBrowserAssessmentProfile,
@@ -128,6 +129,7 @@ import type {
   OperatorProfileUpdateRequest,
   PostToolAssistantConfig,
   Page,
+  ChatSessionRewind,
   PersistedChatMessage,
   LocalProviderDetection,
   ModelDescriptor,
@@ -1932,6 +1934,7 @@ interface WireEngagementScope extends JsonObject {
   prohibited_actions?: string[];
   local_only?: boolean;
   tool_suggestions?: boolean;
+  always_loaded_tools?: string[];
   max_concurrency?: number;
   grants?: Array<{
     risk_classes?: string[];
@@ -1942,6 +1945,14 @@ interface WireEngagementScope extends JsonObject {
     granted_by?: string;
   }>;
   revision?: number;
+}
+
+interface WireScopeToolCandidate extends JsonObject {
+  name: string;
+  server_id: string;
+  server_name: string;
+  tool_name: string;
+  description?: string;
 }
 
 interface WireScopeImport extends WireEntity {
@@ -2551,6 +2562,10 @@ function mapProvider(value: WireProvider): ProviderHealth {
     state,
     enabled: value.enabled !== false,
     endpoint: value.endpoint ?? undefined,
+    // A stored profile carries no runtime catalog, so the allowed models stand in
+    // until a health check discovers the real list. Folding one of these records
+    // into a checked provider goes through providerWithDiscoveredModels, which
+    // keeps that discovery instead of emptying the operator's model picker.
     models: value.model_allowlist ?? [],
     availableModels: value.model_allowlist ?? [],
     modelAllowlist: value.model_allowlist ?? [],
@@ -2794,6 +2809,10 @@ export function mapToolSuggestions(value: unknown): import("./types").ToolSugges
   };
 }
 
+export function mapVaultState(value: unknown): import("./types").VaultState {
+  return value === "available" || value === "locked" ? value : "unavailable";
+}
+
 function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types").TypeSafeIntegration {
   const test = value.last_test && typeof value.last_test === "object" ? value.last_test as Record<string, unknown> : undefined;
   const source = value.source === "vault" || value.source === "session" || value.source === "environment" ? value.source : undefined;
@@ -2801,6 +2820,7 @@ function mapTypeSafeIntegration(value: Record<string, unknown>): import("./types
     source,
     available: value.available === true,
     vaultAvailable: value.vault_available === true,
+    vaultState: mapVaultState(value.vault_state),
     projectsUsing: numberField(value.projects_using),
     lastTest: test && typeof test.tested_at === "string"
       ? {
@@ -3921,6 +3941,14 @@ function mapPersistedChatMessage(
       typeof value.metadata?.harness_turn_id === "string"
         ? value.metadata.harness_turn_id
         : undefined,
+    replacedAt:
+      typeof value.metadata?.retracted_at === "string"
+        ? value.metadata.retracted_at
+        : undefined,
+    replacedGroupId:
+      typeof value.metadata?.retraction_id === "string"
+        ? value.metadata.retraction_id
+        : undefined,
     toolSuggestions: mapToolSuggestions(value.metadata?.tool_suggestions),
     toolResults: Array.isArray(value.metadata?.tool_results)
       ? value.metadata.tool_results.flatMap((item) => {
@@ -3989,6 +4017,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
     toolSuggestions: value.tool_suggestions === true,
+    alwaysLoadedTools: value.always_loaded_tools ?? [],
     maxConcurrency: numberField(value.max_concurrency) || 1,
     grants: (value.grants ?? []).map((grant) => ({
       riskClasses: grant.risk_classes ?? [],
@@ -5292,6 +5321,13 @@ export class ApiClient {
     }).then(mapSetupControlResponse);
   }
 
+  /** Whether the OS vault can take a secret now; a locked vault cannot. */
+  async credentialVaultStatus(signal?: AbortSignal): Promise<import("./types").CredentialVaultStatus> {
+    const value = await this.request<Record<string, unknown>>("credentials/vault", { signal });
+    const state = mapVaultState(value.state);
+    return { state, available: state === "available" };
+  }
+
   createCredential(
     secret: string,
     persistence: "vault" | "session" = "vault",
@@ -6361,6 +6397,25 @@ export class ApiClient {
     ).then(mapEngagementScope);
   }
 
+  /** Connected-source tools this project can keep loaded; [] on older Core. */
+  listScopeToolCandidates(
+    engagementId: string,
+    signal?: AbortSignal,
+  ): Promise<ScopeToolCandidate[]> {
+    return this.request<WireScopeToolCandidate[]>(
+      `engagements/${encodeURIComponent(engagementId)}/scope/tool-candidates`,
+      { signal },
+    ).then((items) =>
+      (items ?? []).map((item) => ({
+        name: item.name,
+        serverId: item.server_id,
+        serverName: item.server_name,
+        toolName: item.tool_name,
+        description: item.description ?? "",
+      })),
+    );
+  }
+
   createScopeImport(
     body: ScopeImportCreateRequest,
     signal?: AbortSignal,
@@ -6448,6 +6503,7 @@ export class ApiClient {
           prohibited_actions: body.prohibitedActions,
           local_only: body.localOnly,
           tool_suggestions: body.toolSuggestions,
+          always_loaded_tools: body.alwaysLoadedTools,
           max_concurrency: body.maxConcurrency,
           grants: body.grants.map((grant) => ({
             risk_classes: grant.riskClasses,
@@ -8462,11 +8518,31 @@ export class ApiClient {
   listChatMessages(
     sessionId: string,
     signal?: AbortSignal,
+    options?: { includeReplaced?: boolean },
   ): Promise<PersistedChatMessage[]> {
+    const query = options?.includeReplaced ? "?include_replaced=true" : "";
     return this.request<WirePersistedChatMessage[]>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/messages`,
+      `chat/sessions/${encodeURIComponent(sessionId)}/messages${query}`,
       { signal },
     ).then((items) => items.map(mapPersistedChatMessage));
+  }
+
+  rewindChatSession(
+    sessionId: string,
+    beforeMessageId: string,
+  ): Promise<ChatSessionRewind> {
+    return this.request<{
+      session: WireChatSession;
+      messages: WirePersistedChatMessage[];
+      replaced: WirePersistedChatMessage[];
+    }>(`chat/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+      method: "POST",
+      body: JSON.stringify({ before_message_id: beforeMessageId }),
+    }).then((value) => ({
+      session: mapChatSession(value.session),
+      messages: value.messages.map(mapPersistedChatMessage),
+      replaced: value.replaced.map(mapPersistedChatMessage),
+    }));
   }
 
   getChatContext(
