@@ -1,28 +1,18 @@
 {
-  "change_digest": "c57a353dd2140910abb9c4987ad34b7e0be52d60efc96feafed9fdb987342e5e",
-  "reviewed_by": "Claude review of the pages/components audit fixes for findings 5 and 7-12",
-  "reason": "Seven UI defects, each confirmed on origin/main before the change. (5) The Knowledge, Library, Assets and Evidence inspectors kept the record snapshot taken when the route changed, because useCanonicalResourceSelection deliberately skips same-id refreshes for the Findings edit draft; on pages that hold no draft that meant a Reindex left the inspector showing the old status and chunk count and a removed source stayed on screen under the unavailable banner. The hook gains an opt-in followUpdates that presents the live items.find record, the four pages opt in, and Knowledge and Library close the inspector when they remove the inspected record. (7) MissionPromotionDialog and the SideNav New project form could be closed by Cancel, X, Escape or the switcher trigger while the create request was in flight, so a late rejection landed on an unmounted form; those controls now hold until the request settles. (8) ReportsPage discarded keystrokes typed while a save was in flight because the save response replaced `selected` and the reset effect rewrote every field; the effect now tracks the id/revision it presents, keeps the fields for the save's own refresh and marks the form unsaved when anything was typed after the save started, and route-driven report switches ask the same discard confirmation as the in-page list. (9) CommandPalette showed the previous query's Core results under a new query and under the offline notice; results are cleared on every query change and on failure. (10) AgentsPage hid the mission search and status filter once the history dropped to six or fewer runs while a filter was active; the tools stay while a query or non-default status is set. (11) TerminalCommandHistoryPanel appended a late Load more page from a superseded search or project; loads carry a sequence and stale pages are ignored. (12) ChatSearchPanel More matches replaced the list and reset the match index; it now appends and keeps the current match. Each behaviour has a new vitest case that was run first against the unpatched tree (11 failed, 46 passed) and passes with the fix (57 passed across the nine files); ReportsPage.test.tsx is new and follows the SettingsPage.test.tsx harness. Playwright area:critical-workspaces re-renders the Reports, Sources, Library, Assets, Evidence and Missions pages and the SideNav in a real browser at desktop, compact and narrow widths.",
-  "exclusions": "No Python tests: no src/nebula change. No native tests: no Tauri or Rust change. The impact rules also map the changed page, hook and component files to the fallback areas desktop-interface and mobile-layout (the whole interface.spec.ts on six projects) and ChatSearchPanel.tsx to assistant, chat-edit-in-place and provider-thinking; those are excluded because none of those journeys reindexes a source with its inspector open, cancels a create while Core is still answering, types during a report save or arrives at another report with unsaved edits, changes a palette query before Core answers, filters a mission history that then shrinks, races a terminal Load more against a new search, or pages transcript search past its first twenty hits. The vitest files drive each of those with controlled promises and a memory router, and the assistant area's real-core desktop entry would run the entire real-core.spec.ts, which the mock-runtime areas never do. No screenshot baselines change: nothing changed in a baselined state, since the disabled attributes exist only while a request is in flight, the mission tools appear only with an active filter, and the discard prompt only with unsaved edits. ui/src/App.test.tsx is not selected (its diagnostics hash test is a known pre-existing failure when the whole file runs). No full suites. Not verified by hand in a browser.",
+  "change_digest": "91fdc20f231b625b7c79a3ba3b3fa82110b94418041f9d3e441e380fd7e9633a",
+  "reviewed_by": "Claude review of the chat-reconnection readiness gate",
+  "reason": "Both chat-reconnection tests have been failing on origin/main at every one of the six phone widths the reconnection config runs. After pairing, the spec waited for the desktop connection chip (a button labelled 'Nebula Core ready|degraded'), but the phone shell added by #355 hides that chip when Core is ready and hides the whole top bar on workbench routes, so the locator can never become visible at 320, 390 or 430 pixels. The gate only needs to know that pairing finished before the test navigates, so it now waits for the pairing form to close, which every width renders, and the following hydration assertion carries the 20 second budget the gate used to provide. Reproduced on pristine main (element not found after 20s) and verified fixed here.",
+  "exclusions": "No python tests: no src/nebula change. No frontend tests: no ui/src change, so no vitest file is affected. No native tests: no Tauri or Rust change. Playwright is limited to area:chat-reconnection because only that area's spec file changes; no other area reads it.",
   "expected_tests": {
     "python": 0,
-    "frontend": 57,
+    "frontend": 0,
     "native": 0,
-    "playwright": 21
+    "playwright": 2
   },
   "python": [],
-  "frontend": [
-    "ui/src/hooks/useCanonicalResourceSelection.test.tsx",
-    "ui/src/pages/KnowledgePage.test.tsx",
-    "ui/src/components/MissionPromotionDialog.test.tsx",
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/pages/ReportsPage.test.tsx",
-    "ui/src/components/CommandPalette.test.tsx",
-    "ui/src/pages/AgentsPage.test.tsx",
-    "ui/src/components/TerminalCommandHistoryPanel.test.tsx",
-    "ui/src/components/ChatSearchPanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:critical-workspaces"
+    "area:chat-reconnection"
   ]
 }

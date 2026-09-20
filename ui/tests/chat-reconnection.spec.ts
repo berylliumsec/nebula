@@ -44,10 +44,14 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Reconnect test");
     await page.getByRole("button", {name: "Pair device", exact: true}).click();
-    await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+    // Gate on the pairing form closing rather than the desktop connection chip:
+    // every project here is a phone width, where the shell hides that chip when
+    // Core is ready and hides the whole top bar on workbench routes.
+    await expect(page.getByLabel("Device name")).toBeHidden({timeout: 20_000});
     await page.goto(`/projects/reconnect-project/workbench?view=chat&session=${id}`);
     // Wait for session/runtime hydration before editing its restored draft.
-    await expect(page.getByRole("button", {name: "Assistant settings", exact: true})).toContainText("Test harness");
+    await expect(page.getByRole("button", {name: "Assistant settings", exact: true}))
+      .toContainText("Test harness", {timeout: 20_000});
     const composer = page.locator(".chat-composer textarea");
     await composer.fill("Run the connection check once.");
     await page.getByRole("button", {name: "Send message", exact: true}).click();
