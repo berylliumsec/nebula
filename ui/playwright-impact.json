@@ -11,7 +11,7 @@
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "ui/src/components/EngagementPolicySettings*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
-    {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place"]},
+    {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking"]},
     {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
@@ -51,9 +51,9 @@
       {"area":"provider-goal-skills-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains editable goal skills through source loss","runtime":"real-core","shard":"1/1"}
     ],
     "provider-thinking": [
-      {"area":"provider-thinking","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply","runtime":"mock","shard":"1/1"},
-      {"area":"provider-thinking","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply","runtime":"mock","shard":"1/1"},
-      {"area":"provider-thinking","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply","runtime":"mock","shard":"1/1"}
+      {"area":"provider-thinking","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply|assistant upgrade names a provider turn that thinks without answering","runtime":"mock","shard":"1/1"},
+      {"area":"provider-thinking","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply|assistant upgrade names a provider turn that thinks without answering","runtime":"mock","shard":"1/1"},
+      {"area":"provider-thinking","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider thinking stays collapsed and out of the reply|assistant upgrade names a provider turn that thinks without answering","runtime":"mock","shard":"1/1"}
     ],
     "provider-native-hooks": [
       {"area":"provider-native-hooks","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider lifecycle hooks","runtime":"mock","shard":"1/1"},

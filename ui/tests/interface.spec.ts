@@ -4056,6 +4056,72 @@ test("assistant upgrade provider thinking stays collapsed and out of the reply",
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("assistant upgrade names a provider turn that thinks without answering", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "provider-thinking-only",
+    name: "Thinking provider",
+    provider_type: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1",
+    enabled: true,
+    is_local: false,
+    secret_ref: "env:OPENROUTER_API_KEY",
+    model_allowlist: ["deepseek/deepseek-v4-flash"],
+    capabilities: { streaming: true },
+    privacy: { local_only: false, permits_sensitive_data: false },
+    metadata: { default_model: "deepseek/deepseek-v4-flash" },
+  };
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [provider] });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
+      await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["deepseek/deepseek-v4-flash"] } });
+      return;
+    }
+    await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", session_id: "session-thinking-only", turn_id: "turn-thinking-only" })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "The read is bounded, so run it first." })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "\n\nThe budget ran out before the answer." })}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking-only", session_id: "session-thinking-only", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "", reasoning: "The read is bounded, so run it first.\n\nThe budget ran out before the answer." }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "length", citations: [] })}\n\n`));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
+  await page.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+  await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Reply with FLASH_OK.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const reply = page.locator(".chat-message.assistant").last();
+  // The turn is not silently blank: the transcript says the answer never came.
+  await expect(reply).toContainText("The model spent this turn thinking and returned no answer.");
+  await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveCount(0);
+  const thinking = reply.getByLabel("Thinking");
+  await thinking.locator("summary").click();
+  // Every step's thinking is kept, in the order the model had it.
+  await expect(thinking).toContainText("The read is bounded, so run it first.");
+  await expect(thinking).toContainText("The budget ran out before the answer.");
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test("assistant upgrade provider lifecycle hooks require restart reconciliation before resume", async ({ page }) => {
   const provider = {
     ...entity,
