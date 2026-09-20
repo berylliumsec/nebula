@@ -1774,3 +1774,297 @@ def test_run_event_websocket_completes_and_closes_after_a_terminal_run(api):
         with pytest.raises(WebSocketDisconnect) as exc_info:
             websocket.receive_json()
     assert exc_info.value.code == 1000
+
+
+def _exchange(store, engagement_id: str):
+    from nebula.v3.domain import BrowserTrafficExchange
+
+    return store.create(
+        BrowserTrafficExchange(
+            engagement_id=engagement_id,
+            session_id="session-1",
+            tab_id="tab-1",
+            identity_id="identity-1",
+            method="GET",
+            url="https://target.example/login",
+            scope_state="in_scope",
+            scope_policy_id="scope-1",
+            scope_policy_revision=1,
+        )
+    )
+
+
+def test_resolve_resource_finds_an_existing_browser_exchange(api):
+    # The resolve map named a kind no entity declares, so every exchange
+    # reference was reported as inaccessible although the row existed.
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Exchange resolve"))
+    exchange = _exchange(store, engagement.id)
+
+    response = client.post(
+        "/api/v1/resources/resolve",
+        headers=_auth(),
+        json={
+            "project_id": engagement.id,
+            "kind": "browser_exchange",
+            "id": exchange.id,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "available"
+    assert response.json()["ref"]["revision"] == exchange.revision
+
+
+def test_non_ascii_credentials_are_rejected_instead_of_crashing(tmp_path):
+    # Starlette decodes headers as latin-1, and hmac.compare_digest refuses
+    # non-ASCII text, so a bad credential became an unhandled 500 (and a
+    # pre-accept TypeError on every websocket) instead of the normal 401/403.
+    store = NebulaStore(tmp_path / "non-ascii.db")
+    app = create_app(store, auth_token="test-token")
+    client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
+
+    bearer = client.get(
+        "/api/v1/health", headers={b"Authorization": b"Bearer \xc3\xa9"}
+    )
+    assert bearer.status_code == 401, bearer.text
+
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            "/api/v1/runs/missing/events/ws",
+            headers={b"Authorization": b"Bearer \xc3\xa9"},
+            subprotocols=["nebula.events.v1"],
+        ):
+            pass
+    assert exc_info.value.code == 4401
+
+    pairing = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+    ).json()
+    redeemed = client.post(
+        "/api/v1/auth/pairings/redeem",
+        json={
+            "secret": pairing["secret"],
+            "confirmation_code": pairing["confirmation_code"],
+        },
+    )
+    assert redeemed.status_code == 200, redeemed.text
+    device_id = redeemed.json()["device"]["id"]
+    csrf = redeemed.json()["csrf_token"]
+
+    origin = client.delete(
+        f"/api/v1/auth/devices/{device_id}",
+        headers={"X-Nebula-CSRF": csrf, b"Origin": b"https://127.0.0.1\xc3\xa9"},
+    )
+    assert origin.status_code == 403, origin.text
+    csrf_header = client.delete(
+        f"/api/v1/auth/devices/{device_id}",
+        headers={b"X-Nebula-CSRF": b"\xc3\xa9", "Origin": "https://127.0.0.1"},
+    )
+    assert csrf_header.status_code == 403, csrf_header.text
+    assert client.get("/api/v1/auth/devices").status_code == 200
+
+
+def test_harness_chat_rejects_two_browser_companions_before_persisting(
+    api, monkeypatch
+):
+    # The 409 was raised after prepare_chat had already stored the user
+    # message and a pending turn that nothing would ever start.
+    from nebula.v3.harnesses import HarnessConfigurationError
+
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Companions"))
+    runtime = client.app.state.harness_runtime_service
+    prepared: list[str] = []
+
+    def prepare_chat(**kwargs):
+        prepared.append(kwargs["prompt"])
+        raise HarnessConfigurationError("prepare_chat must not run")
+
+    monkeypatch.setattr(runtime, "prepare_chat", prepare_chat)
+
+    def attachment(session_id: str) -> dict:
+        text = f"tab for {session_id}"
+        return {
+            "source_kind": "browser_companion",
+            "source_id": session_id,
+            "source_label": session_id,
+            "text": text,
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+
+    response = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "backend": "harness",
+            "engagement_id": engagement.id,
+            "harness_profile_id": "profile-1",
+            "messages": [{"role": "user", "content": "Compare both tabs"}],
+            "context_attachments": [
+                attachment("companion-a"),
+                attachment("companion-b"),
+            ],
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert prepared == []
+
+
+def test_harness_turn_event_socket_sends_an_error_frame_on_stream_failure(
+    api, monkeypatch
+):
+    # Only disconnects were caught, so a runtime failure while following the
+    # turn tore the socket down with no error frame for the viewer.
+    client, _, _ = api
+    runtime = client.app.state.harness_runtime_service
+    monkeypatch.setattr(runtime, "activity_events", lambda *args, **kwargs: None)
+
+    async def follow_turn(turn_id: str, *, after_sequence: int = 0):
+        raise RuntimeError("ledger unavailable")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(runtime, "follow_turn", follow_turn)
+
+    with client.websocket_connect(
+        "/api/v1/harness-turns/turn-1/events/ws",
+        headers=_auth(),
+        subprotocols=["nebula.events.v1"],
+    ) as websocket:
+        frame = websocket.receive_json()
+    assert frame["kind"] == "error"
+    assert frame["retryable"] is True
+    assert "ledger unavailable" not in json.dumps(frame)
+
+
+def test_browser_assessment_event_socket_completes_when_the_assessment_is_deleted(
+    api,
+):
+    # The poll loop looked the assessment up every tick; deleting it raised
+    # NotFoundError out of the handler and the viewer saw an abnormal close.
+    from nebula.v3.domain import BrowserAssessment
+
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Assessment stream"))
+    assessment = store.create(
+        BrowserAssessment(
+            engagement_id=engagement.id,
+            name="Login review",
+            objective="Review the login flow",
+            session_id="session-1",
+            identity_ids=["identity-1"],
+            primary_identity_id="identity-1",
+            target_urls=["https://target.example"],
+            scope_policy_id="scope-1",
+            scope_policy_revision=1,
+            status="running",
+            created_by="operator",
+        )
+    )
+
+    with client.websocket_connect(
+        f"/api/v1/browser-assessments/{assessment.id}/events/ws",
+        headers=_auth(),
+        subprotocols=["nebula.events.v1"],
+    ) as websocket:
+        assert websocket.receive_json() == {
+            "kind": "replay_complete",
+            "after_sequence": 0,
+        }
+        store.delete(BrowserAssessment, assessment.id)
+        assert websocket.receive_json() == {"kind": "complete", "after_sequence": 0}
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            websocket.receive_json()
+    assert exc_info.value.code == 4404
+
+
+def test_health_does_not_expose_host_paths(tmp_path):
+    # /health answers cookie-paired devices too, and it echoed the absolute
+    # log directory and settings file path of the operator's home.
+    from nebula.v3.diagnostics import DiagnosticManager
+
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    try:
+        client = TestClient(
+            create_app(
+                NebulaStore(tmp_path / "health.db"),
+                auth_token="test-token",
+                diagnostic_manager=manager,
+            )
+        )
+        response = client.get("/api/v1/health", headers=_auth())
+        assert response.status_code == 200, response.text
+        body = json.dumps(response.json())
+        assert "log_directory" not in response.json()["diagnostics"]
+        assert "settings_path" not in response.json()["diagnostics"]
+        assert str(tmp_path) not in body
+    finally:
+        manager.close()
+
+
+def test_pairing_redeem_reports_a_wrong_code_and_lets_the_phone_retry(tmp_path):
+    # The offer was popped before the code was checked, so one typo burned
+    # the QR and blamed the secret instead of the code.
+    from nebula.v3 import api as api_module
+
+    store = NebulaStore(tmp_path / "pairing-retry.db")
+    app = create_app(store, auth_token="test-token")
+    client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
+    pairing = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Phone"}
+    ).json()
+    wrong_code = f"{(int(pairing['confirmation_code']) + 1) % 1_000_000:06d}"
+
+    def redeem(code: str):
+        return client.post(
+            "/api/v1/auth/pairings/redeem",
+            json={"secret": pairing["secret"], "confirmation_code": code},
+        )
+
+    mistyped = redeem(wrong_code)
+    assert mistyped.status_code == 401
+    assert mistyped.json()["detail"] == "pairing confirmation code did not match"
+    assert redeem(pairing["confirmation_code"]).status_code == 200
+
+    second = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Tablet"}
+    ).json()
+    pairing = second
+    for _ in range(api_module.PAIRING_CONFIRMATION_ATTEMPTS):
+        assert redeem(wrong_code).status_code == 401
+    exhausted = redeem(second["confirmation_code"])
+    assert exhausted.status_code == 401
+    assert exhausted.json()["detail"] == "pairing secret is invalid or expired"
+
+
+def test_diagnostics_settings_write_failure_is_a_retryable_503(tmp_path, monkeypatch):
+    # DiagnosticsError was unmapped, so an unwritable settings file became a
+    # generic 500 with retryable=false although the service had an error_id.
+    from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA
+
+    manager = DiagnosticManager(tmp_path / "diagnostics", watch_settings=False)
+    try:
+        client = TestClient(
+            create_app(
+                NebulaStore(tmp_path / "settings.db"),
+                auth_token="test-token",
+                diagnostic_manager=manager,
+            ),
+            raise_server_exceptions=False,
+        )
+
+        def refuse(*args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(manager, "_atomic_write_json", refuse)
+        response = client.put(
+            "/api/v1/diagnostics/settings",
+            headers=_auth(),
+            json={"schema": SETTINGS_SCHEMA, "global_level": "debug"},
+        )
+        assert response.status_code == 503, response.text
+        assert response.json()["retryable"] is True
+        assert "could not be saved" in response.json()["detail"]
+    finally:
+        manager.close()

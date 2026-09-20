@@ -180,6 +180,7 @@ from .container_terminal import (
 from .database import Database
 from .diagnostics import (
     DiagnosticManager,
+    DiagnosticsError,
     current_operation_id,
     current_request_id,
     diagnostic_context,
@@ -467,7 +468,11 @@ from .writing_ai import (
     WritingTransformResponse,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
-from .relations import LEGACY_RELATION_MODELS, ResourceRelationService
+from .relations import (
+    LEGACY_RELATION_MODELS,
+    RESOURCE_ENTITY_KINDS,
+    ResourceRelationService,
+)
 from .search import FederatedSearch
 from .handoffs import (
     HandoffCancelRequest,
@@ -577,6 +582,29 @@ CUSTOM_RESOURCES = {
 
 API_PREFIX = "/api/v1"
 PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
+
+
+# Wrong confirmation codes tolerated per pairing offer before it is withdrawn.
+PAIRING_CONFIRMATION_ATTEMPTS = 5
+
+
+def _secret_matches(candidate: str | None, expected: str | None) -> bool:
+    """Constant-time equality that survives non-ASCII credential text.
+
+    Starlette decodes header and cookie values as latin-1 and
+    ``hmac.compare_digest`` raises ``TypeError`` for ``str`` operands outside
+    ASCII, so a stray byte in ``Authorization``, ``Origin`` or the CSRF token
+    turned the normal 401/403 into an unhandled 500 (and a pre-accept crash on
+    every websocket). Comparing UTF-8 bytes keeps the constant-time property
+    and simply reports a mismatch.
+    """
+
+    if candidate is None or expected is None:
+        return False
+    return hmac.compare_digest(
+        candidate.encode("utf-8", "surrogateescape"),
+        expected.encode("utf-8", "surrogateescape"),
+    )
 
 
 def _websocket_protocol_secret(
@@ -2465,7 +2493,7 @@ def create_app(
             and not parsed.username
             and not parsed.password
             and origin
-            and hmac.compare_digest(origin, f"{scheme}://{host}")
+            and _secret_matches(origin, f"{scheme}://{host}")
         )
 
     async def require_bearer_auth(
@@ -2474,7 +2502,7 @@ def create_app(
         if (
             credentials is None
             or credentials.scheme.lower() != "bearer"
-            or not hmac.compare_digest(credentials.credentials, token)
+            or not _secret_matches(credentials.credentials, token)
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -2492,7 +2520,7 @@ def create_app(
         if (
             credentials is not None
             and credentials.scheme.lower() == "bearer"
-            and hmac.compare_digest(credentials.credentials, token)
+            and _secret_matches(credentials.credentials, token)
         ):
             return credentials.credentials
         device = _device_for_token(request.cookies.get("nebula_device"))
@@ -2519,7 +2547,7 @@ def create_app(
             )
         expected_origin = f"{request.url.scheme}://{host_header}"
         origin = request.headers.get("origin")
-        if origin and not hmac.compare_digest(origin, expected_origin):
+        if origin and not _secret_matches(origin, expected_origin):
             raise HTTPException(
                 status_code=403, detail="paired-device origin validation failed"
             )
@@ -2530,8 +2558,8 @@ def create_app(
             if (
                 not csrf
                 or not cookie_csrf
-                or not hmac.compare_digest(csrf, cookie_csrf)
-                or not hmac.compare_digest(digest, device.csrf_sha256)
+                or not _secret_matches(csrf, cookie_csrf)
+                or not _secret_matches(digest, device.csrf_sha256)
             ):
                 raise HTTPException(
                     status_code=403, detail="paired-device CSRF validation failed"
@@ -2604,6 +2632,7 @@ def create_app(
             "name": body.name,
             "confirmation_code": code,
             "expires_at": expires_at,
+            "attempts": 0,
         }
         return PairingCreateResponse(
             secret=secret,
@@ -2623,17 +2652,23 @@ def create_app(
             raise HTTPException(status_code=400, detail="device pairing requires HTTPS")
         digest = hashlib.sha256(body.secret.encode("utf-8")).hexdigest()
         prune_expired_pairings(pending_pairings, utc_now())
-        pending = pending_pairings.pop(digest, None)
-        if (
-            pending is None
-            or utc_now() >= pending["expires_at"]
-            or not hmac.compare_digest(
-                body.confirmation_code, pending["confirmation_code"]
-            )
-        ):
+        pending = pending_pairings.get(digest)
+        if pending is None or utc_now() >= pending["expires_at"]:
             raise HTTPException(
                 status_code=401, detail="pairing secret is invalid or expired"
             )
+        if not _secret_matches(body.confirmation_code, pending["confirmation_code"]):
+            # The offer used to be popped before the code was checked, so one
+            # mistyped digit burned the QR and the message blamed the secret.
+            # A wrong code now leaves the offer for a bounded number of
+            # retries and says what actually failed.
+            pending["attempts"] = pending.get("attempts", 0) + 1
+            if pending["attempts"] >= PAIRING_CONFIRMATION_ATTEMPTS:
+                pending_pairings.pop(digest, None)
+            raise HTTPException(
+                status_code=401, detail="pairing confirmation code did not match"
+            )
+        pending_pairings.pop(digest, None)
         raw_token = secrets.token_urlsafe(32)
         csrf = secrets.token_urlsafe(32)
         now = utc_now()
@@ -3003,6 +3038,17 @@ def create_app(
             request, exc, status_code=502, detail=str(exc), retryable=True
         )
 
+    @app.exception_handler(DiagnosticsError)
+    async def diagnostics_error_handler(
+        request: Request, exc: DiagnosticsError
+    ) -> JSONResponse:
+        # A settings file that cannot be written is a service condition the
+        # operator can retry, not an unhandled 500; the message already
+        # carries the error_id the service minted.
+        return diagnostic_error_response(
+            request, exc, status_code=503, detail=str(exc), retryable=True
+        )
+
     def require_diagnostic_manager() -> DiagnosticManager:
         if diagnostics is None:
             raise HTTPException(
@@ -3362,28 +3408,10 @@ def create_app(
     async def resolve_resource(ref: ResourceRef) -> ResourceResolution:
         """Validate canonical identity without silently substituting another object."""
 
-        entity_kinds = {
-            ResourceKind.PROJECT: "engagements",
-            ResourceKind.CONVERSATION: "chat_sessions",
-            ResourceKind.NOTE: "observations",
-            ResourceKind.SOURCE: "knowledge",
-            ResourceKind.LIBRARY_ITEM: "library_items",
-            ResourceKind.ASSET: "assets",
-            ResourceKind.EVIDENCE: "evidence",
-            ResourceKind.FINDING: "findings",
-            ResourceKind.REPORT: "reports",
-            ResourceKind.TERMINAL_COMMAND: "command_executions",
-            ResourceKind.BROWSER_SESSION: "browser_sessions",
-            ResourceKind.BROWSER_ASSESSMENT: "browser_assessments",
-            ResourceKind.BROWSER_EXCHANGE: "browser_traffic_exchanges",
-            ResourceKind.MISSION: "runs",
-            ResourceKind.TERMINAL_SESSION: "automation_sessions",
-            ResourceKind.EXECUTION: "operator_executions",
-            ResourceKind.APPROVAL: "approvals",
-            ResourceKind.RECEIPT: "action_intents",
-            ResourceKind.ARTIFACT: "artifacts",
-        }
-        entity_kind = entity_kinds.get(ref.kind)
+        # One import-checked map (relations.RESOURCE_ENTITY_KINDS) serves
+        # resolution, relations and actions; a private copy here once named a
+        # kind no entity declares and resolved every browser exchange as gone.
+        entity_kind = RESOURCE_ENTITY_KINDS.get(ref.kind)
         model = ENTITY_MODEL_BY_KIND.get(entity_kind or "")
         if model is None:
             return ResourceResolution(
@@ -3882,13 +3910,13 @@ def create_app(
         if (
             supplied
             and protocol_token
-            and not hmac.compare_digest(supplied, protocol_token)
+            and not _secret_matches(supplied, protocol_token)
         ):
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
@@ -3923,6 +3951,29 @@ def create_app(
             WebSocketDisconnect
         ):  # diagnostic-expected: disconnect only detaches the viewer
             return
+        except NotFoundError:
+            # diagnostic-expected: the turn was deleted mid-stream; the viewer
+            # gets a bounded completion and a not-found close, not a traceback.
+            try:
+                await websocket.send_json({"kind": "complete"})
+                await websocket.close(code=4404, reason="harness turn not found")
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the viewer left before the close arrived.
+                pass
+        except Exception as exc:
+            frame = stream_error_frame(
+                feature="harnesses",
+                code="harness_stream_failed",
+                detail="harness event stream failed",
+                exception=exc,
+                retryable=True,
+            )
+            frame["kind"] = "error"
+            try:
+                await websocket.send_json(frame)
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the stream failure is already recorded.
+                pass
 
     @app.post(
         f"{API_PREFIX}/harness-sessions/{{session_id}}/close",
@@ -4617,7 +4668,7 @@ def create_app(
         if (
             supplied
             and subprotocol_token
-            and not hmac.compare_digest(supplied, subprotocol_token)
+            and not _secret_matches(supplied, subprotocol_token)
         ):
             emit_diagnostic(
                 "warning",
@@ -4634,7 +4685,7 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
@@ -5284,7 +5335,7 @@ def create_app(
         if (
             supplied
             and subprotocol_token
-            and not hmac.compare_digest(supplied, subprotocol_token)
+            and not _secret_matches(supplied, subprotocol_token)
         ):
             emit_diagnostic(
                 "warning",
@@ -5301,7 +5352,7 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
@@ -5801,13 +5852,13 @@ def create_app(
         if (
             supplied
             and protocol_token
-            and not hmac.compare_digest(supplied, protocol_token)
+            and not _secret_matches(supplied, protocol_token)
         ):
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
@@ -5997,13 +6048,13 @@ def create_app(
         if (
             supplied
             and protocol_token
-            and not hmac.compare_digest(supplied, protocol_token)
+            and not _secret_matches(supplied, protocol_token)
         ):
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = protocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
@@ -8697,6 +8748,18 @@ def create_app(
                 runtime_context += "\n\nNebula-selected context:\n" + json.dumps(
                     selected, ensure_ascii=False
                 )
+            # Reject an over-attached request before prepare_chat stores the
+            # user message and a pending turn that nothing would ever start.
+            companion_ids = {
+                item.source_id
+                for item in request.context_attachments
+                if item.source_kind == "browser_companion" and item.source_id
+            }
+            if len(companion_ids) > 1:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Attach one browser session per conversation.",
+                )
             chat, chat_turn, harness_turn = harness_runtime.prepare_chat(
                 engagement_id=engagement_id,
                 profile_id=request.harness_profile_id or "",
@@ -8723,16 +8786,6 @@ def create_app(
                     else None
                 ),
             )
-            companion_ids = {
-                item.source_id
-                for item in request.context_attachments
-                if item.source_kind == "browser_companion" and item.source_id
-            }
-            if len(companion_ids) > 1:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Attach one browser session per conversation.",
-                )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
             harness_runtime.start_chat_turn(harness_turn.id)
@@ -10057,7 +10110,7 @@ def create_app(
         if (
             supplied
             and subprotocol_token
-            and not hmac.compare_digest(supplied, subprotocol_token)
+            and not _secret_matches(supplied, subprotocol_token)
         ):
             emit_diagnostic(
                 "warning",
@@ -10074,7 +10127,7 @@ def create_app(
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             emit_diagnostic(
@@ -10506,13 +10559,13 @@ def create_app(
         if (
             supplied
             and subprotocol_token
-            and not hmac.compare_digest(supplied, subprotocol_token)
+            and not _secret_matches(supplied, subprotocol_token)
         ):
             await websocket.close(code=4401, reason="conflicting authentication tokens")
             return
         supplied = subprotocol_token or supplied
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid bearer token required")
@@ -10581,6 +10634,32 @@ def create_app(
         except WebSocketDisconnect:
             # diagnostic-expected: disconnect only detaches this viewer.
             return
+        except NotFoundError:
+            # diagnostic-expected: the assessment was deleted while this viewer
+            # polled it; complete the stream and close not-found instead of
+            # unwinding with a traceback and an abnormal close.
+            try:
+                await websocket.send_json(
+                    {"kind": "complete", "after_sequence": cursor}
+                )
+                await websocket.close(code=4404, reason="assessment not found")
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the viewer left before the close arrived.
+                pass
+        except Exception as exc:
+            frame = stream_error_frame(
+                feature="api",
+                code="browser_assessment_stream_failed",
+                detail="browser assessment event stream failed",
+                exception=exc,
+                retryable=True,
+            )
+            frame["kind"] = "error"
+            try:
+                await websocket.send_json(frame)
+            except (RuntimeError, WebSocketDisconnect):
+                # diagnostic-expected: the stream failure is already recorded.
+                pass
 
     @app.post(
         f"{API_PREFIX}/browser-issue-candidates",
@@ -11216,7 +11295,7 @@ def create_app(
             protocols, "nebula.auth.", decode_base64=True
         )
         if not allow_unauthenticated and (
-            (not supplied or not hmac.compare_digest(supplied, token))
+            (not supplied or not _secret_matches(supplied, token))
             and not _cookie_websocket_authenticated(websocket)
         ):
             await websocket.close(code=4401, reason="valid authentication required")
