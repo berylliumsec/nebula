@@ -62,6 +62,9 @@ class CoreSetupState(StringEnum):
 class TerminalSetupState(StringEnum):
     DETECTING_RUNNER = "detecting_runner"
     NEEDS_RUNNER = "needs_runner"
+    # A verified runner is selected but the workstation image is not prepared
+    # and nothing is running (not started yet, or cancelled).
+    NEEDS_IMAGE = "needs_image"
     PREPARING_IMAGE = "preparing_image"
     READY = "ready"
     DISABLED = "disabled"
@@ -1074,7 +1077,7 @@ class SetupService:
             }
         )
         terminal_state = (
-            TerminalSetupState.PREPARING_IMAGE
+            self._selected_runner_terminal_state(cancelled)
             if self._terminal.runner_profile_id is not None
             else TerminalSetupState.NEEDS_RUNNER
         )
@@ -1308,14 +1311,30 @@ class SetupService:
             detail=detail,
         )
 
-    def _selected_runner_terminal_state(self) -> TerminalSetupState:
-        """Report readiness only after the workstation image is verified."""
+    def _selected_runner_terminal_state(
+        self, preparation: ImagePreparationStatus | None = None
+    ) -> TerminalSetupState:
+        """Report readiness only after the workstation image is verified.
 
-        if self._image_preparation.phase == ImagePreparationPhase.READY:
+        ``PREPARING_IMAGE`` is reserved for phases where an operation is
+        actually running; an idle runner (nothing started yet, or a cancelled
+        preparation) is ``NEEDS_IMAGE`` so clients do not show a preparation
+        in progress and poll for one that will never finish.
+        """
+
+        phase = (preparation or self._image_preparation).phase
+        if phase == ImagePreparationPhase.READY:
             return TerminalSetupState.READY
-        if self._image_preparation.phase == ImagePreparationPhase.ERROR:
+        if phase == ImagePreparationPhase.ERROR:
             return TerminalSetupState.ERROR
-        return TerminalSetupState.PREPARING_IMAGE
+        if phase in {
+            ImagePreparationPhase.QUEUED,
+            ImagePreparationPhase.RESOLVING_RUNTIME,
+            ImagePreparationPhase.PREPARING_IMAGE,
+            ImagePreparationPhase.CANCELLING,
+        }:
+            return TerminalSetupState.PREPARING_IMAGE
+        return TerminalSetupState.NEEDS_IMAGE
 
     def _selected_runner_detail(self, runner_detail: str | None) -> str:
         if self._image_preparation.phase == ImagePreparationPhase.READY:
@@ -1326,7 +1345,10 @@ class SetupService:
             )
         if self._image_preparation.detail:
             return self._image_preparation.detail
-        return "A verified local runtime is ready; preparing the workstation image."
+        return (
+            "A verified local runtime is ready; the Kali workstation image is "
+            "prepared when the first terminal opens."
+        )
 
     def _snapshot(self) -> SetupStatus:
         providers = [

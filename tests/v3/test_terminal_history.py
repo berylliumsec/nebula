@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -1157,3 +1158,155 @@ def test_authenticated_terminal_audit_api_is_read_only_and_protects_raw_output(
             headers=headers,
         )
         assert missing.status_code == 404
+
+
+def test_spool_writes_coalesce_durable_syncs_across_chunks(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "coalesced.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Coalesced spool syncs"))
+    history = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    nonce = "terminalcoalesce1234"
+    parser = history.new_parser(
+        nonce=nonce,
+        engagement_id=project.id,
+        session_id="coalesced-session",
+        operator_id="operator-1",
+        runtime_image_digest="sha256:" + "a" * 64,
+        manifest_sha256="b" * 64,
+        default_tools=("printf",),
+    )
+    parser.feed(
+        _audit_frame(
+            "Start",
+            nonce,
+            "40",
+            base64.b64encode(b"/workspace"),
+            base64.b64encode(b"printf loop"),
+        )
+        + _audit_frame("Exec", nonce, "40", base64.b64encode(b"printf loop"))
+    )
+    fsyncs = 0
+    metadata_rewrites = 0
+    real_fsync = os.fsync
+    real_replace = os.replace
+
+    def counting_fsync(descriptor):
+        nonlocal fsyncs
+        fsyncs += 1
+        real_fsync(descriptor)
+
+    def counting_replace(source, destination):
+        nonlocal metadata_rewrites
+        metadata_rewrites += 1
+        real_replace(source, destination)
+
+    monkeypatch.setattr(os, "fsync", counting_fsync)
+    monkeypatch.setattr(os, "replace", counting_replace)
+    chunk = b"x" * 1024
+    for _ in range(64):
+        parser.feed(chunk)
+    monkeypatch.undo()
+
+    # Every chunk lands in the spool, but the durable work is coalesced instead
+    # of three fsyncs (raw, metadata, directory) plus a metadata rename per chunk.
+    assert history.spool_root is not None
+    raw_path = next(history.spool_root.glob("*.raw"))
+    assert raw_path.read_bytes() == chunk * 64
+    assert fsyncs <= 6
+    assert metadata_rewrites <= 2
+
+    finished = parser.feed(_audit_frame("End", nonce, "40", b"0"))
+    assert len(finished.captures) == 1
+    record = history.record_capture(
+        engagement_id=project.id,
+        session_id="coalesced-session",
+        operator_id="operator-1",
+        capture=finished.captures[0],
+    )
+    assert record.output_sha256 == hashlib.sha256(chunk * 64).hexdigest()
+    assert record.output_truncated is False
+    assert history.output_bytes(project.id, record.id, raw=True)[0] == chunk * 64
+    assert list(history.spool_root.glob("*")) == []
+
+
+def test_spool_recovery_tolerates_raw_bytes_ahead_of_metadata(tmp_path):
+    store = NebulaStore(tmp_path / "raw-ahead.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    project = store.create(Engagement(name="Raw-ahead spool recovery"))
+    history = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    nonce = "terminalrawahead1234"
+    parser = history.new_parser(
+        nonce=nonce,
+        engagement_id=project.id,
+        session_id="raw-ahead-session",
+        operator_id="operator-1",
+        runtime_image_digest="sha256:" + "a" * 64,
+        manifest_sha256="b" * 64,
+        default_tools=("long-running-scan",),
+    )
+    start = _audit_frame(
+        "Start",
+        nonce,
+        "41",
+        base64.b64encode(b"/workspace"),
+        base64.b64encode(b"long-running-scan"),
+    )
+    executed = _audit_frame(
+        "Exec",
+        nonce,
+        "41",
+        base64.b64encode(b"long-running-scan"),
+    )
+    parser.feed(start + executed + b"partial result\n")
+
+    # Core dies after a raw append landed but before the metadata describing it
+    # was rewritten: the raw file is ahead of the recorded count and hash.
+    assert history.spool_root is not None
+    raw_path = next(history.spool_root.glob("*.raw"))
+    with raw_path.open("ab") as stream:
+        stream.write(b"more output\n")
+    full = b"partial result\nmore output\n"
+
+    restarted = TerminalCommandHistory(
+        store.database, store=store, artifact_store=artifacts
+    )
+    assert restarted.recover_spools() == 1
+    records = restarted.list(project.id).records
+    assert len(records) == 1
+    assert records[0].status == "interrupted"
+    assert records[0].output_truncated is False
+    assert records[0].observed_output_bytes == len(full)
+    assert records[0].output_sha256 == hashlib.sha256(full).hexdigest()
+    assert restarted.output_bytes(project.id, records[0].id, raw=True)[0] == full
+    assert restarted.status(project.id).audit_gap_count == 0
+    assert list(restarted.spool_root.glob("*")) == []
+
+
+def test_history_search_matches_non_ascii_text_case_insensitively(command_history):
+    history, project = command_history
+    record = history.record(
+        engagement_id=project.id,
+        session_id="terminal-1",
+        command="grep MÜNCHEN /workspace/notes.txt",
+        cwd="/workspace",
+        exit_code=0,
+    )
+    other = history.record(
+        engagement_id=project.id,
+        session_id="terminal-1",
+        command="nmap -sV TARGET",
+        cwd="/workspace",
+        exit_code=0,
+    )
+    assert record is not None
+    assert other is not None
+
+    assert history.list(project.id, search="münchen").records == [record]
+    assert history.list(project.id, search="MÜNCHEN").records == [record]
+    assert history.list(project.id, search="Münch").records == [record]
+    assert history.list(project.id, search="münchen").total == 1
+    assert history.list(project.id, search="target").records == [other]
