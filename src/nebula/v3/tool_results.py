@@ -682,7 +682,14 @@ class WorkspaceOutputService:
         if starting_line < 1 or not 1 <= line_count <= MAX_READ_LINES:
             raise ToolOutputQueryError("invalid starting_line or line_count")
         candidate = self._safe_path(path, directory=False)
-        with candidate.open("rb") as stream:
+        try:
+            stream = candidate.open("rb")
+        except PermissionError as exc:
+            # Report the requested relative path without leaking host paths.
+            raise ToolOutputAccessError(
+                "workspace path is inaccessible: permission denied"
+            ) from exc
+        with stream:
             if b"\x00" in stream.read(8192):
                 return {
                     "schema": "nebula.workspace.read/v1",

@@ -883,3 +883,62 @@ def test_workspace_upload_if_match_rejects_deleted_file(tmp_path):
     assert response.status_code == 412
     assert response.json()["code"] == "workspace_file_changed"
     assert not (platform.workspace_for(engagement.id) / "deleted.py").exists()
+
+
+def test_workspace_entry_mutations_reject_the_workspace_root(tmp_path):
+    _store, _artifacts, _platform, _workspace, engagement, client = _services(tmp_path)
+
+    with client:
+        for path in (".", "./"):
+            renamed = client.patch(
+                f"/api/v1/engagements/{engagement.id}/workspace/entry",
+                headers=AUTH,
+                json={"path": path, "new_name": "renamed.txt"},
+            )
+            assert renamed.status_code == 422, path
+            assert "required" in renamed.text
+            deleted = client.delete(
+                f"/api/v1/engagements/{engagement.id}/workspace/entry",
+                headers=AUTH,
+                params={"path": path},
+            )
+            assert deleted.status_code == 422, path
+            assert "required" in deleted.text
+
+
+def test_workspace_listing_skips_entries_removed_while_listing(tmp_path, monkeypatch):
+    _store, _artifacts, platform, workspace, engagement, _client = _services(tmp_path)
+    root = platform.workspace_for(engagement.id)
+    (root / "stable.txt").write_text("keep", encoding="utf-8")
+    (root / "vanishing.txt").write_text("gone", encoding="utf-8")
+    real_scandir = os.scandir
+
+    class _Entry:
+        def __init__(self, entry):
+            self._entry = entry
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+        def stat(self, *args, **kwargs):
+            if self._entry.name == "vanishing.txt":
+                raise FileNotFoundError(2, "No such file or directory", "vanishing.txt")
+            return self._entry.stat(*args, **kwargs)
+
+    class _Scan:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __enter__(self):
+            return (_Entry(entry) for entry in self._inner.__enter__())
+
+        def __exit__(self, *args):
+            return self._inner.__exit__(*args)
+
+    monkeypatch.setattr(
+        os, "scandir", lambda *args, **kwargs: _Scan(real_scandir(*args, **kwargs))
+    )
+
+    listing = workspace.list(engagement.id, path="")
+
+    assert [entry.name for entry in listing.entries] == ["stable.txt"]

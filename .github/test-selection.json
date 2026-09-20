@@ -1,16 +1,17 @@
 {
-  "change_digest": "9e363d53519f4cb911df333d080afd6afa5d10ea700ac99ff3c7f9eda6509600",
-  "reviewed_by": "Claude review of compaction capacity errors",
-  "reason": "ContextCompactor.compact wrapped every failure from the hierarchical memory pass in a plain ContextCompactionError after persisting the FAILED snapshot, so a ContextCapacityError (a window too small for a faithful summary, or derived context that cannot fit the compactor) lost its subclass. chat.py maps ContextCapacityError to a 422 ChatConfigurationError and the base class to a ChatCompactionError that api.py answers with 503, retryable=True and Retry-After: 1, so a deterministic capacity failure was presented to the operator as a transient outage and each client retry ran the same failing pass and persisted another FAILED snapshot. The except path now re-raises ContextCapacityError as ContextCapacityError with the same safe message and usage, and the base class otherwise. test_context gains a case with a 600-token window that asserts the capacity type reaches the caller, no provider request is made, and the FAILED snapshot is still persisted; the rest of the file covers the provenance-repair and hierarchical paths that share the except block.",
-  "exclusions": "No frontend tests: no ui/ change; the 422 versus 503 mapping already exists in chat.py and api.py. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for context.py) is the real-Core journey suite and does not drive compaction to a capacity failure. No full suites.",
+  "change_digest": "b7fbd26ff40c99f5f1281f105fffc60f0f531673b4f12d99b564bab2c8d73db0",
+  "reviewed_by": "Claude review of workspace entry error handling",
+  "reason": "Three workspace paths turned predictable conditions into 500s or leaked host paths. WorkspaceService.rename and delete resolved the request path with _relative_parts without require_value, so '.' or './' (which pass the request validators' min_length=1) produced an empty tuple and relative[-1] raised IndexError inside a try that only catches FileNotFoundError: PATCH or DELETE /workspace/entry?path=. returned 500 instead of 422. WorkspaceService.list called entry.stat unguarded inside os.scandir, so a file removed by a terminal or execution between scandir and stat (a race workspace.search already guards) failed the whole file-tree refresh with 500. WorkspaceOutputService.read opened the file after _safe_path's checks with no PermissionError mapping, so an unreadable file reached the model as a raw PermissionError carrying the absolute host path, while search on the same file returned the sanitized 'workspace path is inaccessible: permission denied'. rename and delete now require a path segment (422 'workspace file path is required'), list skips entries that vanish mid-walk, and read maps PermissionError to the same sanitized ToolOutputAccessError as search. test_workspace covers the root-path 422s and the vanished-entry listing; test_workspace_tool_search covers the read refusal without the host path; the rest of both files covers the surrounding listing, mutation, upload, reset and search paths.",
+  "exclusions": "No frontend tests: no ui/ change; the UI already renders 422 details and continues on a listing. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through the remaining-core fallback for workspace.py and tool_results.py) is the real-Core journey suite and does not send root-path mutations or race the listing; the Python tests drive the exact paths through the API and service. No full suites.",
   "expected_tests": {
-    "python": 36,
+    "python": 26,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_context.py"
+    "tests/v3/test_workspace.py",
+    "tests/v3/test_workspace_tool_search.py"
   ],
   "frontend": [],
   "native": [],

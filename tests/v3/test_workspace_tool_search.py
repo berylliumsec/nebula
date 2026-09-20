@@ -88,3 +88,19 @@ def test_search_pagination_missing_permissions_and_path_boundaries(
     partial = service.search(query="needle")
     assert partial["unreadable_count"] == 1
     assert partial["incomplete"] and len(partial["matches"]) == 3
+
+
+def test_read_reports_permission_denied_without_the_host_path(tmp_path, monkeypatch):
+    (tmp_path / "private.txt").write_text("secret")
+    service = WorkspaceOutputService(tmp_path)
+    original = Path.open
+
+    def denied(path, *args, **kwargs):
+        if path.name == "private.txt":
+            raise PermissionError(13, "Permission denied", str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(ToolOutputAccessError, match="inaccessible") as caught:
+        service.read(path="private.txt")
+    assert str(tmp_path) not in str(caught.value)
