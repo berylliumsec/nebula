@@ -134,9 +134,13 @@ export function EditorDebuggerPanel({
   onClose,
 }: EditorDebuggerPanelProps) {
   const transportRef = useRef<DebugTransport | undefined>(undefined);
-  const launchRef = useRef<{ threadId?: number; configured: boolean }>({
-    configured: false,
-  });
+  const launchRef = useRef<{
+    threadId?: number;
+    configured: boolean;
+    sentBreakpoints?: string;
+  }>({ configured: false });
+  const breakpointsRef = useRef(breakpoints);
+  breakpointsRef.current = breakpoints;
   const [state, setState] = useState<
     DebugTransportState | "idle" | "running" | "stopped" | "ended"
   >("idle");
@@ -236,16 +240,31 @@ export function EditorDebuggerPanel({
     }
   };
 
+  const sendBreakpoints = async (lines: number[]) => {
+    launchRef.current.sentBreakpoints = lines.join(",");
+    await request("setBreakpoints", {
+      source: { name: path.split("/").at(-1), path: `/workspace/${path}` },
+      breakpoints: lines.map((line) => ({ line })),
+      sourceModified: false,
+    });
+  };
+
   const configure = async () => {
     if (launchRef.current.configured) return;
     launchRef.current.configured = true;
-    await request("setBreakpoints", {
-      source: { name: path.split("/").at(-1), path: `/workspace/${path}` },
-      breakpoints: breakpoints.map((line) => ({ line })),
-      sourceModified: false,
-    });
+    await sendBreakpoints(breakpointsRef.current);
     await request("configurationDone");
   };
+
+  const sessionLive = ["ready", "running", "stopped"].includes(state);
+  useEffect(() => {
+    // DAP accepts setBreakpoints at any time after `initialized`, so a gutter
+    // toggle during a session replaces the adapter's set instead of only
+    // moving the marker. `sentBreakpoints` keeps unrelated renders quiet.
+    if (!sessionLive || !launchRef.current.configured) return;
+    if (launchRef.current.sentBreakpoints === breakpoints.join(",")) return;
+    void sendBreakpoints(breakpoints);
+  }, [breakpoints, sessionLive]);
 
   const onEvent = (event: DebugProtocol.Event) => {
     if (event.event === "initialized") void configure();

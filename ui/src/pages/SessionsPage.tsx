@@ -3972,6 +3972,7 @@ export function SessionsPage() {
     updateSearchParams(params => params.set("browserEngine", engine), { replace: true });
   };
   const [browserAssistantOpen, setBrowserAssistantOpen] = useState(false);
+  const attachBrowserContext = useCallback((request: Parameters<typeof requestChatContext>[0]) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }, [requestChatContext]);
   const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
   const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
   const [terminalToolbarHost, setTerminalToolbarHost] = useState<HTMLDivElement | null>(null);
@@ -4474,7 +4475,7 @@ export function SessionsPage() {
               scopeLoading={browserScopeLoading}
               onAddKnowledgeUrl={(url) => ingestKnowledgeUrlSource({ engagementId: engagement.id, url })}
               onAskNebula={requestNebulaDraft}
-              onAttachContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
+              onAttachContext={attachBrowserContext}
               assistantRuntimeLabel={runtimeReady && model.trim() ? `${assistantSource} · ${runtimeConfiguration}` : undefined}
               onContinueConversation={(id) => void openAttachedChat(id)}
               onOpenFiles={() => setView("workspace")}

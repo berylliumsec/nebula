@@ -37,6 +37,11 @@ import { waitForBrowserInterceptListener } from "./browserInterceptReadiness";
 type ResearchView = "target" | "traffic" | "intercepts" | "repeater" | "automate" | "analyze" | "actions" | "identities" | "session";
 const RESEARCH_VIEWS = new Set<ResearchView>(["target", "traffic", "intercepts", "repeater", "automate", "analyze", "actions", "identities", "session"]);
 
+/** Number("") is 0, so an emptied budget field must stay empty and fail validation instead. */
+function integerBudget(value: string): number {
+  return value.trim() === "" ? Number.NaN : Number(value);
+}
+
 function normalizedResearchView(value: string | null): ResearchView {
   if (value === "intruder") return "automate";
   if (value === "utilities") return "analyze";
@@ -263,9 +268,9 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
   const [automationTarget, setAutomationTarget] = useState("");
   const [automationRisks, setAutomationRisks] = useState<string[]>(["passive", "active_scan", "credential_use"]);
   const [automationCredentialRefs, setAutomationCredentialRefs] = useState("");
-  const [automationDuration, setAutomationDuration] = useState(30);
-  const [automationMaxCommands, setAutomationMaxCommands] = useState(100);
-  const [automationMaxRequests, setAutomationMaxRequests] = useState(1000);
+  const [automationDuration, setAutomationDuration] = useState("30");
+  const [automationMaxCommands, setAutomationMaxCommands] = useState("100");
+  const [automationMaxRequests, setAutomationMaxRequests] = useState("1000");
   const toolbarRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(tabs);
@@ -622,6 +627,21 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setWorkspaceError("Credential use is selected, but no credential reference was supplied. Enter an existing vault reference; never enter the secret itself.");
       return;
     }
+    const durationMinutes = integerBudget(automationDuration);
+    const maxCommands = integerBudget(automationMaxCommands);
+    const maxRequests = integerBudget(automationMaxRequests);
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 60) {
+      setWorkspaceError("Duration must be a whole number of minutes from 1 through 60.");
+      return;
+    }
+    if (!Number.isInteger(maxCommands) || maxCommands < 1 || maxCommands > 100) {
+      setWorkspaceError("Tool-call budget must be a whole number from 1 through 100.");
+      return;
+    }
+    if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 1_000_000) {
+      setWorkspaceError("Request budget must be a whole number from 1 through 1000000.");
+      return;
+    }
     setAutomationBusy(true);
     setWorkspaceError(undefined);
     try {
@@ -633,17 +653,17 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         providerId: runtime.kind === "provider" ? runtime.id : undefined,
         harnessProfileId: runtime.kind === "harness" ? runtime.id : undefined,
         model,
-        maxDurationSeconds: automationDuration * 60,
-        maxToolCalls: automationMaxCommands,
+        maxDurationSeconds: durationMinutes * 60,
+        maxToolCalls: maxCommands,
         maxConcurrency: 1,
         browserAutonomy: {
           sessionId: activeSession.id,
           targets: [target],
           allowedRiskClasses: automationRisks,
           credentialRefs,
-          durationSeconds: automationDuration * 60,
-          maxCommands: automationMaxCommands,
-          maxRequests: automationMaxRequests,
+          durationSeconds: durationMinutes * 60,
+          maxCommands,
+          maxRequests,
           maxBodyBytes: 1_048_576,
         },
       });
@@ -788,19 +808,27 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     setSelectionAskError(undefined);
   }, [projectId]);
 
+  // The native listeners are registered once per desktop project. Everything
+  // they need from the current render is read through this ref: re-running the
+  // effect for each new callback identity or session object unlistened
+  // synchronously while the replacements were still registering, and a capture
+  // reply, download or traffic event emitted in that window was lost.
+  const listenerContextRef = useRef({ activeIdentity, activeSession, addPageToScope, addTab, api, confirm, onAskNebula, onAttachContext, onUploadEvidence, operatorId, updateTab });
+  listenerContextRef.current = { activeIdentity, activeSession, addPageToScope, addTab, api, confirm, onAskNebula, onAttachContext, onUploadEvidence, operatorId, updateTab };
+
   useEffect(() => {
     if (!desktop) return;
     let disposed = false;
     const stops: Array<() => void> = [];
     void Promise.all([
       listen<BrowserPageEvent>("nebula-browser-page", ({ payload }) => {
-        if (payload.state === "new_tab") { addTab(payload.url); return; }
+        if (payload.state === "new_tab") { listenerContextRef.current.addTab(payload.url); return; }
         if (payload.state === "blocked") { setError(payload.detail ?? "The navigation was blocked."); return; }
-        if (payload.state === "title") { if (payload.title) updateTab(payload.tabId, { title: payload.title }); return; }
-        updateTab(payload.tabId, { url: payload.url, address: payload.url, loading: payload.state === "loading", error: undefined });
+        if (payload.state === "title") { if (payload.title) listenerContextRef.current.updateTab(payload.tabId, { title: payload.title }); return; }
+        listenerContextRef.current.updateTab(payload.tabId, { url: payload.url, address: payload.url, loading: payload.state === "loading", error: undefined });
       }),
       listen<BrowserScopeRequestEvent>("nebula-browser-scope-request", ({ payload }) => {
-        void addPageToScope(payload);
+        void listenerContextRef.current.addPageToScope(payload);
       }),
       listen<BrowserSelectionRequestEvent>("nebula-browser-selection-request", ({ payload }) => {
         if (payload.projectId !== projectId || captureRef.current) return;
@@ -831,14 +859,14 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       listen<BrowserDownloadEvent>("nebula-browser-download", ({ payload }) => {
         if (payload.state !== "ready" || !payload.downloadId || !payload.filename) {
           setError(payload.detail ?? "The website download failed.");
-          if (payload.state === "rejected") updateTab(payload.tabId, { created: false, loading: false });
+          if (payload.state === "rejected") listenerContextRef.current.updateTab(payload.tabId, { created: false, loading: false });
           return;
         }
         void (async () => {
           try {
             let result = await workbenchBrowser.importDownload(payload.downloadId!, projectId, false);
             if (result.state === "conflict") {
-              const replace = await confirm({ title: `Replace ${payload.filename}?`, message: <>A file with this name already exists in Project Files. Replace it with the website download?</>, confirmLabel: "Replace file", tone: "danger" });
+              const replace = await listenerContextRef.current.confirm({ title: `Replace ${payload.filename}?`, message: <>A file with this name already exists in Project Files. Replace it with the website download?</>, confirmLabel: "Replace file", tone: "danger" });
               if (!replace) { await workbenchBrowser.discardDownload(payload.downloadId!, projectId); setNotice({ kind: "info", message: `${payload.filename} was discarded.` }); return; }
               result = await workbenchBrowser.importDownload(payload.downloadId!, projectId, true);
             }
@@ -854,11 +882,12 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         if (!pending || pending.requestId !== payload.requestId || pending.tabId !== payload.tabId) return;
         captureRef.current = undefined;
         setCapturingContext(false);
+        const { activeIdentity, activeSession, onAskNebula, onAttachContext, onUploadEvidence, operatorId } = listenerContextRef.current;
         if (payload.state !== "ready" || !payload.context) {
           setError(payload.detail ?? "The live page context could not be captured. Reload the page and try again.");
           return;
         }
-        const decision = evaluateBrowserScope(payload.context.url, scope);
+        const decision = evaluateBrowserScope(payload.context.url, scopeRef.current);
         if (decision.state !== "in_scope") {
           setError(`Nebula did not prepare this capture because the final page is not confirmed in scope. ${decision.detail}`);
           return;
@@ -950,7 +979,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       listen<BrowserTrafficEvent>("nebula-browser-traffic", ({ payload }) => {
         const signal = proxyScopeSignal(payload);
         if (signal !== undefined) setNativeScopeSignals(current => ({...current, [payload.sessionId]: signal}));
-        if (payload.blocked && signal === undefined && payload.sessionId === activeSession?.id) {
+        if (payload.blocked && signal === undefined && payload.sessionId === listenerContextRef.current.activeSession?.id) {
           setError(`Request blocked: ${payload.url}. ${payload.error ?? "Review Project scope and active proxy rules."}`);
         }
         const save = async () => {
@@ -958,7 +987,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           for (const [direction, body] of [["request", payload.requestBody], ["response", payload.responseBody]] as const) {
             if (!body) continue;
             try {
-              const artifact = await api.uploadSecurityBrowserBodyArtifact(payload.sessionId, {
+              const artifact = await listenerContextRef.current.api.uploadSecurityBrowserBodyArtifact(payload.sessionId, {
                 direction,
                 contentBase64: body.base64,
                 mediaType: body.mediaType,
@@ -971,7 +1000,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
               setWorkspaceError(`${errorMessage(caught)} The traffic metadata was retained without the unsafe body.`);
             }
           }
-          const exchange = await api.recordSecurityBrowserTraffic(payload.sessionId, {
+          const exchange = await listenerContextRef.current.api.recordSecurityBrowserTraffic(payload.sessionId, {
             tabId: payload.tabId,
             method: payload.method,
             url: payload.url,
@@ -1001,7 +1030,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         const key = `${payload.sessionId}:${payload.tabId}:${payload.url}`;
         let exchangeRequest = websocketExchangeRef.current.get(key);
         if (!exchangeRequest) {
-          exchangeRequest = api.recordSecurityBrowserTraffic(payload.sessionId, {
+          exchangeRequest = listenerContextRef.current.api.recordSecurityBrowserTraffic(payload.sessionId, {
             tabId: payload.tabId,
             method: "GET",
             url: payload.url.replace(/^ws:/, "http:").replace(/^wss:/, "https:"),
@@ -1012,7 +1041,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
           });
           websocketExchangeRef.current.set(key, exchangeRequest);
         }
-        void exchangeRequest.then((exchange) => api.recordSecurityBrowserWebSocketFrame(payload.sessionId, {
+        void exchangeRequest.then((exchange) => listenerContextRef.current.api.recordSecurityBrowserWebSocketFrame(payload.sessionId, {
           exchangeId: exchange.id,
           direction: payload.direction,
           opcode: payload.opcode,
@@ -1034,7 +1063,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
         const executing = actionExecutionRef.current.get(payload.actionId);
         if (!executing) return;
         actionExecutionRef.current.delete(payload.actionId);
-        void api.finishSecurityBrowserAction(executing, {
+        void listenerContextRef.current.api.finishSecurityBrowserAction(executing, {
           state: payload.state,
           result: payload.result,
           error: payload.detail,
@@ -1048,7 +1077,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       }),
     ]).then((unlisteners) => { if (disposed) unlisteners.forEach((stop) => stop()); else stops.push(...unlisteners); });
     return () => { disposed = true; stops.forEach((stop) => stop()); };
-  }, [activeIdentity, activeSession, addPageToScope, addTab, api, confirm, desktop, onAskNebula, onAttachContext, operatorId, projectId, scope, updateTab]);
+  }, [desktop, projectId]);
 
   useEffect(() => {
     if (typeof api.getSecurityBrowserAutomation !== "function") return;
@@ -1814,7 +1843,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
             <label>Model<select value={automationModel} onChange={(event) => setAutomationModel(event.target.value)} required disabled={!selectedAutomationRuntime}><option value="">Choose a verified model</option>{selectedAutomationRuntime?.models.map((model) => <option key={model} value={model}>{model}</option>)}</select></label>
             <fieldset><legend>Allowed risk classes</legend>{[["passive", "Passive observation"], ["active_scan", "Active scan and replay"], ["credential_use", "Credential use by reference"]].map(([value, label]) => <label key={value}><input type="checkbox" checked={automationRisks.includes(value)} onChange={(event) => setAutomationRisks((current) => event.target.checked ? [...current, value] : current.filter((item) => item !== value))} /><span>{label}</span></label>)}</fieldset>
             {automationRisks.includes("credential_use") && <label>Credential references<input value={automationCredentialRefs} placeholder="vault:reference-1, session:reference-2" onChange={(event) => setAutomationCredentialRefs(event.target.value)} /><small>References only. Never paste a password, cookie, token, or API key.</small></label>}
-            <div className="resource-form-grid"><label>Duration (minutes)<input type="number" min={1} max={60} value={automationDuration} onChange={(event) => setAutomationDuration(Number(event.target.value))} /></label><label>Tool-call budget<input type="number" min={1} max={100} value={automationMaxCommands} onChange={(event) => setAutomationMaxCommands(Number(event.target.value))} /></label><label>Request budget<input type="number" min={1} max={1000000} value={automationMaxRequests} onChange={(event) => setAutomationMaxRequests(Number(event.target.value))} /></label></div>
+            <div className="resource-form-grid"><label>Duration (minutes)<input type="number" min={1} max={60} value={automationDuration} onChange={(event) => setAutomationDuration(event.target.value)} /></label><label>Tool-call budget<input type="number" min={1} max={100} value={automationMaxCommands} onChange={(event) => setAutomationMaxCommands(event.target.value)} /></label><label>Request budget<input type="number" min={1} max={1000000} value={automationMaxRequests} onChange={(event) => setAutomationMaxRequests(event.target.value)} /></label></div>
             <p>Exploitation, persistence, destructive actions, and scope changes require a separate durable step-up grant and are not enabled by this form.</p>
             <button className="button primary" type="submit" disabled={automationBusy || !automationRuntimeKey || !automationModel || !automationTarget || !automationRisks.length}>{automationBusy ? <LoaderCircle className="spin" size={14} /> : <Sparkles size={14} />} {automationBusy ? "Starting…" : "Approve and start run"}</button>
           </form>}

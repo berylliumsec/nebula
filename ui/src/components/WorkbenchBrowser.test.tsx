@@ -31,6 +31,7 @@ const browserMocks = vi.hoisted(() => ({
 type EventHandler = (event: { payload: unknown }) => void;
 const eventMocks = vi.hoisted(() => ({
   handlers: new Map<string, EventHandler>(),
+  registrations: [] as string[],
 }));
 
 vi.mock("../api/runtime", () => ({
@@ -46,6 +47,7 @@ vi.mock("../api/workbenchBrowser", async (importOriginal) => {
 vi.mock("@tauri-apps/api/event", () => ({
   listen: (event: string, handler: EventHandler) => {
     eventMocks.handlers.set(event, handler);
+    eventMocks.registrations.push(event);
     return Promise.resolve(() => eventMocks.handlers.delete(event));
   },
 }));
@@ -184,6 +186,7 @@ async function openPage(finalUrl = "https://docs.example.com/guide") {
 describe("WorkbenchBrowser", () => {
   beforeEach(() => {
     eventMocks.handlers.clear();
+    eventMocks.registrations.length = 0;
     chrome.settingLensOpen = false;
     runtimeMocks.isTauriRuntime.mockReset();
     runtimeMocks.isTauriRuntime.mockReturnValue(false);
@@ -524,6 +527,119 @@ describe("WorkbenchBrowser", () => {
     expect(onAskNebula.mock.calls[0][0].text).toContain("Project scope: In scope (revision 4)");
     expect(onAskNebula.mock.calls[0][0].text).toContain("role=analyst");
     expect(onAskNebula.mock.calls[0][0].text).not.toContain('"value"');
+  });
+
+  it("registers native listeners once per project and delivers events to the latest callbacks", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    // SessionsPage passes fresh arrow functions on every render, exactly like this.
+    const tree = (onAskNebula: (request: unknown) => void) => (
+      <MemoryRouter>
+        <DialogProvider>
+          <ChromeProvider value={chrome}>
+            <WorkbenchBrowser
+              active
+              api={api}
+              projectId="project-1"
+              scope={{ ...scope }}
+              onAddKnowledgeUrl={vi.fn(async () => ({ id: "source-1", name: "Guide" }))}
+              onAskNebula={onAskNebula}
+              onAttachContext={(request) => onAskNebula(request)}
+              onOpenFiles={() => undefined}
+              onScopeUpdated={vi.fn()}
+            />
+          </ChromeProvider>
+        </DialogProvider>
+      </MemoryRouter>
+    );
+    const first = vi.fn();
+    const { rerender } = render(tree(first));
+    await openPage("https://docs.example.com/account");
+    await waitFor(() => expect(api.getSecurityBrowserWorkspace).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
+
+    const second = vi.fn();
+    for (let pass = 0; pass < 3; pass += 1) {
+      rerender(tree(second));
+      await act(async () => { await Promise.resolve(); });
+    }
+    expect(eventMocks.registrations.filter((event) => event === "nebula-browser-context")).toHaveLength(1);
+    expect(eventMocks.registrations.filter((event) => event === "nebula-browser-page")).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ask Nebula about the live page" }));
+    await waitFor(() => expect(browserMocks.captureContext).toHaveBeenCalledTimes(1));
+    const [tabId, , requestId] = browserMocks.captureContext.mock.calls[0];
+    act(() => {
+      eventMocks.handlers.get("nebula-browser-context")?.({
+        payload: {
+          requestId,
+          tabId,
+          state: "ready",
+          context: { url: "https://docs.example.com/account", title: "Account portal", selectedText: "", text: "Authenticated account page", truncated: false, forms: [], links: [] },
+        },
+      });
+    });
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(second.mock.calls[0][0]).toMatchObject({ sourceKind: "browser_page", sourceId: "browser-session-1" });
+  });
+
+  it("keeps a cleared autonomous budget field empty and refuses to start with it", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600);
+    });
+    const api = browserApi();
+    const workspace = await api.getSecurityBrowserWorkspace("project-1");
+    const pairedSession = { ...workspace.sessions[0], deviceOwner: "desktop-test" };
+    api.getSecurityBrowserWorkspace = vi.fn(async () => ({ ...workspace, sessions: [pairedSession] }));
+    api.syncSecurityBrowserSession = vi.fn(async (_session, tabs, activeTabId) => ({ ...pairedSession, tabs, activeTabId, revision: 2 }));
+    api.getSecurityBrowserAssessments = vi.fn(async () => ({ assessments: [], steps: [], profiles: [], engines: [], candidates: [], validationGrants: [] }));
+    api.listProviders = vi.fn(async () => ({ items: [{
+      id: "provider-1", revision: 1, name: "Local runtime", providerType: "openai_compatible", kind: "local", local: true,
+      state: "healthy", enabled: true, models: ["gpt-test"], modelAllowlist: [], capabilities: [], permitsSensitiveData: true,
+    }], total: 1 })) as unknown as ApiClient["listProviders"];
+    api.listHarnesses = vi.fn(async () => []);
+    const createMission = vi.fn(async (_request: Parameters<ApiClient["createMission"]>[0]) => ({ id: "mission-123456789" }));
+    api.createMission = createMission as unknown as ApiClient["createMission"];
+    renderBrowser(undefined, undefined, scope, undefined, api);
+    await openPage();
+    fireEvent.click(screen.getByRole("button", { name: "Security research workbench" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Session" }));
+    await waitFor(() => expect(screen.getByLabelText("Research session")).toHaveValue("browser-session-1"));
+    fireEvent.click(screen.getByRole("button", { name: "Start autonomous web test" }));
+    await waitFor(() => expect(screen.getByLabelText("Investigation runtime")).toHaveValue("provider:provider-1"));
+    await waitFor(() => expect(screen.getByLabelText("Model")).toHaveValue("gpt-test"));
+    fireEvent.change(screen.getByLabelText("Target subset"), { target: { value: "https://docs.example.com/guide" } });
+    fireEvent.click(screen.getByLabelText("Credential use by reference"));
+
+    const duration = screen.getByLabelText("Duration (minutes)");
+    expect(duration).toHaveValue(30);
+    fireEvent.change(duration, { target: { value: "" } });
+    expect(duration).toHaveValue(null);
+    fireEvent.change(duration, { target: { value: "4" } });
+    expect(duration).toHaveValue(4);
+    fireEvent.change(screen.getByLabelText("Request budget"), { target: { value: "" } });
+    expect(screen.getByLabelText("Request budget")).toHaveValue(null);
+
+    fireEvent.submit(duration.closest("form")!);
+    await act(async () => { await Promise.resolve(); });
+    expect(createMission).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Request budget must be a whole number from 1 through 1000000.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.getByLabelText("Duration (minutes)")).toHaveValue(4));
+    fireEvent.change(screen.getByLabelText("Request budget"), { target: { value: "250" } });
+    fireEvent.submit(screen.getByLabelText("Duration (minutes)").closest("form")!);
+    await waitFor(() => expect(createMission).toHaveBeenCalledTimes(1));
+    expect(createMission.mock.calls[0][0]).toMatchObject({
+      maxDurationSeconds: 240,
+      maxToolCalls: 100,
+      browserAutonomy: { durationSeconds: 240, maxCommands: 100, maxRequests: 250 },
+    });
   });
 
   it("answers a native page selection inline and continues the same durable conversation", async () => {

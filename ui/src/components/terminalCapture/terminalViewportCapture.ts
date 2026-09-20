@@ -166,8 +166,10 @@ function selectedAt(range: IBufferRange | undefined, col: number, absoluteRow: n
   if (!range) return false;
   const start = comparePosition(range.start, range.end) <= 0 ? range.start : range.end;
   const end = start === range.start ? range.end : range.start;
+  // xterm's getSelectionPosition() reports 0-based buffer columns and absolute
+  // rows with an exclusive end, the same space as `col` and `absoluteRow` here.
   for (let offset = 0; offset < Math.max(1, width); offset += 1) {
-    const position = { x: col + offset + 1, y: absoluteRow + 1 };
+    const position = { x: col + offset, y: absoluteRow };
     if (comparePosition(position, start) >= 0 && comparePosition(position, end) < 0) return true;
   }
   return false;

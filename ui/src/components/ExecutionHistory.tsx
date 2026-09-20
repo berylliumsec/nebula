@@ -109,6 +109,13 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     return () => window.clearInterval(timer);
   }, [hasActive]);
 
+  // Background polls replace `items` (and therefore `selected`) with equal
+  // data every two seconds while anything is active. The output view only
+  // resets when the reviewed execution itself changes, so pages loaded through
+  // "Load next 256 KiB" survive the polls.
+  const outputExecutionId = selected?.id;
+  const outputStatus = selected?.status;
+  const outputCompletedAt = selected?.completedAt;
   useEffect(() => {
     setStdout("");
     setStderr("");
@@ -116,16 +123,16 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
     setStderrNext(0);
     setStdoutTotal(0);
     setStderrTotal(0);
-    if (!selected || ACTIVE.has(selected.status) || (!selected.completedAt && selected.status !== "denied")) return;
+    if (!outputExecutionId || !outputStatus || ACTIVE.has(outputStatus) || (!outputCompletedAt && outputStatus !== "denied")) return;
     const controller = new AbortController();
     void Promise.allSettled([
-      api.executionOutput(selected.id, "stdout", 0, controller.signal).then((page) => {
+      api.executionOutput(outputExecutionId, "stdout", 0, controller.signal).then((page) => {
         setStdout(page.text); setStdoutNext(page.nextOffset); setStdoutTotal(page.totalBytes);
       }).catch((outputError) => {
         void logCaughtDiagnostic("interface.execution_history.stdout_load_failed", "Reviewed execution stdout could not be loaded.", outputError, "execution_history");
         if (!controller.signal.aborted) setError(outputError instanceof Error ? outputError.message : "Could not load stdout.");
       }),
-      api.executionOutput(selected.id, "stderr", 0, controller.signal).then((page) => {
+      api.executionOutput(outputExecutionId, "stderr", 0, controller.signal).then((page) => {
         setStderr(page.text); setStderrNext(page.nextOffset); setStderrTotal(page.totalBytes);
       }).catch((outputError) => {
         void logCaughtDiagnostic("interface.execution_history.stderr_load_failed", "Reviewed execution stderr could not be loaded.", outputError, "execution_history");
@@ -133,7 +140,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       }),
     ]);
     return () => controller.abort();
-  }, [api, selected]);
+  }, [api, outputCompletedAt, outputExecutionId, outputStatus]);
 
   const source = async (execution: OperatorExecution) => {
     const blob = await api.getArtifactContent(execution.sourceArtifactId);

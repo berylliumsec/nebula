@@ -86,7 +86,8 @@ function terminalFixture(): XtermViewportTerminal {
       lineHeight: 1.2,
       theme: { green: "#008800", brightGreen: "#00ff00", selectionBackground: "#abcdef" },
     },
-    getSelectionPosition: () => ({ start: { x: 2, y: 4 }, end: { x: 4, y: 4 } }),
+    // xterm reports 0-based buffer coordinates with an exclusive end: columns 1-2 of absolute row 3.
+    getSelectionPosition: () => ({ start: { x: 1, y: 3 }, end: { x: 3, y: 3 } }),
   };
 }
 
@@ -98,11 +99,33 @@ describe("terminal viewport capture", () => {
     expect(snapshot.cells).toHaveLength(7);
     expect(snapshot.cells[0]).toMatchObject({ chars: "A", foreground: "#00ff00", bold: true });
     expect(snapshot.cells[1]).toMatchObject({ chars: "界", width: 2, foreground: "#123456", selected: true });
+    expect(snapshot.cells[0]).toMatchObject({ chars: "A", selected: false });
+    expect(snapshot.cells.find((cell) => cell.chars === "!")).toMatchObject({ selected: false });
     expect(snapshot.cells.find((cell) => cell.chars === "!")).toMatchObject({
       foreground: "#7bbcf2",
       background: "#ff7f86",
     });
     expect(snapshot.cells.find((cell) => cell.cursor)).toMatchObject({ row: 1, col: 1 });
+  });
+
+  it("treats xterm selection coordinates as 0-based with an exclusive end", () => {
+    const firstColumn = snapshotTerminalViewport({
+      ...terminalFixture(),
+      getSelectionPosition: () => ({ start: { x: 0, y: 3 }, end: { x: 1, y: 3 } }),
+    });
+    expect(firstColumn.cells.filter((cell) => cell.selected).map((cell) => cell.chars)).toEqual(["A"]);
+
+    const nextRow = snapshotTerminalViewport({
+      ...terminalFixture(),
+      getSelectionPosition: () => ({ start: { x: 0, y: 4 }, end: { x: 1, y: 4 } }),
+    });
+    expect(nextRow.cells.filter((cell) => cell.selected).map((cell) => `${cell.chars}@r${cell.row}c${cell.col}`)).toEqual(["$@r1c0"]);
+
+    const wholeRow = snapshotTerminalViewport({
+      ...terminalFixture(),
+      getSelectionPosition: () => ({ start: { x: 0, y: 3 }, end: { x: 4, y: 3 } }),
+    });
+    expect(wholeRow.cells.filter((cell) => cell.selected).map((cell) => cell.chars)).toEqual(["A", "界", "!"]);
   });
 
   it("renders at an explicit display scale with deterministic grid dimensions", () => {

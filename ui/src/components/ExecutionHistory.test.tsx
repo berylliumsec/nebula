@@ -105,6 +105,49 @@ describe("ExecutionHistory active updates", () => {
     expect(screen.getByText("ready", { exact: false, selector: "pre" })).toBeVisible();
   });
 
+  it("keeps the selected execution's loaded output pages while background polls replace the list", async () => {
+    vi.useFakeTimers();
+    const other: OperatorExecution = { ...running, id: "execution-active" };
+    const reviewed: OperatorExecution = { ...completed, id: "execution-reviewed", queuedAt: "2026-07-18T09:00:00Z" };
+    // Every poll returns fresh objects with identical data, exactly as the API client does.
+    const listExecutions = vi.fn().mockImplementation(() => Promise.resolve({ items: [{ ...other }, { ...reviewed }], total: 2 }));
+    const executionOutput = vi.fn().mockImplementation((_id: string, stream: string, offset: number) => Promise.resolve(stream === "stdout"
+      ? offset === 0
+        ? { text: "first page ", totalBytes: 22, nextOffset: 11 }
+        : { text: "second page", totalBytes: 22, nextOffset: 22 }
+      : { text: "", totalBytes: 0, nextOffset: 0 }));
+    renderHistory({ listExecutions, executionOutput });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /bash · completed/i }));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("first page", { exact: false, selector: "pre" })).toBeVisible();
+    fireEvent.click(screen.getAllByRole("button", { name: "Load next 256 KiB" })[0]);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText("first page second page", { selector: "pre" })).toBeVisible();
+    expect(executionOutput).toHaveBeenCalledTimes(3);
+
+    await act(async () => {
+      vi.advanceTimersByTime(2_000);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(listExecutions).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("first page second page", { selector: "pre" })).toBeVisible();
+    expect(executionOutput).toHaveBeenCalledTimes(3);
+  });
+
   it("pauses after a refresh failure and makes recovery explicit and retryable", async () => {
     vi.useFakeTimers();
     const listExecutions = vi.fn()
