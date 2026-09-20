@@ -1530,3 +1530,190 @@ def test_human_terminal_image_rejects_unproven_repository(monkeypatch):
     monkeypatch.setattr(preparer, "_runtime_command", runtime_command)
     with pytest.raises(SandboxUnavailable, match="official repository"):
         asyncio.run(preparer.prepare())
+
+
+def test_egress_helper_is_removed_when_readiness_wait_is_cancelled(
+    tmp_path, monkeypatch
+):
+    calls = []
+    killed = []
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self, *, helper=False):
+            # A helper that never prints READY and never closes stdout keeps
+            # the readiness wait pending until the execution is cancelled.
+            self.stdout = asyncio.StreamReader() if helper else None
+            self.stdin = None
+
+        async def wait(self):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+        def kill(self):
+            killed.append(True)
+            self.returncode = -9
+            if self.stdout is not None:
+                self.stdout.feed_eof()
+
+    async def create_process(*argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return FakeProcess(helper=len(calls) == 1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    controller = ContainerEgressController(
+        helper_image="example.invalid/helper@sha256:" + "b" * 64,
+        readiness_timeout_seconds=30,
+    )
+
+    async def scenario():
+        task = asyncio.create_task(
+            controller.acquire(
+                runtime_argv=["/usr/bin/podman"],
+                runtime_environment={"HOME": "/tmp/home"},
+                request=_request(
+                    tmp_path,
+                    network=SandboxNetwork.SCOPED,
+                    execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+                    egress_rules=[EgressRule(address="203.0.113.1", ports=[443])],
+                ),
+                container_name="nebula-cancelled-egress",
+                seccomp_profile=None,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert len(calls) == 1 and not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert killed == [True]
+    assert len(calls) == 2
+    assert calls[1][0][-3:] == ["rm", "--force", "nebula-cancelled-egress-egress"]
+
+
+def test_run_stream_cancelled_while_feeding_stdin_removes_container_and_lease(
+    tmp_path, monkeypatch
+):
+    runner = ContainerSandboxRunner(runtime="/usr/bin/podman")
+    events: list[str] = []
+
+    async def healthy():
+        return True, "test runner"
+
+    async def remove(name):
+        events.append(f"removed:{name}")
+
+    monkeypatch.setattr(runner, "available", healthy)
+    monkeypatch.setattr(runner, "_force_remove", remove)
+
+    class FakeLease:
+        network_mode = "container:nebula-cancelled-stdin-egress"
+
+        @property
+        def enabled(self):
+            return True
+
+        async def enable(self):
+            return None
+
+        async def close(self):
+            events.append("lease-closed")
+
+    class FakeController:
+        certified = True
+
+        async def acquire(self, **kwargs):
+            events.append(f"acquired:{kwargs['container_name']}")
+            return FakeLease()
+
+    runner.egress_controller = FakeController()
+
+    class FakeStdin:
+        def __init__(self, started: asyncio.Event) -> None:
+            self.started = started
+
+        def write(self, data):
+            return None
+
+        async def drain(self):
+            # A worker that never reads its stdin keeps the drain pending.
+            self.started.set()
+            await asyncio.Event().wait()
+
+        def close(self):
+            return None
+
+        async def wait_closed(self):
+            return None
+
+    class FakeProcess:
+        def __init__(self, started: asyncio.Event) -> None:
+            self.returncode = None
+            self.stdin = FakeStdin(started)
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+
+        def kill(self):
+            events.append("killed")
+            self.returncode = -9
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+
+        async def wait(self):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    async def scenario():
+        drain_started = asyncio.Event()
+
+        async def create_process(*argv, **kwargs):
+            return FakeProcess(drain_started)
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+        request = _request(
+            tmp_path,
+            network=SandboxNetwork.SCOPED,
+            execution_kind=SandboxExecutionKind.NETWORK_TOOL,
+            egress_rules=[EgressRule(address="203.0.113.1", ports=[443])],
+        )
+        task = asyncio.create_task(
+            runner.run_stream(
+                request,
+                input_bytes=b"print('never read')\n",
+                container_name="nebula-cancelled-stdin",
+            )
+        )
+        await asyncio.wait_for(drain_started.wait(), timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+    assert events == [
+        "acquired:nebula-cancelled-stdin",
+        "killed",
+        "removed:nebula-cancelled-stdin",
+        "lease-closed",
+    ]
+
+
+def test_workspace_path_with_double_quote_is_rejected_as_unsafe_mount(tmp_path):
+    workspace = tmp_path / 'linked "folder"'
+    workspace.mkdir()
+    runner = ContainerSandboxRunner(
+        runtime="/usr/bin/podman", workspace_roots=[tmp_path]
+    )
+    request = _request(
+        tmp_path,
+        workspace=workspace,
+        workspace_access=SandboxWorkspaceAccess.READ,
+    )
+    with pytest.raises(SandboxError, match="safe OCI mount"):
+        runner._validate(request)
+    # The same folder is still fine when nothing is mounted from it.
+    assert runner._validate(_request(tmp_path, workspace=workspace)) is None

@@ -1158,45 +1158,48 @@ class ExecutionService:
                             f"execution.{stream}",
                             {"stream": stream, "text": display, "final": True},
                         )
-        after = await asyncio.to_thread(_workspace_snapshot, resolution.workspace)
-        changes = _workspace_changes(before, after)
-        error_code: str | None
-        error_detail: str | None
-        exit_code: int | None
-        if cancelled:
-            terminal = (
-                OperatorExecutionStatus.INTERRUPTED
-                if self._shutting_down
-                else OperatorExecutionStatus.CANCELLED
-            )
-            error_code = "interrupted" if self._shutting_down else "cancelled"
-            error_detail = f"execution {error_code}"
-            exit_code = None
-            truncated = False
-        elif failure is not None:
-            terminal = OperatorExecutionStatus.FAILED
-            error_code = _execution_failure_code(failure)
-            error_detail = str(failure)[:4000]
-            exit_code = None
-            truncated = False
-        elif result is not None and result.timed_out:
-            terminal = OperatorExecutionStatus.TIMED_OUT
-            error_code = "timeout"
-            error_detail = "execution exceeded its fixed runtime limit"
-            exit_code = None
-            truncated = result.output_truncated
-        else:
-            terminal = OperatorExecutionStatus.COMPLETED
-            error_code = "output_limit" if result and result.output_truncated else None
-            error_detail = (
-                "captured output reached the per-stream limit"
-                if result and result.output_truncated
-                else None
-            )
-            exit_code = result.exit_code if result is not None else None
-            truncated = bool(result and result.output_truncated)
-        await asyncio.shield(
-            self._persist_terminal(
+
+        async def finalize() -> None:
+            after = await asyncio.to_thread(_workspace_snapshot, resolution.workspace)
+            changes = _workspace_changes(before, after)
+            error_code: str | None
+            error_detail: str | None
+            exit_code: int | None
+            if cancelled:
+                terminal = (
+                    OperatorExecutionStatus.INTERRUPTED
+                    if self._shutting_down
+                    else OperatorExecutionStatus.CANCELLED
+                )
+                error_code = "interrupted" if self._shutting_down else "cancelled"
+                error_detail = f"execution {error_code}"
+                exit_code = None
+                truncated = False
+            elif failure is not None:
+                terminal = OperatorExecutionStatus.FAILED
+                error_code = _execution_failure_code(failure)
+                error_detail = str(failure)[:4000]
+                exit_code = None
+                truncated = False
+            elif result is not None and result.timed_out:
+                terminal = OperatorExecutionStatus.TIMED_OUT
+                error_code = "timeout"
+                error_detail = "execution exceeded its fixed runtime limit"
+                exit_code = None
+                truncated = result.output_truncated
+            else:
+                terminal = OperatorExecutionStatus.COMPLETED
+                error_code = (
+                    "output_limit" if result and result.output_truncated else None
+                )
+                error_detail = (
+                    "captured output reached the per-stream limit"
+                    if result and result.output_truncated
+                    else None
+                )
+                exit_code = result.exit_code if result is not None else None
+                truncated = bool(result and result.output_truncated)
+            await self._persist_terminal(
                 execution.id,
                 stdout_path,
                 stderr_path,
@@ -1209,26 +1212,43 @@ class ExecutionService:
                 output_truncated=truncated,
                 workspace_changes=changes,
             )
-        )
+            try:
+                shutil.rmtree(spool_dir)
+            except FileNotFoundError:
+                record_diagnostic(
+                    "debug",
+                    "executions",
+                    "executions.spool.cleanup_absent",
+                    "An execution spool was already absent during cleanup.",
+                    stage="spool-cleanup",
+                    outcome="expected",
+                )
+            except OSError as caught_error:
+                record_caught_exception(
+                    "executions",
+                    "executions.spool.cleanup_failed",
+                    "An execution spool could not be removed after persistence.",
+                    caught_error,
+                    stage="spool-cleanup",
+                )
+
+        # The captured output lives only in the spool until it is persisted,
+        # so the workspace walk and persistence run as one shielded unit that
+        # a cancel or Core shutdown after the runner finished cannot discard.
+        # diagnostic-expected: shielded and awaited to completion just below.
+        finalize_task = asyncio.create_task(finalize())
         try:
-            shutil.rmtree(spool_dir)
-        except FileNotFoundError:
-            record_diagnostic(
-                "debug",
-                "executions",
-                "executions.spool.cleanup_absent",
-                "An execution spool was already absent during cleanup.",
-                stage="spool-cleanup",
-                outcome="expected",
-            )
-        except OSError as caught_error:
+            await asyncio.shield(finalize_task)
+        except asyncio.CancelledError as caught_error:
             record_caught_exception(
                 "executions",
-                "executions.spool.cleanup_failed",
-                "An execution spool could not be removed after persistence.",
+                "executions.executions.caught_failure_022",
+                "A handled executions operation raised an exception.",
                 caught_error,
-                stage="spool-cleanup",
+                stage="executions",
             )
+            await asyncio.wait({finalize_task})
+            raise
         if cancelled:
             raise asyncio.CancelledError
 
@@ -1622,7 +1642,11 @@ def _workspace_snapshot(workspace: Path) -> dict[str, tuple[str, int, int]]:
         for name in sorted([*directories, *files]):
             path = Path(root) / name
             relative = path.relative_to(workspace).as_posix()
-            metadata = path.lstat()
+            try:
+                metadata = path.lstat()
+            except OSError:
+                # diagnostic-expected: a concurrent terminal removed the entry mid-walk.
+                continue
             kind = (
                 "symlink"
                 if path.is_symlink()
