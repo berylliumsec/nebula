@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import nebula.v3.chat as chat_module
+from nebula.v3.chat_subagents import is_subagent_session
 from nebula.v3.chat import (
     ChatCompletionRequest,
     ChatCompactionError,
