@@ -114,6 +114,7 @@ from .providers import (
     ModelRequest,
     ModelResponse,
     ModelToolResult,
+    ModelUsage,
     ProviderContextLengthError,
     StreamEventType,
     ToolCall as ModelToolCall,
@@ -625,6 +626,14 @@ _CHAT_TOOL_RESULT_INSTRUCTIONS = (
     + _CHAT_BASE_INSTRUCTIONS
 )
 
+_CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS = """Your previous response was not a
+complete operator-facing answer. Return a concise natural-language answer using
+only the supplied messages and tool results. Tools are unavailable during this
+final synthesis. If a needed result is unavailable, say exactly what is missing
+instead of emitting a tool call, control frame, or protocol markup."""
+
+_OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+
 _RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array containing one
 to four searches for the operator's request."""
 
@@ -649,6 +658,34 @@ def _joined_reasoning(collected: str, addition: str) -> str:
     # The closing thoughts are the ones that explain the answer, so an episode
     # past the bound loses its opening rather than its end.
     return joined[-_REASONING_LIMIT:]
+
+
+def _is_provider_control_frame(text: str) -> bool:
+    """Quarantine a known wire-level frame that arrived as assistant prose.
+
+    Some OpenRouter routes serialize DeepSeek's DSML tool protocol into the
+    Chat Completions ``content`` field. It is neither an operator answer nor a
+    safe alternate tool-call transport, so Core recognizes only the complete
+    outer frame and never parses or executes its contents.
+    """
+
+    normalized = text.strip().replace("｜", "|").replace("\\</", "</")
+    return normalized.startswith("<|DSML| calls>") and normalized.endswith(
+        "</|DSML| calls>"
+    )
+
+
+def _final_answer_problem(response: ModelResponse) -> str | None:
+    if response.tool_calls:
+        return "tool_call"
+    content = response.text.strip()
+    if not content:
+        if (response.finish_reason or "").lower() in _OUTPUT_LIMIT_FINISH_REASONS:
+            return "output_limit"
+        return "missing_answer"
+    if _is_provider_control_frame(content):
+        return "provider_control_frame"
+    return None
 
 
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
@@ -2349,7 +2386,7 @@ class ChatService:
         request = self._fit_turn_goal_request(
             prepared, _tool_free_request(prepared.model_request)
         )
-        response = await self._complete_with_context_recovery(prepared, request)
+        response = await self._complete_final_answer_with_recovery(prepared, request)
         if prepared.turn is not None:
             self._assert_execution_owner(prepared)
         completion = self._completion(prepared, response)
@@ -2380,6 +2417,72 @@ class ChatService:
                     "the provider rejected the compacted request context; reduce "
                     "mandatory instructions or configure a lower context cap"
                 ) from exc
+
+    async def _complete_final_answer_with_recovery(
+        self, prepared: PreparedChat, request: ModelRequest
+    ) -> ModelResponse:
+        """Require visible content and re-synthesize one incomplete response."""
+
+        response = await self._complete_with_context_recovery(prepared, request)
+        problem = _final_answer_problem(response)
+        if problem is None:
+            return response
+
+        turn = prepared.turn
+        if turn is not None:
+            self._assert_execution_owner(prepared)
+            turn = self._add_usage(self._refresh_turn(turn), response)
+            turn = self.store.update(
+                ChatTurn,
+                turn.id,
+                {
+                    "request_snapshot": {
+                        **turn.request_snapshot,
+                        "final_answer_recovery": {
+                            "attempts": 1,
+                            "reason": problem,
+                        },
+                    }
+                },
+                expected_revision=turn.revision,
+            )
+            prepared.turn = turn
+
+        retry_request = self._final_answer_recovery_request(prepared, request, problem)
+        retry_response = await self._complete_with_context_recovery(
+            prepared, retry_request
+        )
+        retry_problem = _final_answer_problem(retry_response)
+        if turn is not None:
+            self._assert_execution_owner(prepared)
+            prepared.turn = self._add_usage(
+                self._refresh_turn(prepared.turn or turn), retry_response
+            )
+        if retry_problem is not None:
+            raise ChatError(
+                "provider did not return a valid final answer after recovery"
+            )
+        if turn is not None:
+            return retry_response
+        return retry_response.model_copy(
+            update={
+                "reasoning": _joined_reasoning(
+                    response.reasoning, retry_response.reasoning
+                ),
+                "usage": ModelUsage(
+                    input_tokens=(
+                        response.usage.input_tokens + retry_response.usage.input_tokens
+                    ),
+                    output_tokens=(
+                        response.usage.output_tokens
+                        + retry_response.usage.output_tokens
+                    ),
+                    total_tokens=(
+                        response.usage.total_tokens + retry_response.usage.total_tokens
+                    ),
+                ),
+            }
+        )
 
     async def _stream_with_context_recovery(
         self, prepared: PreparedChat, request: ModelRequest
@@ -3233,72 +3336,120 @@ class ChatService:
             self._ensure_request_capacity(prepared.provider_profile, final_request)
             completed = False
             routing_thoughts = turn.reasoning
-            async for event in prepared.provider.stream(final_request):
-                if event.type == StreamEventType.STARTED:
-                    continue
-                if event.type == StreamEventType.REASONING_DELTA:
-                    delta = event.delta or ""
-                    if routing_thoughts and delta.strip():
-                        delta = f"\n\n{delta.lstrip()}"
-                        routing_thoughts = ""
-                    yield (
-                        "reasoning_delta",
-                        {
-                            "type": "reasoning_delta",
-                            "turn_id": turn.id,
-                            "provider_id": prepared.provider_profile.id,
-                            "model": prepared.resolved_model,
-                            "delta": delta,
-                        },
-                    )
-                    continue
-                if event.type == StreamEventType.TEXT_DELTA:
-                    yield (
-                        "delta",
-                        {
-                            "type": "delta",
-                            "turn_id": turn.id,
-                            "provider_id": prepared.provider_profile.id,
-                            "model": prepared.resolved_model,
-                            "delta": event.delta or "",
-                        },
-                    )
-                    continue
-                if event.type == StreamEventType.TOOL_CALL:
-                    raise ChatError(
-                        "final synthesis attempted an unauthorized tool call"
-                    )
-                if event.type == StreamEventType.ERROR:
-                    raise ChatError(event.error or "provider final synthesis failed")
-                if event.type == StreamEventType.COMPLETED:
-                    if event.response is None:
-                        raise ChatError("provider final synthesis omitted its response")
-                    self._assert_execution_owner(prepared)
-                    turn = self._refresh_turn(turn)
-                    turn = self._add_usage(turn, event.response)
-                    prepared.turn = turn
-                    completion = self._completion(prepared, event.response)
-                    self._persist(prepared, completion)
-                    turn = prepared.turn or turn
-                    self.start_optional_naming(
-                        self._name_initial_session(prepared, completion.message.content)
-                    )
-                    turn = self.store.update(
-                        ChatTurn,
-                        turn.id,
-                        {
-                            "status": ChatTurnStatus.COMPLETE,
-                            "final_message_id": completion.message.id,
-                            "usage": turn.usage,
-                        },
-                        expected_revision=turn.revision,
-                    )
-                    prepared.turn = turn
-                    self._release_execution(prepared)
-                    payload = completion.model_dump(mode="json")
-                    payload["type"] = "done"
-                    yield "done", payload
-                    completed = True
+            recovery_attempted = False
+            while not completed:
+                attempt_completed = False
+                attempted_tool_call = False
+                async for event in prepared.provider.stream(final_request):
+                    if event.type == StreamEventType.STARTED:
+                        continue
+                    if event.type == StreamEventType.REASONING_DELTA:
+                        delta = event.delta or ""
+                        if routing_thoughts and delta.strip():
+                            delta = f"\n\n{delta.lstrip()}"
+                            routing_thoughts = ""
+                        yield (
+                            "reasoning_delta",
+                            {
+                                "type": "reasoning_delta",
+                                "turn_id": turn.id,
+                                "provider_id": prepared.provider_profile.id,
+                                "model": prepared.resolved_model,
+                                "delta": delta,
+                            },
+                        )
+                        continue
+                    if event.type == StreamEventType.TEXT_DELTA:
+                        # Final synthesis is an untrusted candidate until the
+                        # completed response proves it is operator-facing text.
+                        # Buffering prevents a leaked provider control frame
+                        # from flashing in the transcript before recovery.
+                        continue
+                    if event.type == StreamEventType.TOOL_CALL:
+                        attempted_tool_call = True
+                        continue
+                    if event.type == StreamEventType.ERROR:
+                        raise ChatError(
+                            event.error or "provider final synthesis failed"
+                        )
+                    if event.type == StreamEventType.COMPLETED:
+                        if event.response is None:
+                            raise ChatError(
+                                "provider final synthesis omitted its response"
+                            )
+                        attempt_completed = True
+                        self._assert_execution_owner(prepared)
+                        turn = self._refresh_turn(turn)
+                        turn = self._add_usage(turn, event.response)
+                        prepared.turn = turn
+                        problem = (
+                            "tool_call"
+                            if attempted_tool_call
+                            else _final_answer_problem(event.response)
+                        )
+                        if problem is not None:
+                            if recovery_attempted:
+                                raise ChatError(
+                                    "provider did not return a valid final answer after recovery"
+                                )
+                            turn = self.store.update(
+                                ChatTurn,
+                                turn.id,
+                                {
+                                    "request_snapshot": {
+                                        **turn.request_snapshot,
+                                        "final_answer_recovery": {
+                                            "attempts": 1,
+                                            "reason": problem,
+                                        },
+                                    }
+                                },
+                                expected_revision=turn.revision,
+                            )
+                            prepared.turn = turn
+                            final_request = self._final_answer_recovery_request(
+                                prepared, final_request, problem
+                            )
+                            recovery_attempted = True
+                            break
+                        completion = self._completion(prepared, event.response)
+                        if completion.message.content:
+                            yield (
+                                "delta",
+                                {
+                                    "type": "delta",
+                                    "turn_id": turn.id,
+                                    "provider_id": prepared.provider_profile.id,
+                                    "model": prepared.resolved_model,
+                                    "delta": completion.message.content,
+                                },
+                            )
+                        self._persist(prepared, completion)
+                        turn = prepared.turn or turn
+                        self.start_optional_naming(
+                            self._name_initial_session(
+                                prepared, completion.message.content
+                            )
+                        )
+                        turn = self.store.update(
+                            ChatTurn,
+                            turn.id,
+                            {
+                                "status": ChatTurnStatus.COMPLETE,
+                                "final_message_id": completion.message.id,
+                                "usage": turn.usage,
+                            },
+                            expected_revision=turn.revision,
+                        )
+                        prepared.turn = turn
+                        self._release_execution(prepared)
+                        payload = completion.model_dump(mode="json")
+                        payload["type"] = "done"
+                        yield "done", payload
+                        completed = True
+                        break
+                if not attempt_completed:
+                    raise ChatError("provider stream ended before final synthesis")
             if not completed:
                 raise ChatError("provider stream ended before final synthesis")
         except asyncio.CancelledError as caught_error:
@@ -3397,6 +3548,50 @@ class ChatService:
     ) -> ModelRequest:
         goal_id = prepared.turn.goal_id if prepared.turn is not None else None
         return self._fit_goal_request_budget(goal_id, request) if goal_id else request
+
+    def _final_answer_recovery_request(
+        self,
+        prepared: PreparedChat,
+        request: ModelRequest,
+        problem: str,
+    ) -> ModelRequest:
+        """Build one bounded re-synthesis request without relaxing operator caps."""
+
+        max_output_tokens = request.max_output_tokens
+        operator_capped = bool(
+            prepared.source_request is not None
+            and prepared.source_request.max_output_tokens is not None
+        )
+        retry = request.model_copy(
+            update={
+                "instructions": (
+                    _CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS
+                    + "\n\n"
+                    + (request.instructions or "")
+                ),
+                "metadata": {
+                    **request.metadata,
+                    "final_answer_recovery": problem,
+                },
+            }
+        )
+        if problem == "output_limit" and max_output_tokens:
+            desired = (
+                max_output_tokens
+                if operator_capped
+                else max(max_output_tokens * 2, 4_096)
+            )
+            limits = resolve_context_limits(
+                prepared.provider_profile,
+                model=request.model,
+                requested_output_tokens=desired,
+            )
+            available = max(1, limits.context_window - estimate_model_request(retry))
+            max_output_tokens = min(desired, limits.max_output_tokens, available)
+        retry = retry.model_copy(update={"max_output_tokens": max_output_tokens})
+        retry = self._fit_turn_goal_request(prepared, retry)
+        self._ensure_request_capacity(prepared.provider_profile, retry)
+        return retry
 
     def _fit_goal_request_budget(
         self, goal_id: str, request: ModelRequest
@@ -6124,8 +6319,12 @@ class ChatService:
             )
         content = response.text.strip()
         reasoning = response.reasoning.strip()
-        if not content and not reasoning:
-            raise ChatError("provider returned an empty chat response")
+        if not content:
+            raise ChatError("provider returned no operator-facing chat response")
+        if _is_provider_control_frame(content):
+            raise ChatError(
+                "provider returned a control frame instead of a chat response"
+            )
         # A tool turn thinks once per routing step and again while it answers.
         # The turn collected all of it; the final response holds only the last.
         if prepared.turn is not None and prepared.turn.reasoning:
@@ -6138,7 +6337,11 @@ class ChatService:
             message=ChatResponseMessage(content=content, reasoning=reasoning),
             usage=(
                 prepared.turn.usage
-                if prepared.turn is not None and prepared.tools_enabled
+                if prepared.turn is not None
+                and (
+                    prepared.tools_enabled
+                    or "final_answer_recovery" in prepared.turn.request_snapshot
+                )
                 else ChatTokenUsage.model_validate(response.usage.model_dump())
             ),
             context_usage=(
@@ -6278,7 +6481,19 @@ class ChatService:
             expected_revision=latest.revision,
         )
         if latest.goal_id and not prepared.tools_enabled:
-            self._charge_goal(latest.goal_id, completion.usage)
+            uncharged = ChatTokenUsage(
+                input_tokens=max(
+                    0, completion.usage.input_tokens - latest.usage.input_tokens
+                ),
+                output_tokens=max(
+                    0, completion.usage.output_tokens - latest.usage.output_tokens
+                ),
+                total_tokens=max(
+                    0, completion.usage.total_tokens - latest.usage.total_tokens
+                ),
+            )
+            if uncharged.total_tokens:
+                self._charge_goal(latest.goal_id, uncharged)
 
     def _turn_timing(
         self, turn: ChatTurn | None, started_at: datetime | None = None

@@ -102,6 +102,7 @@ def _response(
     calls: list[ToolCall] | None = None,
     text: str = "",
     reasoning: str = "",
+    finish_reason: str | None = None,
 ) -> ModelResponse:
     return ModelResponse(
         provider_id="provider",
@@ -110,7 +111,7 @@ def _response(
         reasoning=reasoning,
         tool_calls=calls or [],
         usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
-        finish_reason="tool_calls" if calls else "stop",
+        finish_reason=finish_reason or ("tool_calls" if calls else "stop"),
     )
 
 
@@ -649,6 +650,87 @@ def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
     )
     assert streamed == "Only the answer needed thought."
     assert store.get(ChatTurn, "turn").reasoning == "Only the answer needed thought."
+
+
+def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
+    broker = RecordingBroker()
+    control_frame = (
+        '<｜DSML｜ calls> <｜DSML｜ invoke name="tool_output_read">'
+        '<｜DSML｜ parameter name="artifact_id">artifact-a</｜DSML｜ parameter>'
+        "</｜DSML｜ invoke> </｜DSML｜ calls>"
+    )
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text=control_frame),
+        _response(text="The safe tool returned a."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    visible = "".join(payload["delta"] for name, payload in events if name == "delta")
+    assert visible == "The safe tool returned a."
+    assert control_frame not in visible
+    turn_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert len(turn_requests) == 4
+    assert turn_requests[-1].metadata["final_answer_recovery"] == (
+        "provider_control_frame"
+    )
+    completed = store.get(ChatTurn, "turn")
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.request_snapshot["final_answer_recovery"] == {
+        "attempts": 1,
+        "reason": "provider_control_frame",
+    }
+    assert completed.usage.input_tokens == 8
+    assert completed.usage.output_tokens == 4
+    assert completed.usage.total_tokens == 12
+
+
+def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(reasoning="Still working it out.", finish_reason="length"),
+        _response(text="The safe tool returned a."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    prepared.model_request = prepared.model_request.model_copy(
+        update={"max_output_tokens": 2_048}
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The safe tool returned a."
+    turn_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert turn_requests[-2].max_output_tokens == 2_048
+    assert turn_requests[-1].max_output_tokens == 4_096
+    assert turn_requests[-1].metadata["final_answer_recovery"] == "output_limit"
+    completed = store.get(ChatTurn, "turn")
+    assert completed.request_snapshot["final_answer_recovery"]["reason"] == (
+        "output_limit"
+    )
 
 
 def test_mcp_calls_reach_the_transcript_under_a_readable_name(tmp_path):

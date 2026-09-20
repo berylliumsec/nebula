@@ -1004,6 +1004,25 @@ def test_openrouter_tool_payload_requires_compatible_route():
     assert "reasoning" not in payload
 
 
+def test_openrouter_payload_keeps_chat_requests_on_one_routing_session():
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-session",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+            default_model="test/model",
+        )
+    )
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="Continue the turn")],
+        metadata={"chat_session_id": "chat-session-a"},
+    )
+
+    payload = provider._payload(request, provider.require(request))
+
+    assert payload["session_id"] == "chat-session-a"
+
+
 def test_context_compression_is_disabled_only_for_openrouter():
     def payload(flavor: ProviderFlavor) -> dict:
         provider = OpenAICompatibleProvider(

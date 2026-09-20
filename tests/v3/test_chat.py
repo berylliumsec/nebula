@@ -574,6 +574,91 @@ def test_provider_chat_persists_reasoning_apart_from_the_reply(tmp_path, monkeyp
     assert stored[-1].reasoning == "Private chain of thought."
 
 
+@pytest.mark.parametrize(
+    ("requested_output_tokens", "expected_retry_tokens"),
+    [(None, 4_096), (2_048, 2_048)],
+)
+def test_provider_chat_recovers_from_reasoning_only_output_exhaustion(
+    tmp_path,
+    monkeypatch,
+    requested_output_tokens,
+    expected_retry_tokens,
+):
+    class RecoveringThinkingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") == "conversation_naming":
+                return await super().complete(request)
+            self.requests.append(request)
+            if (
+                len(
+                    [
+                        item
+                        for item in self.requests
+                        if not item.metadata.get("operation")
+                    ]
+                )
+                == 1
+            ):
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model=request.model or "model-a",
+                    reasoning="The first attempt used its entire output budget.",
+                    usage=ModelUsage(
+                        input_tokens=4,
+                        output_tokens=2_048,
+                        total_tokens=2_052,
+                    ),
+                    finish_reason="length",
+                )
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="Recovered visible answer.",
+                reasoning="Now answer concisely.",
+                usage=ModelUsage(input_tokens=4, output_tokens=3, total_tokens=7),
+                finish_reason="stop",
+            )
+
+    store = NebulaStore(tmp_path / f"chat-recovery-{requested_output_tokens}.db")
+    engagement = store.create(Engagement(id="eng-recovery", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    provider = RecoveringThinkingProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Give me a visible answer."}],
+            include_knowledge=False,
+            max_output_tokens=requested_output_tokens,
+            stream=True,
+        )
+    )
+
+    response = asyncio.run(service.complete(prepared))
+
+    normal_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert len(normal_requests) == 2
+    assert normal_requests[0].max_output_tokens == 2_048
+    assert normal_requests[1].max_output_tokens == expected_retry_tokens
+    assert normal_requests[1].metadata["final_answer_recovery"] == "output_limit"
+    assert response.message.content == "Recovered visible answer."
+    assert response.usage.input_tokens == 8
+    assert response.usage.output_tokens == 2_051
+    assert response.usage.total_tokens == 2_059
+    completed = store.get(ChatTurn, response.turn_id)
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.request_snapshot["final_answer_recovery"] == {
+        "attempts": 1,
+        "reason": "output_limit",
+    }
+
+
 def test_completed_turn_records_the_time_it_took(tmp_path, monkeypatch):
     store = NebulaStore(tmp_path / "chat-elapsed.db")
     engagement = store.create(Engagement(id="eng-elapsed", name="Elapsed"))

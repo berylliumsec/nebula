@@ -1323,6 +1323,13 @@ class OpenAICompatibleProvider(ModelProvider):
                 },
             }
         if openrouter:
+            # OpenRouter uses this as a sticky-routing key. A Nebula chat turn
+            # can span several tool and synthesis requests, so keep those
+            # requests on one upstream route instead of letting each hop choose
+            # a different provider implementation.
+            session_id = request.metadata.get("chat_session_id")
+            if session_id:
+                payload["session_id"] = session_id
             allowed = self.openrouter_allowed_providers
             if allowed:
                 # Operator-selected upstream providers: never route elsewhere.
