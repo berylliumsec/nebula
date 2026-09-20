@@ -505,7 +505,9 @@ async def test_cloud_transfer_requires_confirmation_and_chat_attachment_stays_in
     )
     assert attachment.session.engagement_id == engagement.id
     assert attachment.context_message.role == "user"
-    assert "JSON DATA ONLY" in attachment.context_message.content
+    # The attachment is fenced as data, never as instructions.
+    assert "BEGIN EXECUTION ATTACHMENT (JSON)" in attachment.context_message.content
+    assert "END EXECUTION ATTACHMENT" in attachment.context_message.content
     assert "supersecret123" not in attachment.context_message.content
     assert store.count(ChatSession, engagement_id=engagement.id) == 1
 
@@ -603,3 +605,41 @@ def test_execution_ai_api_is_closed_and_protected(tmp_path):
         assert detail.json()["status"] == "ready"
         delete = client.delete(f"/api/v1/generated-drafts/{draft_id}", headers=headers)
         assert delete.status_code == 405
+
+
+@async_test
+async def test_dismissing_a_generating_draft_is_rejected_and_result_stays_ready(
+    tmp_path,
+):
+    store, _artifacts, _engagement, execution, profile, _evidence, provider, service = (
+        _fixture(tmp_path)
+    )
+    release = asyncio.Event()
+    real_complete = provider.complete
+
+    async def blocked_complete(request):
+        await release.wait()
+        return await real_complete(request)
+
+    provider.complete = blocked_complete
+    draft = await service.generate(
+        execution.id,
+        DraftNoteRequest(provider_id=profile.id, model="model-1"),
+    )
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert store.get(GeneratedDraft, draft.id).status == GeneratedDraftStatus.GENERATING
+
+    with pytest.raises(ExecutionAIError) as rejected:
+        service.dismiss_suggestion(draft.id)
+    assert rejected.value.status_code == 409
+    assert rejected.value.code == "draft_state"
+
+    release.set()
+    await service._tasks[draft.id]
+    result = store.get(GeneratedDraft, draft.id)
+    assert result.status == GeneratedDraftStatus.READY, result.error_detail
+    assert "dismissed" not in result.metadata
+
+    dismissed = service.dismiss_suggestion(draft.id)
+    assert dismissed.metadata["dismissed"] is True

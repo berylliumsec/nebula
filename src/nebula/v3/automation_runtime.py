@@ -17,6 +17,7 @@ import platform
 import re
 import secrets
 import shlex
+import shutil
 import signal
 import socket
 import tempfile
@@ -30,7 +31,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .artifacts import ArtifactStore
-from .diagnostics import create_diagnostic_task
+from .diagnostics import create_diagnostic_task, record_caught_exception
 from .domain import (
     Approval,
     ApprovalStatus,
@@ -80,6 +81,15 @@ MAX_COMMAND_CHARACTERS = 200_000
 MAX_PROCESS_INPUT_BYTES = 1_048_576
 MAX_POLL_BYTES = 32_768
 MAX_CAPTURE_BYTES = 100 * 1024 * 1024
+# How long stream capture may lag a finished process before it is abandoned
+# (a detached descendant can hold the pipes open indefinitely).
+DRAIN_SETTLE_SECONDS = 5.0
+HOST_EXIT_POLL_SECONDS = 0.25
+HOST_PIPE_RELEASE_SECONDS = 2.0
+# Per-command capture directories: ``<process uuid4>-<mkdtemp suffix>``.
+_CAPTURE_DIRECTORY_NAME = re.compile(
+    r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-[a-z0-9_]{8}"
+)
 _IMAGE_PATTERN = re.compile(
     r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"
     r"(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+@sha256:[0-9a-f]{64}"
@@ -302,6 +312,7 @@ class HostRuntimeProcess(RuntimeBackendProcess):
         assert process.stdout is not None and process.stderr is not None
         self.stdout = process.stdout
         self.stderr = process.stderr
+        self._exit_waiter: asyncio.Task[int] | None = None
 
     async def write(self, data: bytes) -> None:
         if self.process.stdin is None or self.process.returncode is not None:
@@ -316,19 +327,62 @@ class HostRuntimeProcess(RuntimeBackendProcess):
             # diagnostic-expected: the supervised process group already exited.
             pass
 
+    def _exit_task(self) -> asyncio.Task[int]:
+        if self._exit_waiter is None:
+            self._exit_waiter = create_diagnostic_task(
+                self.process.wait(),
+                feature="runtime",
+                event_code="runtime.host_process_exit",
+                failure_message="Host process exit supervision stopped unexpectedly.",
+            )
+        return self._exit_waiter
+
+    async def _await_exit(self) -> int:
+        """Return the exit code once the child itself has exited.
+
+        ``Process.wait()`` only resolves after every stdio pipe has closed, so a
+        detached descendant (``setsid nohup daemon &``) that inherited stdout or
+        stderr keeps it pending long after bash exited. Watch the exit status
+        as well so a foreground command, ``terminate`` and session close return.
+        """
+
+        waiter = self._exit_task()
+        while self.process.returncode is None:
+            await asyncio.wait({waiter}, timeout=HOST_EXIT_POLL_SECONDS)
+        return int(self.process.returncode)
+
+    async def _release_pipes(self) -> None:
+        """Close stdio pipes a detached descendant kept open after exit."""
+
+        waiter = self._exit_task()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(waiter), timeout=HOST_PIPE_RELEASE_SECONDS
+            )
+            return
+        except asyncio.TimeoutError:
+            # diagnostic-expected: a detached descendant still holds the pipes.
+            pass
+        transport = getattr(self.process, "_transport", None)
+        if transport is None:
+            return
+        transport.close()
+        await asyncio.wait({waiter}, timeout=HOST_PIPE_RELEASE_SECONDS)
+
     async def wait(self) -> int:
-        code = await self.process.wait()
+        code = await self._await_exit()
         self._signal(signal.SIGKILL)
-        return int(code)
+        await self._release_pipes()
+        return code
 
     async def terminate(self) -> None:
         self._signal(signal.SIGTERM)
         try:
-            await asyncio.wait_for(self.process.wait(), timeout=2)
+            await asyncio.wait_for(self._await_exit(), timeout=2)
         except asyncio.TimeoutError:
             # diagnostic-expected: bounded escalation for a supervised host process.
             self._signal(signal.SIGKILL)
-            await self.process.wait()
+            await self._await_exit()
         self._signal(signal.SIGKILL)
 
 
@@ -701,6 +755,7 @@ class _ManagedProcess:
     stderr: _Capture
     workspace: Path
     workspace_before: dict[str, tuple[str, int, int]]
+    capture_directory: Path | None = None
     stdout_offset: int = 0
     stderr_offset: int = 0
     forced_status: CommandExecutionStatus | None = None
@@ -893,6 +948,70 @@ class AutomationRuntimeManager:
                     },
                     expected_revision=execution.revision,
                 )
+        await asyncio.to_thread(self._sweep_stale_captures)
+
+    def _sweep_stale_captures(self) -> int:
+        """Remove per-command capture directories left by a previous Core."""
+
+        live = {
+            process.capture_directory
+            for process in self._processes.values()
+            if process.capture_directory is not None
+        }
+        removed = 0
+        try:
+            entries = list(self.capture_root.iterdir())
+        except OSError as caught_error:
+            record_caught_exception(
+                "runtime",
+                "runtime.capture_sweep_failed",
+                "The command capture root could not be listed.",
+                caught_error,
+                stage="capture-cleanup",
+            )
+            return 0
+        for entry in entries:
+            if (
+                entry in live
+                or not _CAPTURE_DIRECTORY_NAME.fullmatch(entry.name)
+                or entry.is_symlink()
+                or not entry.is_dir()
+            ):
+                continue
+            try:
+                shutil.rmtree(entry)
+            except OSError as caught_error:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.capture_cleanup_failed",
+                    "A stale command capture directory could not be removed.",
+                    caught_error,
+                    stage="capture-cleanup",
+                )
+                continue
+            removed += 1
+        return removed
+
+    def _discard_capture(self, process: _ManagedProcess) -> None:
+        """Delete a command's capture directory once nothing reads it."""
+
+        directory = process.capture_directory
+        if directory is None:
+            return
+        process.capture_directory = None
+        try:
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            # diagnostic-expected: the capture directory was already gone.
+            return
+        except OSError as caught_error:
+            record_caught_exception(
+                "runtime",
+                "runtime.capture_cleanup_failed",
+                "A command capture directory could not be removed.",
+                caught_error,
+                stage="capture-cleanup",
+            )
 
     def _all_entities(self, model: type[Any]) -> list[Any]:
         entities: list[Any] = []
@@ -1369,6 +1488,7 @@ class AutomationRuntimeManager:
             stderr=_Capture(directory / "stderr"),
             workspace=managed.workspace,
             workspace_before=workspace_before,
+            capture_directory=directory,
         )
         process.drain_tasks = (
             create_diagnostic_task(
@@ -1575,8 +1695,9 @@ class AutomationRuntimeManager:
             ),
             None,
         )
-        for process_id in managed.processes:
+        for process_id, process in managed.processes.items():
             self._processes.pop(process_id, None)
+            self._discard_capture(process)
         return managed.entity
 
     async def _expire_session_at_scope_boundary(
@@ -2012,7 +2133,7 @@ class AutomationRuntimeManager:
         async with process.finalize_lock:
             exit_code = await process.backend.wait()
             if process.drain_tasks is not None:
-                await asyncio.gather(*process.drain_tasks)
+                await self._settle_drains(process.drain_tasks)
             status = process.forced_status or (
                 CommandExecutionStatus.COMPLETED
                 if exit_code == 0
@@ -2023,14 +2144,14 @@ class AutomationRuntimeManager:
                 "process_id": process.execution.process_id,
                 "tool_call_id": process.execution.metadata.get("tool_call_id"),
             }
-            stdout, redacted_stdout = self._store_stream_artifacts(
+            stdout, redacted_stdout = await self._store_stream_artifacts(
                 process.stdout.path,
                 engagement_id=process.execution.engagement_id,
                 filename=f"command-{process.execution.id}.stdout",
                 kind="stdout",
                 metadata=metadata,
             )
-            stderr, redacted_stderr = self._store_stream_artifacts(
+            stderr, redacted_stderr = await self._store_stream_artifacts(
                 process.stderr.path,
                 engagement_id=process.execution.engagement_id,
                 filename=f"command-{process.execution.id}.stderr",
@@ -2075,7 +2196,21 @@ class AutomationRuntimeManager:
             )
             return process.execution
 
-    def _store_stream_artifacts(
+    @staticmethod
+    async def _settle_drains(
+        drain_tasks: tuple[asyncio.Task[None], asyncio.Task[None]],
+    ) -> None:
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*drain_tasks), timeout=DRAIN_SETTLE_SECONDS
+            )
+        except asyncio.TimeoutError:
+            # diagnostic-expected: a detached descendant kept a pipe open; stop capturing.
+            for task in drain_tasks:
+                task.cancel()
+            await asyncio.gather(*drain_tasks, return_exceptions=True)
+
+    async def _store_stream_artifacts(
         self,
         path: Path,
         *,
@@ -2084,24 +2219,18 @@ class AutomationRuntimeManager:
         kind: str,
         metadata: dict[str, Any],
     ) -> tuple[Artifact, Artifact]:
+        # Up to MAX_CAPTURE_BYTES per stream: read and redact it once, off the
+        # event loop, instead of three synchronous reads plus regex work on it.
+        binary, visible = await asyncio.to_thread(_redacted_stream_copy, path)
         raw = self.artifact_store.put_file(
             path,
             engagement_id=engagement_id,
             filename=filename,
-            media_type="application/octet-stream"
-            if b"\x00" in path.read_bytes()[:8_192]
-            else "text/plain",
+            media_type="application/octet-stream" if binary else "text/plain",
             source="automation-runtime",
-            metadata={
-                **metadata,
-                "kind": kind,
-                "searchable": b"\x00" not in path.read_bytes()[:8_192],
-            },
+            metadata={**metadata, "kind": kind, "searchable": not binary},
         )
         raw = self.store.create(raw)
-        visible = redact_text(
-            path.read_bytes().decode("utf-8", errors="replace")
-        ).encode()
         redacted = self.artifact_store.put_bytes(
             visible,
             engagement_id=engagement_id,
@@ -2126,6 +2255,11 @@ class AutomationRuntimeManager:
         )
         if process.final_task is not None and process.final_task.done():
             process.execution = await process.final_task
+            if (
+                process.stdout_offset >= process.stdout.retained
+                and process.stderr_offset >= process.stderr.retained
+            ):
+                self._discard_capture(process)
         return self._result(
             managed,
             process,
@@ -2201,6 +2335,14 @@ def _dedupe_rules(rules: list[EgressRule]) -> list[EgressRule]:
             seen.add(key)
             output.append(rule)
     return output
+
+
+def _redacted_stream_copy(path: Path) -> tuple[bool, bytes]:
+    """Read a captured stream once: NUL-sniff its head and redact the text."""
+
+    data = path.read_bytes()
+    binary = b"\x00" in data[:8_192]
+    return binary, redact_text(data.decode("utf-8", errors="replace")).encode()
 
 
 def _read_increment(path: Path, offset: int, maximum: int) -> tuple[bytes, int]:

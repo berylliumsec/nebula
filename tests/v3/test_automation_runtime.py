@@ -1417,3 +1417,87 @@ def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_pat
     assert {ref.artifact_id for ref in receipt.artifacts} == {out.id, err.id}
     with artifacts.open(out) as stream:
         assert stream.read() == b"useful result\n"
+
+
+def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
+    async def scenario():
+        manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        result = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="chat",
+            owner_id="capture-cleanup",
+            request=RunCommandRequest(command="echo hi", cwd="."),
+        )
+        assert result.status == CommandExecutionStatus.COMPLETED
+        assert "command=echo hi" in result.stdout
+        assert list(manager.capture_root.glob(f"{result.process_id}-*")) == []
+        await manager.close_session(result.session_id)
+        assert list(manager.capture_root.glob(f"{result.process_id}-*")) == []
+
+    asyncio.run(scenario())
+
+
+def test_startup_sweeps_stale_capture_directories(tmp_path):
+    from uuid import uuid4
+
+    async def scenario():
+        manager, _store, _artifacts, _engagement, _sessions = runtime(tmp_path)
+        stale = manager.capture_root / f"{uuid4()}-ab3_x9zq"
+        stale.mkdir()
+        (stale / "stdout").write_bytes(b"orphaned capture\n")
+        unrelated = manager.capture_root / "resolver-or-other"
+        unrelated.mkdir()
+        await manager.startup()
+        assert not stale.exists()
+        assert unrelated.is_dir()
+
+    asyncio.run(scenario())
+
+
+def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_path):
+    import os
+    import signal
+    import time
+
+    daemon_pid: int | None = None
+
+    async def scenario():
+        nonlocal daemon_pid
+        manager, _store, _, engagement, _ = runtime(tmp_path)
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=20_000,
+        )
+        started = time.monotonic()
+        # The detached daemon inherits stdout/stderr and outlives bash.
+        result = await asyncio.wait_for(
+            manager.run_command(
+                engagement_id=engagement.id,
+                owner_kind="api",
+                owner_id="detached-daemon",
+                request=RunCommandRequest(
+                    command="setsid sleep 30 </dev/null & echo launched $!"
+                ),
+            ),
+            timeout=10,
+        )
+        elapsed = time.monotonic() - started
+        assert result.status == CommandExecutionStatus.COMPLETED
+        assert result.stdout.startswith("launched ")
+        daemon_pid = int(result.stdout.split()[1])
+        assert elapsed < 8, elapsed
+        await asyncio.wait_for(manager.close_session(result.session_id), timeout=5)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        if daemon_pid is not None:
+            try:
+                os.kill(daemon_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

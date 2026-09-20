@@ -434,6 +434,17 @@ class ExecutionAIService:
 
     def dismiss_suggestion(self, draft_id: str) -> GeneratedDraft:
         draft = self.store.get(GeneratedDraft, draft_id)
+        if draft.status not in {
+            GeneratedDraftStatus.READY,
+            GeneratedDraftStatus.ACCEPTED,
+        }:
+            # Bumping the revision of a GENERATING draft makes the provider's
+            # READY update conflict and records a spurious FAILED result.
+            raise ExecutionAIError(
+                "draft_state",
+                "only a ready or accepted suggestion can be dismissed "
+                f"(draft is {draft.status.value})",
+            )
         updated = self.store.update(
             GeneratedDraft,
             draft.id,

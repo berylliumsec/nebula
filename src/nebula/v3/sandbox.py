@@ -696,26 +696,47 @@ class ContainerEgressController(EgressController):
         deadline = asyncio.get_running_loop().time() + self.readiness_timeout_seconds
         detail = bytearray()
         timed_out = False
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                timed_out = True
-                break
-            try:
-                line = await asyncio.wait_for(
-                    process.stdout.readline(), timeout=remaining
-                )
-            except asyncio.TimeoutError:
-                # diagnostic-expected: handled below as a bounded readiness failure.
-                timed_out = True
-                break
-            if not line:
-                break
-            if line.rstrip(b"\r\n") == b"READY" and process.returncode is None:
-                return
-            detail.extend(line)
-            if len(detail) > 4_096:
-                del detail[:-4_096]
+        try:
+            while True:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    line = await asyncio.wait_for(
+                        process.stdout.readline(), timeout=remaining
+                    )
+                except asyncio.TimeoutError:
+                    # diagnostic-expected: handled below as a bounded readiness failure.
+                    timed_out = True
+                    break
+                if not line:
+                    break
+                if line.rstrip(b"\r\n") == b"READY" and process.returncode is None:
+                    return
+                detail.extend(line)
+                if len(detail) > 4_096:
+                    del detail[:-4_096]
+        except BaseException as caught_error:
+            # An operator cancel or Core shutdown during the readiness wait
+            # must not leave the privileged helper behind: nothing else ever
+            # reclaims a `<name>-egress` container.
+            record_caught_exception(
+                "sandbox",
+                "sandbox.egress_readiness_interrupted",
+                "The egress helper readiness wait was interrupted; helper removed.",
+                caught_error,
+                stage="sandbox",
+            )
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            await self._remove_failed_helper(
+                runtime_argv=runtime_argv,
+                runtime_environment=runtime_environment,
+                helper_name=helper_name,
+            )
+            raise
         if process.returncode is None:
             process.kill()
         await process.wait()
@@ -942,6 +963,21 @@ class ContainerEgressController(EgressController):
             drain_task=drain_task,
             _enabled=not request.start_egress_disabled,
         )
+
+
+_UNSAFE_MOUNT_CHARACTERS = frozenset({'"', ",", "\n", "\r"})
+_UNSAFE_MOUNT_DETAIL = "double quotes, commas and line breaks are not allowed"
+
+
+def _unsafe_for_mount(path: Path) -> bool:
+    """Whether a host path cannot be carried in a ``--mount`` CSV value.
+
+    Docker and Podman parse ``--mount`` with a CSV reader: a comma ends the
+    field and a double quote opens a quoted field, so either one breaks every
+    execution and terminal of a project whose linked folder contains it.
+    """
+
+    return any(character in str(path) for character in _UNSAFE_MOUNT_CHARACTERS)
 
 
 class SandboxRunner(ABC):
@@ -1644,9 +1680,10 @@ class ContainerSandboxRunner(SandboxRunner):
             workspace = request.workspace.expanduser().resolve(strict=True)
             if not workspace.is_dir():
                 raise SandboxError("workspace must be an existing directory")
-            if any(character in str(workspace) for character in {",", "\n", "\r"}):
+            if _unsafe_for_mount(workspace):
                 raise SandboxError(
-                    "workspace path cannot be encoded as a safe OCI mount"
+                    "workspace path cannot be encoded as a safe OCI mount: "
+                    + _UNSAFE_MOUNT_DETAIL
                 )
             if self.workspace_roots is not None and not any(
                 workspace == root or workspace.is_relative_to(root)
@@ -1665,10 +1702,11 @@ class ContainerSandboxRunner(SandboxRunner):
                 raise SandboxError("tool output directory must be a regular directory")
             if engagement_workspace not in output_directory.parents:
                 raise SandboxError("tool output directory must remain in the workspace")
-            if any(
-                character in str(output_directory) for character in {",", "\n", "\r"}
-            ):
-                raise SandboxError("tool output directory cannot be encoded safely")
+            if _unsafe_for_mount(output_directory):
+                raise SandboxError(
+                    "tool output directory cannot be encoded as a safe OCI mount: "
+                    + _UNSAFE_MOUNT_DETAIL
+                )
             if self.workspace_roots is not None and not any(
                 engagement_workspace == root
                 or engagement_workspace.is_relative_to(root)
@@ -1681,8 +1719,11 @@ class ContainerSandboxRunner(SandboxRunner):
                 raise SandboxError(
                     "policy resolver configuration must be a regular file"
                 )
-            if any(character in str(resolver) for character in {",", "\n", "\r"}):
-                raise SandboxError("policy resolver path cannot be encoded safely")
+            if _unsafe_for_mount(resolver):
+                raise SandboxError(
+                    "policy resolver path cannot be encoded as a safe OCI mount: "
+                    + _UNSAFE_MOUNT_DETAIL
+                )
         repository_digest = re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", request.image)
         local_image_id = re.fullmatch(r"sha256:[0-9a-f]{64}", request.image)
         if (
@@ -2018,108 +2059,111 @@ class ContainerSandboxRunner(SandboxRunner):
         if not re.fullmatch(r"nebula-[a-z0-9][a-z0-9_.-]{0,62}", selected_name):
             raise SandboxError("container name is outside the Nebula namespace")
         lease: EgressLease | None = None
-        if request.network == SandboxNetwork.SCOPED:
-            if not request.egress_rules and not request.egress_domains:
-                raise SandboxUnavailable(
-                    "network tool execution requires an explicit broker-approved boundary"
-                )
-            if not self.egress_controller.certified:
-                raise SandboxUnavailable(
-                    "network tool execution requires a certified per-invocation egress helper"
-                )
-            lease = await self.egress_controller.acquire(
-                runtime_argv=self._runtime_argv(),
-                runtime_environment=_runtime_environment(),
-                request=request,
-                container_name=selected_name,
-                seccomp_profile=self.profile.seccomp_profile if self.profile else None,
-            )
-        argv = self._argv(
-            request,
-            workspace,
-            container_name=selected_name,
-            network_mode=lease.network_mode if lease else None,
-            interactive=bool(input_bytes),
-        )
-        started_at = utc_now()
-        started = monotonic()
+        process: asyncio.subprocess.Process | None = None
+        stdout_task: asyncio.Task[tuple[bytes, bool, int]] | None = None
+        stderr_task: asyncio.Task[tuple[bytes, bool, int]] | None = None
+        timed_out = False
         try:
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                stdin=(
-                    asyncio.subprocess.PIPE
-                    if input_bytes
-                    else asyncio.subprocess.DEVNULL
-                ),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=_runtime_environment(),
+            if request.network == SandboxNetwork.SCOPED:
+                if not request.egress_rules and not request.egress_domains:
+                    raise SandboxUnavailable(
+                        "network tool execution requires an explicit broker-approved boundary"
+                    )
+                if not self.egress_controller.certified:
+                    raise SandboxUnavailable(
+                        "network tool execution requires a certified per-invocation egress helper"
+                    )
+                lease = await self.egress_controller.acquire(
+                    runtime_argv=self._runtime_argv(),
+                    runtime_environment=_runtime_environment(),
+                    request=request,
+                    container_name=selected_name,
+                    seccomp_profile=self.profile.seccomp_profile
+                    if self.profile
+                    else None,
+                )
+            argv = self._argv(
+                request,
+                workspace,
+                container_name=selected_name,
+                network_mode=lease.network_mode if lease else None,
+                interactive=bool(input_bytes),
             )
-        except OSError as exc:
-            record_caught_exception(
-                "sandbox",
-                "sandbox.sandbox.caught_failure_020",
-                "A handled sandbox operation raised an exception.",
-                exc,
-                stage="sandbox",
-            )
-            if lease is not None:
-                await lease.close()
-            raise SandboxUnavailable(
-                f"could not start container runtime: {exc}"
-            ) from exc
-
-        assert process.stdout is not None
-        assert process.stderr is not None
-        if input_bytes:
-            assert process.stdin is not None
+            started_at = utc_now()
+            started = monotonic()
             try:
-                process.stdin.write(input_bytes)
-                await process.stdin.drain()
-            except (BrokenPipeError, ConnectionResetError) as caught_error:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    stdin=(
+                        asyncio.subprocess.PIPE
+                        if input_bytes
+                        else asyncio.subprocess.DEVNULL
+                    ),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=_runtime_environment(),
+                )
+            except OSError as exc:
                 record_caught_exception(
                     "sandbox",
-                    "sandbox.sandbox.caught_failure_021",
+                    "sandbox.sandbox.caught_failure_020",
                     "A handled sandbox operation raised an exception.",
-                    caught_error,
+                    exc,
                     stage="sandbox",
                 )
-                pass
-            finally:
-                process.stdin.close()
+                raise SandboxUnavailable(
+                    f"could not start container runtime: {exc}"
+                ) from exc
+
+            assert process.stdout is not None
+            assert process.stderr is not None
+            if input_bytes:
+                assert process.stdin is not None
                 try:
-                    await process.stdin.wait_closed()
+                    process.stdin.write(input_bytes)
+                    await process.stdin.drain()
                 except (BrokenPipeError, ConnectionResetError) as caught_error:
                     record_caught_exception(
                         "sandbox",
-                        "sandbox.sandbox.caught_failure_022",
+                        "sandbox.sandbox.caught_failure_021",
                         "A handled sandbox operation raised an exception.",
                         caught_error,
                         stage="sandbox",
                     )
                     pass
-        # diagnostic-expected: both bounded stream readers are gathered below.
-        stdout_task = asyncio.create_task(
-            _read_limited_stream(
-                process.stdout,
-                request.limits.output_bytes,
-                stream="stdout",
-                on_chunk=on_chunk,
-                retain=request.retain_output,
+                finally:
+                    process.stdin.close()
+                    try:
+                        await process.stdin.wait_closed()
+                    except (BrokenPipeError, ConnectionResetError) as caught_error:
+                        record_caught_exception(
+                            "sandbox",
+                            "sandbox.sandbox.caught_failure_022",
+                            "A handled sandbox operation raised an exception.",
+                            caught_error,
+                            stage="sandbox",
+                        )
+                        pass
+            # diagnostic-expected: both bounded stream readers are gathered below.
+            stdout_task = asyncio.create_task(
+                _read_limited_stream(
+                    process.stdout,
+                    request.limits.output_bytes,
+                    stream="stdout",
+                    on_chunk=on_chunk,
+                    retain=request.retain_output,
+                )
             )
-        )
-        # diagnostic-expected: paired with stdout_task and gathered below.
-        stderr_task = asyncio.create_task(
-            _read_limited_stream(
-                process.stderr,
-                request.limits.output_bytes,
-                stream="stderr",
-                on_chunk=on_chunk,
-                retain=request.retain_output,
+            # diagnostic-expected: paired with stdout_task and gathered below.
+            stderr_task = asyncio.create_task(
+                _read_limited_stream(
+                    process.stderr,
+                    request.limits.output_bytes,
+                    stream="stderr",
+                    on_chunk=on_chunk,
+                    retain=request.retain_output,
+                )
             )
-        )
-        timed_out = False
-        try:
             try:
                 await asyncio.wait_for(
                     process.wait(), timeout=request.limits.timeout_seconds
@@ -2136,21 +2180,6 @@ class ContainerSandboxRunner(SandboxRunner):
                 process.kill()
                 await process.wait()
                 await self._force_remove(selected_name)
-            except asyncio.CancelledError as caught_error:
-                record_caught_exception(
-                    "sandbox",
-                    "sandbox.sandbox.caught_failure_024",
-                    "A handled sandbox operation raised an exception.",
-                    caught_error,
-                    stage="sandbox",
-                )
-                process.kill()
-                await process.wait()
-                await self._force_remove(selected_name)
-                stdout_task.cancel()
-                stderr_task.cancel()
-                await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
-                raise
             stream_results = await asyncio.gather(
                 stdout_task, stderr_task, return_exceptions=True
             )
@@ -2180,6 +2209,28 @@ class ContainerSandboxRunner(SandboxRunner):
                 observed_stdout_bytes=observed_stdout,
                 observed_stderr_bytes=observed_stderr,
             )
+        except asyncio.CancelledError as caught_error:
+            # Cancellation anywhere after the helper was acquired, including
+            # while stdin is still being fed, must kill and remove the worker
+            # container; the finally below releases the egress lease.
+            record_caught_exception(
+                "sandbox",
+                "sandbox.sandbox.caught_failure_024",
+                "A handled sandbox operation raised an exception.",
+                caught_error,
+                stage="sandbox",
+            )
+            if process is not None:
+                if process.returncode is None:
+                    process.kill()
+                await process.wait()
+                await self._force_remove(selected_name)
+            readers = [task for task in (stdout_task, stderr_task) if task is not None]
+            for reader in readers:
+                reader.cancel()
+            if readers:
+                await asyncio.gather(*readers, return_exceptions=True)
+            raise
         finally:
             if lease is not None:
                 await lease.close()
