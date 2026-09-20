@@ -47,6 +47,7 @@ from .model_catalog import (
     openrouter_models,
     openrouter_upstream_providers,
 )
+from .redaction import redact_text
 
 
 class ProviderError(RuntimeError):
@@ -2100,6 +2101,25 @@ class GeminiProvider(ModelProvider):
             )
 
 
+def _bedrock_error_detail(exc: BaseException) -> str:
+    """Describe a boto3 failure without leaking its types into the adapter.
+
+    A botocore ClientError carries the actionable code and message
+    ("ValidationException: The provided model identifier is invalid");
+    anything else is reported by type name only.
+    """
+
+    response = getattr(exc, "response", None)
+    error = response.get("Error") if isinstance(response, dict) else None
+    if isinstance(error, dict):
+        code = str(error.get("Code") or "").strip()
+        message = re.sub(r"\s+", " ", str(error.get("Message") or "")).strip()
+        detail = ": ".join(part for part in (code, message) if part)
+        if detail:
+            return redact_text(detail)[:500]
+    return type(exc).__name__
+
+
 class BedrockProvider(ModelProvider):
     """AWS Bedrock Converse adapter using boto3 without leaking its types."""
 
@@ -2196,7 +2216,7 @@ class BedrockProvider(ModelProvider):
                 stage="providers",
             )
             raise ProviderError(
-                f"Bedrock request failed: {type(exc).__name__}"
+                f"Bedrock request failed: {_bedrock_error_detail(exc)}"
             ) from exc
         blocks = data.get("output", {}).get("message", {}).get("content", [])
         calls = [
@@ -2255,7 +2275,7 @@ class BedrockProvider(ModelProvider):
             return ProviderHealth(
                 provider_id=self.config.id,
                 healthy=False,
-                detail=f"Bedrock health check failed: {type(exc).__name__}",
+                detail=f"Bedrock health check failed: {_bedrock_error_detail(exc)}",
             )
 
 

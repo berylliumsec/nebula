@@ -56,7 +56,7 @@ from .context import (
     resolve_context_limits,
 )
 from .providers import ModelMessage, ModelProvider, ModelRequest
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_results import sanitize_model_history_result
 from .tools import ApprovalRequired
 
@@ -1033,10 +1033,12 @@ class MissionRuntime:
             ):
                 error = "mission token budget exceeded by context compaction"
                 result = None
+                self._cancel_dropped_approval(approval)
                 approval = None
             if budget.max_cost_usd is not None and cost > budget.max_cost_usd:
                 error = "mission cost budget exceeded by context compaction"
                 result = None
+                self._cancel_dropped_approval(approval)
                 approval = None
             if approval:
                 # A batched turn can pause part way through. What it already
@@ -1670,6 +1672,35 @@ class MissionRuntime:
                 "assembled mission context exceeds the specialist input budget"
             )
         return assembled
+
+    def _cancel_dropped_approval(self, approval: Approval | None) -> None:
+        """Cancel a pending card the mission is about to drop from its state.
+
+        A budget overrun discards the approval before anything consumes it;
+        without this the persisted Approval stays PENDING forever, keeps
+        appearing in the approvals list, and any later decision on it is a
+        no-op.
+        """
+
+        if approval is None:
+            return
+        try:
+            current = self.store.get(Approval, approval.id)
+        except NotFoundError:  # diagnostic-expected: the card was never persisted, so there is nothing to cancel
+            return
+        if current.status != ApprovalStatus.PENDING:
+            return
+        self.store.update(
+            Approval,
+            current.id,
+            {
+                "status": ApprovalStatus.CANCELLED,
+                "decided_by": "mission-runtime",
+                "decided_at": utc_now(),
+                "decision_note": "mission budget exhausted",
+            },
+            expected_revision=current.revision,
+        )
 
     @staticmethod
     def _add_context_usage(

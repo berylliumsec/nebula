@@ -9,6 +9,7 @@ from nebula.v3 import providers
 from nebula.v3.model_catalog import openrouter_models
 from nebula.v3.providers import (
     AnthropicProvider,
+    BedrockProvider,
     GeminiProvider,
     ModelCapabilities,
     ModelMessage,
@@ -1989,3 +1990,91 @@ def test_streaming_context_length_rejection_is_flagged_for_recovery():
     ]
     assert events[-1].context_length_exceeded is True
     assert "context length" in (events[-1].error or "")
+
+
+def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
+    from botocore.exceptions import ClientError, NoCredentialsError
+
+    class FailingClient:
+        def __init__(self, failure: Exception) -> None:
+            self.failure = failure
+
+        def converse(self, **kwargs):
+            del kwargs
+            raise self.failure
+
+        def list_foundation_models(self):
+            raise self.failure
+
+    def install(failure: Exception) -> None:
+        monkeypatch.setattr(
+            providers.boto3, "client", lambda *args, **kwargs: FailingClient(failure)
+        )
+
+    provider = BedrockProvider(_config(ProviderKind.BEDROCK))
+    request = ModelRequest(
+        model="test-model", messages=[ModelMessage(role="user", content="hi")]
+    )
+
+    install(
+        ClientError(
+            {
+                "Error": {
+                    "Code": "ValidationException",
+                    "Message": "The provided model identifier is invalid.",
+                }
+            },
+            "Converse",
+        )
+    )
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(request))
+    assert str(failure.value) == (
+        "Bedrock request failed: ValidationException: "
+        "The provided model identifier is invalid."
+    )
+
+    install(
+        ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDeniedException",
+                    "Message": "not authorized to perform bedrock:ListFoundationModels",
+                }
+            },
+            "ListFoundationModels",
+        )
+    )
+    health = asyncio.run(provider.health())
+    assert health.healthy is False
+    assert health.detail == (
+        "Bedrock health check failed: AccessDeniedException: "
+        "not authorized to perform bedrock:ListFoundationModels"
+    )
+
+    # Anything that is not a botocore ClientError still reports only its type.
+    install(NoCredentialsError())
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(request))
+    assert str(failure.value) == "Bedrock request failed: NoCredentialsError"
+    health = asyncio.run(provider.health())
+    assert health.detail == "Bedrock health check failed: NoCredentialsError"
+
+    # Secrets inside a provider message are redacted before they are surfaced.
+    install(
+        ClientError(
+            {
+                "Error": {
+                    "Code": "UnrecognizedClientException",
+                    "Message": "token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk",
+                }
+            },
+            "Converse",
+        )
+    )
+    with pytest.raises(ProviderError) as failure:
+        asyncio.run(provider.complete(request))
+    assert "eyJhbGci" not in str(failure.value)
+    assert str(failure.value).startswith(
+        "Bedrock request failed: UnrecognizedClientException: "
+    )

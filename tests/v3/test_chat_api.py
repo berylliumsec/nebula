@@ -1037,3 +1037,54 @@ def test_failed_harness_fork_does_not_orphan_the_vendor_session(tmp_path):
 
     assert response.status_code == 409, response.text
     assert [item.id for item in store.list_entities(HarnessSession)] == [vendor.id]
+
+
+def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "stopped-provider-follower.db")
+        engagement = store.create(Engagement(id="project-a", name="Project A"))
+        profile = store.create(
+            ProviderProfile(
+                id="provider-a",
+                name="Local provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                privacy={"local_only": True},
+                metadata={"default_model": "model-a"},
+            )
+        )
+        provider = DetachedChatProvider(profile.id)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                engagement_id=engagement.id,
+                provider_id=profile.id,
+                messages=[{"role": "user", "content": "Stop when asked"}],
+                stream=True,
+            )
+        )
+        turn_id = service.start_provider_turn(prepared)
+        follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "started"
+        assert (await anext(follower))[0] == "delta"
+
+        stopped = await service.stop_provider_turn(turn_id)
+        assert stopped.status.value == "cancelled"
+
+        # The follower was never cancelled itself: the stop reaches it as a
+        # terminal frame it can forward, not as a CancelledError raised inside
+        # its own task.
+        remaining = [event async for event in follower]
+
+        assert [name for name, _ in remaining] == ["cancelled"]
+        assert remaining[0][1] == {
+            "type": "cancelled",
+            "turn_id": turn_id,
+            "detail": "response stopped",
+            "sequence": 3,
+        }
+        assert store.get(ChatTurn, turn_id).status.value == "cancelled"
+        await service.shutdown()
+
+    asyncio.run(scenario())

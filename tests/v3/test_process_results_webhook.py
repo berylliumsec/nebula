@@ -1,20 +1,31 @@
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
 from nebula.v3.automation_runtime import ProcessResultsRequest, RunCommandRequest
-from nebula.v3.chat import ChatService
+from nebula.v3.automation_tools import AutomationBroker, AutomationToolComponents
+from nebula.v3.chat import ChatService, PreparedChat
 from nebula.v3.domain import (
+    Approval,
+    ApprovalStatus,
     AutomationApprovalPolicy,
     AutomationNetworkMode,
+    ChatMessage,
+    ChatRole,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
     ProviderProfile,
+    ScopePolicy,
+    utc_now,
 )
+from nebula.v3.providers import ModelMessage, ModelRequest, ToolCall
+from nebula.v3.tool_results import ToolOutputService
 from tests.v3.test_automation_runtime import runtime
 from tests.v3.test_chat import FakeProvider
+from tests.v3.test_chat_tool_loop import ScriptedProvider, _response
 
 
 def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
@@ -177,6 +188,186 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
         latest = store.get(ChatTurn, waiting.id)
         assert latest.status == ChatTurnStatus.ROUTING
         assert latest.tool_history[-1]["status"] == "complete"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_approved_background_command_waits_for_its_callback(tmp_path):
+    """An approval resume must park a background command exactly like a fresh run.
+
+    The receipt of an approved background command carries results_url and
+    results_api_key; the resumed turn has to wait in WAITING_CALLBACK for the
+    LAN webhook instead of recording the call as complete with no output.
+    """
+
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager.callback_origin = "http://10.0.0.8:8765"
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.ALWAYS,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        profile = store.create(
+            ProviderProfile(
+                id="provider",
+                name="Local",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                capabilities={"streaming": True, "tool_calling": True},
+                metadata={"default_model": "model-a"},
+            )
+        )
+        session = store.create(
+            ChatSession(
+                id="session-approval",
+                engagement_id=engagement.id,
+                title="Approval",
+                provider_profile_id=profile.id,
+                model="model-a",
+                metadata={
+                    "message_count": 1,
+                    "last_sequence": 1,
+                    "initial_title_state": "generated",
+                },
+            )
+        )
+        user = store.create(
+            ChatMessage(
+                id="user-message",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                sequence=1,
+                role=ChatRole.USER,
+                content="Scan the host in the background.",
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                id="turn-approval",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                tools_enabled=True,
+                max_tool_calls=5,
+            )
+        )
+        provider = ScriptedProvider(
+            [
+                _response(
+                    calls=[
+                        ToolCall(
+                            id="call-1",
+                            name="run_command",
+                            arguments={"command": "wait-forever", "background": True},
+                        )
+                    ]
+                ),
+                # After the callback lands: one routing response with no call
+                # moves the turn to synthesis, then the final answer.
+                _response(),
+                _response(text="The scan results are in."),
+            ]
+        )
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        chat = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker"
+        )
+        assert engagement.scope_policy_id is not None
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+
+        def prepared_for(current: ChatTurn) -> PreparedChat:
+            return PreparedChat(
+                provider=provider,
+                provider_profile=profile,
+                model_request=ModelRequest(
+                    model="model-a",
+                    messages=[ModelMessage(role="user", content=user.content)],
+                ),
+                resolved_model="model-a",
+                citations=[],
+                engagement_id=engagement.id,
+                session=session,
+                pending_session=None,
+                stored_messages=[user],
+                new_messages=[],
+                tools_enabled=True,
+                tool_components=AutomationToolComponents(
+                    broker=broker,
+                    scope=scope,
+                    workspace=tmp_path / "workspaces" / engagement.id,
+                    specs=dict(broker.specs),
+                    runtime_digest="test-runtime",
+                ),
+                turn=current,
+                inputs_persisted=True,
+            )
+
+        events = [item async for item in chat.stream(prepared_for(turn))]
+        assert events[-1][0] == "approval_required"
+        paused = store.get(ChatTurn, turn.id)
+        assert paused.status == ChatTurnStatus.WAITING_APPROVAL
+        assert paused.approval_id is not None
+        approval = store.get(Approval, paused.approval_id)
+        store.update(
+            Approval,
+            approval.id,
+            {
+                "status": ApprovalStatus.APPROVED,
+                "decided_by": "operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
+
+        events = [item async for item in chat.stream(prepared_for(paused))]
+
+        names = [name for name, _ in events]
+        assert names == ["started", "callback_required"], names
+        callback = events[-1][1]
+        process_id = callback["process_id"]
+        assert process_id
+        assert callback["results_url"] == (
+            f"http://10.0.0.8:8765/api/v1/automation-processes/{process_id}/results"
+        )
+        waiting = store.get(ChatTurn, turn.id)
+        assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
+        assert waiting.approval_id is None
+        assert waiting.execution_claim_id is None
+        entry = waiting.tool_history[-1]
+        assert entry["status"] == "waiting_callback"
+        assert entry["process_id"] == process_id
+        assert entry["results_url"] == callback["results_url"]
+        assert entry["trusted_result"] is False
+        results_api_key = json.loads(entry["provider_result"])["results_api_key"]
+        assert results_api_key
+
+        # The webhook now lands on a turn that is actually waiting for it.
+        manager.accept_results(
+            process_id,
+            results_api_key,
+            ProcessResultsRequest(status="complete", summary="ports enumerated"),
+        )
+        events = [item async for item in chat.stream(prepared_for(waiting))]
+
+        assert [name for name, _ in events][:2] == ["started", "tool_completed"]
+        assert events[1][1]["status"] == "complete"
+        assert events[1][1]["summary"] == "ports enumerated"
+        assert events[-1][0] == "done"
+        finished = store.get(ChatTurn, turn.id)
+        assert finished.status == ChatTurnStatus.COMPLETE
+        assert finished.tool_history[-1]["status"] == "complete"
         await chat.shutdown()
 
     asyncio.run(scenario())

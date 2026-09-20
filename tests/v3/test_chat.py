@@ -53,7 +53,7 @@ from nebula.v3.providers import (
     ProviderKind,
     StreamEventType,
 )
-from nebula.v3.model_catalog import ModelRouteDescriptor
+from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
 from nebula.v3.storage import NebulaStore, StoreTransaction
 from nebula.v3.tools import ToolInvocation
 
@@ -2554,3 +2554,62 @@ def test_provider_settings_change_preserves_chat_and_history(
         )
 
     asyncio.run(scenario())
+
+
+def test_context_metadata_refresh_merges_onto_a_concurrent_profile_save(tmp_path):
+    """A profile saved during the health call must not fail the recovery.
+
+    The refresh reads the profile, spends up to 15 s on the provider, then
+    writes. A concurrent save (operator edit, another turn's recovery) in that
+    window used to surface as a raw revision conflict; the refreshed limits are
+    now merged onto the current revision instead.
+    """
+
+    store = NebulaStore(tmp_path / "chat-refresh-conflict.db")
+    profile = store.create(_profile(local=True))
+
+    class ConcurrentSaveProvider(FakeProvider):
+        async def health(self) -> ProviderHealth:
+            current = store.get(ProviderProfile, profile.id)
+            store.update(
+                ProviderProfile,
+                current.id,
+                {
+                    "metadata": {
+                        **current.metadata,
+                        "operator_note": "saved while the refresh was in flight",
+                    }
+                },
+                expected_revision=current.revision,
+            )
+            return ProviderHealth(
+                provider_id=self.config.id,
+                healthy=True,
+                models=["model-a"],
+                model_descriptors=[
+                    ModelDescriptor(
+                        id="model-a",
+                        name="Model A",
+                        context_window=32_000,
+                        max_output_tokens=4_000,
+                    )
+                ],
+            )
+
+    provider = ConcurrentSaveProvider(profile.id, local=True)
+    service = ChatService(store, provider_factory=lambda _: provider)
+
+    refreshed = asyncio.run(
+        service._refresh_context_metadata(profile.id, provider, "model-a")
+    )
+
+    assert refreshed.metadata["operator_note"] == (
+        "saved while the refresh was in flight"
+    )
+    assert refreshed.metadata["default_model"] == "model-a"
+    descriptors = refreshed.metadata["model_descriptors"]
+    assert [item["id"] for item in descriptors] == ["model-a"]
+    assert descriptors[0]["context_window"] == 32_000
+    assert descriptors[0]["max_output_tokens"] == 4_000
+    assert refreshed.metadata["route_catalog_revision"]
+    assert store.get(ProviderProfile, profile.id).revision == refreshed.revision
