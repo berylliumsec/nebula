@@ -12,7 +12,6 @@ from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
 import keyring
-import secretstorage
 from keyring.backends.SecretService import Keyring
 from pydantic import SecretStr, field_validator
 
@@ -277,6 +276,7 @@ class CredentialStore:
 
     def _secret_service_write(self, identifier: str, value: str) -> None:
         """Save in an unlocked existing collection without running any prompt."""
+        import secretstorage
         from secretstorage.collection import SS_PREFIX, format_secret, open_session
 
         backend = cast(Keyring, self.keyring_backend)
@@ -312,6 +312,8 @@ class CredentialStore:
 
     def _secret_service_delete(self, reference: str) -> None:
         """Never invoke a desktop unlock or confirmation prompt from Core."""
+        import secretstorage
+
         backend = self.keyring_backend
         with closing(secretstorage.dbus_init()) as connection:
             collection = self._secret_service_collection(connection)
@@ -340,6 +342,8 @@ class CredentialStore:
         get_password can wait indefinitely for a desktop unlock prompt there.
         Locked collections/items must instead report unavailable.
         """
+        import secretstorage
+
         backend = self.keyring_backend
         with closing(secretstorage.dbus_init()) as connection:
             collection = self._secret_service_collection(connection)

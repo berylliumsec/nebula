@@ -16,7 +16,6 @@ from __future__ import annotations
 from contextlib import closing
 from typing import Any, Callable, Literal, Protocol
 
-import secretstorage
 from keyring.backends.SecretService import Keyring
 
 VaultState = Literal["available", "locked", "unavailable"]
@@ -65,6 +64,8 @@ def backend_usable(
 def secret_service_collection(backend: Any, connection: Any) -> Any:
     """The collection keyring itself would use, resolved without a prompt."""
 
+    import secretstorage
+
     preferred = getattr(backend, "preferred_collection", None)
     if preferred is not None:
         return secretstorage.Collection(connection, preferred)
@@ -77,6 +78,11 @@ def secret_service_state(
     """Read the Linux collection's lock state without raising a prompt."""
 
     try:
+        # secretstorage is a Linux-only dependency, so keyring installs it only
+        # there. Importing it here keeps Core importable on macOS and Windows,
+        # where this backend is never selected.
+        import secretstorage
+
         with closing(secretstorage.dbus_init()) as connection:
             collection = secret_service_collection(backend, connection)
             return "locked" if collection.is_locked() else "available"
