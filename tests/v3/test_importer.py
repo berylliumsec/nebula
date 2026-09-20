@@ -3,7 +3,7 @@ import json
 import sqlite3
 
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.domain import Artifact, Asset, Engagement, Observation
+from nebula.v3.domain import Artifact, Asset, Engagement, Observation, ScopePolicy
 from nebula.v3.importer import LegacyEngagementImporter
 from nebula.v3.storage import NebulaStore, StoreTransaction
 
@@ -69,7 +69,7 @@ def test_import_is_side_by_side_typed_and_source_preserving(tmp_path):
     assert report.imported_counts["engagements"] == 1
     assert report.imported_counts["assets"] == 3
     assert report.imported_counts["evidence"] == 4
-    assert report.imported_counts["tool_selections"] == 2
+    assert "tool_selections" not in report.imported_counts
     assert report.imported_counts["chroma_documents"] == 1
 
     engagement = store.get(Engagement, report.target_engagement_id)
@@ -128,3 +128,116 @@ def test_importer_refuses_to_place_destination_inside_source(tmp_path):
     report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
     assert report.status == "failed"
     assert "outside the source engagement" in report.errors[0]
+
+
+def _write_details(root, details):
+    root.mkdir()
+    (root / "engagement_details.json").write_text(json.dumps(details))
+
+
+def test_legacy_targets_expand_ranges_and_skip_unusable_values_with_warnings(
+    tmp_path,
+):
+    source = tmp_path / "legacy"
+    _write_details(
+        source,
+        {
+            "engagement_name": "Ranges",
+            "ip_addresses": [
+                "10.0.0.1-10.0.0.4",
+                "10.0.0.5:8080",
+                "10.0.0.0/24 (DMZ)",
+                "app.example.com",
+            ],
+        },
+    )
+    store = NebulaStore(tmp_path / "v3.db")
+    artifacts = ArtifactStore(tmp_path / "artifact-store")
+
+    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+
+    assert report.status == "completed", report.errors
+    engagement = store.get(Engagement, report.target_engagement_id)
+    scope = store.get(ScopePolicy, engagement.scope_policy_id)
+    assert scope.allowed_cidrs == ["10.0.0.1/32", "10.0.0.2/31", "10.0.0.4/32"]
+    assert scope.allowed_domains == ["app.example.com"]
+    assert any("10.0.0.5:8080" in warning for warning in report.warnings)
+    assert any("10.0.0.0/24 (DMZ)" in warning for warning in report.warnings)
+    assets = store.list_entities(Asset, engagement_id=engagement.id)
+    assert sorted(item.address for item in assets if item.address) == [
+        "10.0.0.1/32",
+        "10.0.0.2/31",
+        "10.0.0.4/32",
+    ]
+    assert [item.hostname for item in assets if item.asset_type == "domain"] == [
+        "app.example.com"
+    ]
+    assert report.imported_counts["assets"] == 4
+
+
+def test_legacy_ipv6_networks_are_typed_by_prefix_length(tmp_path):
+    source = tmp_path / "legacy"
+    _write_details(
+        source,
+        {
+            "engagement_name": "IPv6",
+            "ip_addresses": ["2001:db8::/32", "2001:db8::1", "10.0.0.5"],
+        },
+    )
+    store = NebulaStore(tmp_path / "v3.db")
+    artifacts = ArtifactStore(tmp_path / "artifact-store")
+
+    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+
+    assert report.status == "completed", report.errors
+    assets = store.list_entities(Asset, engagement_id=report.target_engagement_id)
+    assert {item.address: item.asset_type for item in assets} == {
+        "2001:db8::/32": "network",
+        "2001:db8::1/128": "host",
+        "10.0.0.5/32": "host",
+    }
+
+
+def test_legacy_receipt_counts_observations_and_omits_fabricated_entries(tmp_path):
+    source = tmp_path / "legacy"
+    _make_legacy_engagement(source)
+    store = NebulaStore(tmp_path / "v3.db")
+    artifacts = ArtifactStore(tmp_path / "artifact-store")
+
+    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+
+    assert report.status == "completed", report.errors
+    observations = store.list_entities(
+        Observation, engagement_id=report.target_engagement_id
+    )
+    assert len(observations) == 3
+    assert report.imported_counts["observations"] == 3
+    assert report.imported_counts["chroma_documents"] == 1
+    assert "tool_selections" not in report.imported_counts
+
+
+def test_legacy_external_chroma_refusal_warns_once_without_a_sentinel_path(
+    tmp_path,
+):
+    external = tmp_path / "external-chroma"
+    external.mkdir()
+    source = tmp_path / "legacy"
+    _write_details(
+        source,
+        {
+            "engagement_name": "External knowledge",
+            "ip_addresses": ["10.0.0.5"],
+            "chromadb_dir": str(external),
+        },
+    )
+    store = NebulaStore(tmp_path / "v3.db")
+    artifacts = ArtifactStore(tmp_path / "artifact-store")
+
+    report = LegacyEngagementImporter(store, artifacts).import_engagement(source)
+
+    assert report.status == "completed", report.errors
+    assert report.warnings == [
+        "external Chroma path was not imported without explicit approval"
+    ]
+    assert "knowledge" not in report.imported_counts
+    assert "chroma_documents" not in report.imported_counts

@@ -1976,6 +1976,13 @@ def create_app(
                     report_renders.startup,
                     report_renders.shutdown,
                 )
+            if scope_imports is not None:
+                await start_component(
+                    "projects",
+                    "scope-imports",
+                    scope_imports.startup,
+                    scope_imports.shutdown,
+                )
             if execution_ai is not None:
                 await start_component(
                     "executions",

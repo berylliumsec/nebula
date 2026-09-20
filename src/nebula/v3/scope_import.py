@@ -30,6 +30,8 @@ from .harnesses import HarnessError, HarnessRuntimeService
 from .knowledge import (
     DocumentTooLargeError,
     ExtractedDocument,
+    ExtractedSection,
+    KnowledgeIngestionError,
     MAX_DOCUMENT_BYTES,
     extract_document,
     safe_filename,
@@ -48,6 +50,11 @@ PROMPT_VERSION = "scope-import/v1"
 MAX_SCOPE_TEXT = 400_000
 MAX_CHUNK_CHARACTERS = 40_000
 MAX_CANDIDATES = 2_000
+INTERRUPTED_DETAIL = (
+    "Core restarted while the scope import was generating; upload the document again"
+)
+_CHUNK_WRAPPER = len(json.dumps({"sections": []}, separators=(",", ":")))
+_PART_LABEL_RESERVE = 24
 
 
 class ScopeImportError(RuntimeError):
@@ -214,7 +221,9 @@ class ScopeImportService:
                     },
                     expected_revision=current.revision,
                 )
-            if isinstance(exc, ScopeImportError):
+            if isinstance(exc, (ScopeImportError, KnowledgeIngestionError)):
+                # Document faults are the operator's to fix; only model and
+                # transport faults are reported as a provider failure.
                 raise
             if isinstance(exc, (ProviderError, ValueError, json.JSONDecodeError)):
                 raise ScopeImportError("provider_failed", str(exc)) from exc
@@ -492,12 +501,44 @@ class ScopeImportService:
                 )
         return ScopeImportApplyResult(scope=scope, scope_import=completed)
 
+    async def startup(self) -> None:
+        """Fail imports the previous Core process left mid-generation."""
+
+        for scope_import in self._all_imports():
+            if scope_import.status != ScopeImportStatus.GENERATING:
+                continue
+            self.store.update(
+                ScopeImport,
+                scope_import.id,
+                {
+                    "status": ScopeImportStatus.FAILED,
+                    "error_detail": INTERRUPTED_DETAIL,
+                },
+                expected_revision=scope_import.revision,
+            )
+
+    async def shutdown(self) -> None:
+        return None
+
+    def _all_imports(self) -> list[ScopeImport]:
+        result: list[ScopeImport] = []
+        offset = 0
+        while True:
+            page = self.store.list_entities(ScopeImport, offset=offset, limit=1000)
+            result.extend(page)
+            if len(page) < 1000:
+                return result
+            offset += len(page)
+
     def discard(self, scope_import_id: str) -> ScopeImport:
         scope_import = self.store.get(ScopeImport, scope_import_id)
-        if scope_import.status != ScopeImportStatus.READY:
+        if scope_import.status not in {
+            ScopeImportStatus.READY,
+            ScopeImportStatus.FAILED,
+        }:
             raise ScopeImportError(
                 "import_not_ready",
-                "only a ready scope import can be discarded",
+                "only a ready or failed scope import can be discarded",
                 status_code=409,
             )
         return self.store.update(
@@ -589,36 +630,158 @@ class ScopeImportService:
                 )
 
 
+def _encoded_length(value: object) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def _encode_chunk(items: list[dict[str, str]]) -> str:
+    return json.dumps({"sections": items}, ensure_ascii=False, separators=(",", ":"))
+
+
+def _split_section_text(text: str, budget: int) -> list[str]:
+    """Split text into pieces whose JSON string encoding fits within ``budget``."""
+
+    pieces: list[str] = []
+    start = 0
+    while start < len(text):
+        # JSON escaping only grows a string, so the raw budget bounds the search
+        # for the longest prefix whose encoding still fits.
+        low, high = start + 1, min(start + budget, len(text))
+        while low < high:
+            middle = (low + high + 1) // 2
+            if _encoded_length(text[start:middle]) <= budget:
+                low = middle
+            else:
+                high = middle - 1
+        end = low
+        if end < len(text):
+            minimum = start + max(1, (end - start) // 2)
+            boundary = max(
+                text.rfind("\n\n", minimum, end),
+                text.rfind("\n", minimum, end),
+                text.rfind(" ", minimum, end),
+            )
+            if boundary > start:
+                end = boundary + 1
+        piece = text[start:end]
+        if piece.strip():
+            pieces.append(piece)
+        start = end
+    return pieces
+
+
+def _section_items(index: int, section: ExtractedSection) -> list[dict[str, str]]:
+    """Return one chunk item per section, splitting sections the chunk cannot hold."""
+
+    location = section.location or (
+        f"page {section.page}" if section.page else f"section {index}"
+    )
+    item = {"location": location, "text": section.text}
+    budget = MAX_CHUNK_CHARACTERS - _CHUNK_WRAPPER
+    if _encoded_length(item) <= budget:
+        return [item]
+    overhead = _encoded_length({"location": location, "text": ""})
+    pieces = _split_section_text(
+        section.text, max(budget - overhead - _PART_LABEL_RESERVE, 1)
+    )
+    return [
+        {"location": f"{location}, part {number} of {len(pieces)}", "text": piece}
+        for number, piece in enumerate(pieces, start=1)
+    ]
+
+
 def _document_chunks(document: ExtractedDocument) -> list[str]:
     chunks: list[str] = []
     current: list[dict[str, str]] = []
-    current_size = 2
+    current_size = _CHUNK_WRAPPER
     for index, section in enumerate(document.sections, start=1):
-        item = {
-            "location": section.location
-            or (f"page {section.page}" if section.page else f"section {index}"),
-            "text": section.text,
-        }
-        encoded = json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-        if len(encoded) > MAX_CHUNK_CHARACTERS:
-            raise DocumentTooLargeError(
-                "one document section exceeds the 40,000 character AI chunk limit"
-            )
-        if current and current_size + len(encoded) + 1 > MAX_CHUNK_CHARACTERS:
-            chunks.append(
-                json.dumps(
-                    {"sections": current}, ensure_ascii=False, separators=(",", ":")
-                )
-            )
-            current = []
-            current_size = 2
-        current.append(item)
-        current_size += len(encoded) + 1
+        for item in _section_items(index, section):
+            encoded = _encoded_length(item)
+            if current and current_size + encoded + 1 > MAX_CHUNK_CHARACTERS:
+                chunks.append(_encode_chunk(current))
+                current = []
+                current_size = _CHUNK_WRAPPER
+            current.append(item)
+            current_size += encoded + 1
     if current:
-        chunks.append(
-            json.dumps({"sections": current}, ensure_ascii=False, separators=(",", ":"))
-        )
+        chunks.append(_encode_chunk(current))
     return chunks
+
+
+def _domain_covers(allowed: str, excluded: str) -> bool:
+    """Whether an allowed domain pattern authorizes an excluded host or pattern."""
+
+    if not allowed.startswith("*."):
+        return False
+    return excluded.removeprefix("*.").endswith(allowed[1:])
+
+
+def _covers_exclusion(
+    allowed: ScopeImportCandidate, excluded: ScopeImportCandidate
+) -> bool:
+    if (
+        allowed.target_type != excluded.target_type
+        or not allowed.normalized_value
+        or not excluded.normalized_value
+    ):
+        return False
+    if allowed.target_type == ScopeImportTargetType.CIDR:
+        wide = ipaddress.ip_network(allowed.normalized_value)
+        narrow = ipaddress.ip_network(excluded.normalized_value)
+        if wide.version != narrow.version:
+            return False
+        wide_first, wide_last = int(wide[0]), int(wide[-1])
+        narrow_first, narrow_last = int(narrow[0]), int(narrow[-1])
+        overlaps = wide_first <= narrow_last and narrow_first <= wide_last
+        # A narrower allowance inside a broad exclusion is a carve-out, not a
+        # conflict; an allowance that reaches into an exclusion is.
+        wide_inside_narrow = narrow_first <= wide_first and wide_last <= narrow_last
+        return overlaps and not wide_inside_narrow
+    if allowed.target_type == ScopeImportTargetType.DOMAIN:
+        return _domain_covers(allowed.normalized_value, excluded.normalized_value)
+    return False
+
+
+def _warn_about_covered_exclusions(
+    normalized: dict[tuple[str, str], ScopeImportCandidate], warnings: list[str]
+) -> None:
+    excluded = [
+        item
+        for item in normalized.values()
+        if item.classification == ScopeImportClassification.EXCLUDED
+    ]
+    for key, candidate in list(normalized.items()):
+        if candidate.classification != ScopeImportClassification.ALLOWED:
+            continue
+        covered = [
+            item.normalized_value
+            for item in excluded
+            if _covers_exclusion(candidate, item) and item.normalized_value
+        ]
+        if not covered:
+            continue
+        label = candidate.normalized_value or candidate.raw_value
+        for value in covered:
+            warnings.append(
+                f"{label}: covers excluded target {value}; the scope policy has no "
+                "exclusion list, so applying it also authorizes that target"
+            )
+        normalized[key] = candidate.model_copy(
+            update={
+                "warnings": list(
+                    dict.fromkeys(
+                        [
+                            *candidate.warnings,
+                            *(
+                                f"covers excluded target {value}; applying this "
+                                "candidate also authorizes it"
+                                for value in covered
+                            ),
+                        ]
+                    )
+                )[:20]
+            }
+        )
 
 
 def _normalize_candidates(
@@ -630,11 +793,19 @@ def _normalize_candidates(
     for item in proposed:
         value: str | None = None
         item_warnings: list[str] = []
+        host_bits_masked = False
         try:
             if item.target_type == "cidr":
                 if "-" in item.raw_value:
                     raise ValueError("address ranges require manual review")
-                value = str(ipaddress.ip_network(item.raw_value, strict=False))
+                network = ipaddress.ip_network(item.raw_value, strict=False)
+                value = str(network)
+                try:
+                    ipaddress.ip_network(item.raw_value, strict=True)
+                except ValueError:
+                    # diagnostic-expected: host bits set on a network is a
+                    # review condition surfaced below, not a parse failure.
+                    host_bits_masked = True
             elif item.target_type == "domain":
                 value = ScopePolicy(
                     engagement_id="validation", allowed_domains=[item.raw_value]
@@ -648,6 +819,16 @@ def _normalize_candidates(
             item_warnings.append(str(exc))
             warnings.append(f"{item.raw_value}: {exc}")
         classification = ScopeImportClassification(item.classification)
+        if host_bits_masked:
+            classification = ScopeImportClassification.AMBIGUOUS
+            item_warnings.append(
+                f"host bits masked: {item.raw_value} became {value}; confirm whether "
+                "the single host or the whole network is in scope"
+            )
+            warnings.append(
+                f"{item.raw_value}: host bits masked, normalized to {value}; "
+                "needs review before it can be applied"
+            )
         if item.raw_value.casefold() not in source_folded:
             classification = ScopeImportClassification.AMBIGUOUS
             item_warnings.append(
@@ -694,6 +875,7 @@ def _normalize_candidates(
             or candidate.classification == ScopeImportClassification.AMBIGUOUS
             else existing
         )
+    _warn_about_covered_exclusions(normalized, warnings)
     return sorted(
         normalized.values(),
         key=lambda item: (
@@ -704,6 +886,7 @@ def _normalize_candidates(
 
 
 __all__ = [
+    "INTERRUPTED_DETAIL",
     "MAX_CANDIDATES",
     "MAX_CHUNK_CHARACTERS",
     "MAX_SCOPE_TEXT",
