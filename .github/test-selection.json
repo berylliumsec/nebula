@@ -1,18 +1,23 @@
 {
-  "change_digest": "b61d1297893a7ed569b79a63835f81e6ccb8253e9ae16112b025d505aacf875d",
-  "reviewed_by": "Claude review of the two long-red compaction tests",
-  "reason": "These two tests have been failing on origin/main since #332 raised COMPACTOR_MIN_OUTPUT_TOKENS, and several pull requests have excluded tests/v3/test_orchestration.py for that reason. Their stub profile advertises a 600-token context window, which leaves the compactor a 15-token summary allowance, below the 32-token minimum, so ContextService raises the capacity error and the task ends FAILED before either test reaches the assertion it is about: one asserts that compaction runs and records provenance, the other that an insufficient mission token budget BLOCKS the call. The window is now 1,500 tokens, the smallest value that leaves a viable summary allowance, and the stub's dependency answer grows from 180 to 520 repetitions so it still overflows the larger window and compaction is still required. No product code changes; the compactor's refusal for genuinely tiny models is unchanged.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: no ui/ change at all. Only a test fixture changes, so test_orchestration.py is the file that proves it; test_context.py and test_missions.py were run as neighbours and stay green.",
+  "change_digest": "cad445108ed17347d9d6501495d0713d343e3af2861de29f5bfb79c41b4f4756",
+  "reviewed_by": "Codex review of reasoning-only final-answer recovery",
+  "reason": "A provider can complete final synthesis with reasoning but no operator-facing content and an ordinary stop finish reason. Core now identifies that response as reasoning_only across streaming, non-streaming, and post-tool synthesis, performs one bounded synthesis-only retry with more output room when the operator did not set a cap, retains safe per-attempt response metadata, and exposes a distinct retryable failure contract after exhaustion. Manual retry resumes the durable failed turn without replaying prior tool work. The selected Python tests cover direct, streaming API, and tool-loop recovery; provider-thinking Playwright verifies the exact visible retry workflow on desktop, Chromium mobile, and WebKit mobile; durable-conversation-core verifies production real-Core persistence and reload.",
+  "exclusions": "No frontend unit test is selected because the new action is an SSE-to-session integration exercised by the focused Playwright journey rather than an isolated component contract. No native tests because no Rust or desktop-shell code changed. Provider transport internals, model catalog, MCP, hooks, workspace mutation, unrelated chat workflows, and full suites are excluded. The calm-CSS audit is not selected because no styles changed; its existing repository-wide baseline violations remain unrelated.",
   "expected_tests": {
-    "python": 16,
+    "python": 79,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 10
   },
   "python": [
-    "tests/v3/test_orchestration.py"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py::test_chat_stream_names_exhausted_final_answer_recovery",
+    "tests/v3/test_chat_tool_loop.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:provider-thinking",
+    "area:durable-conversation-core"
+  ]
 }

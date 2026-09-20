@@ -34,6 +34,7 @@ from nebula.v3.providers import (
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
+    ProviderResponseError,
     ToolCall,
 )
 from nebula.v3.runtime_platform import RuntimeToolComponents
@@ -693,6 +694,15 @@ def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
     assert completed.request_snapshot["final_answer_recovery"] == {
         "attempts": 1,
         "reason": "provider_control_frame",
+        "responses": [
+            {
+                "content_characters": len(control_frame),
+                "finish_reason": "stop",
+                "provider_request_id": None,
+                "reason": "provider_control_frame",
+                "reasoning_characters": 0,
+            }
+        ],
     }
     assert completed.usage.input_tokens == 8
     assert completed.usage.output_tokens == 4
@@ -730,6 +740,53 @@ def test_final_synthesis_retries_reasoning_exhaustion_with_more_room(tmp_path):
     completed = store.get(ChatTurn, "turn")
     assert completed.request_snapshot["final_answer_recovery"]["reason"] == (
         "output_limit"
+    )
+
+
+def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure(
+    tmp_path,
+):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(reasoning="Still planning.", finish_reason="stop"),
+        _response(reasoning="Still planning again.", finish_reason="stop"),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    prepared.model_request = prepared.model_request.model_copy(
+        update={"max_output_tokens": 2_048}
+    )
+
+    with pytest.raises(
+        ProviderResponseError,
+        match="no operator-facing answer after bounded recovery",
+    ):
+        asyncio.run(service.complete(prepared))
+
+    assert len(broker.calls) == 1
+    failed = store.get(ChatTurn, "turn")
+    assert failed.status == ChatTurnStatus.FAILED
+    assert len(failed.tool_history) == 1
+    turn_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert [request.max_output_tokens for request in turn_requests[-2:]] == [
+        2_048,
+        4_096,
+    ]
+    assert failed.request_snapshot["final_answer_recovery"]["attempts"] == 2
+    assert failed.request_snapshot["final_answer_recovery"]["reason"] == (
+        "reasoning_only"
+    )
+    assert failed.request_snapshot["final_answer_recovery"]["last_reason"] == (
+        "reasoning_only"
     )
 
 

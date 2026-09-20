@@ -4085,7 +4085,7 @@ test("assistant upgrade provider thinking stays collapsed and out of the reply",
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
-test("assistant upgrade names a provider turn that thinks without answering", async ({ page }) => {
+test("assistant upgrade names a provider turn that thinks without answering and retries final synthesis", async ({ page }) => {
   const provider = {
     ...entity,
     id: "provider-thinking-only",
@@ -4102,7 +4102,49 @@ test("assistant upgrade names a provider turn that thinks without answering", as
   };
   await installTruthfulCore(page);
   await page.route("**/api/v1/**", async (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "session-thinking-only",
+        engagement_id: "scratch-project",
+        title: "Reasoning recovery",
+        backend: "provider",
+        provider_profile_id: provider.id,
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: "deepseek/deepseek-v4-flash",
+        metadata: { tools_enabled: true },
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/session-thinking-only/messages")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "user-thinking-only",
+        engagement_id: "scratch-project",
+        session_id: "session-thinking-only",
+        sequence: 1,
+        role: "user",
+        content: "Reply with FLASH_OK.",
+        citations: [],
+        metadata: {},
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/session-thinking-only/pending-turn")) {
+      await route.fulfill({ json: {
+        ...entity,
+        id: "turn-thinking-only",
+        session_id: "session-thinking-only",
+        started_at: entity.created_at,
+        status: "failed",
+        tool_call_ids: [],
+        error: "Provider returned no operator-facing answer after bounded recovery.",
+      } });
+      return;
+    }
     if (path.endsWith("/providers") && route.request().method() === "GET") {
       await route.fulfill({ json: [provider] });
       return;
@@ -4115,16 +4157,27 @@ test("assistant upgrade names a provider turn that thinks without answering", as
   });
   await page.addInitScript(() => {
     const nativeFetch = globalThis.fetch.bind(globalThis);
+    const calls = { completion: 0, resume: 0 };
+    (globalThis as typeof globalThis & { __finalAnswerCalls?: typeof calls }).__finalAnswerCalls = calls;
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const isCompletion = url.endsWith("/chat/completions");
+      const isResume = url.endsWith("/chat/turns/turn-thinking-only/resume");
+      if (!isCompletion && !isResume) return nativeFetch(input, init);
+      if (isCompletion) calls.completion += 1;
+      if (isResume) calls.resume += 1;
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", session_id: "session-thinking-only", turn_id: "turn-thinking-only" })}\n\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "The read is bounded, so run it first." })}\n\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "\n\nThe budget ran out before the answer." })}\n\n`));
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking-only", session_id: "session-thinking-only", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "", reasoning: "The read is bounded, so run it first.\n\nThe budget ran out before the answer." }, usage: { input_tokens: 3, output_tokens: 2, total_tokens: 5 }, finish_reason: "length", citations: [] })}\n\n`));
+          if (isCompletion) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "started", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", session_id: "session-thinking-only", turn_id: "turn-thinking-only" })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "The read is bounded, so run it first." })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "reasoning_delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "\n\nThe budget ran out before the answer." })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "error", code: "provider_final_answer_missing", feature: "providers", retryable: true, detail: "Provider returned no operator-facing answer after bounded recovery." })}\n\n`));
+          } else {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "delta", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", delta: "FLASH_OK" })}\n\n`));
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: "done", turn_id: "turn-thinking-only", session_id: "session-thinking-only", provider_id: "provider-thinking-only", model: "deepseek/deepseek-v4-flash", message: { role: "assistant", content: "FLASH_OK", reasoning: "The read is bounded, so run it first.\n\nThe budget ran out before the answer." }, usage: { input_tokens: 6, output_tokens: 4, total_tokens: 10 }, finish_reason: "stop", citations: [] })}\n\n`));
+          }
           controller.close();
         },
       });
@@ -4140,14 +4193,18 @@ test("assistant upgrade names a provider turn that thinks without answering", as
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Reply with FLASH_OK.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const reply = page.locator(".chat-message.assistant").last();
-  // The turn is not silently blank: the transcript says the answer never came.
-  await expect(reply).toContainText("The model spent this turn thinking and returned no answer.");
-  await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry final answer" })).toBeVisible();
   const thinking = reply.getByLabel("Thinking");
   await thinking.locator("summary").click();
   // Every step's thinking is kept, in the order the model had it.
   await expect(thinking).toContainText("The read is bounded, so run it first.");
   await expect(thinking).toContainText("The budget ran out before the answer.");
+  await page.getByRole("button", { name: "Reload conversation" }).click();
+  await expect(page.getByRole("button", { name: "Retry final answer" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry final answer" }).click();
+  await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveText("FLASH_OK");
+  await expect(page.getByRole("button", { name: "Retry final answer" })).toHaveCount(0);
+  expect(await page.evaluate(() => (globalThis as typeof globalThis & { __finalAnswerCalls?: { completion: number; resume: number } }).__finalAnswerCalls)).toEqual({ completion: 1, resume: 1 });
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
