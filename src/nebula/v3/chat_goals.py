@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from .domain import ChatBackend, ChatGoal, ChatGoalStatus, ChatSession, utc_now
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .domain import (
+    CHAT_GOAL_CHILD_LIMIT,
+    ChatBackend,
+    ChatGoal,
+    ChatGoalStatus,
+    ChatSession,
+    utc_now,
+)
+from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
 from .skill_catalog import SkillSelection, SkillSnapshot
 
 
@@ -20,7 +28,7 @@ class GoalCreate(BaseModel):
     token_budget: int | None = Field(default=None, ge=1)
     time_budget_seconds: int | None = Field(default=None, ge=1)
     step_budget: int | None = Field(default=None, ge=1)
-    child_budget: int | None = Field(default=None, ge=0)
+    child_budget: int | None = Field(default=None, ge=0, le=CHAT_GOAL_CHILD_LIMIT)
 
 
 class GoalWrite(BaseModel):
@@ -84,6 +92,7 @@ class ChatGoalService:
             )
         now = utc_now()
         changes: dict = {}
+        propagate: ChatGoalStatus | None = None
         if body.action == "start":
             if goal.status != ChatGoalStatus.DRAFT:
                 raise ConflictError("only a draft goal can be started")
@@ -101,7 +110,7 @@ class ChatGoalService:
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
             }
-            self._propagate_parent_stop(goal, ChatGoalStatus.PAUSED)
+            propagate = ChatGoalStatus.PAUSED
         elif body.action == "resume":
             if goal.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
                 raise ConflictError("only a paused or blocked goal can be resumed")
@@ -126,7 +135,7 @@ class ChatGoalService:
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
             }
-            self._propagate_parent_stop(goal, ChatGoalStatus.CANCELLED)
+            propagate = ChatGoalStatus.CANCELLED
         elif body.action == "block":
             if goal.status != ChatGoalStatus.RUNNING:
                 raise ConflictError("only a running goal can be blocked")
@@ -152,9 +161,18 @@ class ChatGoalService:
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
             }
-        return self.store.update(
-            ChatGoal, goal.id, changes, expected_revision=goal.revision
-        )
+        # Children are read before the unit of work opens and written inside
+        # it, after the parent's guarded update: a revision conflict on either
+        # side rolls the whole stop back instead of leaving children changed
+        # under an unchanged parent.
+        children = self.list_children(session_id) if propagate is not None else []
+        with self.store.transaction() as transaction:
+            updated = transaction.update(
+                ChatGoal, goal.id, changes, expected_revision=goal.revision
+            )
+            if propagate is not None:
+                self._propagate_parent_stop(transaction, children, propagate, now)
+        return updated
 
     def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
         """Reserve one cumulative child slot before delegation begins."""
@@ -168,6 +186,10 @@ class ChatGoalService:
             raise ConflictError("goal has no child budget; delegation is disabled")
         if goal.children_started >= goal.child_budget:
             raise ConflictError("goal child budget is exhausted")
+        if len(goal.child_session_ids) >= CHAT_GOAL_CHILD_LIMIT:
+            raise ConflictError(
+                f"goal cannot list more than {CHAT_GOAL_CHILD_LIMIT} children"
+            )
         return self.store.update(
             ChatGoal,
             goal.id,
@@ -234,12 +256,22 @@ class ChatGoalService:
             offset += len(page)
         return children
 
-    def _propagate_parent_stop(self, parent: ChatGoal, status: ChatGoalStatus) -> None:
-        now = utc_now()
-        for child in self.list_children(parent.session_id):
+    def _propagate_parent_stop(
+        self,
+        transaction: StoreTransaction,
+        children: list[ChatGoal],
+        status: ChatGoalStatus,
+        now: datetime,
+    ) -> None:
+        for child in children:
             if child.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
                 continue
-            self.store.update(
+            # Only child work that passed Start pauses with its parent; a draft
+            # child stays a draft rather than becoming resumable without ever
+            # having started. Cancelling still retires drafts.
+            if status == ChatGoalStatus.PAUSED and child.status == ChatGoalStatus.DRAFT:
+                continue
+            transaction.update(
                 ChatGoal,
                 child.id,
                 {

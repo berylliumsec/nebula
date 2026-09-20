@@ -3,15 +3,18 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import nebula.v3.chat_goals as chat_goals_module
 from nebula.v3.chat import ChatCompletionRequest, ChatConfigurationError, ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.context import estimate_model_request
 from nebula.v3.domain import (
+    CHAT_GOAL_CHILD_LIMIT,
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatTokenUsage,
     ChatTurn,
     Engagement,
     ProviderProfile,
@@ -380,13 +383,13 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
 def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypatch):
     _, goals = setup_goal(tmp_path)
     base = datetime(2026, 9, 18, tzinfo=timezone.utc)
+    # One clock read per action: start, pause, resume, pause. A pause stamps
+    # the parent and any started children with the same instant.
     clock = iter(
         [
             base,
             base + timedelta(seconds=5),
-            base + timedelta(seconds=5),
             base + timedelta(seconds=100),
-            base + timedelta(seconds=103),
             base + timedelta(seconds=103),
         ]
     )
@@ -454,3 +457,264 @@ def test_block_reports_wrong_status_and_missing_reason_distinctly(tmp_path):
     assert "running" in str(wrong_status.value)
     assert "reason" not in str(wrong_status.value)
     assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
+
+
+def _goal_request(goal_id: str, content: str) -> ChatCompletionRequest:
+    return ChatCompletionRequest(
+        engagement_id="project",
+        session_id="session",
+        goal_id=goal_id,
+        provider_id="provider",
+        model="model-a",
+        messages=[{"role": "user", "content": content}],
+        include_knowledge=False,
+        stream=True,
+    )
+
+
+def test_goal_turns_continue_past_a_plan_shorter_than_the_step_budget(tmp_path):
+    """``current_step`` counts turns under the step budget; the plan is guidance.
+
+    A two-line plan with a step budget of four used to crash the third send
+    inside ``_persist_turn_inputs`` (``current goal step exceeds the plan``),
+    leaving the goal RUNNING and every later send failing the same way.
+    """
+
+    store, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Inspect the workspace safely",
+            completion_criteria=["Evidence is retained"],
+            plan=["Inspect", "Summarize"],
+            step_budget=4,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    provider = FakeProvider("provider", local=False)
+    chat = ChatService(store, provider_factory=lambda _: provider)
+
+    for index in range(4):
+        prepared = chat.prepare(_goal_request(running.id, f"Step {index}"))
+        assert "Core-owned goal context" in prepared.model_request.instructions
+        asyncio.run(chat.complete(prepared))
+        goal = goals.get("session")
+        assert goal.status == ChatGoalStatus.RUNNING
+        assert goal.current_step == index + 1
+
+    assert len(store.list_entities(ChatTurn, engagement_id="project")) == 4
+    assert goals.get("session").linked_turn_ids == [
+        turn.id for turn in store.list_entities(ChatTurn, engagement_id="project")
+    ]
+
+    # The step budget, not the plan length, is what ends the goal cleanly.
+    with pytest.raises(ChatConfigurationError, match="step budget is exhausted"):
+        chat.prepare(_goal_request(running.id, "One more"))
+    exhausted = goals.get("session")
+    assert exhausted.status == ChatGoalStatus.PAUSED
+    assert exhausted.blocked_reason == "Goal step budget is exhausted."
+    assert exhausted.current_step == 4
+    assert len(store.list_entities(ChatTurn, engagement_id="project")) == 4
+
+    # A goal with a plan and no step budget is bounded by tokens/time only.
+    assert (
+        ChatGoal(
+            engagement_id="project",
+            session_id="session",
+            objective="Unbounded",
+            completion_criteria=["Done"],
+            plan=["Only step"],
+            current_step=3,
+        ).current_step
+        == 3
+    )
+
+
+def test_charging_a_terminal_goal_records_usage_without_resurrecting_it(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    provider = FakeProvider("provider", local=False)
+    chat = ChatService(store, provider_factory=lambda _: provider)
+    over_budget = ChatTokenUsage(input_tokens=6, output_tokens=6, total_tokens=12)
+
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Inspect", completion_criteria=["Evidence"], token_budget=10
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    cancelled = goals.write(
+        "session", GoalWrite(expected_revision=running.revision, action="cancel")
+    )
+
+    charged = chat._charge_goal(cancelled.id, over_budget)
+
+    assert charged.status == ChatGoalStatus.CANCELLED
+    assert charged.usage.total_tokens == 12
+    assert charged.completed_at == cancelled.completed_at
+    assert charged.blocked_reason is None
+    assert charged.paused_at is None
+    with pytest.raises(ConflictError, match="paused or blocked"):
+        goals.write(
+            "session", GoalWrite(expected_revision=charged.revision, action="resume")
+        )
+
+    completed = store.update(
+        ChatGoal,
+        charged.id,
+        {
+            "status": ChatGoalStatus.COMPLETED,
+            "completion_summary": "Done.",
+            "completion_evidence": [{"kind": "note"}],
+        },
+        expected_revision=charged.revision,
+    )
+    charged_again = chat._charge_goal(completed.id, over_budget)
+    assert charged_again.status == ChatGoalStatus.COMPLETED
+    assert charged_again.usage.total_tokens == 24
+    assert charged_again.completion_summary == "Done."
+
+    # A running goal that crosses its budget still pauses with the reason.
+    active = store.update(
+        ChatGoal,
+        charged_again.id,
+        {"status": ChatGoalStatus.RUNNING, "active_since": utc_now()},
+        expected_revision=charged_again.revision,
+    )
+    paused = chat._charge_goal(active.id, over_budget)
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert paused.blocked_reason == "Token budget exhausted during provider response."
+    assert paused.usage.total_tokens == 36
+
+
+def test_parent_pause_skips_draft_children_and_commits_with_the_parent(tmp_path):
+    store, service = setup_goal(tmp_path)
+    parent = service.create(
+        "session",
+        GoalCreate(
+            objective="Parent work",
+            completion_criteria=["Children stay bounded"],
+            child_budget=2,
+        ),
+    )
+    service.write(
+        "session", GoalWrite(expected_revision=parent.revision, action="start")
+    )
+    draft_child = service.start_child(
+        "session", GoalCreate(objective="Draft child", completion_criteria=["x"])
+    )
+    started_child = service.start_child(
+        "session", GoalCreate(objective="Started child", completion_criteria=["y"])
+    )
+    started_child = service.write(
+        started_child.session_id,
+        GoalWrite(expected_revision=started_child.revision, action="start"),
+    )
+
+    paused = service.write(
+        "session",
+        GoalWrite(expected_revision=service.get("session").revision, action="pause"),
+    )
+
+    assert paused.status == ChatGoalStatus.PAUSED
+    # The draft child never passed Start, so the parent's pause leaves it alone.
+    untouched = service.get(draft_child.session_id)
+    assert untouched.status == ChatGoalStatus.DRAFT
+    assert untouched.revision == draft_child.revision
+    assert untouched.blocked_reason is None
+    with pytest.raises(ConflictError, match="paused or blocked"):
+        service.write(
+            draft_child.session_id,
+            GoalWrite(expected_revision=untouched.revision, action="resume"),
+        )
+    stopped = service.get(started_child.session_id)
+    assert stopped.status == ChatGoalStatus.PAUSED
+    assert stopped.blocked_reason == "Parent goal paused; child work is paused."
+    assert stopped.started_at is not None
+
+    # Resume everything, then make the parent's own update lose a revision race
+    # while the pause is in flight: neither the parent nor the child may change.
+    resumed = service.write(
+        "session", GoalWrite(expected_revision=paused.revision, action="resume")
+    )
+    running_child = service.write(
+        stopped.session_id,
+        GoalWrite(expected_revision=stopped.revision, action="resume"),
+    )
+    real_list_children = service.list_children
+
+    def list_children_while_another_device_writes(session_id: str) -> list[ChatGoal]:
+        children = real_list_children(session_id)
+        store.update(
+            ChatGoal,
+            resumed.id,
+            {"metadata": {"touched_elsewhere": True}},
+            expected_revision=resumed.revision,
+        )
+        return children
+
+    service.list_children = list_children_while_another_device_writes  # type: ignore[method-assign]
+    with pytest.raises(ConflictError):
+        service.write(
+            "session", GoalWrite(expected_revision=resumed.revision, action="pause")
+        )
+
+    assert service.get("session").status == ChatGoalStatus.RUNNING
+    child_after = service.get(running_child.session_id)
+    assert child_after.status == ChatGoalStatus.RUNNING
+    assert child_after.revision == running_child.revision
+
+
+def test_child_budget_is_bounded_by_the_child_list_cap(tmp_path):
+    store, service = setup_goal(tmp_path)
+    assert CHAT_GOAL_CHILD_LIMIT == 32
+    with pytest.raises(ValidationError, match="less than or equal to 32"):
+        GoalCreate(
+            objective="Too many",
+            completion_criteria=["x"],
+            child_budget=CHAT_GOAL_CHILD_LIMIT + 1,
+        )
+    assert (
+        GoalCreate(
+            objective="Enough",
+            completion_criteria=["x"],
+            child_budget=CHAT_GOAL_CHILD_LIMIT,
+        ).child_budget
+        == CHAT_GOAL_CHILD_LIMIT
+    )
+
+    # A goal persisted with a larger budget (or one whose list is already full)
+    # is refused before any child session or goal is created.
+    full = store.create(
+        ChatGoal(
+            engagement_id="project",
+            session_id="session",
+            objective="Parent",
+            completion_criteria=["x"],
+            status=ChatGoalStatus.RUNNING,
+            started_at=utc_now(),
+            active_since=utc_now(),
+            child_budget=40,
+            children_started=CHAT_GOAL_CHILD_LIMIT,
+            child_session_ids=[
+                f"child-{index}" for index in range(CHAT_GOAL_CHILD_LIMIT)
+            ],
+        )
+    )
+    goals_before = store.count(ChatGoal)
+    sessions_before = store.count(ChatSession)
+
+    with pytest.raises(ConflictError, match="cannot list more than 32 children"):
+        service.start_child(
+            "session", GoalCreate(objective="Child 33", completion_criteria=["x"])
+        )
+
+    assert store.count(ChatGoal) == goals_before
+    assert store.count(ChatSession) == sessions_before
+    parent = service.get("session")
+    assert parent.revision == full.revision
+    assert parent.children_started == CHAT_GOAL_CHILD_LIMIT

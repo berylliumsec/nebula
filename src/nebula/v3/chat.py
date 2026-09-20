@@ -3705,7 +3705,14 @@ class ChatService:
             output_tokens=goal.usage.output_tokens + usage.output_tokens,
             total_tokens=goal.usage.total_tokens + usage.total_tokens,
         )
-        if goal.token_budget is not None and combined.total_tokens >= goal.token_budget:
+        # Usage is always recorded, but only a running goal pauses on the
+        # budget: a goal the operator cancelled, completed, paused or blocked
+        # while the response was in flight keeps that state and its timestamps.
+        if (
+            goal.status == ChatGoalStatus.RUNNING
+            and goal.token_budget is not None
+            and combined.total_tokens >= goal.token_budget
+        ):
             paused_at = utc_now()
             return self.store.update(
                 ChatGoal,
