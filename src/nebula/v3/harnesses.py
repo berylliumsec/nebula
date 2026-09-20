@@ -183,6 +183,9 @@ CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
+HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
+CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
+GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
 _CODEX_MANAGED_VENDOR_FEATURES = (
@@ -1350,6 +1353,9 @@ class _CodexRpc:
         await self._write({"id": request_id, "result": result})
 
     async def _write(self, value: dict[str, Any]) -> None:
+        if self._closing:
+            # The reader is gone, so a response could never be correlated.
+            raise HarnessTransportError(f"{self.transport_name} transport is closed")
         encoded = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
         if self.websocket is not None:
             await self.websocket.send(encoded)
@@ -1399,10 +1405,33 @@ class _CodexRpc:
                     f"{self.transport_name} transport failed: {type(exc).__name__}"
                 )
             )
-            for future in self._pending.values():
-                if not future.done():
-                    future.set_exception(error)
-            await self.events.put(error)
+            await self._end_transport(error)
+
+    async def _end_transport(self, error: HarnessTransportError) -> None:
+        """Fail every waiter once the reader can no longer correlate responses.
+
+        A live process without a reader (for example after ``readline`` rejected
+        a line over the buffer limit) would let the next request wait forever,
+        so the process ends with the reader and the runtime reopens a fresh one.
+        """
+
+        self._closing = True
+        for future in self._pending.values():
+            if not future.done():
+                future.set_exception(error)
+        if self.process is not None and self.process.returncode is None:
+            try:
+                self.process.kill()
+            except ProcessLookupError as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.transport.process_already_exited",
+                    "The harness process exited before the failed transport could end it.",
+                    caught_error,
+                    stage="transport",
+                )
+            await self.process.wait()
+        await self.events.put(error)
 
     async def _dispatch_frame(self, raw: Any) -> None:
         """Reject one invalid frame without permanently killing the reader."""
@@ -2725,7 +2754,9 @@ class CodexAppServerAdapter(HarnessAdapter):
     ) -> list[ExternalHarnessSession]:
         rpc = await self._connect(profile, credential_store, (), workspace)
         try:
-            await self._initialize(rpc)
+            await asyncio.wait_for(
+                self._initialize(rpc), timeout=CODEX_SESSION_LIST_TIMEOUT_SECONDS
+            )
             sessions: list[ExternalHarnessSession] = []
             cursor: str | None = None
             for _ in range(10):
@@ -2737,7 +2768,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                 }
                 if cursor:
                     params["cursor"] = cursor
-                result = await rpc.request("thread/list", params)
+                result = await asyncio.wait_for(
+                    rpc.request("thread/list", params),
+                    timeout=CODEX_SESSION_LIST_TIMEOUT_SECONDS,
+                )
                 if not isinstance(result, dict) or not isinstance(
                     result.get("data"), list
                 ):
@@ -2776,6 +2810,12 @@ class CodexAppServerAdapter(HarnessAdapter):
                     break
                 cursor = next_cursor
             return sessions
+        except asyncio.TimeoutError as exc:
+            # diagnostic-expected: a stalled app-server becomes a bounded, retryable listing error.
+            raise HarnessUnavailableError(
+                "Codex did not list sessions within "
+                f"{CODEX_SESSION_LIST_TIMEOUT_SECONDS:g} seconds on the Nebula host"
+            ) from exc
         finally:
             await rpc.close()
 
@@ -3211,8 +3251,10 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             )
         del mode, skill  # Claude receives skills through its configured Skill tool.
         del model  # Locked into ClaudeAgentOptions for the connected session.
-        self.active = True
         await self.client.query(prompt)
+        # A rejected query leaves nothing to interrupt; ``active`` is cleared by
+        # the ``finally`` below only once the turn body has started.
+        self.active = True
         yield HarnessEvent(
             type="started",
             vendor=HarnessKind.CLAUDE_AGENT_SDK,
@@ -4372,12 +4414,14 @@ class GrokAcpConnection(HarnessConnection):
         if self.active:
             raise HarnessStateError("Grok ACP session already has an active turn")
         _discard_queued_session_replay(self.rpc.events)
-        self.active = True
         if mode:
             await self.rpc.request(
                 "session/set_mode",
                 {"sessionId": self.external_session_id, "modeId": mode},
             )
+        # A rejected mode raised above with nothing in flight; only now does the
+        # ``finally`` below own clearing ``active``.
+        self.active = True
         # diagnostic-expected: this task is awaited, cancelled, and drained by this turn.
         request = asyncio.create_task(
             self.rpc.request(
@@ -5000,6 +5044,7 @@ class GrokAcpAdapter(HarnessAdapter):
                 "Grok executable must be an existing absolute file"
             )
         command = [str(executable), "sessions", "list", "--limit", "500"]
+        process: asyncio.subprocess.Process | None = None
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -5008,8 +5053,14 @@ class GrokAcpAdapter(HarnessAdapter):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=GROK_SESSION_LIST_TIMEOUT_SECONDS
+            )
         except (OSError, TimeoutError) as exc:
+            if process is not None and process.returncode is None:
+                # The listing gave up on the child; do not leave it running.
+                process.kill()
+                await process.wait()
             raise HarnessUnavailableError(
                 "Grok sessions could not be listed on the Nebula host"
             ) from exc
@@ -5214,6 +5265,16 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             )
 
     async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+        try:
+            async with asyncio.timeout(HARNESS_STARTUP_TIMEOUT_SECONDS):
+                return await self._open(request)
+        except TimeoutError as exc:
+            # diagnostic-expected: startup deadline becomes an actionable retryable error.
+            raise TimeoutError(
+                "Claude startup timed out. Check the runtime on the Nebula host, then retry this message."
+            ) from exc
+
+    async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         sdk = self._sdk()
         version = _claude_sdk_version(sdk)
         if version is None:
@@ -5785,9 +5846,11 @@ class HarnessRuntimeService:
     async def shutdown(self) -> None:
         self._closed = True
         active = list(self._active.items())
-        for _, item in active:
+        for session_id, item in active:
             try:
-                await item.connection.interrupt()
+                await self._interrupt_connection(
+                    session_id, item.connection, stage="shutdown"
+                )
             except Exception as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -7727,7 +7790,9 @@ class HarnessRuntimeService:
                     if interrupted_reason or terminal_error:
                         break
                 if interrupted_reason or terminal_error:
-                    await connection.interrupt()
+                    await self._interrupt_connection(
+                        session.id, connection, stage="turn-runtime"
+                    )
                     self._fail_turn(
                         turn.id,
                         HarnessTurnStatus.INTERRUPTED,
@@ -7835,7 +7900,9 @@ class HarnessRuntimeService:
                     caught_error,
                     stage="harnesses",
                 )
-                await connection.interrupt()
+                await self._interrupt_connection(
+                    session.id, connection, stage="turn-cancel"
+                )
                 latest_cancelled = self.store.get(HarnessTurn, turn.id)
                 if latest_cancelled.status != HarnessTurnStatus.CANCELLED:
                     self._fail_turn(
@@ -7851,6 +7918,27 @@ class HarnessRuntimeService:
                     stage="turn",
                     metadata={"entity_type": "harness_turn", "entity_id": turn.id},
                 )
+                if isinstance(exc, (HarnessTransportError, OSError)):
+                    # The vendor process or pipe is gone. Keeping this connection
+                    # cached would make every later turn fail on the dead transport.
+                    await self._discard_connection(
+                        session.id, connection, reason="transport_failure"
+                    )
+                else:
+                    # A Nebula-side failure abandoned the vendor turn mid-stream;
+                    # stop it so the vendor is not left executing with no consumer.
+                    try:
+                        await self._interrupt_connection(
+                            session.id, connection, stage="turn-failure"
+                        )
+                    except Exception as interrupt_error:
+                        record_caught_exception(
+                            "harnesses",
+                            "harnesses.turn_failure_interrupt_failed",
+                            "A failed harness turn could not interrupt the vendor turn.",
+                            interrupt_error,
+                            stage="turn-failure",
+                        )
                 error = _safe_error(exc)
                 reason = reason_code_for(
                     exc, feature="harnesses", event_code="harnesses.turn.failed"
@@ -8323,7 +8411,9 @@ class HarnessRuntimeService:
         session_id = run.harness_session_id or ""
         active = self._active.get(session_id)
         if active is not None:
-            await active.connection.interrupt()
+            await self._interrupt_connection(
+                session_id, active.connection, stage="run-stop"
+            )
         task = self._mission_tasks.get(run.id) or self._scheduled_mission_tasks.get(
             run.id
         )
@@ -8840,7 +8930,11 @@ class HarnessRuntimeService:
             active = self._active.get(turn.harness_session_id)
             if active is not None and active.turn_id == turn.id:
                 try:
-                    await active.connection.interrupt()
+                    await self._interrupt_connection(
+                        turn.harness_session_id,
+                        active.connection,
+                        stage="turn-stop-recovery",
+                    )
                 except Exception as caught_error:
                     record_caught_exception(
                         "harnesses",
@@ -8953,7 +9047,9 @@ class HarnessRuntimeService:
         active = self._active.get(turn.harness_session_id)
         if active is not None and active.turn_id == turn.id:
             try:
-                await active.connection.interrupt()
+                await self._interrupt_connection(
+                    turn.harness_session_id, active.connection, stage="turn-stop"
+                )
             except Exception as caught_error:
                 record_caught_exception(
                     "harnesses",
@@ -10421,6 +10517,74 @@ class HarnessRuntimeService:
             return RiskClass.LOCAL_READ
         return RiskClass.WORKSPACE_WRITE
 
+    async def _interrupt_connection(
+        self, session_id: str, connection: HarnessConnection, *, stage: str
+    ) -> None:
+        """Interrupt the vendor turn without letting a wedged process hold Nebula.
+
+        Codex answers ``turn/interrupt`` as a request and Grok's cancel blocks on
+        the stdin drain, so a hung vendor process would otherwise hang Stop,
+        Core shutdown, and the session lock. After the deadline the connection
+        is closed and forgotten; the next turn reopens a fresh one.
+        """
+
+        try:
+            await asyncio.wait_for(
+                connection.interrupt(), timeout=HARNESS_INTERRUPT_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError as caught_error:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.interrupt.timed_out",
+                "The harness did not acknowledge the interrupt in time; its connection is being closed.",
+                caught_error,
+                stage=stage,
+                metadata={"entity_type": "harness_session", "entity_id": session_id},
+            )
+            await self._discard_connection(
+                session_id, connection, reason="interrupt_timeout"
+            )
+
+    async def _discard_connection(
+        self, session_id: str, connection: HarnessConnection, *, reason: str
+    ) -> None:
+        """Close a connection the runtime no longer trusts and forget it.
+
+        The saved external thread is resumed by a fresh vendor process on the
+        next turn, so the durable conversation and native transcript survive.
+        """
+
+        if self._connections.get(session_id) is connection:
+            self._connections.pop(session_id, None)
+            self._connection_browser_bindings.pop(session_id, None)
+        record_diagnostic(
+            "info",
+            "harnesses",
+            "harnesses.connection.discarded",
+            "A harness connection was closed; the next turn reopens the session.",
+            outcome="discarded",
+            stage="connection",
+            metadata={
+                "entity_type": "harness_session",
+                "entity_id": session_id,
+                "reason": reason,
+            },
+        )
+        try:
+            await connection.close()
+        except Exception as caught_error:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.connection.discard_close_failed",
+                "A discarded harness connection did not close cleanly.",
+                caught_error,
+                stage="connection",
+                metadata={"entity_type": "harness_session", "entity_id": session_id},
+            )
+        gateway = self._gateways.pop(session_id, None)
+        if gateway is not None:
+            await gateway.close()
+
     async def _connection(
         self, session: HarnessSession, turn: HarnessTurn
     ) -> HarnessConnection:
@@ -10428,20 +10592,24 @@ class HarnessRuntimeService:
         browser_binding = session.metadata.get("browser_companion_session_id")
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
         existing = self._connections.get(session.id)
-        if (
-            existing is not None
-            and self._connection_browser_bindings.get(session.id) != browser_binding
-        ):
-            # Vendor MCP catalogs are fixed when the connection opens. Resume the
-            # saved external thread with a fresh gateway between turns, keeping
-            # the durable conversation and native transcript intact.
-            self._connections.pop(session.id, None)
-            self._connection_browser_bindings.pop(session.id, None)
-            await existing.close()
-            gateway = self._gateways.pop(session.id, None)
-            if gateway is not None:
-                await gateway.close()
-            existing = None
+        if existing is not None:
+            stale_reason = (
+                # Vendor MCP catalogs are fixed when the connection opens. Resume
+                # the saved external thread with a fresh gateway between turns,
+                # keeping the durable conversation and native transcript intact.
+                "browser_binding_changed"
+                if self._connection_browser_bindings.get(session.id) != browser_binding
+                # The vendor process died between turns; writing to it would
+                # fail every later turn on this session.
+                else "disconnected"
+                if existing.connection_state == "disconnected"
+                else None
+            )
+            if stale_reason is not None:
+                await self._discard_connection(
+                    session.id, existing, reason=stale_reason
+                )
+                existing = None
         if existing is not None:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)

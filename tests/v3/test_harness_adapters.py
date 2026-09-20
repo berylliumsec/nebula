@@ -11,6 +11,7 @@ from jsonschema import Draft7Validator
 from pydantic import SecretStr
 import pytest
 
+from nebula.v3 import harnesses as harness_module
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.domain import (
     HarnessAuthMode,
@@ -35,8 +36,11 @@ from nebula.v3.harnesses import (
     GrokAcpAdapter,
     GrokAcpConnection,
     HarnessConfigurationError,
+    HarnessProviderError,
     HarnessSkillInvocation,
     HarnessPermissionDecision,
+    HarnessTransportError,
+    HarnessUnavailableError,
     PermissionTicket,
     _AcpRpc,
     _CodexRpc,
@@ -1631,7 +1635,9 @@ def test_codex_rpc_reader_survives_one_invalid_frame():
             return next(self.lines)
 
     async def scenario() -> None:
-        rpc = _CodexRpc(process=SimpleNamespace(stdout=FixtureStdout(), stderr=None))
+        rpc = _CodexRpc(
+            process=SimpleNamespace(stdout=FixtureStdout(), stderr=None, returncode=0)
+        )
 
         await rpc._reader()
 
@@ -1651,7 +1657,9 @@ def test_grok_acp_rpc_reports_its_own_transport_identity():
             return b""
 
     async def scenario() -> None:
-        rpc = _AcpRpc(process=SimpleNamespace(stdout=ClosedStdout(), stderr=None))
+        rpc = _AcpRpc(
+            process=SimpleNamespace(stdout=ClosedStdout(), stderr=None, returncode=0)
+        )
 
         await rpc._reader()
 
@@ -2734,3 +2742,226 @@ def test_grok_catalog_uses_selected_account_for_command_and_cache(
 
     asyncio.run(scenario())
     assert observed == [str(tmp_path / name) for name in ("personal", "work")]
+
+
+def test_grok_connection_stays_usable_after_a_rejected_mode():
+    class RejectingModeRpc(FixtureGrokRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "session/set_mode":
+                self.calls.append((method, params))
+                raise HarnessProviderError(
+                    "Grok ACP", {"code": -32602, "message": "unknown mode"}
+                )
+            return await super().request(method, params)
+
+    async def scenario() -> None:
+        rpc = RejectingModeRpc()
+
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = GrokAcpConnection(
+            rpc, external_session_id="grok-session", permission_handler=no_permission
+        )
+
+        with pytest.raises(HarnessProviderError):
+            async for _ in connection.run_turn(
+                "first", model="grok-build", mode="unknown"
+            ):
+                pass
+        assert connection.active is False
+
+        # The next turn on the same transport must not be refused as "active".
+        events = [
+            event async for event in connection.run_turn("second", model="grok-build")
+        ]
+        assert events[-1].type == "completed"
+        assert events[-1].message == "done"
+        assert [method for method, _ in rpc.calls].count("session/prompt") == 1
+
+    asyncio.run(scenario())
+
+
+def test_claude_connection_clears_active_when_the_query_is_rejected(tmp_path):
+    class RejectingClient(FakeClaudeClient):
+        async def query(self, prompt: str) -> None:
+            raise RuntimeError("Claude stdin closed")
+
+    async def scenario() -> None:
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = ClaudeAgentSdkConnection(
+            RejectingClient(options=FakeClaudeOptions()),
+            permission_handler=no_permission,
+            sdk=SimpleNamespace(),
+            external_session_id="claude-session",
+            workspace=tmp_path,
+        )
+
+        with pytest.raises(RuntimeError, match="stdin closed"):
+            async for _ in connection.run_turn("first", model="claude-test"):
+                pass
+
+        assert connection.active is False
+
+    asyncio.run(scenario())
+
+
+def test_claude_open_is_bounded_by_the_startup_deadline(tmp_path, monkeypatch):
+    class HangingClient(FakeClaudeClient):
+        async def connect(self) -> None:
+            await asyncio.Event().wait()
+
+    sdk = SimpleNamespace(
+        ClaudeAgentOptions=FakeClaudeOptions,
+        ClaudeSDKClient=HangingClient,
+        HookMatcher=FakeHookMatcher,
+        PermissionResultAllow=PermissionResultAllow,
+    )
+    monkeypatch.setattr(ClaudeAgentSdkAdapter, "_sdk", staticmethod(lambda: sdk))
+    monkeypatch.setattr(harness_module, "HARNESS_STARTUP_TIMEOUT_SECONDS", 0.05)
+
+    async def scenario() -> None:
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        profile = HarnessProfile(
+            id="claude-a",
+            name="Claude",
+            kind=HarnessKind.CLAUDE_AGENT_SDK,
+            default_model="claude-test",
+        )
+        session = HarnessSession(
+            id="session-a",
+            engagement_id="eng-a",
+            harness_profile_id=profile.id,
+            model="claude-test",
+        )
+        with pytest.raises(TimeoutError, match="Claude startup timed out"):
+            await asyncio.wait_for(
+                ClaudeAgentSdkAdapter().open(
+                    AdapterOpenRequest(
+                        profile=profile,
+                        session=session,
+                        workspace=tmp_path,
+                        mcp_profiles=(),
+                        credential_store=CredentialStore(),
+                        permission_handler=no_permission,
+                    )
+                ),
+                timeout=2,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_codex_session_listing_is_bounded_when_the_app_server_stalls(
+    tmp_path, monkeypatch
+):
+    class StallingRpc(FixtureCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "thread/list":
+                self.calls.append((method, params))
+                await asyncio.Event().wait()
+            return await super().request(method, params)
+
+    monkeypatch.setattr(harness_module, "CODEX_SESSION_LIST_TIMEOUT_SECONDS", 0.05)
+    rpc = StallingRpc()
+    profile = HarnessProfile(
+        name="Codex", kind=HarnessKind.CODEX_APP_SERVER, executable="/bin/true"
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(HarnessUnavailableError, match="Codex"):
+            await asyncio.wait_for(
+                FixtureCodexAdapter(rpc).list_external_sessions(
+                    profile, CredentialStore(), tmp_path
+                ),
+                timeout=2,
+            )
+        assert rpc.closed is True
+
+    asyncio.run(scenario())
+
+
+def test_grok_session_listing_timeout_kills_the_child_process(tmp_path, monkeypatch):
+    executable = tmp_path / "grok"
+    executable.write_text("#!/bin/sh\nexec sleep 30\n", encoding="utf-8")
+    executable.chmod(0o700)
+    monkeypatch.setattr(harness_module, "GROK_SESSION_LIST_TIMEOUT_SECONDS", 0.1)
+    created: list[Any] = []
+    original = asyncio.create_subprocess_exec
+
+    async def observed_create(*argv: str, **kwargs: Any) -> Any:
+        process = await original(*argv, **kwargs)
+        created.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observed_create)
+    profile = HarnessProfile(
+        id="grok-a",
+        name="Grok",
+        kind=HarnessKind.GROK_ACP,
+        executable=str(executable),
+    )
+
+    async def scenario() -> None:
+        with pytest.raises(HarnessUnavailableError):
+            await GrokAcpAdapter().list_external_sessions(
+                profile, CredentialStore(), tmp_path
+            )
+        assert len(created) == 1
+        # The stalled `grok sessions list` child must not outlive the request.
+        assert created[0].returncode is not None
+
+    asyncio.run(scenario())
+
+
+def test_codex_rpc_reader_limit_overrun_ends_the_transport():
+    class OverrunStdout:
+        async def readline(self) -> bytes:
+            raise ValueError("Separator is not found, and chunk exceed the limit")
+
+    class Stdin:
+        def write(self, _data: bytes) -> None:
+            return None
+
+        async def drain(self) -> None:
+            return None
+
+    class Process:
+        def __init__(self) -> None:
+            self.returncode: int | None = None
+            self.stdout = OverrunStdout()
+            self.stderr = None
+            self.stdin = Stdin()
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self) -> int | None:
+            return self.returncode
+
+    async def scenario() -> None:
+        process = Process()
+        rpc = _CodexRpc(process=process)
+        pending = asyncio.get_running_loop().create_future()
+        rpc._pending[1] = pending
+
+        await rpc._reader()
+
+        with pytest.raises(HarnessTransportError):
+            await pending
+        failure = await rpc.events.get()
+        assert isinstance(failure, HarnessTransportError)
+        # A live process with no reader would let every later request wait
+        # forever, so the transport ends with it.
+        assert process.killed is True
+        assert rpc.connection_state == "disconnected"
+        with pytest.raises(HarnessTransportError):
+            await asyncio.wait_for(rpc.request("thread/list", {}), timeout=1)
+
+    asyncio.run(scenario())
