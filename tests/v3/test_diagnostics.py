@@ -488,6 +488,8 @@ def test_background_tasks_receive_child_correlation_and_persist_failures(
 
     assert observed["operation_id"] not in {None, "operation_parent"}
     assert durable.wait(timeout=1)
+    # ERROR records are appended asynchronously; drain the writer before reading.
+    assert manager.flush()
     failures = [
         record
         for record in _records(manager.log_dir / "missions.log")
