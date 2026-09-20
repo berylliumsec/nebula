@@ -26,6 +26,7 @@ from nebula.v3.domain import (
     HarnessTurnOrigin,
     HarnessTurnStatus,
     RiskClass,
+    RunBackend,
     RunBudget,
     RunStatus,
     ToolCall,
@@ -497,3 +498,66 @@ def test_new_chat_turn_budgets_are_unlimited():
     )
     assert turn.max_tool_calls is None
     assert turn.max_artifact_queries is None
+
+
+def test_delete_chat_session_removes_its_harness_session_unless_a_mission_shares_it(
+    store,
+):
+    engagement = store.create(Engagement(name="Harness chat cleanup"))
+    vendor = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="test-model",
+        )
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Delete me",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=vendor.id,
+            model="test-model",
+        )
+    )
+
+    store.delete_chat_session(chat.id)
+
+    with pytest.raises(NotFoundError):
+        store.get(HarnessSession, vendor.id)
+    # The project has nothing left that would block deleting it.
+    assert store.engagement_has_dependents(engagement.id) is False
+
+    shared_engagement = store.create(Engagement(name="Continued as a mission"))
+    shared_vendor = store.create(
+        HarnessSession(
+            engagement_id=shared_engagement.id,
+            harness_profile_id="harness-1",
+            model="test-model",
+        )
+    )
+    shared_chat = store.create(
+        ChatSession(
+            engagement_id=shared_engagement.id,
+            title="Continued",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=shared_vendor.id,
+            model="test-model",
+        )
+    )
+    mission = store.create(
+        AgentRun(
+            engagement_id=shared_engagement.id,
+            objective="Keep using the vendor session",
+            backend=RunBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=shared_vendor.id,
+        )
+    )
+
+    store.delete_chat_session(shared_chat.id)
+
+    assert store.get(HarnessSession, shared_vendor.id).id == shared_vendor.id
+    assert store.get(AgentRun, mission.id).harness_session_id == shared_vendor.id

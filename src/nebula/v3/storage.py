@@ -791,6 +791,50 @@ class NebulaStore:
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
 
+    def iter_readable_entities(
+        self, model: type[EntityT], *, page_size: int = 1000
+    ) -> Iterator[EntityT]:
+        """Yield every ``model`` record oldest first, skipping rows that no longer validate.
+
+        ``list_entities`` raises ``CorruptRecordError`` for a whole page as soon
+        as one row fails validation, so a reference scan over every kind turned
+        into a failure of the operation that ran it once any record anywhere was
+        unreadable. Scans only need the readable rows; each skipped row is
+        recorded so the corruption stays visible.
+        """
+
+        if not 1 <= page_size <= 1000:
+            raise ValueError("page_size must be between 1 and 1000")
+        offset = 0
+        while True:
+            statement = (
+                select(EntityRow)
+                .where(EntityRow.kind == model.entity_kind)
+                .order_by(EntityRow.created_at, EntityRow.id)
+                .offset(offset)
+                .limit(page_size)
+            )
+            readable: list[EntityT] = []
+            scanned = 0
+            with self.database.session() as session:
+                for row in session.scalars(statement):
+                    scanned += 1
+                    try:
+                        readable.append(_row_to_entity(row, model))
+                    except CorruptRecordError as exc:
+                        record_caught_exception(
+                            "storage",
+                            "storage.scan.skipped_unreadable_record",
+                            "A reference scan skipped a stored record that failed validation.",
+                            exc,
+                            stage="storage",
+                            metadata={"kind": row.kind, "entity_id": row.id},
+                        )
+            yield from readable
+            if scanned < page_size:
+                return
+            offset += scanned
+
     def count(self, model: type[Entity], *, engagement_id: str | None = None) -> int:
         statement = select(func.count(EntityRow.id)).where(
             EntityRow.kind == model.entity_kind
@@ -1168,7 +1212,34 @@ class NebulaStore:
                 raise ConflictError(
                     "conversation cannot be deleted while a harness turn is active"
                 )
-            owned_records = or_(
+            # Vendor (harness) sessions belong to the conversations that opened
+            # them; nothing else releases the row once the chat is gone, and a
+            # leftover row keeps the project from being deleted. A mission that
+            # continued from the chat still runs on the same vendor session, so
+            # a session any run references is left in place.
+            harness_session_ids = {
+                str(item.payload["harness_session_id"])
+                for item in session.scalars(
+                    select(EntityRow).where(
+                        EntityRow.kind == "chat_sessions",
+                        EntityRow.id.in_(session_ids),
+                    )
+                )
+                if item.payload.get("harness_session_id")
+            }
+            if harness_session_ids:
+                shared_with_runs = session.scalars(
+                    select(EntityRow).where(
+                        EntityRow.kind == "runs",
+                        EntityRow.payload["harness_session_id"]
+                        .as_string()
+                        .in_(sorted(harness_session_ids)),
+                    )
+                )
+                harness_session_ids.difference_update(
+                    str(item.payload["harness_session_id"]) for item in shared_with_runs
+                )
+            owned_predicates = [
                 and_(
                     EntityRow.kind.in_(
                         (
@@ -1205,7 +1276,15 @@ class NebulaStore:
                     EntityRow.kind == "chat_sessions",
                     EntityRow.id.in_(session_ids[1:]),
                 ),
-            )
+            ]
+            if harness_session_ids:
+                owned_predicates.append(
+                    and_(
+                        EntityRow.kind == "harness_sessions",
+                        EntityRow.id.in_(sorted(harness_session_ids)),
+                    )
+                )
+            owned_records = or_(*owned_predicates)
             # Operation events are an immutable audit ledger. As with deleted
             # missions, retain those records while removing the mutable chat,
             # harness-turn, and interaction entities that expose them in the UI.

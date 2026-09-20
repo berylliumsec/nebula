@@ -76,6 +76,26 @@ class SourceFetchError(KnowledgeIngestionError):
     """The remote source could not be fetched safely."""
 
 
+class KnowledgeSourceIndexError(KnowledgeIndexError):
+    """The source and its artifact were recorded, but the index write failed.
+
+    ``source`` is the stored row in ``error`` status so callers can hand its id
+    back for reindexing instead of ingesting the same document again.
+    """
+
+    def __init__(self, source: KnowledgeSource, cause: KnowledgeIndexError) -> None:
+        super().__init__(str(cause) or "the local knowledge index write failed")
+        self.source = source
+
+
+class LibraryItemIndexError(KnowledgeIndexError):
+    """The Library item and its artifact were recorded, but the index write failed."""
+
+    def __init__(self, item: LibraryItem, cause: KnowledgeIndexError) -> None:
+        super().__init__(str(cause) or "the local Library index write failed")
+        self.item = item
+
+
 class BrowserRuntimeUnavailableError(SourceFetchError):
     """No supported local Chromium runtime can render a web source."""
 
@@ -383,15 +403,15 @@ def ingest_document(
         return source
     try:
         knowledge_index.upsert_source(source, chunks)
-    except KnowledgeIndexError:
+    except KnowledgeIndexError as exc:
         current = store.get(KnowledgeSource, source.id)
-        store.update(
+        errored = store.update(
             KnowledgeSource,
             source.id,
             {"status": "error"},
             expected_revision=current.revision,
         )
-        raise
+        raise KnowledgeSourceIndexError(errored, exc) from exc
     current = store.get(KnowledgeSource, source.id)
     source = store.update(
         KnowledgeSource,
@@ -857,15 +877,15 @@ def ingest_library_item(
         return item
     try:
         knowledge_index.upsert_library_item(item, chunks)
-    except KnowledgeIndexError:
+    except KnowledgeIndexError as exc:
         current = store.get(LibraryItem, item.id)
-        store.update(
+        errored = store.update(
             LibraryItem,
             item.id,
             {"status": "error"},
             expected_revision=current.revision,
         )
-        raise
+        raise LibraryItemIndexError(errored, exc) from exc
     current = store.get(LibraryItem, item.id)
     return store.update(
         LibraryItem,

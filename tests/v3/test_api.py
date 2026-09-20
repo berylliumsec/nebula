@@ -1717,3 +1717,58 @@ def test_paired_device_is_recognised_beyond_the_first_thousand_sessions(api):
     )
 
     assert response.status_code == 200, response.text
+
+
+def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Corrupt neighbour"))
+    asset = store.create(
+        Asset(engagement_id=engagement.id, name="host", asset_type="host")
+    )
+    unrelated = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Will be corrupted",
+            provider_profile_id="provider",
+            model="model-a",
+        )
+    )
+    with store.database.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE entities SET payload = json_set(payload, '$.title', 5) "
+            "WHERE id = ?",
+            (unrelated.id,),
+        )
+
+    response = client.delete(f"/api/v1/assets/{asset.id}", headers=_auth())
+
+    assert response.status_code == 204, response.text
+    assert store.count(Asset) == 0
+
+
+def test_run_event_websocket_completes_and_closes_after_a_terminal_run(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(name="Finished mission"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Already finished",
+            status="complete",
+        )
+    )
+    store.append_event(run.id, "run.completed", {}, idempotency_key="done")
+
+    with client.websocket_connect(
+        f"/api/v1/runs/{run.id}/events/ws?after=0",
+        headers=_auth(),
+        subprotocols=["nebula.events.v1"],
+    ) as websocket:
+        assert websocket.receive_json()["event"]["sequence"] == 1
+        assert websocket.receive_json() == {
+            "kind": "replay_complete",
+            "after_sequence": 1,
+        }
+        assert websocket.receive_json() == {"kind": "complete", "after_sequence": 1}
+        with pytest.raises(WebSocketDisconnect) as exc_info:
+            websocket.receive_json()
+    assert exc_info.value.code == 1000

@@ -1088,3 +1088,123 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
         await service.shutdown()
 
     asyncio.run(scenario())
+
+
+class _FakeVendorProcess:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def test_deleting_a_harness_chat_closes_its_vendor_session(tmp_path):
+    from nebula.v3.domain import HarnessSession
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Harness"))
+    vendor = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="model-a",
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Harness chat",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=vendor.id,
+            model="model-a",
+        )
+    )
+    app = create_app(store, auth_token="test-token")
+    runtime = app.state.harness_runtime_service
+    connection = _FakeVendorProcess()
+    gateway = _FakeVendorProcess()
+    runtime._connections[vendor.id] = connection
+    runtime._gateways[vendor.id] = gateway
+    client = TestClient(app)
+
+    # A turn that is still running on the vendor session blocks the delete
+    # before anything is closed or removed.
+    runtime._active[vendor.id] = object()
+    refused = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+    assert refused.status_code == 409, refused.text
+    assert connection.closed is False
+    assert store.get(ChatSession, session.id).id == session.id
+    del runtime._active[vendor.id]
+
+    response = client.delete(f"/api/v1/chat-sessions/{session.id}", headers=_auth())
+
+    assert response.status_code == 204, response.text
+    assert connection.closed is True
+    assert gateway.closed is True
+    assert vendor.id not in runtime._connections
+    assert vendor.id not in runtime._gateways
+    assert store.list_entities(HarnessSession) == []
+    assert store.engagement_has_dependents(engagement.id) is False
+
+
+def test_expired_pairings_are_pruned_when_pairings_are_created_or_redeemed(
+    tmp_path, monkeypatch
+):
+    from datetime import timedelta
+
+    import nebula.v3.api as api_module
+    from nebula.v3.domain import utc_now
+
+    store = NebulaStore(tmp_path / "pairing.db")
+    app = create_app(store, auth_token="test-token")
+    client = TestClient(app, base_url="https://127.0.0.1", client=("127.0.0.1", 50000))
+    pending = app.state.pending_pairings
+    # Start in the past so the device rows the redeem writes never carry a
+    # created_at later than the domain clock's updated_at.
+    clock = {"now": utc_now() - timedelta(hours=1)}
+    monkeypatch.setattr(api_module, "utc_now", lambda: clock["now"])
+
+    abandoned = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Abandoned"}
+    )
+    assert abandoned.status_code == 200
+    assert len(pending) == 1
+
+    clock["now"] += timedelta(minutes=6)
+    fresh = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Fresh"}
+    )
+    assert fresh.status_code == 200
+    # Creating a pairing drops the abandoned one that can no longer be redeemed.
+    assert len(pending) == 1
+
+    clock["now"] += timedelta(minutes=6)
+    stale = client.post(
+        "/api/v1/auth/pairings/redeem",
+        json={
+            "secret": fresh.json()["secret"],
+            "confirmation_code": fresh.json()["confirmation_code"],
+        },
+    )
+    assert stale.status_code == 401
+    assert pending == {}
+
+    third = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Third"}
+    )
+    clock["now"] += timedelta(minutes=6)
+    fourth = client.post(
+        "/api/v1/auth/pairings", headers=_auth(), json={"name": "Fourth"}
+    )
+    assert third.status_code == 200 and fourth.status_code == 200
+    redeemed = client.post(
+        "/api/v1/auth/pairings/redeem",
+        json={
+            "secret": fourth.json()["secret"],
+            "confirmation_code": fourth.json()["confirmation_code"],
+        },
+    )
+    assert redeemed.status_code == 200, redeemed.text
+    # Redeeming prunes the expired third pairing along with the redeemed one.
+    assert pending == {}
