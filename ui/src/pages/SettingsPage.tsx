@@ -822,9 +822,12 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       <SettingsGroup id="environments-settings" title="Environments" summary="SSH hosts from ~/.ssh/config" open={openAdvancedGroup === "environments-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "environments-settings"}>
       <EnvironmentSettings />
       </SettingsGroup>
-      <SettingsGroup id="integrations-settings" title="Integrations" summary="Web search runtime and TypeSafe Jev tool suggestions" open={openAdvancedGroup === "integrations-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "integrations-settings"}>
-      <WebSearchRuntimeSettings />
+      <SettingsGroup id="integrations-settings" title="Integrations" summary="TypeSafe Jev tool suggestions and the web search runtime" open={openAdvancedGroup === "integrations-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "integrations-settings"}>
+      {/* Web search loads asynchronously and grows when it lands. Keeping it
+          last means that growth never pushes an anchored section above it out
+          of view after a jump to #typesafe-integration-settings. */}
       <TypeSafeIntegrationSettings />
+      <WebSearchRuntimeSettings />
       </SettingsGroup>
       <SettingsGroup id="project-policy-settings" title="Project Policy" summary={engagement ? `${engagement.name} · deny network unless scoped` : "Select a project"} open={openAdvancedGroup === "project-policy-settings"} onOpen={openSettingsGroup} hidden={embedded && embeddedAdvancedGroup !== "project-policy-settings"}>
       <EngagementPolicySettings />
