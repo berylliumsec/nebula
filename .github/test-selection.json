@@ -1,20 +1,20 @@
 {
-  "change_digest": "8e172036b7eb8d16c62523fa6cd8b806fcc930d98e724af12c39b0f9cf504e96",
-  "reviewed_by": "Claude review of scoping the tool-free claim to the turns that really expose no functions",
-  "reason": "Every chat turn's base instructions started with \"No tools are available in this turn.\", and both tool paths prepend their own instructions to that same text rather than replacing it, so a tools-enabled turn was told to call a supplied function and, two lines later, that it had none; final synthesis, which supplies no functions of its own, repeated the claim after the tools had run. chat.py now builds the base from _CHAT_BASE_INSTRUCTIONS and attaches the claim through the new _tool_free_request() at the two sites that really expose no functions (_complete_claimed and stream, both reached only when prepared.tools_enabled is false) plus the tool-free half of the context-length retry in _recover_context_length_rejection. test_chat covers all three: the new prepare-level test asserts a tools-enabled turn (a skill with resources, so no command runtime is needed) starts at the neutral base and never carries the claim, and it fails on origin/main; test_local_chat_retrieves_only_its_engagement_and_persists now asserts a tool-free turn still opens with the exact sentence and sends no functions; test_confirmed_context_rejection_refreshes_compacts_and_retries_once asserts the rebuilt tool-free retry keeps it. test_chat_tool_loop asserts the routing steps and final synthesis all propagate the base instructions and none of them claims the turn has no tools. test_minimal_agent_instructions pins the constant split so the base cannot regain the sentence.",
-  "exclusions": "No frontend tests: no UI file changes. The operator-facing copy of these instructions, chat_results.py's context-sources endpoint, already branches on the session's tools_enabled and is untouched, so ChatRecordedContext renders the same text it did before for each kind of session. No native tests: no Tauri or Rust change. No screenshot baselines: nothing rendered changes. No Playwright: src/nebula/v3/chat.py matches the assistant rule (area:assistant, area:chat-edit-in-place, area:provider-thinking), but all three are mock-runtime browser tests whose stub provider never reads request instructions, and no request or response schema changes -- only the text Core sends a real provider. area:core-api is excluded for the same reason. tests/v3/test_chat_api.py, test_chat_subagents.py, test_chat_goals.py, test_chat_decisions.py, test_context.py, test_approval_continuation.py, test_api.py, test_browser_companion.py, test_application_model_admission.py, test_chat_workspace.py, test_chat_catchup.py, test_chat_queue.py, test_chat_media.py, test_chat_reconnection.py, test_chat_schedules.py, test_tool_catalog.py and test_specialist_tool_batches.py all build chat requests through the same assembly; they were run locally against this branch and pass, and none asserts the instruction text, so they are not selected.",
-  "expected_tests": {
-    "python": 70,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
-  "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_minimal_agent_instructions.py"
-  ],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+ "change_digest": "49abd1cf417e177cd108483612acbea5940a50bc1fe001d8580d3d68c5e488c1",
+ "reviewed_by": "Claude review of importing the Linux-only secretstorage module lazily",
+ "reason": "vault_probe.py and credentials.py imported secretstorage at module scope, but keyring installs that Linux-only dependency only on Linux, so importing nebula.v3 on macOS or Windows died inside nebula/v3/__init__.py -> domain -> diagnostics -> diagnostic_sensitive -> vault_probe with ModuleNotFoundError: No module named 'secretstorage'. CI's macOS job is gated on a native test selection, so nothing has run it since #374 introduced the import; the first diff to select native tests (the diagnostics log-tolerance branch) failed collection there. Both modules now import secretstorage inside the SecretService code paths, which run only when keyring selects that backend, and secret_service_state() already routes caught failures through on_caught, so a missing dependency reads as an unavailable vault. tests/v3/test_credentials.py adds two tests that fail on origin/main: one runs a subprocess with a meta-path finder that blocks secretstorage and imports nebula.v3.credentials and nebula.v3.vault_probe, the other pins that the Linux probe reports 'unavailable' with an ImportError instead of raising. The existing Linux vault tests monkeypatch attributes on the same module object and still pass, because a function-level import resolves through sys.modules. The native selection is present only to run the macOS job, which is where this fix has to be proven: it collects tests/v3/test_sandbox.py under -k macos, the collection that was failing.",
+ "exclusions": "No frontend or Rust source change: the selected native test is the cheapest one that makes CI run the macOS job at all, and its Rust behaviour is unrelated and unchanged. No Playwright: src/nebula/v3/** matches the catch-all core-api rule, but no request, response, or rendered surface changes -- on Linux, where every browser suite runs, the import resolves exactly as before. No screenshot baselines for the same reason. tests/v3/test_diagnostics.py and test_diagnostic_sensitive.py are excluded because diagnostic_sensitive.py only re-exports vault_state and is untouched; both were run locally and pass. The two compaction tests in tests/v3/test_orchestration.py remain red on origin/main for the reason recorded in earlier receipts and are unrelated.",
+ "expected_tests": {
+  "python": 21,
+  "frontend": 0,
+  "native": 1,
+  "playwright": 0
+ },
+ "python": [
+  "tests/v3/test_credentials.py"
+ ],
+ "frontend": [],
+ "native": [
+  "diagnostics::tests::stable_codes_and_identifiers_are_strict"
+ ],
+ "playwright": []
 }

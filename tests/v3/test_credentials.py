@@ -429,3 +429,48 @@ def test_failed_vpn_vault_delete_keeps_profile_and_core_responsive(tmp_path):
             assert retry.status_code == 204
 
     asyncio.run(scenario())
+
+
+def test_core_imports_where_secretstorage_is_absent():
+    """macOS and Windows have no secretstorage: Core must still import."""
+
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    import nebula
+
+    script = (
+        "import importlib.abc, sys\n"
+        "class Blocker(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'secretstorage':\n"
+        '            raise ImportError(f"No module named {name!r}")\n'
+        "        return None\n"
+        "sys.meta_path.insert(0, Blocker())\n"
+        "import nebula.v3.credentials\n"
+        "import nebula.v3.vault_probe\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(Path(nebula.__file__).resolve().parents[1]),
+        },
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_missing_secretstorage_is_reported_instead_of_raising(monkeypatch):
+    import sys
+
+    from keyring.backends.SecretService import Keyring
+
+    from nebula.v3.vault_probe import secret_service_state
+
+    monkeypatch.setitem(sys.modules, "secretstorage", None)
+    caught: list[Exception] = []
+    assert secret_service_state(Keyring(), on_caught=caught.append) == "unavailable"
+    assert isinstance(caught[0], ImportError)
