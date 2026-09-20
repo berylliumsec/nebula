@@ -542,3 +542,87 @@ def test_core_shutdown_interrupts_rather_than_stops_subagents(tmp_path: Path) ->
         assert record.error == "Core shut down while this subagent was running."
 
     asyncio.run(scenario())
+
+
+def test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Count the route files.",
+                    name="Count routes",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p3"),
+                _response(text="The subagent was interrupted by a restart."),
+            ],
+            child=[],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Split the work.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        events = await _drain(chat, parent_turn_id)
+        assert "callback_required" in events
+        assert (
+            store.get(ChatTurn, parent_turn_id).status
+            == ChatTurnStatus.WAITING_CALLBACK
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(lambda: bool(provider.child_requests))
+        # Simulate a crash: drop the in-memory worker without settling the child.
+        for runtime in chat._active_provider_turns.values():
+            if runtime.task is not None:
+                runtime.task.cancel()
+        chat._active_provider_turns.clear()
+        store.update(
+            ChatSubagent,
+            record.id,
+            {
+                "status": ChatSubagentStatus.RUNNING,
+                "finished_at": None,
+                "result_message_id": None,
+            },
+            expected_revision=store.get(ChatSubagent, record.id).revision,
+        )
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        store.update(
+            ChatTurn,
+            child_turn.id,
+            {"status": ChatTurnStatus.ROUTING, "error": None},
+            expected_revision=child_turn.revision,
+        )
+
+        restarted = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker-2"
+        )
+        await restarted.startup()
+
+        assert store.get(ChatSubagent, record.id).status == (
+            ChatSubagentStatus.INTERRUPTED
+        )
+        # The waiting parent must be resumed, not left waiting forever.
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert parent.tool_history[1]["name"] == "wait_subagents"
+        assert parent.tool_history[1]["status"] == "complete"
+        messages = _messages(store, parent.session_id)
+        assert any(
+            item.content == "The subagent was interrupted by a restart."
+            for item in messages
+        )
+        await restarted.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
