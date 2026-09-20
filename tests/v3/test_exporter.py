@@ -399,3 +399,47 @@ def test_export_rejects_missing_required_global_reference_without_output(tmp_pat
         )
 
     assert not destination.exists()
+
+
+def test_export_keeps_recorded_browser_headers_with_credentials_redacted(tmp_path):
+    from datetime import timedelta
+
+    from nebula.v3.domain import BrowserInterceptItem, utc_now
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Browser evidence"))
+    store.create(
+        BrowserInterceptItem(
+            engagement_id=engagement.id,
+            session_id="browser-session",
+            tab_id="tab-1",
+            identity_id="identity-1",
+            transaction_id="txn-1",
+            phase="request",
+            method="GET",
+            url="https://example.test/login",
+            headers=[
+                ("host", "example.test"),
+                ("authorization", "Bearer secret-token"),
+                ("cookie", "sid=abc"),
+            ],
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+    )
+    destination = tmp_path / "browser.nebula.zip"
+
+    export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    with zipfile.ZipFile(destination) as archive:
+        (item,) = json.loads(archive.read("entities/browser_intercepts.json"))
+    assert item["headers"] == [
+        ["host", "example.test"],
+        ["authorization", "[redacted]"],
+        ["cookie", "[redacted]"],
+    ]

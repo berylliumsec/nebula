@@ -78,6 +78,43 @@ def _json_bytes(value: Any) -> bytes:
     )
 
 
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrf-token",
+    }
+)
+
+
+def _portable_header_pairs(pairs: list[Any]) -> list[Any]:
+    """Keep recorded (name, value) header pairs, redacting credential values."""
+
+    cleaned: list[Any] = []
+    for pair in pairs:
+        if (
+            isinstance(pair, (list, tuple))
+            and len(pair) == 2
+            and isinstance(pair[0], str)
+        ):
+            name, value = pair
+            lowered = name.lower()
+            if (
+                lowered in _SENSITIVE_HEADER_NAMES
+                or "token" in lowered
+                or "secret" in lowered
+            ):
+                value = "[redacted]"
+            cleaned.append([name, value])
+        else:
+            cleaned.append(_credential_free(pair))
+    return cleaned
+
+
 def _credential_free(value: Any) -> Any:
     """Remove machine-local auth bindings while retaining portable snapshots."""
 
@@ -85,6 +122,12 @@ def _credential_free(value: Any) -> Any:
         cleaned: dict[str, Any] = {}
         for key, item in value.items():
             lowered = key.lower()
+            if lowered == "headers" and isinstance(item, list):
+                # Recorded browser traffic (intercepts, repeater tabs) keeps its
+                # header pairs; only a dict-shaped headers binding is a
+                # machine-local credential set.
+                cleaned[key] = _portable_header_pairs(item)
+                continue
             if "secret_ref" in lowered or lowered in {
                 "authorization",
                 "headers",
