@@ -1,17 +1,16 @@
 {
-  "change_digest": "c26d6e948ea36527924739c0ebe512a58d6649605a632bbef2af2abe95b112b3",
-  "reviewed_by": "Claude review of the remaining first-page scans",
-  "reason": "Two more lookups had the defect #386 fixed elsewhere: they read the first 1,000-row page of a kind (list_entities orders oldest first) and filtered in Python. AutomationRuntime._authorize_or_request decided 'approval has already been consumed' by scanning the first 1,000 CommandExecution rows for metadata.approval_id, so once a Core had recorded more than 1,000 command executions a consumed approval was no longer visible to the check and the same approval could authorize the command again from another managed session; the check now asks NebulaStore.has_entity_with_metadata, which tests metadata.approval_id in SQL. ChatService.attach_native_run_to_chat looked for an existing mission chat in the first 1,000 sessions of the project, so past 1,000 conversations every 'Continue in chat' created a duplicate conversation for the same mission; it now pages through the project's sessions. test_session_record_lookups gains both beyond-1,000 cases; test_automation_runtime covers the authorization path that calls the new store query.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through storage.py and the remaining-core fallback) is the real-Core journey suite; the defects only appear past 1,000 rows, which the Python tests create directly. No full suites.",
+  "change_digest": "34b09d9bf87d4758eb4b85fc6d17cb12056b4e411ad70ae4a99dafa75b8c1da0",
+  "reviewed_by": "Claude review of exported browser headers",
+  "reason": "exporter._credential_free blanked every key named headers regardless of shape, so the recorded request headers of BrowserInterceptItem and BrowserRepeaterTab (list[tuple[str, str]] fields) were written as null in every project bundle: captured browser evidence lost its headers, and the record no longer matched its own model. The helper's purpose is to strip machine-local auth bindings, which are dict-shaped; list-shaped headers are recorded traffic. The list case now keeps the (name, value) pairs and redacts values for credential-bearing names (authorization, proxy-authorization, cookie, set-cookie, x-api-key, x-auth-token, x-csrf-token, and any name containing token or secret); the dict case is unchanged. test_exporter gains a bundle round trip asserting the intercept's host header survives and its authorization and cookie values are redacted (null on main); the file's other cases cover manifests, blobs, events, snapshots and reference handling.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for exporter.py) is the real-Core journey suite and does not export a project with intercept records; the Python test writes and reads the bundle directly. No full suites.",
   "expected_tests": {
-    "python": 39,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_automation_runtime.py"
+    "tests/v3/test_exporter.py"
   ],
   "frontend": [],
   "native": [],
