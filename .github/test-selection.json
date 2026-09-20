@@ -1,19 +1,26 @@
 {
-  "change_digest": "7b9ea97bcecff849e5acb6f5c335ca73cb251de569cbcb6e6471a2e5e997ed4e",
-  "reviewed_by": "Claude review of reporting-export",
-  "reason": "Six audit findings in the reporting/export/artifact path. (22) request_render assembled the canonical snapshot, which SHA-256 hashes every referenced artifact, synchronously on the event loop while holding the render lock, and the PDF download route re-hashed the PDF on the loop; snapshot assembly and the cached-render check now run in _prepare_render via asyncio.to_thread outside the lock, and the route offloads pdf(). (23) exporter's elif chain made the harness_profile_id branch unreachable for an AgentRun that also had a supervisor provider, so the bundle omitted the harness profile; both references are now collected. (26) sign-off wrote report_revision N into the report metadata but N+1 into the audit event, and validated findings outside the committing transaction so a finding deleted or invalidated between check and commit produced a 404 or was finalized; sign-off now records the signed revision consistently, opens the write transaction first (BEGIN IMMEDIATE on SQLite, matching delete_archived_engagement) and re-validates every finding inside it, reporting a deleted finding as a ConflictError. (28) _build_pdf appended one distinct glyph warning per field, unbounded against ReportRender.warnings max_length=1000, so a large multilingual report could fail its completion update after the PDF was written; unsupported code points are now aggregated into one bounded warning. (29) ArtifactStore.verify raised ArtifactStoreError for a row whose storage_path escapes the store or disagrees with its digest, so the render's structured artifact_integrity 409 became a 500; verify now records the exception and returns False. (38) blob writes fsynced the file but never the shard directory after os.link, so a crash could leave the committed Artifact row without its blob; the directory (and newly created parent shards) are fsynced after the link. Proven by the nine new tests in the listed files, each of which fails on origin/main, plus the existing suites in those files; the existing rollback test now injects its failure into StoreTransaction.append_operation_event because sign-off no longer goes through update_with_operation_event. Rebased onto main after #425: that change added media-type inference tests to test_artifacts.py, this one adds fsync and verify tests, and the resolution keeps both.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through api.py) does not exercise report sign-off revision metadata, PDF hashing threads, exporter harness references, artifact verify on corrupt rows or blob fsync; the Python tests drive them directly. No full suites.",
+  "change_digest": "bc7df20aafb556fc6483c603b6e004112c00c483ecb6044cf85c981a16fd9ecb",
+  "reviewed_by": "Claude review of api-row-caps",
+  "reason": "Several API routes read one fixed page of entities (the 100 or 1,000 oldest rows) and filtered it in Python, so anything past that page was invisible: /chat/session-activity never flagged the newest conversations of a project with more than 100, harness-turn interactions, tool-call artifacts and live paired devices vanished once a project or Core held more than 1,000 rows of the kind, DELETE /vpn-profiles no longer saw the active session or policy using a profile, and a retried POST /action-intents no longer found its prior idempotency key and queued a second device action. The intents/handoffs lists were oldest-first with no offset, the terminal output pager could return an empty page whose X-Nebula-Output-Next equalled offset, PUT/PATCH /engagements skipped the workspace_path resolution that POST enforces, and /search reported any internal ValueError as an invalid cursor and accepted negative cursor offsets. storage.py gains find_entities (SQL JSON-payload filters, engagement scope, offset/limit, newest-first ordering) and list_entities gains newest_first; every scan above now filters in SQL, session activity pages through all conversations with one query for the project's pending turns (ChatService.pending_turns), intents/handoffs are paged newest first with offset, both output pagers share _output_page_end with the forward fallback, create/replace/patch share _resolve_engagement_workspace_path, and search decodes its cursor in _decode_search_cursor raising SearchCursorError. The new tests in test_storage.py (find_entities semantics, newest-first paging), test_api.py (101-conversation activity, 1,000-row interaction/artifact/device/VPN fixtures, newest-first intents and handoffs, multibyte output page, workspace_path on PUT/PATCH), test_action_broker.py (device routing and idempotency past 1,000 rows) and test_federated_search.py (negative/garbage cursors, stale projection kind) each fail on main; the other listed files cover the shared pagers, VPN delete, handoff listing, chat pending turns and engagement CRUD paths. Rebased onto main after #426, #431, #433 and #436: the handoff paging in handoffs.py now defers to the equivalent implementation #433 merged (its validation and tests are already on main), while list_entities keeps the newest_first option this change adds for its other call sites; the conflicting test files keep both sides' new tests.",
+  "exclusions": "No frontend tests: no ui/ change (response shapes of every touched route are unchanged and the UI callers in ui/src/api/client.ts pass no new parameters). No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through tests/v3/test_api.py) does not exercise thousand-row projects, output paging by byte offset or engagement PUT/PATCH; the Python tests drive them directly. No full suites.",
   "expected_tests": {
-    "python": 31,
+    "python": 274,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_artifacts.py",
-    "tests/v3/test_exporter.py",
-    "tests/v3/test_report_signoff.py",
-    "tests/v3/test_reporting.py"
+    "tests/v3/test_api.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_action_broker.py",
+    "tests/v3/test_federated_search.py",
+    "tests/v3/test_handoffs.py",
+    "tests/v3/test_terminal_history.py",
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat.py"
   ],
   "frontend": [],
   "native": [],

@@ -372,3 +372,109 @@ def test_heartbeat_stamps_server_time_and_keeps_the_client_clock_as_metadata(
     assert updated.last_used_at >= before
     assert broker.healthy(updated) is True
     assert updated.metadata["client_heartbeat_at"] == client_clock.isoformat()
+
+
+def test_device_routing_sees_live_devices_past_a_thousand_revoked_pairings(tmp_path):
+    store = NebulaStore(tmp_path / "broker-revoked.db")
+    project, source = _source(store)
+    now = utc_now()
+    expiry = now + timedelta(days=1)
+    store.create_many(
+        [
+            PairedDeviceSession(
+                name="Revoked phone",
+                token_sha256="c" * 64,
+                csrf_sha256="d" * 64,
+                idle_expires_at=expiry,
+                absolute_expires_at=expiry,
+                revoked_at=now,
+                created_at=now - timedelta(minutes=1),
+            )
+            for _ in range(1_000)
+        ]
+    )
+    device = _device(store)
+    broker = ActionBroker(store)
+    ref = ResourceRef(
+        project_id=project.id,
+        kind=ResourceKind.SOURCE,
+        id=source.id,
+        revision=source.revision,
+    )
+    broker.heartbeat(
+        device.id,
+        DeviceCapabilitySnapshot(
+            platform="macos",
+            app_version="3.0.0",
+            capabilities=["browser.navigate"],
+            ownership_claims=[ref],
+            expected_revision=device.revision,
+        ),
+    )
+
+    intent = broker.create(
+        ActionIntentCreateRequest(
+            project_id=project.id,
+            resources=[ref],
+            action_id="navigate",
+            requester="operator-1",
+            idempotency_key="navigate-live",
+        )
+    )
+
+    assert intent.eligible_device_ids == [device.id]
+
+
+def test_idempotent_create_finds_the_prior_intent_past_a_thousand_older_ones(
+    tmp_path,
+):
+    from nebula.v3.domain import ActionIntent
+
+    store = NebulaStore(tmp_path / "broker-crowded.db")
+    project, source = _source(store)
+    device = _device(store)
+    broker = ActionBroker(store)
+    ref = ResourceRef(
+        project_id=project.id,
+        kind=ResourceKind.SOURCE,
+        id=source.id,
+        revision=source.revision,
+    )
+    broker.heartbeat(
+        device.id,
+        DeviceCapabilitySnapshot(
+            platform="macos",
+            app_version="3.0.0",
+            capabilities=["browser.navigate"],
+            ownership_claims=[ref],
+            expected_revision=device.revision,
+        ),
+    )
+    now = utc_now()
+    store.create_many(
+        [
+            ActionIntent(
+                engagement_id=project.id,
+                resources=[ref],
+                action_id="navigate",
+                requester="operator-1",
+                idempotency_key=f"older-{index}",
+                logical_lease_key=f"lease-{index}",
+                expires_at=now + timedelta(days=1),
+                created_at=now - timedelta(minutes=1),
+            )
+            for index in range(1_000)
+        ]
+    )
+    request = ActionIntentCreateRequest(
+        project_id=project.id,
+        resources=[ref],
+        action_id="navigate",
+        requester="operator-1",
+        idempotency_key="navigate-once",
+    )
+
+    first = broker.create(request)
+
+    assert broker.create(request).id == first.id
+    assert store.count(ActionIntent, engagement_id=project.id) == 1_001

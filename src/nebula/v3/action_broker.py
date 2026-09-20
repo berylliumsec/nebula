@@ -143,13 +143,12 @@ class ActionBroker:
         return updated
 
     def create(self, request: ActionIntentCreateRequest) -> ActionIntent:
-        existing = [
-            item
-            for item in self.store.list_entities(
-                ActionIntent, engagement_id=request.project_id, limit=1_000
-            )
-            if item.idempotency_key == request.idempotency_key
-        ]
+        existing = self.store.find_entities(
+            ActionIntent,
+            {"idempotency_key": request.idempotency_key},
+            engagement_id=request.project_id,
+            limit=1,
+        )
         if existing:
             intent = existing[0]
             if (
@@ -165,7 +164,9 @@ class ActionBroker:
             raise ValueError("action intent requires a registered device action")
         devices = [
             item
-            for item in self.store.list_entities(PairedDeviceSession, limit=1_000)
+            for item in self.store.find_entities(
+                PairedDeviceSession, {"revoked_at": None}
+            )
             if self.healthy(item)
         ]
         eligible = []
@@ -291,11 +292,19 @@ class ActionBroker:
     def get(self, intent_id: str) -> ActionIntent:
         return self._current(intent_id)
 
-    def list_intents(self, project_id: str) -> list[ActionIntent]:
+    def list_intents(
+        self, project_id: str, *, offset: int = 0, limit: int = 100
+    ) -> list[ActionIntent]:
+        """Return one page of a project's intents, newest first."""
+
         return [
             self._current(item.id)
             for item in self.store.list_entities(
-                ActionIntent, engagement_id=project_id, limit=1_000
+                ActionIntent,
+                engagement_id=project_id,
+                offset=offset,
+                limit=limit,
+                newest_first=True,
             )
         ]
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 
@@ -203,3 +205,44 @@ def test_temporary_conversations_do_not_keep_the_projection_stale(tmp_path):
         assert response.json()["partial_index"] is False
         labels = [item["label"] for item in response.json()["items"]]
         assert labels == ["Durable conversation"]
+
+
+def _cursor(value: str) -> str:
+    return base64.urlsafe_b64encode(value.encode()).decode().rstrip("=")
+
+
+def test_search_does_not_blame_the_cursor_for_a_stale_projection_kind(tmp_path):
+    store = NebulaStore(tmp_path / "stale-kind.db")
+    project = store.create(Engagement(name="Stale kind"))
+    with store.database.session() as session:
+        session.execute(
+            update(SearchDocumentRow)
+            .where(SearchDocumentRow.id == project.id)
+            .values(resource_kind="retired_kind")
+        )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.get(
+        "/api/v1/search",
+        params={"query": "Stale", "active_project": project.id},
+        headers=_auth(),
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] != "invalid search cursor"
+    assert "retired_kind" in response.json()["detail"]
+
+
+def test_search_rejects_a_cursor_that_is_not_a_page_offset(tmp_path):
+    store = NebulaStore(tmp_path / "cursor.db")
+    project = store.create(Engagement(name="Cursor"))
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    for cursor in (_cursor("-1"), _cursor("abc"), "%%%"):
+        response = client.get(
+            "/api/v1/search",
+            params={"query": "Cursor", "active_project": project.id, "cursor": cursor},
+            headers=_auth(),
+        )
+        assert response.status_code == 422, (cursor, response.text)
+        assert response.json()["detail"] == "invalid search cursor"

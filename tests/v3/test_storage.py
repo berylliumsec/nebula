@@ -827,3 +827,102 @@ def test_deleting_a_chat_run_or_archive_removes_budget_counters(store):
         assert session.get(RunBudgetCounterRow, kept_turn.id) is None
     with pytest.raises(NotFoundError):
         store.get(ChatSession, kept_chat.id)
+
+
+def test_find_entities_filters_payload_fields_in_sql_and_pages_in_order(store):
+    engagement = store.create(Engagement(name="Filtered"))
+    other = store.create(Engagement(name="Other"))
+    base = utc_now()
+    store.create_many(
+        [
+            Asset(
+                id=f"asset-{index}",
+                engagement_id=engagement.id,
+                name=f"host-{index % 2}",
+                hostname=None if index == 2 else f"h{index}.test",
+                metadata={"tool_call_id": f"call-{index % 2}"},
+                created_at=base + timedelta(seconds=index),
+                updated_at=base + timedelta(seconds=index),
+            )
+            for index in range(4)
+        ]
+        + [
+            Asset(
+                id="asset-elsewhere",
+                engagement_id=other.id,
+                name="host-0",
+                hostname="elsewhere.test",
+                metadata={"tool_call_id": "call-0"},
+                created_at=base + timedelta(seconds=10),
+                updated_at=base + timedelta(seconds=10),
+            )
+        ]
+    )
+
+    def ids(items):
+        return [item.id for item in items]
+
+    assert ids(store.find_entities(Asset, {"name": "host-0"})) == [
+        "asset-0",
+        "asset-2",
+        "asset-elsewhere",
+    ]
+    assert ids(
+        store.find_entities(Asset, {"name": "host-0"}, engagement_id=engagement.id)
+    ) == ["asset-0", "asset-2"]
+    assert ids(store.find_entities(Asset, {"hostname": None})) == ["asset-2"]
+    assert ids(store.find_entities(Asset, {"metadata.tool_call_id": "call-1"})) == [
+        "asset-1",
+        "asset-3",
+    ]
+    assert ids(store.find_entities(Asset, {"name": "host-0", "hostname": None})) == [
+        "asset-2"
+    ]
+    newest = store.find_entities(
+        Asset,
+        {"name": ["host-0", "host-1"]},
+        engagement_id=engagement.id,
+        newest_first=True,
+        limit=3,
+    )
+    assert ids(newest) == ["asset-3", "asset-2", "asset-1"]
+    rest = store.find_entities(
+        Asset,
+        {"name": ["host-0", "host-1"]},
+        engagement_id=engagement.id,
+        newest_first=True,
+        offset=3,
+        limit=3,
+    )
+    assert ids(rest) == ["asset-0"]
+    assert store.find_entities(Asset, {"name": []}) == []
+    with pytest.raises(ValueError):
+        store.find_entities(Asset, {"name": "host-0"}, offset=-1)
+    with pytest.raises(ValueError):
+        store.find_entities(Asset, {"name": "host-0"}, limit=0)
+
+
+def test_list_entities_can_page_newest_first(store):
+    engagement = store.create(Engagement(name="Paged"))
+    base = utc_now()
+    store.create_many(
+        [
+            Asset(
+                id=f"asset-{index}",
+                engagement_id=engagement.id,
+                name=f"host {index}",
+                created_at=base + timedelta(seconds=index),
+                updated_at=base + timedelta(seconds=index),
+            )
+            for index in range(3)
+        ]
+    )
+
+    newest = store.list_entities(
+        Asset, engagement_id=engagement.id, newest_first=True, limit=2
+    )
+    assert [item.id for item in newest] == ["asset-2", "asset-1"]
+    rest = store.list_entities(
+        Asset, engagement_id=engagement.id, newest_first=True, offset=2, limit=2
+    )
+    assert [item.id for item in rest] == ["asset-0"]
