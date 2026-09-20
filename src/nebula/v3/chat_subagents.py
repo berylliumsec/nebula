@@ -720,17 +720,10 @@ class SubagentService:
                 },
                 expected_revision=record.revision,
             )
-            if self.chat.pending_turn(record.parent_session_id) is None:
-                try:
-                    self._post_result(self.get(record.id))
-                except Exception as exc:
-                    record_caught_exception(
-                        "chat",
-                        "chat.subagent.result_post_failed",
-                        "A subagent report could not be added to the conversation.",
-                        exc,
-                        stage="subagent-restart",
-                    )
+            # A parent parked in wait_subagents survives the restart, so deliver
+            # the interruption the same way a settled child is: resume a waiting
+            # parent, or post the report once the parent is idle.
+            await self._deliver(self.get(record.id))
 
 
 class SubagentBroker:

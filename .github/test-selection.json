@@ -1,16 +1,16 @@
 {
-  "change_digest": "45c5b4030c17bd90909871080572b33c4747e2b69d117d80a738b819564e9073",
-  "reviewed_by": "Claude review of in-band streaming error frames",
-  "reason": "The OpenAI-compatible SSE loop in _stream_openai_compatible read only choices, usage and ids from each data frame. OpenRouter, vLLM and similar gateways report an upstream failure that happens after the 200 headers were sent as a {\"error\": {...}} data frame, so such a frame produced no events and the stream ended with a COMPLETED event carrying empty text: the operator saw an empty successful reply (or a truncated one) with no failure, and nothing retried or explained it. _stream_error_frame now maps that frame to ProviderError (ProviderContextLengthError for context-length codes and markers) using the same detail extraction as HTTP errors, factored into _error_detail and _context_length_error so both paths unwrap OpenRouter's metadata.raw upstream reason. Raising inside the stream body reaches the existing except that yields a StreamEventType.ERROR event with the message, which chat.py already turns into a failed turn; _stream_with_retry never replays a started stream, so no retry happens. test_providers covers the frame after partial output, the frame before any token, the typed context-length mapping, and all existing HTTP error, retry and streaming cases.",
-  "exclusions": "No frontend tests: no ui/ change; the failure renders through the existing turn error path. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through the remaining-core fallback for providers.py) is the real-Core journey suite and cannot inject a provider error frame; the Python provider suite exercises the transport with httpx.MockTransport. No full suites.",
+  "change_digest": "ae1c5e9a083ca6ad99d923bc7ba8b34ae7a0248177ff9c666f026f0e1771e451",
+  "reviewed_by": "Claude review of subagent restart reconciliation",
+  "reason": "SubagentService.reconcile_after_restart marked a child that Core interrupted at restart as INTERRUPTED and then only posted its report when the parent conversation was idle. A parent parked in wait_subagents (turn status WAITING_CALLBACK) survives the restart because ChatService.startup only interrupts ROUTING and FINALIZING turns, so pending_turn returned it, the idle-only branch was skipped, and nothing ever called _resume_waiting_parent: the parent showed 'Waiting for 1 subagent to report.' forever unless an operator posted a manual resume. The INTERRUPTED branch now delivers through _deliver, the same path a settled child uses, which resumes a waiting parent or posts the report once the parent is idle. test_chat_subagents gains a restart scenario with the parent waiting and asserts the parent turn completes and its reply is posted; the existing restart, wait, late-report, stop, limit and deletion scenarios in the same file cover the neighbouring paths.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_subagents.py) is the real-Core journey suite and cannot restart Core mid-turn; the Python scenario simulates the crash against the durable store. No full suites.",
   "expected_tests": {
-    "python": 53,
+    "python": 10,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_providers.py"
+    "tests/v3/test_chat_subagents.py"
   ],
   "frontend": [],
   "native": [],
