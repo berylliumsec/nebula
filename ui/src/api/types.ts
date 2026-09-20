@@ -2075,6 +2075,8 @@ export interface ChatSessionSummary {
   forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;
+  mcpServerIds: Identifier[];
+  hookIds: Identifier[];
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -2392,6 +2394,12 @@ export interface HarnessSessionActivity {
 
 export interface ChatSessionRenameRequest {
   title: string;
+  expectedRevision?: number;
+}
+
+export interface ChatSessionAssistantSettingsRequest {
+  mcpServerIds: Identifier[];
+  hookIds: Identifier[];
   expectedRevision?: number;
 }
 

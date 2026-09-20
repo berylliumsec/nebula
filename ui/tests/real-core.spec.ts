@@ -414,7 +414,7 @@ async function writeProjectHook(
   }), "utf8");
 }
 
-test("assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation", async ({ page }) => {
+test("assistant upgrade real Core provider selections survive reload and restart reconciliation", async ({ page }) => {
   test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();
   let core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
@@ -457,6 +457,28 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
     } });
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
     const provider = await providerResponse.json() as { id: string };
+    const fixtureServer = path.resolve(import.meta.dirname, "../../tests/v3/fixtures/fake_mcp_server.py");
+    const mcpResponse = await api.post("mcp-servers", { data: {
+      name: "restart-tools",
+      transport: "stdio",
+      command: "/usr/bin/python3",
+      arguments: [fixtureServer],
+      trusted_stdio: true,
+      cwd_policy: "fixed",
+      cwd: core.dataDir,
+      enabled: false,
+    } });
+    expect(mcpResponse.ok(), await mcpResponse.text()).toBe(true);
+    let mcp = await mcpResponse.json() as { id: string; revision: number; enabled: boolean };
+    const probe = await api.post(`mcp-servers/${mcp.id}/probe`, { data: { engagement_id: projectId } });
+    expect(probe.ok(), await probe.text()).toBe(true);
+    expect((await probe.json() as { compatible: boolean }).compatible).toBe(true);
+    mcp = await (await api.get(`mcp-servers/${mcp.id}`)).json() as typeof mcp;
+    const enableMcp = await api.patch(`mcp-servers/${mcp.id}`, { data: {
+      changes: { enabled: true }, expected_revision: mcp.revision,
+    } });
+    expect(enableMcp.ok(), await enableMcp.text()).toBe(true);
+    expect((await enableMcp.json() as { enabled: boolean }).enabled).toBe(true);
 
     const pairingApi = await playwrightRequest.newContext({
       baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
@@ -509,11 +531,18 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
     await expect(page.getByText("Real Core retained the exact research context.").first()).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
     const sessionId = chat.session_id;
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const savedSettings = page.getByRole("dialog", { name: "Assistant settings" });
+    await expect(savedSettings.getByRole("checkbox", { name: /Audit lifecycle/ })).toBeChecked();
+    await savedSettings.getByRole("checkbox", { name: /restart-tools/ }).check();
+    await expect(savedSettings.getByRole("status").filter({ hasText: "Assistant settings saved" })).toBeVisible();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
 
     await page.reload();
     await expect(page.getByText("Lifecycle hooks · 2/2 completed")).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
-    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).not.toBeChecked();
+    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /Audit lifecycle/ })).toBeChecked();
+    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("checkbox", { name: /restart-tools/ })).toBeChecked();
     await page.getByRole("button", { name: "Close assistant settings" }).click();
 
     await rm(path.join(workspaceRoot, ".agents", "hooks", "audit"), { recursive: true, force: true });
@@ -568,6 +597,10 @@ test("assistant upgrade real Core provider lifecycle hooks survive reload and re
     await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
     await page.getByRole("button", { name: "Resume response" }).click();
     await expect(page.getByText("Core is continuing in Project A").first()).toBeVisible({ timeout: 30_000 });
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const restoredSettings = page.getByRole("dialog", { name: "Assistant settings" });
+    await expect(restoredSettings.getByRole("checkbox", { name: /Persist workspace/ })).toBeChecked();
+    await expect(restoredSettings.getByRole("checkbox", { name: /restart-tools/ })).toBeChecked();
   } finally {
     await api.dispose();
     await stopLocalModelStub(modelStub);

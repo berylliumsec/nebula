@@ -1846,6 +1846,25 @@ describe("ApiClient", () => {
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "PATCH", body: JSON.stringify({ archived: true, expected_revision: 2 }) });
   });
 
+  it("maps and updates durable assistant selections on chat sessions", async () => {
+    const wire = {
+      created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z",
+      revision: 4, id: "session-1", engagement_id: "engagement-1", title: "Scope review",
+      provider_profile_id: "provider-1", model: "model-1",
+      metadata: { mcp_server_ids: ["mcp-1"], hook_ids: ["audit"] },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify(wire), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.updateChatSessionAssistantSettings("session-1", {
+      mcpServerIds: ["mcp-1"], hookIds: ["audit"], expectedRevision: 3,
+    })).resolves.toMatchObject({ mcpServerIds: ["mcp-1"], hookIds: ["audit"], revision: 4 });
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: "PATCH",
+      body: JSON.stringify({ mcp_server_ids: ["mcp-1"], hook_ids: ["audit"], expected_revision: 3 }),
+    });
+  });
+
   it("maps provenance-backed chat and mission context status", async () => {
     const status = {
       owner_type: "chat_session",

@@ -18,4 +18,17 @@ describe("ThinkingDisclosure", () => {
     const { container } = render(<ThinkingDisclosure text="" />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("keeps model paragraph boundaries semantic inside the disclosure", async () => {
+    const { container } = render(
+      <ThinkingDisclosure text={"First reasoning paragraph.\n\nSecond reasoning paragraph."} />,
+    );
+
+    await userEvent.click(screen.getByText("Thinking"));
+
+    const paragraphs = container.querySelectorAll(".assistant-markdown p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0]).toHaveTextContent("First reasoning paragraph.");
+    expect(paragraphs[1]).toHaveTextContent("Second reasoning paragraph.");
+  });
 });

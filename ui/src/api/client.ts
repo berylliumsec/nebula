@@ -14,6 +14,7 @@ import type {
   ChatSessionRenameRequest,
   ChatSessionActivity,
   ChatSessionSummary,
+  ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
   ContainerTerminalCapacity,
@@ -3342,6 +3343,8 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
+    mcpServerIds: Array.isArray(value.metadata?.mcp_server_ids) ? value.metadata.mcp_server_ids.map(String) : [],
+    hookIds: Array.isArray(value.metadata?.hook_ids) ? value.metadata.hook_ids.map(String) : [],
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -8359,6 +8362,23 @@ export class ApiClient {
       {
         method: "PATCH",
         body: JSON.stringify({ archived, expected_revision: expectedRevision }),
+      },
+    ).then(mapChatSession);
+  }
+
+  updateChatSessionAssistantSettings(
+    sessionId: string,
+    body: ChatSessionAssistantSettingsRequest,
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat-sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          mcp_server_ids: body.mcpServerIds,
+          hook_ids: body.hookIds,
+          expected_revision: body.expectedRevision,
+        }),
       },
     ).then(mapChatSession);
   }

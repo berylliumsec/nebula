@@ -62,9 +62,9 @@
       {"area":"provider-native-hooks","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider lifecycle hooks","runtime":"mock","shard":"1/1"}
     ],
     "provider-native-hooks-core": [
-      {"area":"provider-native-hooks-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
-      {"area":"provider-native-hooks-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
-      {"area":"provider-native-hooks-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider lifecycle hooks survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"}
+      {"area":"provider-native-hooks-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider selections survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-native-hooks-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider selections survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-native-hooks-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core provider selections survive reload and restart reconciliation","runtime":"real-core","shard":"1/1"}
     ],
     "interactive-guides": [
       {"area":"interactive-guides","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade interactive guides","runtime":"real-core","shard":"1/1"},

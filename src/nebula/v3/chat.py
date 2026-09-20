@@ -6227,6 +6227,15 @@ class ChatService:
         return redact_text(value)
 
     @staticmethod
+    def _assistant_settings(prepared: PreparedChat) -> dict[str, list[str]]:
+        if prepared.source_request is None:
+            return {}
+        return {
+            "mcp_server_ids": list(prepared.source_request.mcp_server_ids),
+            "hook_ids": list(prepared.source_request.hook_ids),
+        }
+
+    @staticmethod
     def _title(messages: list[ChatRequestMessage]) -> str:
         first = next(
             (message.content for message in messages if message.role == ChatRole.USER),
@@ -6435,6 +6444,7 @@ class ChatService:
         metadata = {
             **session.metadata,
             "tools_enabled": prepared.tools_enabled,
+            **self._assistant_settings(prepared),
             "message_count": last_sequence,
             "last_sequence": last_sequence,
         }
@@ -6645,6 +6655,7 @@ class ChatService:
                             or "tools_enabled" in prepared.pending_session.metadata
                             else {}
                         ),
+                        **self._assistant_settings(prepared),
                         "message_count": messages[-1].sequence,
                         "last_sequence": messages[-1].sequence,
                     }
@@ -6684,6 +6695,7 @@ class ChatService:
                                 or "tools_enabled" in latest_session.metadata
                                 else {}
                             ),
+                            **self._assistant_settings(prepared),
                             "message_count": messages[-1].sequence,
                             "last_sequence": messages[-1].sequence,
                         }
