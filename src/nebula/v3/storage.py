@@ -1174,65 +1174,94 @@ class NebulaStore:
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
 
+    def validate_chat_session_delete(
+        self, session_id: str, *, expected_revision: int | None = None
+    ) -> None:
+        """Raise what ``delete_chat_session`` would raise, without deleting.
+
+        A caller with side effects of its own (closing the vendor session a
+        harness chat runs on) refuses here first, so a refused delete leaves
+        the surviving conversation untouched.
+        """
+
+        with self.database.session() as session:
+            self._chat_session_delete_scope(
+                session, session_id, expected_revision=expected_revision
+            )
+
+    def _chat_session_delete_scope(
+        self, session: Session, session_id: str, *, expected_revision: int | None
+    ) -> tuple[EntityRow, list[str]]:
+        """The conversation row and the chat ids its delete removes.
+
+        Raises ``NotFoundError`` or ``ConflictError`` when the delete must be
+        refused: a stale revision, a running subagent, or an active turn.
+        """
+
+        row = session.scalar(
+            select(EntityRow).where(
+                EntityRow.id == session_id,
+                EntityRow.kind == "chat_sessions",
+            )
+        )
+        if row is None:
+            raise NotFoundError(f"chat_sessions entity not found: {session_id}")
+        if expected_revision is not None and row.revision != expected_revision:
+            raise ConflictError(
+                f"revision conflict: expected {expected_revision}, found {row.revision}"
+            )
+        # Subagent conversations belong to their parent and go with it.
+        subagent_rows = session.scalars(
+            select(EntityRow).where(
+                EntityRow.kind == "chat_subagents",
+                EntityRow.payload["parent_session_id"].as_string() == session_id,
+            )
+        ).all()
+        if any(item.payload.get("status") == "running" for item in subagent_rows):
+            raise ConflictError(
+                "conversation cannot be deleted while a subagent is running"
+            )
+        session_ids = [
+            session_id,
+            *(
+                str(item.payload["child_session_id"])
+                for item in subagent_rows
+                if item.payload.get("child_session_id")
+            ),
+        ]
+        active_turn = and_(
+            EntityRow.kind == "chat_turns",
+            EntityRow.payload["session_id"].as_string().in_(session_ids),
+            EntityRow.payload["status"]
+            .as_string()
+            .in_(("routing", "waiting_approval", "waiting_callback", "finalizing")),
+        )
+        if session.scalar(select(exists().where(active_turn))):
+            raise ConflictError(
+                "conversation cannot be deleted while a response is active"
+            )
+        active_harness_turn = and_(
+            EntityRow.kind == "harness_turns",
+            EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+            EntityRow.payload["status"]
+            .as_string()
+            .in_(("queued", "running", "waiting_approval")),
+        )
+        if session.scalar(select(exists().where(active_harness_turn))):
+            raise ConflictError(
+                "conversation cannot be deleted while a harness turn is active"
+            )
+        return row, session_ids
+
     def delete_chat_session(
         self, session_id: str, *, expected_revision: int | None = None
     ) -> None:
         """Atomically remove one conversation and its private derived records."""
 
         with self.database.session() as session:
-            row = session.scalar(
-                select(EntityRow).where(
-                    EntityRow.id == session_id,
-                    EntityRow.kind == "chat_sessions",
-                )
+            row, session_ids = self._chat_session_delete_scope(
+                session, session_id, expected_revision=expected_revision
             )
-            if row is None:
-                raise NotFoundError(f"chat_sessions entity not found: {session_id}")
-            if expected_revision is not None and row.revision != expected_revision:
-                raise ConflictError(
-                    f"revision conflict: expected {expected_revision}, found {row.revision}"
-                )
-            # Subagent conversations belong to their parent and go with it.
-            subagent_rows = session.scalars(
-                select(EntityRow).where(
-                    EntityRow.kind == "chat_subagents",
-                    EntityRow.payload["parent_session_id"].as_string() == session_id,
-                )
-            ).all()
-            if any(item.payload.get("status") == "running" for item in subagent_rows):
-                raise ConflictError(
-                    "conversation cannot be deleted while a subagent is running"
-                )
-            session_ids = [
-                session_id,
-                *(
-                    str(item.payload["child_session_id"])
-                    for item in subagent_rows
-                    if item.payload.get("child_session_id")
-                ),
-            ]
-            active_turn = and_(
-                EntityRow.kind == "chat_turns",
-                EntityRow.payload["session_id"].as_string().in_(session_ids),
-                EntityRow.payload["status"]
-                .as_string()
-                .in_(("routing", "waiting_approval", "waiting_callback", "finalizing")),
-            )
-            if session.scalar(select(exists().where(active_turn))):
-                raise ConflictError(
-                    "conversation cannot be deleted while a response is active"
-                )
-            active_harness_turn = and_(
-                EntityRow.kind == "harness_turns",
-                EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
-                EntityRow.payload["status"]
-                .as_string()
-                .in_(("queued", "running", "waiting_approval")),
-            )
-            if session.scalar(select(exists().where(active_harness_turn))):
-                raise ConflictError(
-                    "conversation cannot be deleted while a harness turn is active"
-                )
             # Vendor (harness) sessions belong to the conversations that opened
             # them; nothing else releases the row once the chat is gone, and a
             # leftover row keeps the project from being deleted. A mission that

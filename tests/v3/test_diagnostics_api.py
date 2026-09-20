@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import zipfile
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA
+from nebula.v3.diagnostics import DiagnosticManager, SETTINGS_SCHEMA, _on_event_loop
 from nebula.v3.diagnostic_sensitive import SensitiveDiagnosticStore
 from nebula.v3.harnesses import HarnessTransportError
 from nebula.v3.storage import NebulaStore
@@ -357,5 +361,97 @@ def test_actionable_incident_resolution_and_guarded_sensitive_detail(
         assert str(failure) not in (manager.log_dir / "diagnostics.log").read_text(
             encoding="utf-8"
         )
+    finally:
+        manager.close()
+
+
+def test_diagnostics_reads_run_off_the_event_loop_behind_a_stalled_writer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = DiagnosticManager(tmp_path / "data", watch_settings=False)
+    store = NebulaStore(tmp_path / "nebula.db")
+    app = create_app(store, auth_token="test-token", diagnostic_manager=manager)
+    gate = threading.Event()
+    released = threading.Event()
+    flushing = threading.Event()
+    flush_on_loop: list[bool] = []
+    original_write = manager._write_pending
+    original_flush = manager.flush
+
+    def blocked_write(pending: Any) -> None:
+        gate.wait(timeout=5)
+        released.set()
+        original_write(pending)
+
+    def observed_flush(timeout: float = 5.0) -> bool:
+        flush_on_loop.append(_on_event_loop())
+        flushing.set()
+        return original_flush(timeout=timeout)
+
+    async def record_on_loop() -> str:
+        return manager.record(
+            "error",
+            "api",
+            "api.test.stalled_writer",
+            "An error queued behind a slow disk.",
+        )
+
+    try:
+        with TestClient(app) as client:
+            assert manager.flush()
+            monkeypatch.setattr(manager, "_write_pending", blocked_write)
+            monkeypatch.setattr(manager, "flush", observed_flush)
+            # Recorded on an event loop, the ERROR is acknowledged by the writer
+            # thread, which is now stuck on a slow disk.
+            error_id = asyncio.run(record_on_loop())
+            responses: dict[str, Any] = {}
+
+            def fetch_errors() -> None:
+                responses["errors"] = client.get(
+                    "/api/v1/diagnostics/errors", headers=_auth()
+                )
+
+            viewer = threading.Thread(target=fetch_errors)
+            viewer.start()
+            try:
+                assert flushing.wait(timeout=5)
+                # While the viewer waits for the writer, Core keeps serving
+                # everything else: this request comes back while the disk is
+                # still stuck. A viewer that stalled the loop would hold it
+                # until the writer gave up on its own.
+                settings = client.get("/api/v1/diagnostics/settings", headers=_auth())
+                assert settings.status_code == 200
+                assert not released.is_set()
+            finally:
+                gate.set()
+                viewer.join(timeout=10)
+            errors = responses["errors"]
+            assert errors.status_code == 200
+            assert error_id in [item["error_id"] for item in errors.json()["errors"]]
+            assert flush_on_loop == [False]
+
+            # Incident lookups, incident actions, resolution and the support
+            # bundle wait on the writer the same way, so they read off the loop.
+            flush_on_loop.clear()
+            incident = client.get(
+                f"/api/v1/diagnostics/incidents/{error_id}", headers=_auth()
+            )
+            assert incident.status_code == 200
+            action = client.post(
+                f"/api/v1/diagnostics/incidents/{error_id}/actions/missing",
+                headers=_auth(),
+                json={},
+            )
+            assert action.status_code == 404
+            resolved = client.post(
+                "/api/v1/diagnostics/incidents/resolve",
+                headers=_auth(),
+                json={"records": []},
+            )
+            assert resolved.status_code == 200
+            exported = client.post("/api/v1/diagnostics/export", headers=_auth())
+            assert exported.status_code == 200
+            assert len(flush_on_loop) == 4
+            assert not any(flush_on_loop)
     finally:
         manager.close()
