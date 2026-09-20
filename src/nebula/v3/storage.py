@@ -1139,6 +1139,7 @@ class NebulaStore:
                             "chat_queues",
                             "chat_decisions",
                             "chat_read_cursors",
+                            "chat_schedules",
                         )
                     ),
                     EntityRow.payload["session_id"].as_string().in_(session_ids),
