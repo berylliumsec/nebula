@@ -1,22 +1,19 @@
 {
-  "change_digest": "3d0cf11399ac76302b7927a173932be86f4780056ca13bac5e15456f2e41232a",
-  "reviewed_by": "Claude review of browserd tab lifecycle and companion failure paths",
-  "reason": "Five verified defects in the browser backend. (3) browserd registered pages once and only hooked context close, so a tab the operator closed from the headed Chromium window (or window.close()) stayed in _tabs and site-opened popups were never registered; the companion tabs listing then called page.title() on the dead page, which raises, so tabs/new_tab/close_tab and BrowserCompanion.open() all failed with 500 until the whole context was closed. browserd now registers page close (evicting every key for that page) and context page (registering popups idempotently), ensure_identity skips and evicts is_closed() pages, and operate() skips closed pages and reuses the manager's id for new_page. (6) BrowserCompanion.request() ran its pre-flight tabs call outside the httpx error mapping, so a slow or wedged browserd surfaced as a raw ConnectError/ReadTimeout/HTTPStatusError instead of the sanitized reconnect/retry guidance; both calls now go through one _companion_call helper. (7) Assessment stop/complete/revoke required a READY managed-chromium adapter, so a DRAFT created while Chromium was missing could never be revoked and a RUNNING assessment whose browserd died could only be failed; the adapter is now required only for start/pause/resume and the engine stop is best-effort (skipped when absent or when the assessment never started). (8) decide() set the action to running and only except Exception restored a terminal state, so a cancelled chat turn left it running forever; it now catches BaseException, and invalidate_pending_actions also sweeps running rows whose turn ended or whose approval window lapsed by more than two companion budgets. (10) The /v1/actions client deadline was 5 s while browserd runs Playwright's 30 s defaults, so any slower action fabricated an ambiguous receipt; the deadline is now derived from BROWSER_ACTION_TIMEOUT_SECONDS like the companion path. New tests: test_closed_tabs_are_forgotten_and_popups_are_listed (browserd fake Playwright; fails on main with the closed-page title error), test_preflight_tab_check_failure_is_sanitized_like_the_operation x4 (raw httpx errors on main), test_cancelled_decision_leaves_a_terminal_action and test_invalidating_approvals_sweeps_stale_running_actions_only (running on main), test_stop_and_revoke_do_not_require_managed_chromium (unavailable error on main), test_action_client_deadline_covers_playwright_operation_timeout (5 s on main). The rest of the four files pins the surrounding companion, assessment and engine behaviour.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through browserd.py, browser_companion.py, browser_companion_runtime.py, browser_assessments.py and browser_engine.py) does not exercise operator-closed Chromium tabs, browserd transport failures, engine-absent assessment transitions, cancelled decisions or the action client deadline; the Python tests drive them directly with fakes. No full suites. python_browser is set because test_browser_companion.py includes a real-Chromium capture case.",
-  "expected_tests": {
-    "python": 57,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
-  "python": [
-    "tests/v3/test_browserd.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_browser_assessments.py",
-    "tests/v3/test_browser_engine.py"
+  "change_digest": "2d56745e12cef1eca5fda5240ee7af1a7d1b05d0ba25d30c3a17aecdce164bf5",
+  "reviewed_by": "Claude review of settings and dialog reliability",
+  "reason": "Nine verified defects in the web UI settings and dialogs. SettingsPage seeded its section and open advanced group once at mount and only re-synced on window hashchange, which react-router's pushState navigation never fires, so /settings#provider-settings opened from the phone list, a lens, or the palette showed the wrong section; tabs and groups also rewrote the hash with history.replaceState, so useLocation().hash drifted from the address bar. The page now derives section and group from useLocation().hash and rewrites the hash through navigate(replace). SettingsLens never moved focus into itself (its Escape and Tab handlers were inert until a click) and the embedded page looked its deep-link target up with document.getElementById, which focused and scrolled the full page behind the lens; the lens now takes focus on open, closes on a document-level Escape unless a modal is above it, and the page scopes the lookup to its own root. The provider dialog's X and Cancel, the SSH host dialog's X, the candidate-finding dialog and the add-asset dialog all closed unguarded while saving, hiding the failure (and a created vault credential rollback); they are now disabled and routed through a guarded close. A failed SSH 'Test connection' from inside the host dialog reported to the section notice behind the modal; the dialog now passes its own reporter. RunnerSettings.load depended on selectedId, so every profile pick refetched and rewrote typed text; it now reads the id through a ref and aborts on unmount. The project switcher dialog had no Escape handling or focus management; it now focuses its first control, closes on Escape, and returns focus to the trigger. VPN 'Remove' had no in-flight state, so a double tap issued two deletes and reported a false failure; it now tracks the pending id. Operator display names were neither trimmed nor validated; they are now trimmed and blank names disable Save. Each behaviour has a vitest test that fails on main: SettingsPage.test.tsx (5), SettingsLens.test.tsx (2, one guard), ToolingSettings.test.tsx (2), FindingsPage.test.tsx (1), AssetsPage.test.tsx (1), plus two new tests in EnvironmentSettings.test.tsx and one in SideNav.test.tsx alongside their existing coverage.",
+  "exclusions": "No Python tests: no src/nebula change. No native tests: no Tauri or Rust change. No Playwright: the changed behaviours are component-level focus, keyboard, disabled-state and router-hash handling that the vitest files drive directly with a memory router and stubbed workspace; no real-browser pass was run. No full suites.",
+  "expected_tests": {"python": 0, "frontend": 41, "native": 0, "playwright": 0},
+  "python": [],
+  "frontend": [
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/SettingsLens.test.tsx",
+    "ui/src/components/ToolingSettings.test.tsx",
+    "ui/src/pages/FindingsPage.test.tsx",
+    "ui/src/pages/AssetsPage.test.tsx",
+    "ui/src/components/EnvironmentSettings.test.tsx",
+    "ui/src/components/SideNav.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
-  "python_browser": true
+  "playwright": []
 }

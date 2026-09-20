@@ -25,7 +25,7 @@ import { InlineValidationNotice } from "../components/InlineValidationNotice";
 import { DevicePairingSettings } from "../components/DevicePairingSettings";
 import { ProgressState, SettingsGroup, StandardEmptyState } from "../components/SurfacePrimitives";
 import { isTauriRuntime } from "../api/runtime";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useCompactLayout } from "../hooks/useCompactLayout";
 import { CompactSettingsList } from "../components/CompactSettingsList";
 
@@ -76,8 +76,7 @@ function advancedGroupFromHash(hash = window.location.hash.slice(1)): AdvancedSe
   return "models-settings";
 }
 
-function sectionFromHash(): SettingsSection {
-  const hash = window.location.hash.slice(1);
+function sectionFromHash(hash = window.location.hash.slice(1)): SettingsSection {
   if (hash === "diagnostics-settings") return "diagnostics-settings";
   if (hash === "advanced-settings" || (hash && hash !== "setup-settings")) return "advanced-settings";
   return "setup-settings";
@@ -196,7 +195,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [operatorError, setOperatorError] = useState<string>();
   const embedded = Boolean(embeddedTarget);
   const compact = useCompactLayout();
-  const { hash: locationHash } = useLocation();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const locationHash = location.hash;
+  const rootRef = useRef<HTMLDivElement>(null);
   const embeddedAdvancedGroup = advancedGroupFromHash(embeddedTarget);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => embedded ? sectionFromTarget(embeddedTarget) : sectionFromHash());
   const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(() => embedded ? embeddedAdvancedGroup : advancedGroupFromHash());
@@ -260,11 +262,25 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     return () => window.removeEventListener("hashchange", syncSection);
   }, [embedded]);
 
+  // In-app navigation (react-router pushState) never fires hashchange, so the
+  // router location owns the section too: /settings#provider-settings opened from
+  // the phone list, a lens, or the palette must land on that section.
+  useEffect(() => {
+    if (embedded) return;
+    const hash = locationHash.slice(1);
+    const section = sectionFromHash(hash);
+    setSettingsSection(section);
+    if (section === "advanced-settings") setOpenAdvancedGroup(advancedGroupFromHash(hash));
+  }, [embedded, locationHash]);
+
   useEffect(() => {
     if (settingsSection !== "advanced-settings") return;
     const frame = window.requestAnimationFrame(() => {
-      const hash = embeddedTarget ?? window.location.hash.slice(1);
-      const target = document.getElementById(hash === "advanced-settings" ? "models-settings" : hash);
+      const hash = embeddedTarget ?? locationHash.slice(1);
+      const id = hash === "advanced-settings" ? "models-settings" : hash;
+      // Scope the lookup to this page: a lens embeds a second SettingsPage above
+      // the full page, and document.getElementById would focus the one behind.
+      const target = /^[\w-]+$/.test(id) ? rootRef.current?.querySelector<HTMLElement>(`[id="${id}"]`) : null;
       const group = target?.matches("details") ? target as HTMLDetailsElement : target?.closest<HTMLDetailsElement>("details.settings-group");
       if (!group) return;
       const focusTarget = target?.matches("details") ? group.querySelector<HTMLElement>("summary") : target?.querySelector<HTMLElement>("h2, h3") ?? group.querySelector<HTMLElement>("summary");
@@ -273,14 +289,24 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       group.scrollIntoView?.({ block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [embeddedTarget, openAdvancedGroup, settingsSection]);
+  }, [embeddedTarget, locationHash, openAdvancedGroup, settingsSection]);
+
+  // Tabs and groups rewrite the hash through the router so useLocation().hash
+  // never drifts from the address bar (history.replaceState bypassed it).
+  const replaceHash = (hash: string) => {
+    if (!embedded && locationHash !== `#${hash}`) navigate({ search: location.search, hash: `#${hash}` }, { replace: true });
+  };
 
   const openSettingsGroup = (id: string) => {
     const group = id as AdvancedSettingsGroup;
     if (!advancedSettingsGroups.includes(group)) return;
     setOpenAdvancedGroup(group);
     setSettingsSection("advanced-settings");
-    if (!embedded && window.location.hash !== `#${group}`) window.history.replaceState(null, "", `#${group}`);
+    replaceHash(group);
+  };
+
+  const closeProviderDialog = () => {
+    if (!saving) setAdding(false);
   };
 
   useEffect(() => {
@@ -555,13 +581,18 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
 
   const submitOperator = async (event: FormEvent) => {
     event.preventDefault();
+    const displayName = operatorName.trim();
+    if (!displayName) {
+      setOperatorError("A display name is required.");
+      return;
+    }
     setOperatorBusy(editingOperator?.id ?? "new");
     setOperatorError(undefined);
     try {
       if (editingOperator) {
-        await updateOperatorProfile(editingOperator.id, { displayName: operatorName, email: operatorEmail, role: operatorRole, expectedRevision: editingOperator.revision });
+        await updateOperatorProfile(editingOperator.id, { displayName, email: operatorEmail, role: operatorRole, expectedRevision: editingOperator.revision });
       } else {
-        await createOperatorProfile({ displayName: operatorName, email: operatorEmail || undefined, role: operatorRole || undefined });
+        await createOperatorProfile({ displayName, email: operatorEmail || undefined, role: operatorRole || undefined });
       }
       setOperatorDialog(false);
       announceSettingsSaved("Operator profile updated.");
@@ -713,11 +744,11 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     </div>
   );
   return (
-    <div className={`page settings-page${embedded ? " embedded-settings-page" : ""}`} data-embedded-target={embeddedTarget}>
+    <div ref={rootRef} className={`page settings-page${embedded ? " embedded-settings-page" : ""}`} data-embedded-target={embeddedTarget}>
       <SettingsSaveFeedback />
       {!embedded && <PageHeader title="Settings" description="Workspace preferences." />}
       <div className="settings-workspace">
-      {!embedded && <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); const hash = id === "advanced-settings" ? openAdvancedGroup : id; window.history.replaceState(null, "", `#${hash}`); setSettingsSection(id); }}>{label}</a>)}</nav>}
+      {!embedded && <nav className="settings-tabs" aria-label="Settings sections">{settingsSections.map(([id, label, accessibleLabel]) => <a className={settingsSection === id ? "active" : undefined} aria-label={accessibleLabel} aria-current={settingsSection === id ? "page" : undefined} href={`#${id}`} key={id} onClick={(event) => { event.preventDefault(); replaceHash(id === "advanced-settings" ? openAdvancedGroup : id); setSettingsSection(id); }}>{label}</a>)}</nav>}
       <div className="settings-detail" data-section={settingsSection}>
       <section className="settings-section setup-overview" id="setup-settings">
         <div className="section-heading"><div><h2>Readiness</h2><p>Terminal is the only required runtime. Models remain optional.</p></div></div>
@@ -824,8 +855,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
       </div>
       </div>
       {adding && (selected || editingProvider) && (
-        <ModalSurface as="form" className="provider-dialog" labelledBy="provider-dialog-title" onClose={() => { if (!saving) setAdding(false); }} onSubmit={(event) => void submitProvider(event)}>
-            <header><div><small>Provider profile</small><h2 id="provider-dialog-title">{editingProvider ? `Edit ${editingProvider.name}` : "Add model provider"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" onClick={() => setAdding(false)}><X size={17} /></button></header>
+        <ModalSurface as="form" className="provider-dialog" labelledBy="provider-dialog-title" onClose={closeProviderDialog} onSubmit={(event) => void submitProvider(event)}>
+            <header><div><small>Provider profile</small><h2 id="provider-dialog-title">{editingProvider ? `Edit ${editingProvider.name}` : "Add model provider"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close provider dialog" disabled={saving} onClick={closeProviderDialog}><X size={17} /></button></header>
             <label>Provider type<select data-autofocus value={dialogProviderType} disabled={Boolean(editingProvider)} onChange={(event) => chooseProvider(event.target.value)}>{!providerCatalog.some((entry) => entry.flavor === dialogProviderType) && <option value={dialogProviderType}>{dialogProviderType}</option>}<optgroup label="Recommended cloud providers">{primaryProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup><optgroup label="More providers">{moreProviderCatalog.map((entry) => <option value={entry.flavor} key={entry.flavor}>{entry.displayName}</option>)}</optgroup></select></label>
             {editingProvider && <p className="provider-dialog-note">Provider type and locality are fixed after creation. Other profile settings use revision-safe updates.</p>}
             <label>Profile name<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
@@ -863,10 +894,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}
             {formValidationError && <InlineValidationNotice message={formValidationError} />}
-            <footer><button className="button secondary" type="button" onClick={() => setAdding(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
+            <footer><button className="button secondary" type="button" disabled={saving} onClick={closeProviderDialog}>Cancel</button><button className="button primary" type="submit" disabled={saving || !name.trim() || (dialogProviderType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim()))}>{saving ? "Saving…" : editingProvider ? "Save provider" : "Add provider"}</button></footer>
         </ModalSurface>
       )}
-      {operatorDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="operator-dialog-title" onClose={() => setOperatorDialog(false)} onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required data-autofocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy)}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></ModalSurface>}
+      {operatorDialog && <ModalSurface as="form" className="provider-dialog resource-dialog" labelledBy="operator-dialog-title" onClose={() => setOperatorDialog(false)} onSubmit={(event) => void submitOperator(event)}><header><div><small>Local attribution</small><h2 id="operator-dialog-title">{editingOperator ? "Edit operator" : "Add operator"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close operator dialog" onClick={() => setOperatorDialog(false)}><X size={17} /></button></header><label>Display name<input required data-autofocus value={operatorName} onChange={(event) => setOperatorName(event.target.value)} /></label><label>Email<input type="email" value={operatorEmail} onChange={(event) => setOperatorEmail(event.target.value)} /></label><label>Role<input value={operatorRole} placeholder="Project lead, analyst…" onChange={(event) => setOperatorRole(event.target.value)} /></label><p className="provider-dialog-note">This identity is stored locally for attribution only. It is not an authentication account and grants no permissions.</p>{operatorError && <DiagnosticErrorNotice error={operatorError} fallback="The operator profile could not be saved." compact />}<footer><button className="button secondary" type="button" onClick={() => setOperatorDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(operatorBusy) || !operatorName.trim()}>{operatorBusy ? "Saving…" : "Save operator"}</button></footer></ModalSurface>}
     </div>
   );
 }

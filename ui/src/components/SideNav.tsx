@@ -1,4 +1,4 @@
-import { useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
 import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
@@ -9,6 +9,8 @@ import { HostFolderPicker } from "./HostFolderPicker";
 import { useConfirmation, useDialogPresence } from "./DialogSystem";
 
 import "./ProjectSwitcher.css";
+
+const SWITCHER_FOCUSABLE = "button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex='-1'])";
 
 interface SideNavProps {
   collapsed: boolean;
@@ -36,6 +38,8 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   } = useWorkspace();
   const confirm = useConfirmation();
   const switcherButton = useRef<HTMLButtonElement>(null);
+  const switcherMenu = useRef<HTMLDivElement>(null);
+  const switcherWasOpen = useRef(false);
   const [showArchived, setShowArchived] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [projectError, setProjectError] = useState<string>();
@@ -47,6 +51,29 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   useDialogPresence(open);
+
+  // The switcher is a dialog: focus moves to its first control when it opens,
+  // Escape closes it (unless a modal such as the archive confirmation is above
+  // it), and focus returns to the trigger when it closes.
+  useEffect(() => {
+    if (open) {
+      switcherWasOpen.current = true;
+      switcherMenu.current?.querySelector<HTMLElement>(SWITCHER_FOCUSABLE)?.focus();
+      const closeFromDocument = (event: KeyboardEvent) => {
+        if (event.key !== "Escape" || event.defaultPrevented) return;
+        if (document.querySelector(".dialog-backdrop > .modal-surface")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+      };
+      document.addEventListener("keydown", closeFromDocument, true);
+      return () => document.removeEventListener("keydown", closeFromDocument, true);
+    }
+    if (!switcherWasOpen.current) return;
+    switcherWasOpen.current = false;
+    if (!document.activeElement || document.activeElement === document.body) switcherButton.current?.focus();
+  }, [open, setOpen]);
+
   const engagementName = engagement?.name ?? "No project available";
   const initials = engagementName
     .split(/\s+/)
@@ -149,7 +176,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
           <span className="engagement-copy"><small>Active project</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
         </button>
-        {open && <div className="engagement-menu" role="dialog" aria-label="Project switcher">
+        {open && <div ref={switcherMenu} className="engagement-menu" role="dialog" aria-label="Project switcher">
           <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
             {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>

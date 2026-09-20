@@ -123,3 +123,42 @@ describe("hostStatus", () => {
     expect(hostStatus(host("gone", {inConfig: false, resolved: undefined}))).toEqual({label: "Removed from ~/.ssh/config", tone: "warning"});
   });
 });
+
+describe("host details dialog", () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it("shows a failed connection test inside the dialog", async () => {
+    api.discoverSshEnvironments.mockResolvedValue(discovery([host("research3", {environment: environment("research3", {enabled: true, revision: 4})})]));
+    api.probeSshEnvironment.mockRejectedValue(new Error("Permission denied (publickey)."));
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", {name: "research3 details"}));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", {name: "Test connection"}));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Permission denied (publickey).");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+  });
+
+  it("keeps the dialog open while a save is in flight", async () => {
+    api.discoverSshEnvironments.mockResolvedValue(discovery([host("research3")]));
+    let finishSave!: (saved: SshEnvironment) => void;
+    api.saveSshEnvironment.mockImplementation(() => new Promise<SshEnvironment>((resolve) => { finishSave = resolve; }));
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("button", {name: "research3 details"}));
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", {name: "Save"}));
+
+    expect(within(dialog).getByRole("button", {name: "Saving…"})).toBeDisabled();
+    expect(within(dialog).getByRole("button", {name: "Close host details"})).toBeDisabled();
+    expect(within(dialog).getByRole("button", {name: "Cancel"})).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBe(dialog);
+
+    finishSave(environment("research3", {revision: 2}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});

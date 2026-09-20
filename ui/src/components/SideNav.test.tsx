@@ -1,4 +1,5 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -94,5 +95,27 @@ describe("SideNav current page", () => {
     const navigation = renderSideNav(route);
     expectOnlyCurrent(navigation, "Project");
     expect(within(navigation).getByRole("link", { name: "Project" })).toHaveAttribute("href", "/project");
+  });
+});
+
+function SwitcherHarness() {
+  const [open, setOpen] = useState(false);
+  return <SideNav collapsed={false} open={open} setOpen={setOpen} onNavigate={vi.fn()} />;
+}
+
+describe("SideNav project switcher", () => {
+  it("moves focus into the switcher and hands it back to the trigger on Escape", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench"]}><DialogProvider><SwitcherHarness /></DialogProvider></MemoryRouter>);
+    const trigger = screen.getByRole("button", { name: "Switch project" });
+
+    await user.click(trigger);
+    const switcher = screen.getByRole("dialog", { name: "Project switcher" });
+    await waitFor(() => expect(switcher.contains(document.activeElement)).toBe(true));
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Project switcher" })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
   });
 });
