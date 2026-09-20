@@ -2078,3 +2078,53 @@ def test_bedrock_reports_the_client_error_code_and_message(monkeypatch):
     assert str(failure.value).startswith(
         "Bedrock request failed: UnrecognizedClientException: "
     )
+
+
+def test_stream_fallback_reports_thinking_before_the_reply():
+    """A provider without native streaming still shows its thoughts as they land."""
+
+    class NonStreamingProvider(providers.ModelProvider):
+        async def complete(self, request: ModelRequest) -> providers.ModelResponse:
+            del request
+            return providers.ModelResponse(
+                provider_id="fallback",
+                model="model-a",
+                text="FLASH_OK",
+                reasoning="Private chain of thought.",
+                finish_reason="stop",
+            )
+
+        async def health(self) -> providers.ProviderHealth:
+            return providers.ProviderHealth(provider_id="fallback", healthy=True)
+
+    provider = NonStreamingProvider(
+        ProviderConfig(
+            id="fallback",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="http://127.0.0.1:8000/v1",
+            default_model="model-a",
+            model_allowlist=["model-a"],
+            local=True,
+        )
+    )
+
+    async def scenario():
+        return [
+            event
+            async for event in provider.stream(
+                ModelRequest(
+                    model="model-a",
+                    messages=[ModelMessage(role="user", content="Reply.")],
+                )
+            )
+        ]
+
+    events = asyncio.run(scenario())
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.REASONING_DELTA,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.COMPLETED,
+    ]
+    assert events[1].delta == "Private chain of thought."
+    assert events[-1].response.reasoning == "Private chain of thought."
