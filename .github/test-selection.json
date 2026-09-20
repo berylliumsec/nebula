@@ -1,19 +1,18 @@
 {
-  "change_digest": "b7fbd26ff40c99f5f1281f105fffc60f0f531673b4f12d99b564bab2c8d73db0",
-  "reviewed_by": "Claude review of workspace entry error handling",
-  "reason": "Three workspace paths turned predictable conditions into 500s or leaked host paths. WorkspaceService.rename and delete resolved the request path with _relative_parts without require_value, so '.' or './' (which pass the request validators' min_length=1) produced an empty tuple and relative[-1] raised IndexError inside a try that only catches FileNotFoundError: PATCH or DELETE /workspace/entry?path=. returned 500 instead of 422. WorkspaceService.list called entry.stat unguarded inside os.scandir, so a file removed by a terminal or execution between scandir and stat (a race workspace.search already guards) failed the whole file-tree refresh with 500. WorkspaceOutputService.read opened the file after _safe_path's checks with no PermissionError mapping, so an unreadable file reached the model as a raw PermissionError carrying the absolute host path, while search on the same file returned the sanitized 'workspace path is inaccessible: permission denied'. rename and delete now require a path segment (422 'workspace file path is required'), list skips entries that vanish mid-walk, and read maps PermissionError to the same sanitized ToolOutputAccessError as search. test_workspace covers the root-path 422s and the vanished-entry listing; test_workspace_tool_search covers the read refusal without the host path; the rest of both files covers the surrounding listing, mutation, upload, reset and search paths.",
-  "exclusions": "No frontend tests: no ui/ change; the UI already renders 422 details and continues on a listing. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through the remaining-core fallback for workspace.py and tool_results.py) is the real-Core journey suite and does not send root-path mutations or race the listing; the Python tests drive the exact paths through the API and service. No full suites.",
+  "change_digest": "3575d8493c19d0576214087c8b0f639346c0224208a2e3b9f00aae9d95adb687",
+  "reviewed_by": "Claude review of harness and MCP server deletion",
+  "reason": "The Trash icon buttons on the Agent harnesses and MCP servers cards in Settings called deleteHarness / deleteMcpServer on the first click with no confirmation, so one stray tap on a 14 px icon removed a saved profile and its credentials binding; the interface principles require a clear confirmation for destructive actions and a tooltip on every icon button, and the Edit and Delete icons had neither. HarnessSettings now asks through the shared DialogProvider confirmation (danger tone, 'Delete harness' / 'Delete MCP server' confirm labels) before deleting, keeps the same busy, reload and error handling, and gives the four icon buttons title tooltips. HarnessSettings.test.tsx gains a case that clicking Delete opens the confirmation, Cancel leaves the profile untouched and never calls the API, and confirming calls deleteHarness with the profile id and revision then reloads; the existing 13 cases in the file cover the surrounding save, check, import and edit flows and pass unchanged.",
+  "exclusions": "No Python tests: no backend change. No native tests: no Tauri or Rust change. No Playwright: area:mcp-import (matched through HarnessSettings*) is the real-Core 'mcp import previews, saves, trusts, probes' journey across eight desktop and phone projects and never deletes a harness or server; the confirmation surface is the same DialogProvider dialog other journeys already drive. No screenshot baselines: no layout change beyond a native title tooltip. This session did not exercise the delete flow in a real browser; the unit test drives the confirmation and API call through the rendered component. No full suites.",
   "expected_tests": {
-    "python": 26,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 14,
     "native": 0,
     "playwright": 0
   },
-  "python": [
-    "tests/v3/test_workspace.py",
-    "tests/v3/test_workspace_tool_search.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": []
 }

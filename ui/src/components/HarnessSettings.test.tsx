@@ -12,7 +12,7 @@ const profile: HarnessProfile = {
   enabled: true, localOnly: true, permitsSensitiveData: false, autoShareToolResults: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
-const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn()};
+const api = {listHarnesses: vi.fn(), listMcpServers: vi.fn(), createHarness: vi.fn(), checkHarness: vi.fn(), testHarnessTurn: vi.fn(), importMcpServers: vi.fn(), mcpServerSchema: vi.fn(), updateMcpServer: vi.fn(), probeMcpServer: vi.fn(), deleteHarness: vi.fn(), deleteMcpServer: vi.fn()};
 vi.mock("../state/WorkspaceContext", () => ({useWorkspace: () => ({api, coreState: "online", previewMode: false})}));
 vi.mock("../diagnostics", () => ({logCaughtDiagnostic: vi.fn(), DiagnosticErrorNotice: ({error}: {error: string}) => <div role="alert">{error}</div>}));
 
@@ -209,4 +209,33 @@ it("edits an MCP server without resetting its saved working directory", async ()
   const [, changes] = api.updateMcpServer.mock.calls[0];
   expect(changes).toMatchObject({trusted_stdio: true});
   expect(changes).not.toHaveProperty("cwd_policy");
+});
+
+describe("harness settings destructive actions", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    api.listHarnesses.mockResolvedValue([profile]);
+    api.listMcpServers.mockResolvedValue([]);
+    api.deleteHarness.mockResolvedValue(undefined);
+  });
+
+  it("asks before deleting a harness and deletes only after confirmation", async () => {
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    const remove = await screen.findByRole("button", {name: "Delete Local fixture"});
+    expect(remove).toHaveAttribute("title", "Delete harness");
+
+    await user.click(remove);
+    const cancelled = await screen.findByRole("dialog", {name: "Delete this harness?"});
+    await user.click(within(cancelled).getByRole("button", {name: "Cancel"}));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(api.deleteHarness).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", {name: profile.name})).toBeVisible();
+
+    await user.click(screen.getByRole("button", {name: "Delete Local fixture"}));
+    const confirmed = await screen.findByRole("dialog", {name: "Delete this harness?"});
+    await user.click(within(confirmed).getByRole("button", {name: "Delete harness"}));
+    await waitFor(() => expect(api.deleteHarness).toHaveBeenCalledWith(profile.id, profile.revision));
+    expect(api.listHarnesses).toHaveBeenCalledTimes(2);
+  });
 });
