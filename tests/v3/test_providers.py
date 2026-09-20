@@ -3057,6 +3057,13 @@ def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
     assert pages == [{"pageSize": "1000"}, {"pageSize": "1000", "pageToken": "t2"}]
 
 
+@pytest.mark.parametrize(
+    "provider_class, kind",
+    [
+        (OpenAIResponsesProvider, ProviderKind.OPENAI_RESPONSES),
+        (OpenAICompatibleProvider, ProviderKind.OPENAI_COMPATIBLE),
+    ],
+)
 def test_openai_health_skips_model_rows_without_an_id(provider_class, kind):
     def handler(http_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
