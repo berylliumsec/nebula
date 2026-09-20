@@ -2005,6 +2005,7 @@ class ChatService:
                         self.tool_suggestion_client(),
                         deferred=deferred_specs,
                         operator_messages=operator_messages,
+                        skills=skill_snapshots,
                     )
                     tool_suggestions = receipt.model_dump(mode="json")
                     if receipt.status != "unavailable":

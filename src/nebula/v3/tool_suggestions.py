@@ -6,8 +6,9 @@ before the turn starts, in place of the local ranking. Its answer is a hint in
 the per-turn instructions and can preload a few schemas; it never hides a tool,
 grants a permission, or blocks the turn.
 
-Jev receives only redacted operator messages and tool names/descriptions, never
-tool output, which may be controlled by an assessed target.
+Jev receives only redacted operator messages, the expanded instructions of the
+skills the operator selected for the turn, and tool names/descriptions. It never
+receives tool output, which may be controlled by an assessed target.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import os
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import httpx
 from pydantic import Field
@@ -39,10 +40,17 @@ DEFAULT_BASE_URL = "https://api.typesafe.ai"
 DEFAULT_TIMEOUT_SECONDS = 4.0
 # Choice accepts 255 options; one is reserved for "none".
 MAX_CHOICE_TOOLS = 254
-# Keeps state plus the longest question well inside Jev's 32k-token window.
+# Keeps state and the longest question inside Jev's 32k-token window: at most
+# ~28k chars of state (messages plus skills) against ~60k of criteria.
 MAX_CHOICE_CRITERIA_CHARS = 60_000
 MAX_OPERATOR_MESSAGE_CHARS = 4_000
 MAX_PRIOR_OPERATOR_MESSAGES = 3
+# A selected skill names the steps the turn will follow, so its expanded text
+# ranks tools better than the operator's message alone. These caps keep the
+# newest selections inside the window once a goal has collected several skills.
+MAX_STATE_SKILLS = 4
+MAX_SKILL_INSTRUCTION_CHARS = 6_000
+MAX_STATE_SKILL_CHARS = 12_000
 
 # A mean gate below this means the request needs no extra tool at all.
 GATE_THRESHOLD = 0.30
@@ -53,6 +61,13 @@ SUGGEST_THRESHOLD = 0.15
 MAX_SUGGESTED = 5
 
 NONE_OPTION = "none_of_these"
+
+# Appended to every question only when skills are in state, so Jev reads them as
+# part of the request rather than as background prose.
+_SKILL_CLAUSE = (
+    " The operator also selected the skills in operator_selected_skills; the steps"
+    " they lay out are part of fulfilling operator_request."
+)
 
 _GATE_QUESTIONS: dict[str, dict[str, Any]] = {
     "gate_action": {
@@ -80,6 +95,16 @@ _GATE_QUESTIONS: dict[str, dict[str, Any]] = {
 }
 
 
+class SelectedSkill(Protocol):
+    """The part of a ``skill_catalog.SkillSnapshot`` that Jev may see."""
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def instructions(self) -> str: ...
+
+
 class ToolSuggestionError(RuntimeError):
     pass
 
@@ -89,6 +114,9 @@ class ToolSuggestionReceipt(NebulaModel):
 
     status: Literal["suggested", "no_tool_needed", "unavailable"]
     deferred: list[str] = Field(default_factory=list)
+    # Which selected skills had their instructions sent, so the snapshot records
+    # the egress as well as the ranking.
+    skills: list[str] = Field(default_factory=list, max_length=MAX_STATE_SKILLS)
     preloaded: list[str] = Field(default_factory=list)
     suggested: list[str] = Field(default_factory=list)
     probabilities: dict[str, float] = Field(default_factory=dict)
@@ -122,8 +150,29 @@ def _chunks(specs: Sequence[ToolSpec]) -> list[list[ToolSpec]]:
     return chunks
 
 
-def build_state(operator_messages: Sequence[str]) -> dict[str, Any]:
-    """Only operator-authored text reaches Jev, redacted and bounded."""
+def skill_state(skills: Sequence[SelectedSkill]) -> list[dict[str, str]]:
+    """The newest selected skills, redacted and bounded like operator messages."""
+
+    newest: list[dict[str, str]] = []
+    remaining = MAX_STATE_SKILL_CHARS
+    for skill in reversed(list(skills)):
+        if len(newest) >= MAX_STATE_SKILLS or remaining <= 0:
+            break
+        instructions = redact_text(skill.instructions).strip()
+        if not instructions:
+            continue
+        instructions = instructions[: min(MAX_SKILL_INSTRUCTION_CHARS, remaining)]
+        remaining -= len(instructions)
+        newest.append({"name": skill.name, "instructions": instructions})
+    newest.reverse()
+    return newest
+
+
+def build_state(
+    operator_messages: Sequence[str],
+    skills: Sequence[SelectedSkill] = (),
+) -> dict[str, Any]:
+    """Only operator-authored text and selected skills reach Jev, bounded."""
 
     cleaned = [
         redact_text(item)[:MAX_OPERATOR_MESSAGE_CHARS]
@@ -132,14 +181,26 @@ def build_state(operator_messages: Sequence[str]) -> dict[str, Any]:
     ]
     if not cleaned:
         raise ToolSuggestionError("no operator message to evaluate")
-    return {
+    state: dict[str, Any] = {
         "operator_request": cleaned[-1],
         "earlier_operator_messages": cleaned[-1 - MAX_PRIOR_OPERATOR_MESSAGES : -1],
     }
+    selected = skill_state(skills)
+    if selected:
+        state["operator_selected_skills"] = selected
+    return state
 
 
-def build_questions(specs: Sequence[ToolSpec]) -> dict[str, dict[str, Any]]:
-    questions = dict(_GATE_QUESTIONS)
+def build_questions(
+    specs: Sequence[ToolSpec], *, with_skills: bool = False
+) -> dict[str, dict[str, Any]]:
+    # Skill-free turns keep their exact previous wording, so the thresholds
+    # below stay calibrated against the questions they were tuned on.
+    suffix = _SKILL_CLAUSE if with_skills else ""
+    questions: dict[str, dict[str, Any]] = {
+        key: {**question, "instructions": question["instructions"] + suffix}
+        for key, question in _GATE_QUESTIONS.items()
+    }
     for index, chunk in enumerate(_chunks(sorted(specs, key=lambda item: item.name))):
         criteria = {spec.name: summary(spec) or spec.name for spec in chunk}
         criteria[NONE_OPTION] = (
@@ -150,7 +211,8 @@ def build_questions(specs: Sequence[ToolSpec]) -> dict[str, dict[str, Any]]:
             "instructions": (
                 "Which listed tool is most likely needed to act on operator_request "
                 "next? Choose none_of_these unless a listed tool clearly applies."
-            ),
+            )
+            + suffix,
             "criteria": criteria,
         }
     return questions
@@ -242,6 +304,7 @@ async def suggest_tools(
     *,
     deferred: Mapping[str, ToolSpec],
     operator_messages: Sequence[str],
+    skills: Sequence[SelectedSkill] = (),
 ) -> ToolSuggestionReceipt:
     """Ask Jev once; any failure yields an `unavailable` receipt, never an error."""
 
@@ -253,10 +316,17 @@ async def suggest_tools(
             error="No TypeSafe key is configured",
         )
     started = time.monotonic()
+    # Names are recorded once the request exists, so a failed turn still shows
+    # which skills left the host.
+    sent_skills: list[str] = []
     try:
+        state = build_state(operator_messages, skills)
+        sent_skills = [
+            str(item["name"]) for item in state.get("operator_selected_skills", [])
+        ]
         body = await client.system_one(
-            build_state(operator_messages),
-            build_questions(list(deferred.values())),
+            state,
+            build_questions(list(deferred.values()), with_skills=bool(sent_skills)),
         )
         gate, probabilities = interpret_answers(body["answers"], names)
     except (ToolSuggestionError, httpx.HTTPError, ValueError, TypeError) as exc:
@@ -264,6 +334,7 @@ async def suggest_tools(
         return ToolSuggestionReceipt(
             status="unavailable",
             deferred=names,
+            skills=sent_skills,
             latency_ms=int((time.monotonic() - started) * 1000),
             error=f"{type(exc).__name__}: {exc}"[:500],
         )
@@ -273,6 +344,7 @@ async def suggest_tools(
     return ToolSuggestionReceipt(
         status="suggested" if preloaded or suggested else "no_tool_needed",
         deferred=names,
+        skills=sent_skills,
         preloaded=preloaded,
         suggested=suggested,
         probabilities=probabilities,

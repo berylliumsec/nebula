@@ -176,7 +176,9 @@ Loading on demand is on for every project. Set `on_demand_tools` to `false` on
 a project's scope (`PUT /api/v1/engagements/{id}/scope`) to send every tool
 with every request again. A project that opts into Jev suggestions from
 TypeSafe uses Jev's picks instead of the local ranking, and falls back to the
-local ranking when Jev is unavailable.
+local ranking when Jev is unavailable. Jev is sent the redacted operator
+messages, the expanded instructions of the skills selected for the turn, and
+tool names and descriptions — never tool output.
 
 ## Fields that are not imported
 

@@ -26,6 +26,8 @@ from nebula.v3.tool_catalog import (
 )
 from nebula.v3.tool_suggestions import (
     MAX_CHOICE_TOOLS,
+    MAX_SKILL_INSTRUCTION_CHARS,
+    MAX_STATE_SKILL_CHARS,
     NONE_OPTION,
     JevClient,
     build_questions,
@@ -75,6 +77,10 @@ def _jev_answers(probabilities: dict[str, float], *, action=0.9, prose=0.1):
 
 def _client(handler) -> JevClient:
     return JevClient(api_key="test-key", transport=httpx.MockTransport(handler))
+
+
+def _skill(name: str, instructions: str) -> SimpleNamespace:
+    return SimpleNamespace(name=name, instructions=instructions)
 
 
 def test_jev_receives_only_redacted_operator_text_and_tool_summaries():
@@ -171,11 +177,14 @@ def test_jev_failure_never_raises_and_keeps_the_catalog(handler):
             _client(handler),
             deferred={MCP_TOOL: _spec(MCP_TOOL, "Search.")},
             operator_messages=["find issues"],
+            skills=[_skill("triage", "Search the tracker first.")],
         )
     )
     assert receipt.status == "unavailable"
     assert receipt.deferred == [MCP_TOOL]
     assert receipt.error
+    # The request was built, so the receipt still names what left the host.
+    assert receipt.skills == ["triage"]
 
 
 def test_missing_api_key_is_reported_without_a_request(monkeypatch):
@@ -206,6 +215,76 @@ def test_state_requires_an_operator_message():
         build_state(["   "])
 
 
+def test_selected_skill_instructions_reach_jev_redacted_and_bounded():
+    state = build_state(
+        ["triage the finding"],
+        [
+            _skill("recon", "x" * (MAX_SKILL_INSTRUCTION_CHARS + 500)),
+            _skill("blank", "   "),
+            _skill("triage", "Check the tracker first. api_key: hunter2hunter2"),
+        ],
+    )
+
+    skills = state["operator_selected_skills"]
+    assert [item["name"] for item in skills] == ["recon", "triage"]
+    assert len(skills[0]["instructions"]) == MAX_SKILL_INSTRUCTION_CHARS
+    assert skills[1]["instructions"] == "Check the tracker first. api_key: [REDACTED]"
+
+
+def test_state_keeps_the_newest_skills_inside_the_window():
+    state = build_state(
+        ["go"],
+        [
+            _skill(f"skill-{index}", "y" * MAX_SKILL_INSTRUCTION_CHARS)
+            for index in range(5)
+        ],
+    )
+
+    skills = state["operator_selected_skills"]
+    assert [item["name"] for item in skills] == ["skill-3", "skill-4"]
+    assert sum(len(item["instructions"]) for item in skills) <= MAX_STATE_SKILL_CHARS
+
+
+def test_state_omits_the_skill_key_when_none_is_selected():
+    assert "operator_selected_skills" not in build_state(["go"])
+
+
+def test_questions_name_the_skills_only_when_state_carries_them():
+    specs = [_spec(MCP_TOOL, "Search tracker issues.")]
+
+    plain = build_questions(specs)
+    assert "operator_selected_skills" not in json.dumps(plain)
+
+    with_skills = build_questions(specs, with_skills=True)
+    assert all(
+        "operator_selected_skills" in question["instructions"]
+        for question in with_skills.values()
+    )
+    assert with_skills["tools_0"]["criteria"] == plain["tools_0"]["criteria"]
+
+
+def test_receipt_records_the_skills_that_were_sent():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.7, NONE_OPTION: 0.3}))
+
+    receipt = asyncio.run(
+        suggest_tools(
+            _client(handler),
+            deferred={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+            operator_messages=["work the queue"],
+            skills=[_skill("triage", "Search the tracker before anything else.")],
+        )
+    )
+
+    assert seen["body"]["state"]["operator_selected_skills"] == [
+        {"name": "triage", "instructions": "Search the tracker before anything else."}
+    ]
+    assert receipt.skills == ["triage"]
+
+
 def test_local_only_scope_never_enables_suggestions():
     assert suggestions_enabled(ScopePolicy(engagement_id="e", tool_suggestions=True))
     assert not suggestions_enabled(
@@ -232,7 +311,7 @@ class _McpPlatform:
         )
 
 
-def _mcp_service(tmp_path, monkeypatch, client_factory):
+def _mcp_service(tmp_path, monkeypatch, client_factory, skill: str | None = None):
     store = NebulaStore(tmp_path / "chat-suggestions.db")
     engagement = store.create(Engagement(id="eng-jev", name="Jev"))
     payload = _profile(local=True).model_dump(mode="python")
@@ -256,11 +335,19 @@ def _mcp_service(tmp_path, monkeypatch, client_factory):
         store,
         tool_platform=_McpPlatform(tmp_path),
         tool_suggestion_client=client_factory,
+        workspace_resolver=lambda _: tmp_path,
     )
+    selection = None
+    if skill is not None:
+        entrypoint = tmp_path / ".agents" / "skills" / "triage" / "SKILL.md"
+        entrypoint.parent.mkdir(parents=True, exist_ok=True)
+        entrypoint.write_text(skill, encoding="utf-8")
+        selection = {"name": "triage", "path": str(entrypoint.resolve())}
     request = ChatCompletionRequest(
         provider_id=profile.id,
         engagement_id=engagement.id,
         mcp_server_ids=["tracker"],
+        skill=selection,
         messages=[{"role": "user", "content": "find the login bug"}],
         include_knowledge=False,
         stream=True,
@@ -292,6 +379,34 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     assert "Already loaded" in catalog_instructions(
         catalog, prepared.tool_components.specs
     )
+
+
+def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(200, json=_jev_answers({MCP_TOOL: 0.8}))
+
+    service, request = _mcp_service(
+        tmp_path,
+        monkeypatch,
+        lambda: _client(handler),
+        skill="Search the tracker for duplicates before filing anything.",
+    )
+
+    prepared = service.prepare(request)
+
+    assert calls[0]["state"]["operator_selected_skills"] == [
+        {
+            "name": "triage",
+            "instructions": "Search the tracker for duplicates before filing anything.",
+        }
+    ]
+    assert calls[0]["questions"]["tools_0"]["instructions"].endswith(
+        "part of fulfilling operator_request."
+    )
+    assert prepared.turn.request_snapshot["tool_suggestions"]["skills"] == ["triage"]
 
 
 def test_unavailable_jev_falls_back_to_local_ranking(tmp_path, monkeypatch):
