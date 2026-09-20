@@ -81,6 +81,12 @@ class ProviderOverloadedError(ProviderError):
         self.retry_after = retry_after
 
 
+class ProviderResponseError(ProviderError):
+    """The provider completed a request without the required response shape."""
+
+    status_code = 502
+
+
 class ProviderQuotaError(ProviderError):
     """The account's quota or billing limit is spent; retrying cannot help."""
 
@@ -3262,6 +3268,7 @@ __all__ = [
     "ProviderError",
     "ProviderContextLengthError",
     "ProviderOverloadedError",
+    "ProviderResponseError",
     "ProviderFlavor",
     "ProviderHealth",
     "ProviderKind",

@@ -117,6 +117,7 @@ from .providers import (
     ModelUsage,
     ProviderContextLengthError,
     ProviderOverloadedError,
+    ProviderResponseError,
     StreamEventType,
     ToolCall as ModelToolCall,
     ToolChoice,
@@ -706,10 +707,56 @@ def _final_answer_problem(response: ModelResponse) -> str | None:
     if not content:
         if (response.finish_reason or "").lower() in _OUTPUT_LIMIT_FINISH_REASONS:
             return "output_limit"
+        if response.reasoning.strip():
+            return "reasoning_only"
         return "missing_answer"
     if _is_provider_control_frame(content):
         return "provider_control_frame"
     return None
+
+
+def _final_answer_response_record(
+    response: ModelResponse, problem: str
+) -> dict[str, Any]:
+    """Retain safe evidence about an invalid synthesis without storing raw text."""
+
+    return {
+        "reason": problem,
+        "finish_reason": response.finish_reason,
+        "content_characters": len(response.text.strip()),
+        "reasoning_characters": len(response.reasoning.strip()),
+        "provider_request_id": response.provider_request_id,
+    }
+
+
+def _next_final_answer_recovery_state(
+    snapshot: dict[str, Any], response: ModelResponse, problem: str
+) -> dict[str, Any]:
+    """Append one invalid synthesis receipt without losing earlier attempts."""
+
+    current = snapshot.get("final_answer_recovery")
+    current = current if isinstance(current, dict) else {}
+    responses = current.get("responses")
+    responses = list(responses) if isinstance(responses, list) else []
+    stored_attempts = current.get("attempts")
+    stored_attempts = (
+        stored_attempts
+        if isinstance(stored_attempts, int) and not isinstance(stored_attempts, bool)
+        else 0
+    )
+    attempts = max(stored_attempts, len(responses)) + 1
+    state = {
+        **current,
+        "attempts": attempts,
+        "reason": current.get("reason") or problem,
+        "responses": [
+            *responses,
+            _final_answer_response_record(response, problem),
+        ],
+    }
+    if attempts > 1:
+        state["last_reason"] = problem
+    return state
 
 
 def _routing_input_schema(spec: Any) -> dict[str, Any]:
@@ -2338,6 +2385,7 @@ class ChatService:
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
                     "model_request": model_request.model_dump(mode="json"),
+                    "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "mcp_server_ids": [item.id for item in mcp_profiles],
@@ -2390,6 +2438,7 @@ class ChatService:
                         item.model_dump(mode="json") for item in hook_snapshots
                     ],
                     "model_request": model_request.model_dump(mode="json"),
+                    "operator_max_output_tokens": request.max_output_tokens,
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "include_oci_tools": False,
@@ -2551,6 +2600,16 @@ class ChatService:
         """Require visible content and re-synthesize one incomplete response."""
 
         response = await self._complete_with_context_recovery(prepared, request)
+        return await self._recover_final_answer(prepared, request, response)
+
+    async def _recover_final_answer(
+        self,
+        prepared: PreparedChat,
+        request: ModelRequest,
+        response: ModelResponse,
+    ) -> ModelResponse:
+        """Recover one completed response without repeating prior model or tool work."""
+
         problem = _final_answer_problem(response)
         if problem is None:
             return response
@@ -2565,10 +2624,9 @@ class ChatService:
                 {
                     "request_snapshot": {
                         **turn.request_snapshot,
-                        "final_answer_recovery": {
-                            "attempts": 1,
-                            "reason": problem,
-                        },
+                        "final_answer_recovery": _next_final_answer_recovery_state(
+                            turn.request_snapshot, response, problem
+                        ),
                     }
                 },
                 expected_revision=turn.revision,
@@ -2582,15 +2640,31 @@ class ChatService:
         retry_problem = _final_answer_problem(retry_response)
         if turn is not None:
             self._assert_execution_owner(prepared)
-            prepared.turn = self._add_usage(
+            turn = self._add_usage(
                 self._refresh_turn(prepared.turn or turn), retry_response
             )
+            prepared.turn = turn
         if retry_problem is not None:
-            raise ChatError(
-                "provider did not return a valid final answer after recovery"
+            if turn is not None:
+                turn = self.store.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "request_snapshot": {
+                            **turn.request_snapshot,
+                            "final_answer_recovery": _next_final_answer_recovery_state(
+                                turn.request_snapshot,
+                                retry_response,
+                                retry_problem,
+                            ),
+                        }
+                    },
+                    expected_revision=turn.revision,
+                )
+                prepared.turn = turn
+            raise ProviderResponseError(
+                "provider returned no operator-facing answer after bounded recovery"
             )
-        if turn is not None:
-            return retry_response
         return retry_response.model_copy(
             update={
                 "reasoning": _joined_reasoning(
@@ -3016,7 +3090,10 @@ class ChatService:
                     self._assert_execution_owner(prepared)
                 if event.response is None:
                     raise ChatError("provider stream completed without a response")
-                completion = self._completion(prepared, event.response)
+                response = await self._recover_final_answer(
+                    prepared, request, event.response
+                )
+                completion = self._completion(prepared, response)
                 await self._run_native_hooks(
                     prepared,
                     "chat.turn.completed",
@@ -3526,8 +3603,24 @@ class ChatService:
                         )
                         if problem is not None:
                             if recovery_attempted:
-                                raise ChatError(
-                                    "provider did not return a valid final answer after recovery"
+                                turn = self.store.update(
+                                    ChatTurn,
+                                    turn.id,
+                                    {
+                                        "request_snapshot": {
+                                            **turn.request_snapshot,
+                                            "final_answer_recovery": _next_final_answer_recovery_state(
+                                                turn.request_snapshot,
+                                                event.response,
+                                                problem,
+                                            ),
+                                        }
+                                    },
+                                    expected_revision=turn.revision,
+                                )
+                                prepared.turn = turn
+                                raise ProviderResponseError(
+                                    "provider returned no operator-facing answer after bounded recovery"
                                 )
                             turn = self.store.update(
                                 ChatTurn,
@@ -3535,10 +3628,11 @@ class ChatService:
                                 {
                                     "request_snapshot": {
                                         **turn.request_snapshot,
-                                        "final_answer_recovery": {
-                                            "attempts": 1,
-                                            "reason": problem,
-                                        },
+                                        "final_answer_recovery": _next_final_answer_recovery_state(
+                                            turn.request_snapshot,
+                                            event.response,
+                                            problem,
+                                        ),
                                     }
                                 },
                                 expected_revision=turn.revision,
@@ -3703,6 +3797,9 @@ class ChatService:
         operator_capped = bool(
             prepared.source_request is not None
             and prepared.source_request.max_output_tokens is not None
+            or prepared.turn is not None
+            and prepared.turn.request_snapshot.get("operator_max_output_tokens")
+            is not None
         )
         retry = request.model_copy(
             update={
@@ -3717,7 +3814,7 @@ class ChatService:
                 },
             }
         )
-        if problem == "output_limit" and max_output_tokens:
+        if problem in {"output_limit", "reasoning_only"} and max_output_tokens:
             desired = (
                 max_output_tokens
                 if operator_capped
@@ -4529,13 +4626,31 @@ class ChatService:
 
     def prepare_resume(self, turn_id: str) -> PreparedChat:
         turn = self.store.get(ChatTurn, turn_id)
-        if turn.status not in {
-            ChatTurnStatus.WAITING_APPROVAL,
-            ChatTurnStatus.WAITING_CALLBACK,
-            ChatTurnStatus.ROUTING,
-            ChatTurnStatus.FINALIZING,
-            ChatTurnStatus.INTERRUPTED,
-        }:
+        final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
+        final_answer_recovery: dict[str, Any] | None = (
+            dict(final_answer_recovery_value)
+            if isinstance(final_answer_recovery_value, dict)
+            else None
+        )
+        retrying_final_answer = (
+            turn.status == ChatTurnStatus.FAILED
+            and turn.final_message_id is None
+            and final_answer_recovery is not None
+            and isinstance(final_answer_recovery.get("attempts"), int)
+            and not isinstance(final_answer_recovery.get("attempts"), bool)
+            and final_answer_recovery["attempts"] >= 2
+        )
+        if (
+            turn.status
+            not in {
+                ChatTurnStatus.WAITING_APPROVAL,
+                ChatTurnStatus.WAITING_CALLBACK,
+                ChatTurnStatus.ROUTING,
+                ChatTurnStatus.FINALIZING,
+                ChatTurnStatus.INTERRUPTED,
+            }
+            and not retrying_final_answer
+        ):
             raise ChatHistoryConflict(
                 f"chat turn cannot resume from {turn.status.value}"
             )
@@ -4562,6 +4677,37 @@ class ChatService:
                 )
 
         def activate_recovery(candidate: ChatTurn) -> ChatTurn:
+            if retrying_final_answer:
+                if final_answer_recovery is None:
+                    raise ChatHistoryConflict("final-answer recovery state is missing")
+                operator_retries = final_answer_recovery.get("operator_retries")
+                operator_retries = (
+                    operator_retries
+                    if isinstance(operator_retries, int)
+                    and not isinstance(operator_retries, bool)
+                    else 0
+                )
+                return self.store.update(
+                    ChatTurn,
+                    candidate.id,
+                    {
+                        "status": (
+                            ChatTurnStatus.FINALIZING
+                            if candidate.tools_enabled
+                            else ChatTurnStatus.ROUTING
+                        ),
+                        "error": None,
+                        "request_snapshot": {
+                            **candidate.request_snapshot,
+                            "final_answer_recovery": {
+                                **final_answer_recovery,
+                                "operator_retries": operator_retries + 1,
+                                "resumed_at": utc_now().isoformat(),
+                            },
+                        },
+                    },
+                    expected_revision=candidate.revision,
+                )
             if not recovering:
                 return candidate
             return self.store.update(
@@ -4943,6 +5089,26 @@ class ChatService:
                 raise ChatHistoryConflict("chat session has multiple active turns")
             pending[turn.session_id] = turn
         return pending
+
+    def recoverable_final_answer_turn(self, session_id: str) -> ChatTurn | None:
+        """Return the latest turn only when its failed synthesis can be resumed."""
+
+        self.store.get(ChatSession, session_id)
+        turns = self.store.list_session_entities(ChatTurn, session_id)
+        if not turns:
+            return None
+        latest = max(turns, key=lambda item: (item.created_at, item.id))
+        recovery = latest.request_snapshot.get("final_answer_recovery")
+        attempts = recovery.get("attempts") if isinstance(recovery, dict) else None
+        if (
+            latest.status != ChatTurnStatus.FAILED
+            or latest.final_message_id is not None
+            or not isinstance(attempts, int)
+            or isinstance(attempts, bool)
+            or attempts < 2
+        ):
+            return None
+        return latest
 
     def reconcile_interrupted_tool(
         self,

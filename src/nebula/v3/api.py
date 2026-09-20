@@ -439,6 +439,7 @@ from .providers import (
     ProviderFlavor,
     ProviderHealth,
     ProviderQuotaError,
+    ProviderResponseError,
     ToolChoice,
     ToolDefinition,
     provider_from_profile,
@@ -9180,7 +9181,11 @@ def create_app(
                     "error",
                     stream_error_frame(
                         feature=feature,
-                        code="chat_stream_failed",
+                        code=(
+                            "provider_final_answer_missing"
+                            if isinstance(exc, ProviderResponseError)
+                            else "chat_stream_failed"
+                        ),
                         detail=str(exc),
                         exception=exc,
                         retryable=isinstance(exc, ProviderError),
@@ -9385,7 +9390,11 @@ def create_app(
                     "error",
                     stream_error_frame(
                         feature=feature,
-                        code="chat_resume_failed",
+                        code=(
+                            "provider_final_answer_missing"
+                            if isinstance(exc, ProviderResponseError)
+                            else "chat_resume_failed"
+                        ),
                         detail=str(exc),
                         exception=exc,
                         retryable=isinstance(exc, ProviderError),
@@ -9435,7 +9444,10 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
-        turn = chat_service().pending_turn(session_id)
+        service = chat_service()
+        turn = service.pending_turn(session_id)
+        if turn is None:
+            turn = service.recoverable_final_answer_turn(session_id)
         return _chat_turn_summary(turn) if turn is not None else None
 
     @app.post(

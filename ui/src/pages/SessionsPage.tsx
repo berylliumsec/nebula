@@ -302,6 +302,12 @@ interface InterruptedChatRecovery {
   request: ChatCompletionRequest;
 }
 
+interface FailedProviderRecovery {
+  turnId: string;
+  assistantId: string;
+  request: ChatCompletionRequest;
+}
+
 interface HarnessProgress {
   phase: string;
   detail: string;
@@ -702,6 +708,7 @@ export function SessionsPage() {
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
   const [waitingCallback, setWaitingCallback] = useState<{ turnId: string; assistantId: string; resultsUrl?: string; processId?: string; toolCallId: string; summary: string }>();
   const [interruptedRecovery, setInterruptedRecovery] = useState<InterruptedChatRecovery>();
+  const [failedProviderRecovery, setFailedProviderRecovery] = useState<FailedProviderRecovery>();
   const [recoveryNote, setRecoveryNote] = useState("");
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   useEffect(() => setRecoveryNote(""), [interruptedRecovery?.turn.id]);
@@ -1560,6 +1567,7 @@ export function SessionsPage() {
     setMessages([]);
     setReplacedMessages([]);
     setChatError(undefined);
+    setFailedProviderRecovery(undefined);
     setRunCandidate(undefined);
     setToolCards([]);
     setActivityItems([]);
@@ -2235,6 +2243,7 @@ export function SessionsPage() {
     }
     setLoadingHistory(true);
     setChatError(undefined);
+    setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
     setHarnessActivity(undefined);
     if (!preserveTranscript) { setMessages(preview?.messages ?? []); setReplacedMessages([]); }
@@ -2333,19 +2342,23 @@ export function SessionsPage() {
           content: "",
           createdAt: pendingTurn.startedAt ?? new Date().toISOString(),
           citations: [],
-          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : pendingTurn.status === "interrupted" ? "error" : "streaming",
-          detail: pendingTurn.status === "interrupted" ? pendingTurn.error : undefined,
+          state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "error" : "streaming",
+          detail: ["interrupted", "failed"].includes(pendingTurn.status) ? pendingTurn.error : undefined,
           durable: false,
         }]);
         setToolCards([...restoredToolCards, ...pendingTurn.toolCallIds.map((toolCallId) => ({
           assistantId,
           toolCallId,
           capability: "Command runtime",
-          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : pendingTurn.status === "interrupted" ? "failed" : "running",
+          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "failed" : "running",
           evidenceIds: [],
           artifacts: [],
         }))]);
-        if (pendingTurn.status === "interrupted") {
+        if (pendingTurn.status === "failed") {
+          setPendingResponse(undefined);
+          setChatError(pendingTurn.error ?? "The provider did not return a final answer.");
+          setFailedProviderRecovery({ turnId: pendingTurn.id, assistantId, request: resumeRequest });
+        } else if (pendingTurn.status === "interrupted") {
           setPendingResponse(undefined);
           setInterruptedRecovery({ turn: pendingTurn, assistantId, request: resumeRequest });
         } else if (decisionRecorded) {
@@ -3259,6 +3272,7 @@ export function SessionsPage() {
       clearSubmittedContext();
     }
     setChatError(undefined);
+    setFailedProviderRecovery(undefined);
     setSending(true);
     if (runtimeKind === "harness") {
       setHarnessProgress({
@@ -3328,10 +3342,32 @@ export function SessionsPage() {
         ? { ...message, state: cancelled ? "cancelled" : "error", detail }
         : message));
       setChatError(cancelled ? undefined : detail);
+      const failedTurnId = activeProviderTurnIdRef.current;
+      const finalAnswerRetryable = Boolean(
+        !cancelled
+        && runtimeKind === "provider"
+        && failedTurnId
+        && error instanceof ApiError
+        && error.code === "provider_final_answer_missing"
+      );
+      if (finalAnswerRetryable && failedTurnId) {
+        setFailedProviderRecovery({
+          turnId: failedTurnId,
+          assistantId,
+          request: chatRequest,
+        });
+      }
       if (returnedSessionId && !cancelled) {
         try {
           const authoritative = await api.listChatMessages(returnedSessionId);
-          if (authoritative.length) setMessages(await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId)));
+          if (authoritative.length) {
+            const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
+            setMessages((current) => {
+              if (!finalAnswerRetryable) return recovered;
+              const failedAssistant = current.find((message) => message.id === assistantId);
+              return failedAssistant ? [...recovered, failedAssistant] : recovered;
+            });
+          }
           await refreshSessions(returnedSessionId);
         } catch (caughtError) {
           void logCaughtDiagnostic("interface.sessions_page.caught_failure_14", "A handled interface operation failed.", caughtError, "sessions_page");
@@ -3482,6 +3518,64 @@ export function SessionsPage() {
       const cancelled = stream.controller.signal.aborted;
       const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Could not resume the interrupted response.";
       if (!cancelled) setInterruptedRecovery(recovery);
+      setMessages((current) => current.map((message) => message.id === recovery.assistantId
+        ? { ...message, state: cancelled ? "cancelled" : "error", detail }
+        : message));
+      setChatError(cancelled ? undefined : detail);
+    } finally {
+      stream.release();
+      if (stream.isCurrent()) setSending(false);
+    }
+  };
+
+  const retryProviderFinalAnswer = async () => {
+    if (!api || !failedProviderRecovery) return;
+    const recovery = failedProviderRecovery;
+    const stream = beginGuardedStream(
+      { generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef },
+      "provider",
+    );
+    setFailedProviderRecovery(undefined);
+    setSending(true);
+    setChatError(undefined);
+    setMessages((current) => current.map((message) => message.id === recovery.assistantId
+      ? { ...message, state: "streaming", detail: undefined }
+      : message));
+    try {
+      const response = await api.resumeChatTurn(
+        recovery.turnId,
+        recovery.request,
+        stream.guard((streamEvent) => applyChatEvent(
+          streamEvent,
+          recovery.assistantId,
+          "",
+          recovery.request,
+        )),
+        stream.controller.signal,
+      );
+      if (!stream.isCurrent()) return;
+      if (response?.sessionId) await refreshSessions(response.sessionId);
+    } catch (error) {
+      void logCaughtDiagnostic(
+        "interface.sessions_page.final_answer_retry_failed",
+        "A provider final answer could not be retried.",
+        error,
+        "sessions_page",
+      );
+      if (!stream.isCurrent()) return;
+      const cancelled = stream.controller.signal.aborted;
+      const detail = cancelled
+        ? "Response stopped by the operator."
+        : error instanceof Error
+          ? error.message
+          : "Could not retry the final answer.";
+      if (
+        !cancelled
+        && error instanceof ApiError
+        && error.code === "provider_final_answer_missing"
+      ) {
+        setFailedProviderRecovery(recovery);
+      }
       setMessages((current) => current.map((message) => message.id === recovery.assistantId
         ? { ...message, state: cancelled ? "cancelled" : "error", detail }
         : message));
@@ -4289,7 +4383,7 @@ export function SessionsPage() {
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
-              {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
+              {chatError && <div className="chat-recovery-notice"><DiagnosticErrorNotice error={chatError} fallback="The chat operation could not be completed." compact />{failedProviderRecovery && <button className="button quiet" type="button" disabled={sending} onClick={() => void retryProviderFinalAnswer()}>Retry final answer</button>}{sessionId && <button className="button quiet" type="button" disabled={reloadingConversation} onClick={() => void reloadActiveConversation()}>{reloadingConversation ? "Reloading…" : "Reload conversation"}</button>}</div>}
               {activeArchivedSession && <div className="chat-archived-notice" role="status"><Archive size={14} aria-hidden="true" /><span>This conversation is archived. Sending a message moves it back to your conversations.</span><button className="button quiet" type="button" disabled={Boolean(archivingSessionId)} onClick={() => void setConversationArchived(activeArchivedSession, false)}>Unarchive</button></div>}
               {messageActionStatus && <div className="chat-action-status" role="status" aria-live="polite"><Check size={13} aria-hidden="true" /> {messageActionStatus}</div>}
               {runtimeKind === "harness" && harnessActivityError && <div className="chat-recovery-notice" role="status"><span>Harness status could not be loaded. Saved messages remain available.</span><button className="button quiet" type="button" onClick={() => void reloadActiveConversation()}>Retry status</button></div>}

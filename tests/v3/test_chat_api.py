@@ -961,6 +961,77 @@ def test_chat_compaction_failure_is_explicitly_retryable(tmp_path, monkeypatch):
     assert payload["remediation_id"].startswith("chat.")
 
 
+def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch):
+    class ReasoningOnlyProvider(ApiChatProvider):
+        @staticmethod
+        def response(request: ModelRequest, provider_id: str) -> ModelResponse:
+            return ModelResponse(
+                provider_id=provider_id,
+                model=request.model or "model-a",
+                reasoning="The model planned but did not answer.",
+                usage=ModelUsage(input_tokens=3, output_tokens=8, total_tokens=11),
+                finish_reason="stop",
+            )
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            return self.response(request, self.config.id)
+
+        async def stream(self, request: ModelRequest):
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(
+                type=StreamEventType.REASONING_DELTA,
+                delta="The model planned but did not answer.",
+            )
+            yield ModelStreamEvent(
+                type=StreamEventType.COMPLETED,
+                response=self.response(request, self.config.id),
+            )
+
+    store = NebulaStore(tmp_path / "final-answer-stream.db")
+    engagement = store.create(Engagement(name="Final answer recovery"))
+    profile = store.create(
+        ProviderProfile(
+            id="provider-reasoning-only",
+            name="Thinking provider",
+            provider_type="openrouter",
+            endpoint="https://openrouter.ai/api/v1",
+            is_local=False,
+            model_allowlist=["model-a"],
+            capabilities={"streaming": True},
+            privacy={"permits_sensitive_data": True},
+        )
+    )
+    monkeypatch.setattr(
+        chat_module,
+        "provider_from_profile",
+        lambda _: ReasoningOnlyProvider(profile.id),
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "provider_id": profile.id,
+            "messages": [{"role": "user", "content": "Give me an answer."}],
+            "stream": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert '"code":"provider_final_answer_missing"' in response.text
+    assert '"retryable":true' in response.text
+    turn = store.list_entities(ChatTurn, engagement_id=engagement.id)[0]
+    recoverable = client.get(
+        f"/api/v1/chat/sessions/{turn.session_id}/pending-turn",
+        headers=_auth(),
+    )
+    assert recoverable.status_code == 200
+    assert recoverable.json()["id"] == turn.id
+    assert recoverable.json()["status"] == "failed"
+
+
 def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     from nebula.v3.domain import ChatSubagent
 

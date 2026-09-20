@@ -53,6 +53,7 @@ from nebula.v3.providers import (
     ProviderHealth,
     ProviderKind,
     ProviderOverloadedError,
+    ProviderResponseError,
     StreamEventType,
 )
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
@@ -658,7 +659,221 @@ def test_provider_chat_recovers_from_reasoning_only_output_exhaustion(
     assert completed.request_snapshot["final_answer_recovery"] == {
         "attempts": 1,
         "reason": "output_limit",
+        "responses": [
+            {
+                "content_characters": 0,
+                "finish_reason": "length",
+                "provider_request_id": None,
+                "reason": "output_limit",
+                "reasoning_characters": 48,
+            }
+        ],
     }
+
+
+def test_provider_chat_recovers_from_reasoning_only_stop_with_more_room(
+    tmp_path, monkeypatch
+):
+    class RecoveringThinkingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") == "conversation_naming":
+                return await super().complete(request)
+            self.requests.append(request)
+            normal_requests = [
+                item for item in self.requests if not item.metadata.get("operation")
+            ]
+            if len(normal_requests) == 1:
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model=request.model or "model-a",
+                    reasoning="Still planning the answer.",
+                    usage=ModelUsage(
+                        input_tokens=4, output_tokens=512, total_tokens=516
+                    ),
+                    finish_reason="stop",
+                    provider_request_id="reasoning-only-1",
+                )
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="Recovered visible answer.",
+                usage=ModelUsage(input_tokens=4, output_tokens=3, total_tokens=7),
+                finish_reason="stop",
+                provider_request_id="answer-2",
+            )
+
+    store = NebulaStore(tmp_path / "chat-reasoning-only-stop.db")
+    engagement = store.create(Engagement(id="eng-reasoning-stop", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    provider = RecoveringThinkingProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Give me a visible answer."}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    response = asyncio.run(service.complete(prepared))
+
+    normal_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert [request.max_output_tokens for request in normal_requests] == [2_048, 4_096]
+    assert normal_requests[-1].metadata["final_answer_recovery"] == "reasoning_only"
+    assert response.message.content == "Recovered visible answer."
+    completed = store.get(ChatTurn, response.turn_id)
+    assert completed.request_snapshot["final_answer_recovery"] == {
+        "attempts": 1,
+        "reason": "reasoning_only",
+        "responses": [
+            {
+                "content_characters": 0,
+                "finish_reason": "stop",
+                "provider_request_id": "reasoning-only-1",
+                "reason": "reasoning_only",
+                "reasoning_characters": 26,
+            }
+        ],
+    }
+
+
+def test_provider_chat_exhausted_final_answer_recovery_is_a_provider_failure(
+    tmp_path, monkeypatch
+):
+    class EmptyThinkingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                reasoning="Still thinking.",
+                usage=ModelUsage(input_tokens=4, output_tokens=2, total_tokens=6),
+                finish_reason="stop",
+                provider_request_id=f"empty-{len(self.requests)}",
+            )
+
+    store = NebulaStore(tmp_path / "chat-recovery-exhausted.db")
+    engagement = store.create(Engagement(id="eng-exhausted", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    provider = EmptyThinkingProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Give me a visible answer."}],
+            include_knowledge=False,
+        )
+    )
+
+    with pytest.raises(
+        ProviderResponseError,
+        match="no operator-facing answer after bounded recovery",
+    ):
+        asyncio.run(service.complete(prepared))
+
+    normal_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert [request.max_output_tokens for request in normal_requests] == [2_048, 4_096]
+
+
+def test_failed_final_answer_can_resume_without_replaying_the_turn(
+    tmp_path, monkeypatch
+):
+    class ResumeProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model=request.model or "model-a",
+                    reasoning="The resumed synthesis still did not answer.",
+                    usage=ModelUsage(input_tokens=4, output_tokens=8, total_tokens=12),
+                    finish_reason="stop",
+                )
+            return ModelResponse(
+                provider_id=self.config.id,
+                model=request.model or "model-a",
+                text="Recovered after operator retry.",
+                usage=ModelUsage(input_tokens=4, output_tokens=5, total_tokens=9),
+                finish_reason="stop",
+            )
+
+    store = NebulaStore(tmp_path / "chat-final-answer-resume.db")
+    engagement = store.create(Engagement(id="eng-final-resume", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    provider = ResumeProvider(profile.id, local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    session = store.create(
+        ChatSession(
+            id="session-final-resume",
+            engagement_id=engagement.id,
+            title="Recovery",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-final-resume",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.FAILED,
+            error="provider returned no operator-facing answer after bounded recovery",
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "Give me an answer."}],
+                    max_output_tokens=2_048,
+                ).model_dump(mode="json"),
+                "operator_max_output_tokens": 2_048,
+                "context_usage": {},
+                "final_answer_recovery": {
+                    "attempts": 2,
+                    "reason": "reasoning_only",
+                    "responses": [],
+                },
+            },
+        )
+    )
+    service = ChatService(store)
+
+    assert service.recoverable_final_answer_turn(session.id) is not None
+    prepared = service.prepare_resume(turn.id)
+
+    assert prepared.turn is not None
+    assert prepared.turn.status == ChatTurnStatus.ROUTING
+    assert prepared.turn.error is None
+    assert (
+        prepared.turn.request_snapshot["final_answer_recovery"]["operator_retries"] == 1
+    )
+    response = asyncio.run(service.complete(prepared))
+    assert response.message.content == "Recovered after operator retry."
+    normal_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert [request.max_output_tokens for request in normal_requests] == [2_048, 2_048]
+    completed = store.get(ChatTurn, turn.id)
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.final_message_id is not None
+    assert service.recoverable_final_answer_turn(session.id) is None
 
 
 def test_completed_turn_records_the_time_it_took(tmp_path, monkeypatch):
