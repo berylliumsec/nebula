@@ -1734,6 +1734,8 @@ export interface ChatRuntimeSwitchPreflight {
   requiresCompactionConfirmation: boolean;
   confirmationToken?: string;
   reason?: string;
+  /** Names the refusal, so a caller can act on it without reading the prose. */
+  reasonCode?: string;
   estimatedActiveInputTokens: number;
   targetContextWindow?: number;
   targetInputTokens?: number;

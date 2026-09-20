@@ -1972,13 +1972,31 @@ export function SessionsPage() {
     }
     setAssistantSettingsStatus("Checking the selected model against this conversation…");
     try {
-      const preflight = await api.preflightChatRuntimeSwitch(activeSession.id, {
+      const toolsEnabled = Boolean(canUseTools || selectedMcpIds.length || browserControlEnabled || selectedHarnessSkill);
+      const check = () => api.preflightChatRuntimeSwitch(activeSession.id, {
         providerId: nextProviderId,
         model: nextModel,
-        toolsEnabled: Boolean(canUseTools || selectedMcpIds.length || browserControlEnabled || selectedHarnessSkill),
+        toolsEnabled,
         expectedSessionRevision: activeSession.revision,
       });
+      let preflight = await check();
       if (generation !== runtimeSwitchGenerationRef.current) return;
+      // A model nobody has run tools against yet is refused until it is
+      // verified, which for a new conversation happens on selection. Do the
+      // same here rather than leaving the operator on the old model.
+      if (!preflight.compatible && preflight.reasonCode === "model_not_tool_verified") {
+        setAssistantSettingsStatus(`Verifying ${nextModel} for tool use…`);
+        try {
+          await reverifyProvider(nextProviderId, nextModel);
+        } catch (error) {
+          void logCaughtDiagnostic("interface.sessions.runtime_switch_verification_failed", "The model could not be verified for tool use.", error, "assistant_settings");
+          setAssistantSettingsStatus(error instanceof Error ? error.message : `${nextModel} could not be verified for tool use.`);
+          return;
+        }
+        if (generation !== runtimeSwitchGenerationRef.current) return;
+        preflight = await check();
+        if (generation !== runtimeSwitchGenerationRef.current) return;
+      }
       if (!preflight.compatible) {
         setAssistantSettingsStatus(preflight.reason ?? "This model cannot serve the current conversation.");
         return;

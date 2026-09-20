@@ -4659,6 +4659,110 @@ test("assistant upgrade provider model switch keeps the saved model until compac
   expect(submitted?.model).toBe("small-model");
 });
 
+test("assistant upgrade switching to an unverified model verifies it instead of refusing", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent provider-switch matrix.");
+  const provider = {
+    ...entity,
+    id: "provider-verify",
+    name: "Verify provider",
+    provider_type: "openrouter",
+    endpoint: "https://openrouter.ai/api/v1",
+    enabled: true,
+    is_local: false,
+    secret_ref: "env:OPENROUTER_API_KEY",
+    model_allowlist: ["verified-model", "fresh-model"],
+    capabilities: { streaming: true, tool_calling: true },
+    capability_verifications: {
+      "verified-model": { model: "verified-model", status: "verified", contract_version: "required-tool-v1", checked_at: "2026-09-20T00:00:00Z" },
+    },
+    privacy: { local_only: false, permits_sensitive_data: true, residency: [] },
+    metadata: {
+      default_model: "verified-model",
+      model_catalog_revision: "catalog-verify-1",
+      model_descriptors: [
+        { id: "verified-model", name: "Verified model", context_window: 128000, max_output_tokens: 8000 },
+        { id: "fresh-model", name: "Fresh model", context_window: 128000, max_output_tokens: 8000 },
+      ],
+    },
+  };
+  let verified = false;
+  let verifyCalls = 0;
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    const verifiedProfile = () => ({
+      ...provider,
+      revision: (provider.revision ?? 1) + 1,
+      capability_verifications: {
+        ...provider.capability_verifications,
+        "fresh-model": { model: "fresh-model", status: "verified", contract_version: "required-tool-v1", checked_at: "2026-09-20T01:00:00Z" },
+      },
+    });
+    if (path.endsWith("/capabilities/verify") && request.method() === "POST") {
+      verifyCalls += 1;
+      verified = true;
+      return route.fulfill({ json: { provider_id: provider.id, model: "fresh-model", status: "verified" } });
+    }
+    if (path.endsWith(`/providers/${provider.id}`) && request.method() === "GET") {
+      return route.fulfill({ json: verified ? verifiedProfile() : provider });
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [{
+      ...entity,
+      revision: 1,
+      id: "verify-chat",
+      engagement_id: "scratch-project",
+      title: "Unverified model switch",
+      backend: "provider",
+      provider_profile_id: provider.id,
+      model: "verified-model",
+      metadata: { tools_enabled: true },
+    }] });
+    if (path.endsWith("/chat/sessions/verify-chat/messages")) return route.fulfill({ json: [] });
+    if (path.endsWith("/chat/sessions/verify-chat/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith("/chat/sessions/verify-chat/goal")) return route.fulfill({ status: 404, json: { detail: "No goal" } });
+    if (path.endsWith("/chat/sessions/verify-chat/context")) return route.fulfill({ json: {
+      owner_type: "chat_session", owner_id: "verify-chat", status: "not_needed",
+      context_window: 128000, max_output_tokens: 8000, target_input_tokens: 90000,
+      compacted_input_target: 72000, capacity_source: "model_catalog", capacity_estimated: false,
+      metadata_revision: "catalog-verify-1", route_limits_required: false,
+      route_limits_verified: false, estimated_input_tokens: 1200, compacted_through: 0,
+      source_references: [], compaction_usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      compaction_cost_usd: 0,
+    } });
+    if (path.endsWith("/chat/sessions/verify-chat/runtime-switch/preflight")) {
+      // Core refuses a model nothing has run tools against, and names why.
+      if (!verified) return route.fulfill({ json: {
+        session_id: "verify-chat", session_revision: 1,
+        current_provider_id: provider.id, current_model: "verified-model",
+        target_provider_id: provider.id, target_model: "fresh-model", compatible: false,
+        requires_compaction_confirmation: false,
+        reason: "The selected model is not verified for the tools enabled in this conversation.",
+        reason_code: "model_not_tool_verified", estimated_active_input_tokens: 1200,
+      } });
+      return route.fulfill({ json: {
+        session_id: "verify-chat", session_revision: 1,
+        current_provider_id: provider.id, current_model: "verified-model",
+        target_provider_id: provider.id, target_model: "fresh-model", compatible: true,
+        requires_compaction_confirmation: false, estimated_active_input_tokens: 1200,
+        target_context_window: 128000, target_input_tokens: 90000, target_max_output_tokens: 8000,
+        metadata_revision: "catalog-verify-1",
+      } });
+    }
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=verify-chat", "Workbench");
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const model = page.getByRole("combobox", { name: "Chat model" });
+  await expect(model).toHaveValue("verified-model");
+  await model.selectOption("fresh-model");
+  // The switch lands rather than snapping back to the conversation's model.
+  await expect(model).toHaveValue("fresh-model");
+  await expect(page.getByRole("status").filter({ hasText: "Applies to your next message" })).toBeVisible();
+  expect(verifyCalls).toBe(1);
+});
+
 test("AI writing submits the visible supported model", async ({ page }, testInfo) => {
   const report = {
     ...entity,

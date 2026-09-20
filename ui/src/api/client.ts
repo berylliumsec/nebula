@@ -8600,6 +8600,7 @@ export class ApiClient {
       requiresCompactionConfirmation: value.requires_compaction_confirmation === true,
       confirmationToken: typeof value.confirmation_token === "string" ? value.confirmation_token : undefined,
       reason: typeof value.reason === "string" ? value.reason : undefined,
+      reasonCode: typeof value.reason_code === "string" ? value.reason_code : undefined,
       estimatedActiveInputTokens: Number(value.estimated_active_input_tokens ?? 0),
       targetContextWindow: typeof value.target_context_window === "number" ? value.target_context_window : undefined,
       targetInputTokens: typeof value.target_input_tokens === "number" ? value.target_input_tokens : undefined,

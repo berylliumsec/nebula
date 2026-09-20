@@ -387,6 +387,8 @@ class ChatRuntimeSwitchPreflight(NebulaModel):
     requires_compaction_confirmation: bool = False
     confirmation_token: str | None = None
     reason: str | None = None
+    # Names the refusal so a caller can act on it without reading the prose.
+    reason_code: str | None = Field(default=None, max_length=100)
     estimated_active_input_tokens: int = Field(default=0, ge=0)
     target_context_window: int | None = Field(default=None, ge=1)
     target_input_tokens: int | None = Field(default=None, ge=1)
@@ -5186,12 +5188,14 @@ class ChatService:
                 **current,
                 compatible=False,
                 reason="The selected provider is disabled.",
+                reason_code="provider_disabled",
             )
         if profile.model_allowlist and request.model not in profile.model_allowlist:
             return ChatRuntimeSwitchPreflight(
                 **current,
                 compatible=False,
                 reason="The selected model is no longer available from this provider.",
+                reason_code="model_unavailable",
             )
         if request.tools_enabled and not profile.tools_verified_for(request.model):
             return ChatRuntimeSwitchPreflight(
@@ -5200,6 +5204,9 @@ class ChatService:
                 reason=(
                     "The selected model is not verified for the tools enabled in this conversation."
                 ),
+                # A model nobody has run tools against yet is not a refusal to
+                # live with: the caller verifies it and asks again.
+                reason_code="model_not_tool_verified",
             )
         try:
             provider = self.provider_factory(profile)
@@ -5220,6 +5227,7 @@ class ChatService:
                 **current,
                 compatible=False,
                 reason=str(exc),
+                reason_code="context_or_privacy",
             )
         active_tokens = self.context_status(session.id).estimated_input_tokens
         requires_confirmation = active_tokens > limits.target_input_tokens

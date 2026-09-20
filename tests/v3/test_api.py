@@ -549,6 +549,8 @@ def test_runtime_switch_preflight_keeps_incompatible_model_unselected(api):
     assert response.status_code == 200, response.text
     assert response.json()["compatible"] is False
     assert "not verified for the tools" in response.json()["reason"]
+    # The caller verifies the model and asks again instead of reading prose.
+    assert response.json()["reason_code"] == "model_not_tool_verified"
     unchanged = store.get(ChatSession, session.id)
     assert unchanged.model == "model-a"
     assert unchanged.revision == session.revision
