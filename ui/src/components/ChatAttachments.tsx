@@ -16,7 +16,12 @@ export function ChatAttachments({api, projectId, onAttach, onImages, imagesEnabl
   const [error, setError] = useState<string>();
   const input = useRef<HTMLInputElement>(null);
   const run = async (action: () => Promise<void>) => {setBusy(true); setError(undefined); try {await action();} catch(e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");setError(e instanceof Error ? e.message : "Could not read this attachment. Try another file.");} finally {setBusy(false);}};
-  const browse = (path = "", offset = 0) => run(async () => {setSources(undefined); setPreview(undefined); setListing(await api.listWorkspace(projectId, path, offset));});
+  const browse = (path = "", offset = 0) => run(async () => {
+    setSources(undefined); setPreview(undefined);
+    const page = await api.listWorkspace(projectId, path, offset);
+    // A later page extends the listing; replacing it hid the first entries with no way back.
+    setListing(current => offset && current?.path === page.path ? {...page, entries: [...current.entries, ...page.entries]} : page);
+  });
   const sourcePreview = async (source: KnowledgeSource) => {
     const value = await api.request<{text: string; truncated: boolean; label: string}>(`chat/projects/${encodeURIComponent(projectId)}/sources/${encodeURIComponent(source.id)}/preview`);
     setPreview({...value, sourceKind: "knowledge", sourceId: source.id});

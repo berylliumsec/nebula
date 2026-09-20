@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
@@ -26,6 +26,7 @@ import type {
 } from "../api/types";
 import type { StreamState } from "../api/events";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useConfirmation } from "./DialogSystem";
 import { useResizableSidePanel } from "./useResizableSidePanel";
 
 interface SecurityBrowserWorkspacePanelProps {
@@ -78,6 +79,7 @@ export function SecurityBrowserWorkspacePanel({
   onWidthChange,
 }: SecurityBrowserWorkspacePanelProps) {
   const [searchParams, setSearchParams] = useSearchParams();
+  const confirm = useConfirmation();
   const [workspace, setWorkspace] = useState<SecurityBrowserAssessmentWorkspace>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -89,8 +91,9 @@ export function SecurityBrowserWorkspacePanel({
   const [objective, setObjective] = useState("");
   const [profileId, setProfileId] = useState<SecurityBrowserAssessmentProfile>("standard");
   const [validationTechnique, setValidationTechnique] = useState("");
-  const [validationMaxRequests, setValidationMaxRequests] = useState(10);
-  const [validationDurationSeconds, setValidationDurationSeconds] = useState(600);
+  // Raw text so a cleared budget field stays empty instead of snapping to 0; parsed below.
+  const [validationMaxRequests, setValidationMaxRequests] = useState("10");
+  const [validationDurationSeconds, setValidationDurationSeconds] = useState("600");
   const [compact, setCompact] = useState(() => globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false);
   const size = useResizableSidePanel({
     defaultWidth: 920,
@@ -115,29 +118,44 @@ export function SecurityBrowserWorkspacePanel({
   const selected = workspace?.assessments.find((assessment) => assessment.id === selectedId);
   const selectedCandidateId = searchParams.get("candidate") ?? undefined;
 
-  const selectAssessment = useCallback((assessmentId?: string) => {
-    const next = new URLSearchParams(searchParams);
+  // The URL owns the selection, but the callbacks below read it through refs
+  // so that their identity, and therefore refresh, only changes with the api
+  // or project. Depending on searchParams re-ran the snapshot fetch, replaced
+  // the list with its loader and reopened the event stream on every query
+  // change, including a candidate click.
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+  const setSearchParamsRef = useRef(setSearchParams);
+  setSearchParamsRef.current = setSearchParams;
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
+
+  const updateSearchParams = useCallback((mutate: (next: URLSearchParams) => void) => {
+    const next = new URLSearchParams(searchParamsRef.current);
+    mutate(next);
+    setSearchParamsRef.current(next, { replace: true });
+  }, []);
+
+  const selectAssessment = useCallback((assessmentId?: string) => updateSearchParams((next) => {
     if (assessmentId) next.set("assessment", assessmentId);
     else next.delete("assessment");
     next.delete("candidate");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }), [updateSearchParams]);
 
-  const selectCandidate = useCallback((candidateId?: string) => {
-    const next = new URLSearchParams(searchParams);
+  const selectCandidate = useCallback((candidateId?: string) => updateSearchParams((next) => {
     if (candidateId) next.set("candidate", candidateId);
     else next.delete("candidate");
-    setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }), [updateSearchParams]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const next = await api.getSecurityBrowserAssessments(projectId, signal);
       setWorkspace(next);
       setError(undefined);
-      if (selectedId && !next.assessments.some((item) => item.id === selectedId)) {
+      const current = selectedIdRef.current;
+      if (current && !next.assessments.some((item) => item.id === current)) {
         selectAssessment(next.assessments.at(-1)?.id);
-      } else if (!selectedId && next.assessments.length) {
+      } else if (!current && next.assessments.length) {
         selectAssessment(next.assessments.at(-1)?.id);
       }
     } catch (caught) {
@@ -152,7 +170,7 @@ export function SecurityBrowserWorkspacePanel({
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [api, projectId, selectAssessment, selectedId]);
+  }, [api, projectId, selectAssessment]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -203,9 +221,18 @@ export function SecurityBrowserWorkspacePanel({
 
   useEffect(() => {
     setValidationTechnique("");
-    setValidationMaxRequests(10);
-    setValidationDurationSeconds(600);
+    setValidationMaxRequests("10");
+    setValidationDurationSeconds("600");
   }, [selectedCandidate?.id]);
+
+  const validationBudget = {
+    maxRequests: validationMaxRequests.trim() === "" ? Number.NaN : Number(validationMaxRequests),
+    durationSeconds: validationDurationSeconds.trim() === "" ? Number.NaN : Number(validationDurationSeconds),
+  };
+  const validationBudgetValid = Number.isInteger(validationBudget.maxRequests)
+    && validationBudget.maxRequests >= 1 && validationBudget.maxRequests <= 10_000
+    && Number.isInteger(validationBudget.durationSeconds)
+    && validationBudget.durationSeconds >= 30 && validationBudget.durationSeconds <= 3_600;
 
   const openWizard = () => {
     setWizardStep(0);
@@ -290,6 +317,13 @@ export function SecurityBrowserWorkspacePanel({
 
   const deleteSelected = async () => {
     if (!selected) return;
+    const approved = await confirm({
+      title: `Delete ${selected.name}?`,
+      message: "The assessment record is removed from this project along with its plan and candidate list. Preserved evidence is not deleted.",
+      confirmLabel: "Delete assessment",
+      tone: "danger",
+    });
+    if (!approved) return;
     setBusy(true);
     try {
       await api.deleteSecurityBrowserAssessment(selected);
@@ -309,14 +343,14 @@ export function SecurityBrowserWorkspacePanel({
   };
 
   const grantValidation = async () => {
-    if (!selectedCandidate || !validationTechnique.trim()) return;
+    if (!selectedCandidate || !validationTechnique.trim() || !validationBudgetValid) return;
     setBusy(true);
     setError(undefined);
     try {
       await api.grantSecurityBrowserCandidateValidation(selectedCandidate, {
         technique: validationTechnique.trim(),
-        maxRequests: validationMaxRequests,
-        durationSeconds: validationDurationSeconds,
+        maxRequests: validationBudget.maxRequests,
+        durationSeconds: validationBudget.durationSeconds,
       });
       await refresh();
     } catch (caught) {
@@ -439,9 +473,9 @@ export function SecurityBrowserWorkspacePanel({
                 {selectedValidationGrant ? <div className="security-browser-grant-status"><div className="security-browser-callout warning" role="status"><ShieldCheck size={16} /><div><strong>{selectedValidationGrant.status === "active" && new Date(selectedValidationGrant.expiresAt).getTime() > Date.now() ? "Bounded validation authorized" : `Validation grant ${selectedValidationGrant.status === "active" ? "expired" : selectedValidationGrant.status}`}</strong><span>{selectedValidationGrant.technique}</span><small>Up to {selectedValidationGrant.maxRequests} requests over {selectedValidationGrant.durationSeconds} seconds to this target only; expires {new Date(selectedValidationGrant.expiresAt).toLocaleString()}.</small></div></div>{selectedValidationGrant.status === "active" && new Date(selectedValidationGrant.expiresAt).getTime() > Date.now() && <button className="button danger" type="button" disabled={busy} onClick={() => void revokeValidation()}><Square size={14} /> Revoke validation now</button>}</div> : <div className="security-browser-validation-form">
                   <div className="security-browser-callout warning" role="alert"><AlertTriangle size={16} /><div><strong>This authorizes exploit-validation traffic</strong><span>Name one exact technique. Nebula will still enforce the frozen target, duration, request budget, and emergency revocation independently.</span></div></div>
                   <label>Exact validation technique<textarea rows={3} maxLength={1000} value={validationTechnique} onChange={(event) => setValidationTechnique(event.target.value)} placeholder="Describe the probe and its negative control without placing secrets here." /></label>
-                  <div className="security-browser-validation-budget"><label>Maximum requests<input type="number" min={1} max={10000} value={validationMaxRequests} onChange={(event) => setValidationMaxRequests(Number(event.target.value))} /></label><label>Duration (seconds)<input type="number" min={30} max={3600} value={validationDurationSeconds} onChange={(event) => setValidationDurationSeconds(Number(event.target.value))} /></label></div>
-                  <div className="security-browser-traffic-preview"><strong>Expected traffic</strong><span>Up to {validationMaxRequests} requests over {validationDurationSeconds} seconds to <code>{selectedCandidate.targetUrl}</code> through the policy path.</span></div>
-                  <button className="button danger" type="button" disabled={busy || !validationTechnique.trim() || validationMaxRequests < 1 || validationMaxRequests > 10000 || validationDurationSeconds < 30 || validationDurationSeconds > 3600} onClick={() => void grantValidation()}><ShieldCheck size={15} /> Grant bounded validation</button>
+                  <div className="security-browser-validation-budget"><label>Maximum requests<input type="number" min={1} max={10000} value={validationMaxRequests} onChange={(event) => setValidationMaxRequests(event.target.value)} /></label><label>Duration (seconds)<input type="number" min={30} max={3600} value={validationDurationSeconds} onChange={(event) => setValidationDurationSeconds(event.target.value)} /></label></div>
+                  <div className="security-browser-traffic-preview"><strong>Expected traffic</strong><span>Up to {validationMaxRequests.trim() || "0"} requests over {validationDurationSeconds.trim() || "0"} seconds to <code>{selectedCandidate.targetUrl}</code> through the policy path.</span></div>
+                  <button className="button danger" type="button" disabled={busy || !validationTechnique.trim() || !validationBudgetValid} onClick={() => void grantValidation()}><ShieldCheck size={15} /> Grant bounded validation</button>
                 </div>}
               </article>}
             </div>

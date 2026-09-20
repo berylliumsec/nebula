@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { LoaderCircle, MessageSquare, NotebookPen, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
@@ -53,6 +53,14 @@ export function ExecutionInsightDialog({
   const [error, setError] = useState<string>();
   const [draft, setDraft] = useState<GeneratedDraft>();
   const [content, setContent] = useState<GeneratedDraftContent>();
+  // Draft generation polls Core for up to a minute. Closing the dialog cancels
+  // that poll instead of locking the operator in until it ends.
+  const pollRef = useRef<{ cancelled: boolean }>({ cancelled: false });
+  useEffect(() => () => { pollRef.current.cancelled = true; }, []);
+  const close = () => {
+    pollRef.current.cancelled = true;
+    onClose();
+  };
 
   useEffect(() => {
     if (runtime) return;
@@ -78,6 +86,8 @@ export function ExecutionInsightDialog({
     if (!runtime || !canSubmit) return;
     setBusy(true);
     setError(undefined);
+    const poll = { cancelled: false };
+    pollRef.current = poll;
     try {
       if (action === "chat") {
         const attachment = runtime.kind === "harness"
@@ -95,7 +105,7 @@ export function ExecutionInsightDialog({
             cloudConfirmed,
           );
         await onChatAttached(attachment.sessionId);
-        onClose();
+        if (!poll.cancelled) onClose();
         return;
       }
       let generated = runtime.kind === "harness"
@@ -120,8 +130,10 @@ export function ExecutionInsightDialog({
         );
       for (let attempt = 0; attempt < 300 && generated.status === "generating"; attempt += 1) {
         await new Promise((resolve) => setTimeout(resolve, 200));
+        if (poll.cancelled) return;
         generated = await api.getGeneratedDraft(generated.id);
       }
+      if (poll.cancelled) return;
       setDraft(generated);
       setContent(generated.content);
       if (generated.status !== "ready") {
@@ -168,8 +180,8 @@ export function ExecutionInsightDialog({
   };
 
   return (
-      <ModalSurface as="form" className="provider-dialog execution-insight-dialog" labelledBy="execution-insight-title" onClose={() => { if (!busy) onClose(); }} onSubmit={(event) => void submit(event)}>
-        <header><div><small>Operator-triggered · bounded redacted context</small><h2 id="execution-insight-title">{action === "draft" ? "Draft execution note" : "Discuss execution in chat"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close execution action" disabled={busy} onClick={onClose}><X size={17} /></button></header>
+      <ModalSurface as="form" className="provider-dialog execution-insight-dialog" labelledBy="execution-insight-title" onClose={close} onSubmit={(event) => void submit(event)}>
+        <header><div><small>Operator-triggered · bounded redacted context</small><h2 id="execution-insight-title">{action === "draft" ? "Draft execution note" : "Discuss execution in chat"}</h2></div><button className="icon-button subtle" type="button" aria-label="Close execution action" onClick={close}><X size={17} /></button></header>
         {!draft?.content ? <>
           <p className="provider-dialog-note">No request is made until you submit this dialog. The selected AI runtime receives only these categories:</p>
           <ul className="execution-context-categories">{CATEGORIES.map((category) => <li key={category}>{category}</li>)}</ul>
@@ -187,7 +199,7 @@ export function ExecutionInsightDialog({
           <p className="provider-dialog-note">Evidence IDs: {content.evidenceIds.join(", ") || "none"} · Context {draft.contextFingerprint.slice(0, 12)}…</p>
         </section>}
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
-        <footer>{draft?.content ? <><button className="button danger" type="button" disabled={busy} onClick={() => void reject()}>Reject draft</button><button className="button primary" type="button" disabled={busy || !content?.title.trim()} onClick={() => void accept()}>{busy ? <LoaderCircle className="spin" size={15} /> : <NotebookPen size={15} />} Accept as observation</button></> : <><button className="button secondary" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="button primary" type="submit" disabled={!canSubmit}>{busy ? <LoaderCircle className="spin" size={15} /> : action === "draft" ? <NotebookPen size={15} /> : <MessageSquare size={15} />} {busy ? action === "draft" ? "Generating…" : "Attaching…" : action === "draft" ? "Generate draft" : "Create chat"}</button></>}</footer>
+        <footer>{draft?.content ? <><button className="button danger" type="button" disabled={busy} onClick={() => void reject()}>Reject draft</button><button className="button primary" type="button" disabled={busy || !content?.title.trim()} onClick={() => void accept()}>{busy ? <LoaderCircle className="spin" size={15} /> : <NotebookPen size={15} />} Accept as observation</button></> : <><button className="button secondary" type="button" onClick={close}>Cancel</button><button className="button primary" type="submit" disabled={!canSubmit}>{busy ? <LoaderCircle className="spin" size={15} /> : action === "draft" ? <NotebookPen size={15} /> : <MessageSquare size={15} />} {busy ? action === "draft" ? "Generating…" : "Attaching…" : action === "draft" ? "Generate draft" : "Create chat"}</button></>}</footer>
       </ModalSurface>
   );
 }

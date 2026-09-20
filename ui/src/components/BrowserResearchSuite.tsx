@@ -168,8 +168,9 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
   const [compareOutput, setCompareOutput] = useState("");
   const [tokenSamples, setTokenSamples] = useState("");
   const [crawlUrl, setCrawlUrl] = useState("");
-  const [crawlDepth, setCrawlDepth] = useState(2);
-  const [crawlRequests, setCrawlRequests] = useState(100);
+  // Raw text so a cleared field stays empty instead of snapping to 0; parsed on submit.
+  const [crawlDepth, setCrawlDepth] = useState("2");
+  const [crawlRequests, setCrawlRequests] = useState("100");
 
   const refreshSequence = useRef(0);
   useEffect(() => () => { refreshSequence.current += 1; }, []);
@@ -278,14 +279,24 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
   const createCrawl = async (event: FormEvent) => {
     event.preventDefault();
     if (!session || !identity) return;
+    const maxDepth = crawlDepth.trim() === "" ? Number.NaN : Number(crawlDepth);
+    const maxRequests = crawlRequests.trim() === "" ? Number.NaN : Number(crawlRequests);
+    if (!Number.isInteger(maxDepth) || maxDepth < 0 || maxDepth > 10) {
+      setError("Maximum depth must be a whole number from 0 through 10.");
+      return;
+    }
+    if (!Number.isInteger(maxRequests) || maxRequests < 1 || maxRequests > 10_000) {
+      setError("Request budget must be a whole number from 1 through 10000.");
+      return;
+    }
     setBusy(true);
     try {
       await api.createSecurityBrowserCrawl(projectId, {
         sessionId: session.id,
         identityId: identity.id,
         startUrl: crawlUrl,
-        maxDepth: crawlDepth,
-        maxRequests: crawlRequests,
+        maxDepth,
+        maxRequests,
         maxConcurrency: 1,
         maxDurationSeconds: 300,
         maxBodyBytes: 1_048_576,
@@ -677,7 +688,7 @@ function ResearchSuiteSession({ api, desktop, identity, operatorId, projectId, s
 
     {view === "target" && <section aria-labelledby="browser-target-heading">
       <header className="browser-suite-heading"><div><Target size={16} /><span><h3 id="browser-target-heading">Target map</h3><small>In-scope locations discovered by browsing, proxy capture, HAR, crawl, and automation.</small></span></div><button className="icon-button subtle" aria-label="Refresh target map" type="button" onClick={() => void refresh()}><RefreshCw size={14} /></button></header>
-      <form className="browser-suite-form" onSubmit={createCrawl}><label className="browser-suite-wide">Crawl start URL<input required value={crawlUrl} onChange={(event) => setCrawlUrl(event.target.value)} /></label><label>Maximum depth<input type="number" min={0} max={10} value={crawlDepth} onChange={(event) => setCrawlDepth(Number(event.target.value))} /></label><label>Request budget<input type="number" min={1} max={10000} value={crawlRequests} onChange={(event) => setCrawlRequests(Number(event.target.value))} /></label><button className="button primary" disabled={busy || !desktop || !session || !identity || !crawlUrl} type="submit">Create bounded crawl</button>{!desktop && <small className="browser-suite-wide">A paired client can inspect and stop crawls; the desktop owns network execution.</small>}</form>
+      <form className="browser-suite-form" onSubmit={createCrawl}><label className="browser-suite-wide">Crawl start URL<input required value={crawlUrl} onChange={(event) => setCrawlUrl(event.target.value)} /></label><label>Maximum depth<input type="number" min={0} max={10} value={crawlDepth} onChange={(event) => setCrawlDepth(event.target.value)} /></label><label>Request budget<input type="number" min={1} max={10000} value={crawlRequests} onChange={(event) => setCrawlRequests(event.target.value)} /></label><button className="button primary" disabled={busy || !desktop || !session || !identity || !crawlUrl} type="submit">Create bounded crawl</button>{!desktop && <small className="browser-suite-wide">A paired client can inspect and stop crawls; the desktop owns network execution.</small>}</form>
       {sessionItems(workspace?.crawlJobs).length > 0 && <ol className="browser-suite-list">{[...sessionItems(workspace?.crawlJobs)].reverse().map((crawl) => <li key={crawl.id}><span className={`browser-action-status ${crawl.state}`}>{crawl.state}</span><div><strong>{crawl.startUrl}</strong><small>depth {crawl.maxDepth} · {crawl.requestsCompleted}/{crawl.maxRequests} requests · {crawl.nodesDiscovered} nodes{crawl.error ? ` · ${crawl.error}` : ""}</small><span className="browser-suite-actions">{crawl.state === "draft" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "queue")}>Queue on desktop</button>}{crawl.state === "queued" && <small>Waiting for the owning desktop…</small>}{crawl.state === "running" && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "pause")}><Pause size={13} /> Pause</button>}{crawl.state === "paused" && <button className="button primary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "resume")}><Play size={13} /> Resume</button>}{["failed", "cancelled"].includes(crawl.state) && <button className="button secondary" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "retry")}>Retry</button>}{["draft", "queued", "running", "paused"].includes(crawl.state) && <button className="button quiet danger" disabled={busy} type="button" onClick={() => void transitionCrawl(crawl, "cancel")}><Square size={13} /> Cancel</button>}{["draft", "complete", "cancelled", "failed"].includes(crawl.state) && <button className="button quiet danger" disabled={busy} aria-label={`Delete crawl ${crawl.startUrl}`} type="button" onClick={() => void deleteCrawl(crawl)}><Trash2 size={13} /> Delete</button>}</span></div></li>)}</ol>}
       {sessionItems(workspace?.siteNodes).length ? <ol className="browser-suite-list">{sessionItems(workspace?.siteNodes).map((node) => <li key={node.id}><span className={`browser-method method-${node.method.toLowerCase()}`}>{node.method}</span><div><strong>{node.url}</strong><small>{node.kind} · {node.discoverySource}{node.statusCode ? ` · ${node.statusCode}` : ""}{node.parameterNames.length ? ` · parameters: ${node.parameterNames.join(", ")}` : ""}</small></div></li>)}</ol> : <div className="browser-research-empty"><Target size={20} /><strong>No mapped targets</strong><span>Browse an authorized page, import a HAR, or start a bounded crawl.</span></div>}
     </section>}

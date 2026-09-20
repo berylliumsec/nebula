@@ -3,6 +3,7 @@ import { CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-re
 import type { ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
+import { useConfirmation } from "./DialogSystem";
 
 export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
   api: ApiClient;
@@ -27,6 +28,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const confirm = useConfirmation();
 
   const act = async (action: "start" | "pause" | "resume" | "cancel" | "block" | "complete") => {
     if (!goal || busy) return;
@@ -46,6 +48,20 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       void logCaughtDiagnostic("interface.goal.transition_failed", "A conversation goal state change failed.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal state could not be changed.");
     } finally { setBusy(false); }
+  };
+
+  // Cancelling is a terminal transition, so it asks first; the button sits
+  // beside Edit skills and used to read like a form cancel.
+  const cancelGoal = async () => {
+    if (!goal || busy) return;
+    const approved = await confirm({
+      title: "Cancel this goal?",
+      message: "A cancelled goal is final. It cannot be resumed, and the conversation continues without a goal.",
+      confirmLabel: "Cancel goal",
+      cancelLabel: "Keep goal",
+      tone: "danger",
+    });
+    if (approved) await act("cancel");
   };
 
   const create = async () => {
@@ -129,7 +145,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       {goal.status === "running" && <button className="button primary" type="button" disabled={busy} onClick={() => setTransition("complete")}>Complete</button>}
       {(goal.status === "paused" || goal.status === "blocked") && <button className="button primary" type="button" disabled={busy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
       <button className="button quiet" type="button" disabled={busy} onClick={beginSkillEdit}>Edit skills</button>
-      <button className="button quiet" type="button" disabled={busy} onClick={() => void act("cancel")}><OctagonX size={14} /> Cancel</button>
+      <button className="button quiet" type="button" disabled={busy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

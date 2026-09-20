@@ -194,7 +194,9 @@ export function TerminalCommandHistoryPanel({ api, engagementId }: TerminalComma
       anchor.href = url;
       anchor.download = `terminal-command-${record.id}.raw`;
       anchor.click();
-      URL.revokeObjectURL(url);
+      // Revoking synchronously can abort the download before the browser
+      // starts it (Firefox); defer like the other download paths.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (downloadError) {
       void logCaughtDiagnostic("interface.terminal_command_history_panel.caught_failure_05", "A handled interface operation failed.", downloadError, "terminal_command_history_panel");
       setError(downloadError instanceof Error ? downloadError.message : "Could not download the raw result.");

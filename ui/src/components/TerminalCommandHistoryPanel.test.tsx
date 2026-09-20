@@ -90,6 +90,61 @@ describe("TerminalCommandHistoryPanel", () => {
     expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
   });
 
+  it("keeps the raw download object URL alive until the browser has started the download", async () => {
+    const record = {
+      id: "command-raw",
+      engagementId: "project-1",
+      sessionId: "terminal-1",
+      operatorId: "operator-1",
+      shellSequence: "4",
+      command: "nmap -sV 10.0.0.9",
+      commandSha256: "a".repeat(64),
+      cwd: "/workspace",
+      status: "completed",
+      exitCode: 0,
+      occurredAt: "2026-07-13T20:00:01Z",
+      rawOutputAvailable: true,
+      redactedOutputAvailable: true,
+      observedOutputBytes: 19,
+      capturedOutputBytes: 19,
+      outputSha256: "b".repeat(64),
+      outputTruncated: false,
+      outputPreview: "PORT STATE SERVICE",
+      captureDecision: "selected_tool",
+      matchedTools: ["nmap"],
+      recordingPolicyRevision: 0,
+      runtimeImageDigest: `sha256:${"c".repeat(64)}`,
+    };
+    const api = {
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({
+        engagementId: "project-1", enabled: true, captureMode: "selected_tools", recordCount: 1, recordedOutputCount: 1,
+        metadataOnlyCount: 0, classificationFailureCount: 0, degradedCount: 0, truncatedCount: 0, auditGapCount: 0, capturedOutputBytes: 19,
+      }),
+      listTerminalCommands: vi.fn().mockResolvedValue({ records: [record], total: 1, offset: 0, limit: 100 }),
+      terminalCommandOutput: vi.fn().mockResolvedValue(new Blob(["PORT STATE SERVICE\n80 open http"])),
+      terminalRecordingTools: vi.fn().mockResolvedValue({
+        engagementId: "project-1", inventoryStatus: "unavailable", defaultTools: [], customTools: [], disabledTools: [], effectiveTools: [], revision: 0,
+      }),
+      updateTerminalRecordingTools: vi.fn(),
+    } as unknown as ApiClient;
+    const createObjectURL = vi.fn(() => "blob:terminal-raw");
+    const revokeObjectURL = vi.fn();
+    Object.assign(URL, { createObjectURL, revokeObjectURL });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    render(<DialogProvider><TerminalCommandHistoryPanel api={api} engagementId="project-1" /></DialogProvider>);
+
+    await user.click(await screen.findByRole("button", { name: /nmap -sV/ }));
+    await user.click(await screen.findByRole("button", { name: "Raw" }));
+    await user.click(await screen.findByRole("button", { name: "Download raw result" }));
+    await waitFor(() => expect(click).toHaveBeenCalledOnce());
+    expect(api.terminalCommandOutput).toHaveBeenLastCalledWith("project-1", "command-raw", true);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    await waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:terminal-raw"), { timeout: 2_500 });
+    click.mockRestore();
+  });
+
   it("saves custom names without an image catalog and keeps metadata-only output actions unavailable", async () => {
     const catalog = {
       engagementId: "project-1",

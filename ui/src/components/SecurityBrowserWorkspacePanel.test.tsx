@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -7,11 +7,13 @@ import type {
   SecurityBrowserIdentity,
   SecurityBrowserSession,
 } from "../api/types";
+import { DialogProvider } from "./DialogSystem";
 import { SecurityBrowserWorkspacePanel } from "./SecurityBrowserWorkspacePanel";
 
+const streams = vi.hoisted(() => ({ opened: 0 }));
 vi.mock("../api/assessmentEvents", () => ({
   AssessmentEventStream: class {
-    connect() {}
+    connect() { streams.opened += 1; }
     disconnect() {}
   },
 }));
@@ -127,24 +129,28 @@ function api(snapshot = workspace()): ApiClient {
   } as unknown as ApiClient;
 }
 
-function renderPanel(client: ApiClient, desktop = true) {
+function renderPanel(client: ApiClient, desktop = true, entry = "/project?view=browser&tool=traffic") {
   return render(
-    <MemoryRouter initialEntries={["/project?view=browser&tool=traffic"]}>
-      <SecurityBrowserWorkspacePanel
-        api={client}
-        desktop={desktop}
-        projectId="project-1"
-        identity={identity}
-        session={session}
-        targetOptions={["https://app.example.test/"]}
-        toolNavigation={<nav><button type="button">Traffic</button></nav>}
-        onClose={() => undefined}
-      >
-        <div>Traffic tool content</div>
-      </SecurityBrowserWorkspacePanel>
+    <MemoryRouter initialEntries={[entry]}>
+      <DialogProvider>
+        <SecurityBrowserWorkspacePanel
+          api={client}
+          desktop={desktop}
+          projectId="project-1"
+          identity={identity}
+          session={session}
+          targetOptions={["https://app.example.test/"]}
+          toolNavigation={<nav><button type="button">Traffic</button></nav>}
+          onClose={() => undefined}
+        >
+          <div>Traffic tool content</div>
+        </SecurityBrowserWorkspacePanel>
+      </DialogProvider>
     </MemoryRouter>,
   );
 }
+
+const selectedAssessmentEntry = "/project?view=browser&tool=analyze&assessment=assessment-1";
 
 function assessmentWorkspace(): SecurityBrowserAssessmentWorkspace {
   const snapshot = workspace();
@@ -168,7 +174,7 @@ function assessmentWorkspace(): SecurityBrowserAssessmentWorkspace {
 }
 
 describe("SecurityBrowserWorkspacePanel", () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => { vi.restoreAllMocks(); streams.opened = 0; });
 
   it("walks a new operator through all five preflight decisions before creating", async () => {
     const client = api();
@@ -215,11 +221,7 @@ describe("SecurityBrowserWorkspacePanel", () => {
       maxRequests: request.maxRequests, requestsUsed: 0, durationSeconds: request.durationSeconds,
       expiresAt: "2026-08-28T00:11:00Z", status: "active" as const,
     }));
-    render(
-      <MemoryRouter initialEntries={["/project?view=browser&tool=analyze&assessment=assessment-1"]}>
-        <SecurityBrowserWorkspacePanel api={client} desktop projectId="project-1" identity={identity} session={session} targetOptions={["https://app.example.test/"]} toolNavigation={<nav><button type="button">Analyze</button></nav>} onClose={() => undefined}><div>Analyze content</div></SecurityBrowserWorkspacePanel>
-      </MemoryRouter>,
-    );
+    renderPanel(client, true, selectedAssessmentEntry);
 
     await waitFor(() => expect(screen.getByRole("heading", { name: "Candidate issues" })).toBeVisible());
     fireEvent.click(screen.getByRole("button", { name: /Reflected input/ }));
@@ -238,5 +240,69 @@ describe("SecurityBrowserWorkspacePanel", () => {
         durationSeconds: 600,
       },
     ));
+  });
+
+  it("keeps the assessment snapshot and event stream when only the candidate selection changes", async () => {
+    const client = api(assessmentWorkspace());
+    renderPanel(client, true, selectedAssessmentEntry);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Candidate issues" })).toBeVisible());
+    expect(client.getSecurityBrowserAssessments).toHaveBeenCalledTimes(1);
+    expect(streams.opened).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: /Reflected input/ }));
+    await waitFor(() => expect(screen.getByText("This authorizes exploit-validation traffic")).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: "Close candidate detail" }));
+    await waitFor(() => expect(screen.queryByText("This authorizes exploit-validation traffic")).toBeNull());
+
+    expect(client.getSecurityBrowserAssessments).toHaveBeenCalledTimes(1);
+    expect(streams.opened).toBe(1);
+    expect(screen.getByRole("button", { name: /Portal review/ })).toBeVisible();
+  });
+
+  it("keeps a cleared validation budget field empty and submits the retyped value", async () => {
+    const client = api(assessmentWorkspace());
+    client.grantSecurityBrowserCandidateValidation = vi.fn(async (_candidate, request) => ({
+      id: "grant-1", revision: 1, assessmentId: "assessment-1", candidateId: "candidate-1",
+      targetUrl: "https://app.example.test/search", technique: request.technique,
+      maxRequests: request.maxRequests, requestsUsed: 0, durationSeconds: request.durationSeconds,
+      expiresAt: "2026-08-28T00:11:00Z", status: "active" as const,
+    }));
+    renderPanel(client, true, selectedAssessmentEntry);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Candidate issues" })).toBeVisible());
+    fireEvent.click(screen.getByRole("button", { name: /Reflected input/ }));
+    fireEvent.change(screen.getByLabelText("Exact validation technique"), { target: { value: "Replay with one inert marker." } });
+
+    const requests = screen.getByLabelText("Maximum requests");
+    fireEvent.change(requests, { target: { value: "" } });
+    expect(requests).toHaveValue(null);
+    expect(screen.getByRole("button", { name: /grant bounded validation/i })).toBeDisabled();
+    fireEvent.change(requests, { target: { value: "25" } });
+    expect(requests).toHaveValue(25);
+    expect(screen.getByText(/Up to 25 requests over 600 seconds/)).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /grant bounded validation/i }));
+    await waitFor(() => expect(client.grantSecurityBrowserCandidateValidation).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "candidate-1" }),
+      { technique: "Replay with one inert marker.", maxRequests: 25, durationSeconds: 600 },
+    ));
+  });
+
+  it("confirms before deleting assessment metadata", async () => {
+    const snapshot = assessmentWorkspace();
+    snapshot.assessments[0] = { ...snapshot.assessments[0], status: "stopped" };
+    const client = api(snapshot);
+    client.deleteSecurityBrowserAssessment = vi.fn(async () => undefined);
+    renderPanel(client, true, selectedAssessmentEntry);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Delete assessment metadata/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete Portal review?" });
+    expect(client.deleteSecurityBrowserAssessment).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(client.deleteSecurityBrowserAssessment).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Delete assessment metadata/ }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Delete Portal review?" })).getByRole("button", { name: "Delete assessment" }));
+    await waitFor(() => expect(client.deleteSecurityBrowserAssessment).toHaveBeenCalledWith(expect.objectContaining({ id: "assessment-1" })));
   });
 });

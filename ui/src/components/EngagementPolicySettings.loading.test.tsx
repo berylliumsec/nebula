@@ -51,6 +51,41 @@ describe("project policy hydration", () => {
     expect(fixture.api.getAutomationPolicy).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps a cleared timeout field empty, refuses to save it, and saves the retyped value", async () => {
+    fixture.api.updateAutomationPolicy = vi.fn(async (id: string, request: {maxTimeoutMs: number}) => ({...policy(id), maxTimeoutMs: request.maxTimeoutMs, revision: 2}));
+    render(view());
+    const timeout = screen.getByLabelText("Maximum command timeout (milliseconds)");
+    await waitFor(() => expect(timeout).toBeEnabled());
+    expect(timeout).toHaveValue(300000);
+
+    fireEvent.change(timeout, {target: {value: ""}});
+    expect(timeout).toHaveValue(null);
+    fireEvent.click(screen.getByRole("button", {name: "Save runtime policy"}));
+    expect(await screen.findByText(/Maximum command timeout must be a whole number/)).toBeVisible();
+    expect(fixture.api.updateAutomationPolicy).not.toHaveBeenCalled();
+
+    fireEvent.change(timeout, {target: {value: "60000"}});
+    expect(timeout).toHaveValue(60000);
+    fireEvent.click(screen.getByRole("button", {name: "Save runtime policy"}));
+    await waitFor(() => expect(fixture.api.updateAutomationPolicy).toHaveBeenCalledWith("first", expect.objectContaining({maxTimeoutMs: 60000})));
+    await waitFor(() => expect(timeout).toHaveValue(60000));
+  });
+
+  it("keeps a cleared concurrency field empty and refuses to save it", async () => {
+    fixture.api.updateEngagementScope = vi.fn(async (id: string) => scope(id));
+    render(view());
+    const concurrency = screen.getByLabelText("Maximum concurrency");
+    await waitFor(() => expect(concurrency).toBeEnabled());
+    fireEvent.change(concurrency, {target: {value: ""}});
+    expect(concurrency).toHaveValue(null);
+    fireEvent.click(screen.getByRole("button", {name: "Save scope"}));
+    expect(await screen.findByText(/Maximum concurrency must be a whole number/)).toBeVisible();
+    expect(fixture.api.updateEngagementScope).not.toHaveBeenCalled();
+    fireEvent.change(concurrency, {target: {value: "4"}});
+    fireEvent.click(screen.getByRole("button", {name: "Save scope"}));
+    await waitFor(() => expect(fixture.api.updateEngagementScope).toHaveBeenCalledWith("first", expect.objectContaining({maxConcurrency: 4})));
+  });
+
   it.each(["runtime", "scope"])("keeps a late %s save response out of a newly selected project", async area => {
     let resolve!: (value: unknown) => void;
     fixture.api.getAutomationPolicy.mockImplementation(async id => policy(id, id === "second" ? "always" : "on_boundary"));

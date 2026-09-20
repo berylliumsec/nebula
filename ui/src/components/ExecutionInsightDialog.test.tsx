@@ -111,6 +111,49 @@ describe("ExecutionInsightDialog", () => {
     expect(transitionGeneratedDraft).toHaveBeenCalledWith("draft-1", "accept", 2);
   });
 
+  it("lets the operator close the dialog while a draft is still generating and stops polling", async () => {
+    const user = userEvent.setup();
+    const generating = {
+      id: "draft-slow",
+      engagementId: "engagement-1",
+      executionId: execution.id,
+      providerProfileId: "cloud-1",
+      model: "model-1",
+      promptVersion: "execution-note/v1",
+      contextFingerprint: "c".repeat(64),
+      status: "generating",
+      metadata: {},
+      revision: 1,
+    } satisfies GeneratedDraft;
+    const generateExecutionDraft = vi.fn().mockResolvedValue(generating);
+    const getGeneratedDraft = vi.fn().mockResolvedValue(generating);
+    const onClose = vi.fn();
+
+    render(
+      <ExecutionInsightDialog
+        action="draft"
+        api={{ generateExecutionDraft, getGeneratedDraft } as unknown as ApiClient}
+        execution={execution}
+        providers={[provider({ id: "cloud-1", name: "Cloud provider" })]}
+        onClose={onClose}
+        onChatAttached={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: /Allow this cloud request/ }));
+    await user.click(screen.getByRole("button", { name: "Generate draft" }));
+    expect(await screen.findByRole("button", { name: /Generating…/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Close execution action" })).toBeEnabled();
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(cancel).toBeEnabled();
+
+    await user.click(cancel);
+    expect(onClose).toHaveBeenCalledOnce();
+    const polled = getGeneratedDraft.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    expect(getGeneratedDraft.mock.calls.length).toBe(polled);
+  });
+
   it("offers a Codex harness for structured execution drafts", async () => {
     const user = userEvent.setup();
     const draft = {
