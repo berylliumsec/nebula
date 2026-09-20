@@ -11,14 +11,17 @@ from nebula.v3.chat import ChatService
 from nebula.v3.chat_goals import ChatGoalService
 from nebula.v3.chat_schedules import ChatScheduleService
 from nebula.v3.domain import (
+    AgentRun,
     Artifact,
     ChatGoal,
     ChatSchedule,
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    CommandExecution,
     Engagement,
     ProviderProfile,
+    RunBackend,
     utc_now,
 )
 from nebula.v3.storage import NebulaStore
@@ -161,3 +164,83 @@ def test_tool_call_artifacts_are_found_beyond_the_first_thousand_rows(tmp_path):
     assert [
         item.id for item in store.list_tool_call_artifacts("project", "call-new")
     ] == ["new-stdout", "new-receipt"]
+
+
+def _execution(execution_id: str, approval_id: str) -> CommandExecution:
+    return CommandExecution(
+        id=execution_id,
+        engagement_id="project",
+        session_id="automation-session",
+        process_id=f"process-{execution_id}",
+        command=f"echo {execution_id}",
+        command_sha256="0" * 64,
+        runtime_digest="sha256:" + "0" * 64,
+        policy_revision=1,
+        metadata={"approval_id": approval_id},
+    )
+
+
+def test_consumed_approval_is_found_beyond_the_first_thousand_executions(tmp_path):
+    store = _store(tmp_path)
+    store.create_many(
+        [_execution(f"old-{index}", "approval-old") for index in range(1_000)]
+    )
+    store.create(_execution("newest", "approval-new"))
+
+    assert store.has_entity_with_metadata(
+        CommandExecution, "approval_id", "approval-new"
+    )
+    assert not store.has_entity_with_metadata(
+        CommandExecution, "approval_id", "approval-unused"
+    )
+
+
+def test_attaching_a_mission_finds_its_chat_beyond_the_first_thousand_sessions(
+    tmp_path,
+):
+    store = _store(tmp_path)
+    store.create_many(
+        [
+            ChatSession(
+                id=f"old-{index}",
+                engagement_id="project",
+                title="Older",
+                provider_profile_id="provider",
+                model="model-a",
+            )
+            for index in range(1_000)
+        ]
+    )
+    store.create(
+        ChatSession(
+            id="attached",
+            engagement_id="project",
+            title="Mission discussion",
+            provider_profile_id="provider",
+            model="model-a",
+            metadata={"attached_run_ids": ["run-1"], "context_management": "nebula"},
+        )
+    )
+    store.create(
+        AgentRun(
+            id="run-1",
+            engagement_id="project",
+            objective="Scan the target",
+            backend=RunBackend.NATIVE,
+            supervisor_provider_id="provider",
+            supervisor_model="model-a",
+            metadata={"final_summary": "Two hosts answered."},
+        )
+    )
+
+    attached = ChatService(store).attach_native_run_to_chat("run-1")
+
+    assert attached.id == "attached"
+    assert (
+        len(
+            store.list_entities(
+                ChatSession, engagement_id="project", offset=1_000, limit=1_000
+            )
+        )
+        == 3
+    )
