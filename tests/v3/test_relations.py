@@ -8,7 +8,9 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     Asset,
     Engagement,
+    Evidence,
     Finding,
+    KnowledgeSource,
     RelationPredicate,
     Report,
     ReportStatus,
