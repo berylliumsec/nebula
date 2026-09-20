@@ -4,17 +4,24 @@
   "reason": "A saved provider's Chat model picker went empty in Assistant settings. Discovery does arrive: SessionsPage's discovery effect calls refreshProvider, which folds the health check's models into the cached provider. The capability verification that follows the first model selection then calls verifyProviderCapabilities, whose second request re-reads the provider profile, and a profile record carries only the allowed models and state \"unchecked\". WorkspaceContext replaced the checked provider with that record, so models emptied, the reconciliation effect cleared the selected model, and the select stayed disabled at \"\" because discovery does not re-run for the same provider id. A profile with no allowed-model list - the common local/vLLM shape this real-Core journey creates - lost every model this way, while a profile with an allowlist only lost its descriptors and unlisted discoveries, which is why the mocked suites never caught it. ui/src/api/providerRuntime.ts adds providerWithDiscoveredModels and providersWithDiscoveredModels: folding a profile record into a checked provider keeps the discovered catalog, descriptors, latency and lastCheckedAt, re-derives the selectable models from that record's allowed models, and keeps the health verdict only when the last check succeeded on a profile that stayed enabled, so a failed or disabled state never sticks. WorkspaceContext.tsx routes its bootstrap list, the providers retry, updateProvider, reverifyProvider and setProviderEnabled through it, and refreshProvider keeps the newer of the cached and reported revisions, because a health check that started before a PATCH reports the pre-PATCH revision and made the next enable conflict. runtimeDefaults.ts adds providerDefaultModel - the saved default while the runtime still reports it, otherwise the first discovered model, the rule aiRuntimes already applies to AI writing and browser automation - and defaultModelRuntime plus the four SessionsPage provider selections use it, so selecting a provider restores the default saved in Settings instead of the runtime's first model. client.ts only records the invariant beside mapProvider. ui/src/api/providerRuntime.test.ts covers the fold, the narrowed allowlist, the failed check, the disabled and re-enabled profile, the changed endpoint and the list form; runtimeDefaults.test.ts covers the default rule; App.test.tsx, client.test.ts and WorkspaceContext.recovery.test.tsx are the existing consumers of the changed modules. Playwright: the real-Core stabilization journey now discovers two models so the saved default is distinguishable from the runtime's first one, and after the profile read asserts that the picker stays enabled and still lists every discovered model; the mocked assistant settings journey mocks the verification round trip and asserts the same, and fails on this branch when the fold is reverted. entry:assistant on desktop, mobile-chromium and mobile-webkit re-runs the chat journeys that this picker and these provider reads sit inside - it caught the first version of the fold, which let a failed health check stick and left the provider unselectable after a project switch - and entry:stabilization-core/assistant-real-desktop runs the repaired real-Core journey together with the rest of that area.",
   "exclusions": "No Python and no native entries: the diff is UI-only, no Core route, storage or Rust file changed, and Core's provider contract is untouched. Frontend files beyond the chat page's component test, the API client wire test, the two changed api/ modules' tests and the WorkspaceContext test are excluded because no shared component, route or style changed and no screenshot baseline moves. entry:assistant/assistant-real-desktop is excluded because it carries no grep and would re-run all of real-core.spec.ts rather than the chat journeys this change touches; the stabilization entry already exercises the repaired journey against real Core on a LAN origin. The phone-width real-Core projects are excluded because the stabilization area catalogues only assistant-real-desktop and this journey fails at the device-pairing step on pristine origin/main at 390 px, reproduced in a detached main worktree at 427833f before any change here; phone coverage for this picker comes from the mocked assistant entries on mobile-chromium and mobile-webkit. No full suites, and no other Playwright area is selected because the only changed surfaces are the chat runtime selects and the cached provider records behind them.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 132,
     "native": 0,
-    "playwright": 4
+    "playwright": 150
   },
-  "python": [
-    "tests/test_playwright_impact.py"
+  "python": [],
+  "frontend": [
+    "ui/src/api/providerRuntime.test.ts",
+    "ui/src/api/runtimeDefaults.test.ts",
+    "ui/src/api/client.test.ts",
+    "ui/src/App.test.tsx",
+    "ui/src/state/WorkspaceContext.recovery.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "area:durable-conversation-core"
+    "entry:stabilization-core/assistant-real-desktop",
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
   ]
 }
