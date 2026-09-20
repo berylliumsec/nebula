@@ -1,19 +1,19 @@
 {
-  "change_digest": "269a12347c9d5179f89cf9c68487b35ffb69dfa0290b5f5818ea098c1a344a37",
-  "reviewed_by": "Claude review of the unverified-OpenRouter context ceiling and silent prompt compression",
-  "reason": "Two independent OpenRouter context-sizing defects. (1) Until a model's endpoints are verified, resolve_context_limits held every OpenRouter model to the flat 8,192-token floor, because the catalog's `context_length` is the maximum across endpoints and automatic routing may land on a smaller one. OpenRouter also publishes `top_provider.context_length` -- the window the primary route actually serves -- which the catalog parser was discarding. ModelDescriptor now keeps it as `primary_route_context_window`, and the unverified branch caps against that instead of the floor, so the first turn on a model is sized from OpenRouter's own primary-route figure rather than a number no model serves; the floor still applies when the field is absent. The same route publishes `max_completion_tokens`, already stored as max_output_tokens, so the companion 2,048-token output floor lifts with it. Verified route limits still win, and a configured ceiling still narrows. (2) OpenRouter enables context compression by default on endpoints of 8K or less, which silently drops the middle of an oversized prompt; Nebula sizes its own context and already recovers from a rejected request, so the chat payload now sends plugins:[{id:context-compression,enabled:false}] and takes the error instead. test_context pins the primary-route ceiling, the configured-ceiling narrowing and the verified-route precedence; test_providers pins the parsed field and that the plugin is disabled for OpenRouter and absent elsewhere.",
-  "exclusions": "No frontend unit tests and no Playwright: nothing rendered changes. The Assistant context meter already reads capacitySource/routeLimitsRequired from the API and keeps showing an unverified OpenRouter model as estimated -- only the number it prints moves -- so no screenshot baseline or area selector applies. Its 'safe N-token ceiling' wording is now the primary-route figure rather than the floor; a copy change is left for the follow-up that pins routing, which is where the number stops being an estimate. No native tests: no Tauri or Rust change. tests/test_playwright_impact.py and tests/test_test_selection.py are not selected because neither the impact manifest nor the selection script changed. test_api and test_chat are excluded: the descriptor field is additive and both the capability-verify and chat recovery paths already round-trip descriptors opaquely. Two test_orchestration compaction tests fail on origin/main at f6f42a9 and are unrelated to this diff. No full suites.",
-  "expected_tests": {
-    "python": 97,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
+  "change_digest": "9b061f88871366ad8179c1f34d2ff7479f26dd4cdc37604f72752e3102fce23d",
+  "reviewed_by": "Claude review of the clone-independent test-selection digest",
+  "reason": "scripts/test_selection.py change_digest() hashes raw `git diff --binary` bytes, including the `index <old>..<new>` lines whose abbreviation git scales to the local object count (7 digits in a fresh CI clone, 8 in a long-lived working clone), so the digest bound clone geometry as well as the diff and a locally written receipt could never validate. The fix pins core.abbrev to the full object-name length. The selection is tests/test_test_selection.py, which owns change_digest()'s contract: the new test_digest_ignores_this_clone_s_hash_abbreviation_length computes the digest under core.abbrev 4 and 39, asserts git's own diff bytes really differ between them and that the digest does not, and the existing test_digest_binds_content_not_commit_id_and_excludes_receipt still proves the digest tracks content and ignores the receipt itself. python_node is true because that file shells out to `node` for the scope-guard checks.",
+  "exclusions": "No frontend unit tests: the change touches a CI helper script, its test, and docs/TEST_SELECTION.md, with no ui/src code or behavior involved. No native tests: no Tauri or Rust change. No Playwright: nothing the browser renders changes, no baselined surface moves, and no area in ui/playwright-impact.json covers selection tooling. tests/test_playwright_impact.py is excluded because scripts/playwright_impact.py is untouched and diffs with --name-status, which prints no object names; it was run locally anyway and passes. No full suites.",
   "python": [
-    "tests/v3/test_context.py",
-    "tests/v3/test_providers.py"
+    "tests/test_test_selection.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "python_node": true,
+  "expected_tests": {
+    "python": 20,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  }
 }

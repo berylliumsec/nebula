@@ -15,9 +15,14 @@ PLAN = ".github/test-selection.json"
 
 def change_digest(baseline: str, candidate: str) -> str:
     revisions = [baseline] if candidate == "WORKTREE" else [baseline, candidate]
+    # core.abbrev is pinned because git scales the `index <old>..<new>` hash length to
+    # the local object count: unpinned, the digest would bind clone geometry alongside
+    # the diff and a receipt written in a long-lived clone could never satisfy CI.
     diff = subprocess.check_output(
         [
             "git",
+            "-c",
+            "core.abbrev=40",
             "diff",
             "--binary",
             "--no-ext-diff",

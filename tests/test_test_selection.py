@@ -113,9 +113,9 @@ def test_blocked_cli_writes_receipt_and_exits_nonzero(tmp_path):
     assert "coverage_review_required" in receipt.read_text()
 
 
-def test_digest_binds_content_not_commit_id_and_excludes_receipt(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    subprocess.run(["git", "init", "-q"], check=True)
+def commit_base_revision(message="base", *, add=None):
+    if add is not None:
+        subprocess.run(["git", "add", add], check=True)
     subprocess.run(
         [
             "git",
@@ -126,10 +126,16 @@ def test_digest_binds_content_not_commit_id_and_excludes_receipt(tmp_path, monke
             "commit",
             "--allow-empty",
             "-qm",
-            "base",
+            message,
         ],
         check=True,
     )
+
+
+def test_digest_binds_content_not_commit_id_and_excludes_receipt(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    commit_base_revision()
     (tmp_path / "file").write_text("one")
     subprocess.run(["git", "add", "file"], check=True)
     first = change_digest("HEAD", "WORKTREE")
@@ -140,6 +146,23 @@ def test_digest_binds_content_not_commit_id_and_excludes_receipt(tmp_path, monke
     (tmp_path / "file").write_text("two")
     assert change_digest("HEAD", "WORKTREE") != first
     assert first != hashlib.sha256(b"").hexdigest()
+
+
+def test_digest_ignores_this_clone_s_hash_abbreviation_length(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "file").write_text("one")
+    commit_base_revision(add="file")
+    (tmp_path / "file").write_text("two")
+    digests, raw_diffs = set(), set()
+    for abbrev in ("4", "39"):
+        subprocess.run(["git", "config", "core.abbrev", abbrev], check=True)
+        digests.add(change_digest("HEAD", "WORKTREE"))
+        raw_diffs.add(subprocess.check_output(["git", "diff", "HEAD"]))
+    assert len(raw_diffs) == 2, "core.abbrev must really change git's own diff bytes"
+    assert len(digests) == 1, (
+        "a receipt must survive a clone that abbreviates differently"
+    )
 
 
 def test_local_guard_without_starting_any_test_runtime():
