@@ -1,19 +1,18 @@
 {
-  "change_digest": "967fa3e344cf8809410a2b35c0c6a98fa0c89c1c79f2484e9d5869dd6be073e4",
-  "reviewed_by": "Claude review of Workbench side-panel reliability",
-  "reason": "Two Workbench panels misbehaved on ordinary use. PostToolAssistant's polling effect depended on the config object; each tick ended with refresh(), which stored a fresh config object from Core, so the effect re-armed and ran tick again immediately: with Suggest next steps or Take notes enabled the panel issued executions, runs and post-tool-results requests back to back with no 3 s gap (the new unit test measures 17,510 listExecutions calls in three seconds on main, one after the fix). The effect now depends on the primitive fields it gates on and reads the latest config through a ref. NotesPanel's draft-sync effect depended on the selected note's object identity; every list reload (Refresh notes, or a reload after another change) produced a new object for the same note and reset the editor to the saved copy, discarding unsaved edits, and a reload while a new note was being drafted moved the selection to the first note so Delete targeted it. The sync now keys on note id and revision, and a reload keeps the selection untouched while a note is being created. Frontend tests cover both (unsaved body survives Refresh notes; polling issues one request per interval); the files' other cases cover enablement, runtime gating, note create/edit/delete and Ask Nebula. npm run build typechecks and bundles.",
-  "exclusions": "No Python tests: no backend change. No native tests: no Tauri or Rust change. No Playwright: PostToolAssistant* and NotesPanel* map to the remaining-ui-components areas desktop-interface and mobile-layout, whose mocked journeys open these panels but do not measure the polling cadence or edit a note across a refresh; the unit tests drive both against the rendered components. No screenshot baselines: no rendered change. No real-browser pass was run in this session. No full suites.",
+  "change_digest": "889f54cfe8a789de49a2af02032c219579e4d2295654d347e999d4c9d652d697",
+  "reviewed_by": "Claude review of autonomous browser commands",
+  "reason": "BrowserAutomationBroker's fallback for the browser.* and proxy.replay tools validated the flat tool arguments ({tab_id, url, page_url, ...}, already schema-checked with additionalProperties false and no kind) against BrowserCommandCreateRequest, whose kind field is required, so pydantic rejected every call before enqueue_command ran: an autonomous browser mission could never navigate, observe, control, interact, extract, replay or capture evidence; only the research and proxy-config tools worked. The broker now builds the request with the tool name as kind, tab_id and page_url lifted out, and the remaining arguments nested. Separately, BrowserAutomationService.enqueue_command checked only expected_page_url when it was present, so a command whose arguments.url pointed outside the lease's target subset (or the engagement scope) was queued and dispatched as long as expected_page_url was in scope; both targets are now checked. test_browser_automation gains a broker call for browser.navigate that asserts the queued command's kind, tab, arguments and expected page (ValidationError on main) and an enqueue with an in-scope expected_page_url and an out-of-lease url that must be refused (queued on main); the file's other cases cover leases, claims, results, scope expansion and the research tools.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:browser-complete and area:core-api do not run an autonomous browser mission through the broker; the Python tests drive the broker and service directly. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 8,
+    "python": 8,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/NotesPanel.test.tsx",
-    "ui/src/components/PostToolAssistant.test.tsx"
+  "python": [
+    "tests/v3/test_browser_automation.py"
   ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }

@@ -378,3 +378,87 @@ def test_credential_use_is_lease_bound_and_stays_as_a_reference(tmp_path):
             ),
             "agent",
         )
+
+
+def _leased_service(store: NebulaStore, tmp_path: Path):
+    from nebula.v3.domain import BrowserIdentity, BrowserSession
+
+    project, scope_id = _project(store)
+    run = _run(store, project)
+    service = BrowserAutomationService(store)
+    identity = store.create(BrowserIdentity(engagement_id=project.id, name="Identity"))
+    session = store.create(
+        BrowserSession(
+            engagement_id=project.id,
+            name="Session",
+            identity_id=identity.id,
+            device_owner="desktop-1",
+        )
+    )
+    lease = service.create_lease(
+        run.id,
+        project.id,
+        BrowserAutonomyRequestModel(
+            session_id=session.id, targets=["https://app.example.test/"]
+        ),
+        "operator",
+    )
+    return project, run, service, lease, store.get(ScopePolicy, scope_id)
+
+
+def test_autonomous_browser_commands_are_enqueued_from_flat_tool_arguments(
+    tmp_path, monkeypatch
+):
+    from nebula.v3.domain import BrowserCommand
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "nebula.db")
+        project, run, service, _lease, scope = _leased_service(store, tmp_path)
+
+        async def already_finished(command_id: str, _timeout: float):
+            return store.get(BrowserCommand, command_id)
+
+        monkeypatch.setattr(service, "wait_for_command", already_finished)
+        broker = BrowserAutomationBroker(store, service)
+
+        result = await broker.execute(
+            ToolInvocation(
+                engagement_id=project.id,
+                run_id=run.id,
+                tool_name="browser.navigate",
+                arguments={
+                    "tab_id": "tab-1",
+                    "url": "https://app.example.test/docs",
+                    "page_url": "https://app.example.test/",
+                },
+                workspace=Path(tmp_path),
+                idempotency_key="navigate-1",
+            ),
+            scope,
+        )
+
+        (command,) = store.list_entities(BrowserCommand)
+        assert result.output["command_id"] == command.id
+        assert command.kind == "browser.navigate"
+        assert command.tab_id == "tab-1"
+        assert command.arguments == {"url": "https://app.example.test/docs"}
+        assert command.expected_page_url == "https://app.example.test/"
+
+    asyncio.run(scenario())
+
+
+def test_expected_page_url_does_not_bypass_the_lease_target_check(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    _project_, _run_, service, lease, _scope = _leased_service(store, tmp_path)
+
+    with pytest.raises(BrowserAutomationRequestError, match="target"):
+        service.enqueue_command(
+            lease.id,
+            BrowserCommandCreateRequest(
+                tab_id="tab-1",
+                kind="browser.navigate",
+                expected_page_url="https://app.example.test/",
+                arguments={"url": "https://other.example.test/"},
+            ),
+            "operator",
+        )

@@ -798,11 +798,26 @@ class BrowserAutomationBroker(ToolBroker):
                 )
                 output = {"status": "stopped", "revoked_leases": count}
             else:
+                # Tool arguments are flat ({tab_id, url, page_url, ...}); the
+                # command request needs the tool name as its kind and the
+                # remaining arguments nested, or validation rejects every call.
                 command_arguments = dict(invocation.arguments)
                 command_arguments.pop("lease_id", None)
+                tab_id = command_arguments.pop("tab_id", None)
+                expected_page_url = command_arguments.pop("page_url", None)
                 command = self.automation.enqueue_command(
                     lease_id,
-                    BrowserCommandCreateRequest.model_validate(command_arguments),
+                    BrowserCommandCreateRequest(
+                        tab_id=str(tab_id or ""),
+                        kind=invocation.tool_name,
+                        arguments=command_arguments,
+                        expected_page_url=(
+                            expected_page_url
+                            if isinstance(expected_page_url, str)
+                            else None
+                        ),
+                        idempotency_key=invocation.idempotency_key,
+                    ),
                     invocation.requested_by,
                 )
                 command = await self.automation.wait_for_command(

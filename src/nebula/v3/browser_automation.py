@@ -410,8 +410,18 @@ class BrowserAutomationService:
                 f"{request.kind} is not authorized by the active browser lease"
             )
         self._reject_secret_values(request.arguments)
-        target = request.expected_page_url or self._argument_target(request.arguments)
-        if target:
+        # The page the command expects and the URL it will act on are both
+        # targets; checking only one lets a navigate or replay reach a URL the
+        # lease never authorized.
+        targets = [
+            target
+            for target in (
+                request.expected_page_url,
+                self._argument_target(request.arguments),
+            )
+            if target
+        ]
+        for target in dict.fromkeys(targets):
             self._require_target(
                 self._scope(lease.engagement_id), target, risk, request.kind
             )
