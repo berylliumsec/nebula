@@ -213,6 +213,7 @@ from .language_server import (
     LanguageDiagnosticsResponse,
     LanguageServerSession,
     analyze_documents,
+    run_analysis,
 )
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
@@ -5935,9 +5936,15 @@ def create_app(
         request: CodeCompletionRequest,
     ) -> CodeCompletionResponse:
         store.get(Engagement, request.engagement_id)
-        return CodeCompletionResponse(
-            items=complete_code(request.source, request.path, request.offset)
-        )
+        try:
+            items = await run_analysis(
+                complete_code, request.source, request.path, request.offset
+            )
+        except asyncio.TimeoutError:
+            # diagnostic-expected: a completion that outlives the bounded
+            # analysis timeout simply offers no items; the buffer is unchanged.
+            items = []
+        return CodeCompletionResponse(items=items)
 
     @app.websocket(f"{API_PREFIX}/engagements/{{engagement_id}}/language-server/ws")
     async def language_server_socket(

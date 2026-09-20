@@ -27,6 +27,9 @@ SENSITIVE_DETAIL_SERVICE = "io.berylliumsec.nebula.diagnostic-details"
 SENSITIVE_DETAIL_KEY_NAME = "aes-256-gcm-v1"
 MAX_SENSITIVE_DETAIL_BYTES = 64 * 1024
 MAX_SENSITIVE_DIRECTORY_BYTES = 32 * 1024 * 1024
+# Session memory has no rotation of its own, so a locked vault on a headless
+# Core with a flapping dependency would otherwise grow it for the TTL window.
+MAX_SENSITIVE_MEMORY_BYTES = 8 * 1024 * 1024
 SENSITIVE_DETAIL_TTL = timedelta(hours=24)
 _ERROR_ID = re.compile(r"^err_[A-Za-z0-9._:-]{1,123}$")
 
@@ -76,7 +79,8 @@ class SensitiveDiagnosticStore:
         self.enabled = enabled
         self.owner = owner
         self._now = now or (lambda: datetime.now(UTC))
-        self._memory: dict[str, tuple[datetime, str]] = {}
+        self._memory: dict[str, tuple[datetime, str, int]] = {}
+        self._memory_bytes = 0
         self._memory_key = AESGCM.generate_key(bit_length=256)
         self._lock = threading.RLock()
         self._trust_injected_backend = trust_injected_backend
@@ -208,7 +212,7 @@ class SensitiveDiagnosticStore:
         }
         if not self._durable:
             with self._lock:
-                self._memory[error_id] = (expires, encoded.decode("utf-8"))
+                self._retain_in_memory(error_id, expires, encoded)
             return SensitiveDetailCapture(
                 True, metadata["expires_at"], self.persistence
             )
@@ -240,6 +244,19 @@ class SensitiveDiagnosticStore:
             self.prune()
         return SensitiveDetailCapture(True, metadata["expires_at"], self.persistence)
 
+    def _retain_in_memory(
+        self, error_id: str, expires: datetime, encoded: bytes
+    ) -> None:
+        previous = self._memory.pop(error_id, None)
+        if previous is not None:
+            self._memory_bytes -= previous[2]
+        self._memory[error_id] = (expires, encoded.decode("utf-8"), len(encoded))
+        self._memory_bytes += len(encoded)
+        # Insertion order is capture order, so the oldest detail makes room.
+        while self._memory_bytes > MAX_SENSITIVE_MEMORY_BYTES and self._memory:
+            oldest = next(iter(self._memory))
+            self._memory_bytes -= self._memory.pop(oldest)[2]
+
     def reveal(self, error_id: str) -> str:
         self._validate_error_id(error_id)
         if not self.enabled or self._key is None:
@@ -250,9 +267,10 @@ class SensitiveDiagnosticStore:
                 stored = self._memory.get(error_id)
                 if stored is None:
                     raise SensitiveDetailUnavailable("sensitive detail is unavailable")
-                expires, detail = stored
+                expires, detail, size = stored
                 if expires <= now:
                     self._memory.pop(error_id, None)
+                    self._memory_bytes -= size
                     raise SensitiveDetailExpired("sensitive detail has expired")
                 return detail
             path = self.root / f"{error_id}.json"
@@ -315,6 +333,7 @@ class SensitiveDiagnosticStore:
                 for error_id, item in self._memory.items()
                 if item[0] > now
             }
+            self._memory_bytes = sum(item[2] for item in self._memory.values())
             if not self._durable or not self.root.exists():
                 return
             retained: list[tuple[Path, datetime, int]] = []
@@ -351,6 +370,7 @@ class SensitiveDiagnosticStore:
 __all__ = [
     "MAX_SENSITIVE_DETAIL_BYTES",
     "MAX_SENSITIVE_DIRECTORY_BYTES",
+    "MAX_SENSITIVE_MEMORY_BYTES",
     "SENSITIVE_DETAIL_SCHEMA",
     "SENSITIVE_DETAIL_TTL",
     "SensitiveDetailCapture",

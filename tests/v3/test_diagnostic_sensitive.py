@@ -154,3 +154,39 @@ def test_locked_host_vault_selects_session_memory_without_prompting(
     assert capture.persistence == "session-memory"
     assert store.reveal("err_locked_vault") == "locked-vault detail"
     assert not (tmp_path / "core").exists()
+
+
+def test_session_memory_detail_is_byte_capped_and_evicts_oldest_first(
+    monkeypatch, tmp_path
+) -> None:
+    import keyring
+
+    from nebula.v3.diagnostic_sensitive import MAX_SENSITIVE_MEMORY_BYTES
+
+    monkeypatch.setattr(keyring, "get_keyring", lambda: None)
+    store = SensitiveDiagnosticStore(tmp_path, enabled=True, keyring_backend=None)
+    detail = "x" * MAX_SENSITIVE_DETAIL_BYTES
+    fits = MAX_SENSITIVE_MEMORY_BYTES // MAX_SENSITIVE_DETAIL_BYTES
+    count = fits + 8
+
+    for index in range(count):
+        capture = store.capture(
+            f"err_mem{index}",
+            detail,
+            source="core",
+            application_version="3.0.0-alpha.1",
+        )
+        assert capture.persistence == "session-memory"
+
+    with pytest.raises(SensitiveDetailUnavailable):
+        store.reveal("err_mem0")
+    assert store.reveal(f"err_mem{count - 1}") == detail
+    retained = 0
+    for index in range(count):
+        try:
+            store.reveal(f"err_mem{index}")
+        except SensitiveDetailUnavailable:
+            continue
+        retained += 1
+    assert 0 < retained <= fits
+    assert retained * MAX_SENSITIVE_DETAIL_BYTES <= MAX_SENSITIVE_MEMORY_BYTES

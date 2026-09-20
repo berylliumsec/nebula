@@ -87,10 +87,19 @@ MAX_METADATA_DEPTH = 5
 MAX_METADATA_ITEMS = 64
 MAX_STRING_LENGTH = 2048
 MAX_STACK_FRAMES = 32
+# Errors retained in process for the viewer while the disk copy is the durable
+# one. Sized for days of a flapping dependency without unbounded growth.
+MAX_MEMORY_ERRORS = 2_000
 ERROR_MIRROR_PREFIX = "NEBULA_DIAGNOSTIC_ERROR "
 
 _EVENT_CODE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$")
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_OS_ERROR_CODE = re.compile(r"\[(?:Errno|WinError) -?\d+\]\s*")
+# Absolute POSIX paths, drive-letter paths and UNC paths. The lookbehind keeps
+# URL authorities (``https://host/x``) and relative paths (``src/app.py``).
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![\w:/\\])(?:/[^\s'\"`:]+|[A-Za-z]:\\[^\s'\"`]+|\\\\[^\s'\"`]+)"
+)
 _DENIED_KEY = re.compile(
     r"(?:secret|credential|authorization|cookie|header|body|prompt|content|"
     r"source(?:_?code)?|command|argv|stdout|stderr|document(?:_?text)?|"
@@ -243,6 +252,26 @@ def _safe_text(value: Any, *, limit: int = MAX_STRING_LENGTH) -> str:
     if len(value) > limit:
         return value[: limit - 1] + "…"
     return value
+
+
+def _scrub_operator_detail(value: str) -> str:
+    """Keep an exception's own message but not what the OS added to it.
+
+    ``operator_detail`` is exported unredacted. Exception text that wraps an
+    OSError carries the errno and the absolute host path the OS was asked for,
+    which the metadata denylist deliberately keeps out of records.
+    """
+
+    return _ABSOLUTE_PATH.sub("<path>", _OS_ERROR_CODE.sub("", value)).strip()
+
+
+def _on_event_loop() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        # diagnostic-expected: no running loop means a synchronous caller.
+        return False
+    return True
 
 
 def _safe_duration(value: float | int | None) -> float | None:
@@ -425,9 +454,9 @@ class DiagnosticManager:
         self._closed = False
         self._degraded = False
         self._last_failure: dict[str, Any] | None = None
-        # Disk rotation is bounded, but errors in flight or produced while a
-        # sink is unavailable are never evicted during the current process.
-        self._memory_errors: deque[dict[str, Any]] = deque()
+        # The in-process copy keeps errors readable while a sink is unavailable;
+        # disk holds the durable copy, so it is bounded rather than unbounded.
+        self._memory_errors: deque[dict[str, Any]] = deque(maxlen=MAX_MEMORY_ERRORS)
         self._dropped_count = 0
         self._last_drop_notice = 0.0
         self._last_sink_failure_notice = 0.0
@@ -772,7 +801,9 @@ class DiagnosticManager:
             "exception_chain": exception_chain or None,
             "stack_frames": stack_frames or None,
             "reason_code": _safe_text(reason_code, limit=64) if reason_code else None,
-            "operator_detail": _safe_text(operator_detail) if operator_detail else None,
+            "operator_detail": _scrub_operator_detail(_safe_text(operator_detail))
+            if operator_detail
+            else None,
             "impact": _safe_text(impact) if impact else None,
             "remediation_id": _safe_text(remediation_id, limit=160)
             if remediation_id
@@ -935,9 +966,14 @@ class DiagnosticManager:
                     self._condition.notify()
                     return error_id
 
-        # The single writer preserves global sequence order. Error calls wait
-        # for durable append/fsync; lower-level records only wait when they had
-        # to synchronously report queue pressure.
+        # The single writer preserves global sequence order. CRITICAL records
+        # and synchronous queue-pressure notices wait for the durable
+        # append/fsync. ERROR records wait as well unless the caller is on an
+        # asyncio event loop: disk latency there would stall every request and
+        # websocket for as long as the writer needs, so the writer thread
+        # acknowledges those on its own and its sink handling reports failures.
+        if wait_for is not None and normalized_level == "error" and _on_event_loop():
+            return error_id
         if wait_for is not None and not wait_for.wait(timeout=10):
             self._mark_degraded(
                 "The diagnostics writer did not acknowledge an error record.",
@@ -1027,10 +1063,10 @@ class DiagnosticManager:
     def _write_pending(self, pending: _PendingRecord) -> None:
         feature = str(pending.record["feature"])
         path = self.log_dir / FEATURE_FILES[feature]
+        retained = False
         try:
             self._append(path, pending.line)
             if pending.record["level"] in {"ERROR", "CRITICAL"}:
-                self._memory_errors.append(dict(pending.record))
                 if self.desktop_parent:
                     # Desktop validates this complete bounded frame and owns
                     # aggregate errors.log.  stderr is already supervised.
@@ -1042,19 +1078,27 @@ class DiagnosticManager:
                     sys.stderr.flush()
                 else:
                     self._append(self.log_dir / "errors.log", pending.line)
+                # Retained once every sink accepted it; the emergency path
+                # retains it instead when one did not.
+                self._memory_errors.append(dict(pending.record))
+                retained = True
             if time.monotonic() - self._last_prune > 300:
                 self._prune()
         except OSError as exc:
-            self._emergency_sink_failure(pending, exc)
+            self._emergency_sink_failure(pending, exc, retained=retained)
 
     def _emergency_sink_failure(
-        self, pending: _PendingRecord, exception: BaseException
+        self,
+        pending: _PendingRecord,
+        exception: BaseException,
+        *,
+        retained: bool = False,
     ) -> None:
         """Retain errors and report logger failure through the final safe sink."""
 
         self._mark_degraded("Local diagnostics storage became unavailable.", exception)
         is_error = pending.record.get("level") in {"ERROR", "CRITICAL"}
-        if is_error:
+        if is_error and not retained:
             self._memory_errors.append(dict(pending.record))
         try:
             encoded_pending = pending.line.decode("utf-8").rstrip()
@@ -1365,6 +1409,9 @@ class DiagnosticManager:
     ) -> list[dict[str, Any]]:
         normalized_feature = _normalize_feature(feature) if feature else None
         bounded_limit = min(max(limit, 1), 500)
+        # Errors recorded on an event loop are acknowledged asynchronously, so
+        # give the writer a bounded moment to land them before reading.
+        self.flush(timeout=1.0)
         records: list[dict[str, Any]] = []
         paths: list[Path]
         if self.desktop_parent:
@@ -1458,6 +1505,9 @@ class DiagnosticManager:
         if output.suffix.lower() != ".zip":
             raise ValueError("diagnostics export must use a .zip extension")
         output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Bundles are read by support; drain asynchronously acknowledged errors
+        # so the bundle includes everything recorded before the export began.
+        self.flush(timeout=2.0)
         temporary = output.with_name(f".{output.name}.{uuid4().hex}.tmp")
         manifest: dict[str, str] = {}
         try:

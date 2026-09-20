@@ -9,13 +9,17 @@ configuration, plugins, or symlinks to expand Core's filesystem authority.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
 import json
 import re
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 import jedi  # type: ignore[import-untyped]
 from pydantic import Field, field_validator
@@ -30,9 +34,47 @@ MAX_OPEN_DOCUMENTS = 20
 MAX_BATCH_DOCUMENTS = 20
 MAX_DIAGNOSTICS = 500
 ANALYSIS_TIMEOUT_SECONDS = 4
+MAX_ANALYSIS_WORKERS = 4
 _WORKSPACE_URI = "file:///workspace"
 _VIRTUAL_ROOT = PurePosixPath("/__nebula_open_buffer__")
 _PATH_SEGMENT = re.compile(r"[^/\\\x00]+")
+
+_analysis_executor: ThreadPoolExecutor | None = None
+_analysis_executor_lock = threading.Lock()
+
+
+class StaleDocumentVersion(Exception):
+    """The document changed before its queued analysis started."""
+
+
+def _analysis_pool() -> ThreadPoolExecutor:
+    global _analysis_executor
+    with _analysis_executor_lock:
+        if _analysis_executor is None:
+            _analysis_executor = ThreadPoolExecutor(
+                max_workers=MAX_ANALYSIS_WORKERS,
+                thread_name_prefix="nebula-language-analysis",
+            )
+        return _analysis_executor
+
+
+async def run_analysis(function: Callable[..., Any], *arguments: Any) -> Any:
+    """Run one Jedi/Ruff analysis on the bounded pool within the timeout.
+
+    Analyses cannot be interrupted, so one that times out keeps its worker
+    busy until it finishes on its own. Running them on a dedicated, bounded
+    pool instead of the loop's default executor means runaway analyses can
+    neither multiply without limit nor starve unrelated ``to_thread`` users;
+    analyses still queued when the timeout fires are cancelled unstarted.
+    """
+    loop = asyncio.get_running_loop()
+    context = contextvars.copy_context()
+    return await asyncio.wait_for(
+        loop.run_in_executor(
+            _analysis_pool(), functools.partial(context.run, function, *arguments)
+        ),
+        timeout=ANALYSIS_TIMEOUT_SECONDS,
+    )
 
 
 class LanguageDocument(NebulaModel):
@@ -561,10 +603,7 @@ async def analyze_documents(
             version=item.version,
             source=item.source,
         )
-        diagnostics = await asyncio.wait_for(
-            asyncio.to_thread(diagnostics_document, document),
-            timeout=ANALYSIS_TIMEOUT_SECONDS,
-        )
+        diagnostics = await run_analysis(diagnostics_document, document)
         documents.append(
             LanguageDocumentDiagnostics(
                 path=item.path,
@@ -773,6 +812,15 @@ class LanguageServerSession:
                 if notification
                 else [self._error(request_id, -32001, "Language analysis timed out")]
             )
+        except StaleDocumentVersion:
+            # diagnostic-expected: the document changed before this analysis
+            # started. The newer version publishes its own diagnostics and a
+            # request receives the LSP ContentModified error.
+            return (
+                []
+                if notification
+                else [self._error(request_id, -32801, "Content modified")]
+            )
         except Exception as exc:
             record_caught_exception(
                 "workspace",
@@ -798,11 +846,21 @@ class LanguageServerSession:
             },
         )
 
-    async def _analyze(self, function: Any, *arguments: Any) -> Any:
-        return await asyncio.wait_for(
-            asyncio.to_thread(function, *arguments),
-            timeout=ANALYSIS_TIMEOUT_SECONDS,
-        )
+    async def _analyze(
+        self, function: Callable[..., Any], document: _OpenDocument, *arguments: Any
+    ) -> Any:
+        expected = document.version
+
+        def current_version_only() -> Any:
+            # Editors send the next didChange as soon as an analysis is slow.
+            # Work queued for a version the session has already replaced (or
+            # closed) is dropped before it occupies a worker.
+            current = self.documents.get(document.uri)
+            if current is None or current.version != expected:
+                raise StaleDocumentVersion(document.uri)
+            return function(document, *arguments)
+
+        return await run_analysis(current_version_only)
 
     def _document(self, uri: str) -> _OpenDocument:
         path_from_uri(uri)
