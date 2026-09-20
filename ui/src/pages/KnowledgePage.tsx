@@ -82,7 +82,7 @@ export function KnowledgePage() {
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<KnowledgeSource>();
   const sources = knowledgeSources;
-  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("source", sources, selected, setSelected);
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("source", sources, selected, setSelected, { followUpdates: true });
   const visibleSources = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return sources;
@@ -252,6 +252,7 @@ export function KnowledgePage() {
     setError(undefined);
     try {
       await removeKnowledgeSource(source.id);
+      if (selected?.id === source.id) closeResource();
       setStatusMessage(`${source.name} was removed from retrieval.`);
     } catch (removeError) {
       void logCaughtDiagnostic("interface.knowledge_page.caught_failure_03", "A handled interface operation failed.", removeError, "knowledge_page");

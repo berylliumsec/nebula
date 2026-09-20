@@ -49,6 +49,9 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   const [clientName, setClientName] = useState("");
   const [workspacePath, setWorkspacePath] = useState("");
   const [saving, setSaving] = useState(false);
+  // Mirrors `saving` for the document-level Escape handler, which is registered
+  // once per open state so it cannot close the switcher over an in-flight create.
+  const savingRef = useRef(false);
   const [error, setError] = useState<string>();
   useDialogPresence(open);
 
@@ -62,6 +65,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       const closeFromDocument = (event: KeyboardEvent) => {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         if (document.querySelector(".dialog-backdrop > .modal-surface")) return;
+        if (savingRef.current) return;
         event.preventDefault();
         event.stopPropagation();
         setOpen(false);
@@ -140,6 +144,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
+    savingRef.current = true;
     setError(undefined);
     try {
       const created = await createEngagement({ name, clientName: clientName || undefined, workspacePath: workspacePath || undefined });
@@ -154,6 +159,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       void logCaughtDiagnostic("interface.side_nav.caught_failure_01", "A handled interface operation failed.", createError, "side_nav");
       setError(createError instanceof Error ? createError.message : "Could not create the project.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -171,13 +177,13 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       </div>
 
       <div className="engagement-picker">
-        <button ref={switcherButton} className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <button ref={switcherButton} className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => { if (!saving) setOpen((value) => !value); }}>
           <span className="engagement-avatar">{initials}</span>
           <span className="engagement-copy"><small>Active project</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
         </button>
         {open && <div ref={switcherMenu} className="engagement-menu" role="dialog" aria-label="Project switcher">
-          <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" onClick={() => setOpen(false)}><X size={14} /></button></header>
+          <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" disabled={saving} onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
             {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>
               {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
@@ -191,7 +197,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
             {notice && <p className="project-switcher-feedback" role="status">{notice}</p>}
             <button className="engagement-new" type="button" disabled={updating} onClick={() => setShowArchived(!showArchived)}>{showArchived ? "Active projects" : `Archived projects (${archivedEngagements.length})`}</button>
           </>}
-          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={updating || coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
+          {creating ? <form className="engagement-create" onSubmit={(event) => void submit(event)}><label>Name<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>Client name<input value={clientName} onChange={(event) => setClientName(event.target.value)} /></label><label>Project folder<input aria-label="Project folder" aria-describedby="project-folder-help" value={workspacePath} placeholder="Choose a folder" onChange={(event) => setWorkspacePath(event.target.value)} /><small id="project-folder-help">Optional. Grok, Codex, and Kali use this folder directly as their shared working directory.</small></label><HostFolderPicker api={api} value={workspacePath} onSelect={setWorkspacePath} />{error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}<footer><button className="button quiet" type="button" disabled={saving} onClick={() => setCreating(false)}>Cancel</button><button className="button primary" type="submit" disabled={saving}>{saving ? "Creating…" : "Create"}</button></footer></form> : <button className="engagement-new" type="button" disabled={updating || coreState !== "online"} onClick={() => setCreating(true)}><Plus size={14} /> New project</button>}
         </div>}
       </div>
 

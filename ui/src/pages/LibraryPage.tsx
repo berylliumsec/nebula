@@ -75,7 +75,7 @@ export function LibraryPage() {
   const [message, setMessage] = useState<string>();
   const [error, setError] = useState<string>();
   const [selected, setSelected] = useState<LibraryItem>();
-  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("library_item", libraryItems, selected, setSelected);
+  const { closeResource, missingResourceId, openResource } = useCanonicalResourceSelection("library_item", libraryItems, selected, setSelected, { followUpdates: true });
   const visibleItems = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return libraryItems;
@@ -157,6 +157,7 @@ export function LibraryPage() {
     setBusy(item.id, true);
     try {
       await removeLibraryItem(item.id);
+      if (selected?.id === item.id) closeResource();
       setMessage(`${item.name} was removed from the Library index.`);
     } catch (caughtError) {
       void logCaughtDiagnostic(

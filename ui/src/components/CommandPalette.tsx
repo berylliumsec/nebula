@@ -166,6 +166,9 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
       setSearchState("idle");
       return;
     }
+    // Resources belong to the query that produced them: drop the previous
+    // query's results now instead of presenting them under the new query.
+    setRemoteResults([]);
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setSearchState("loading");
@@ -178,6 +181,7 @@ export function CommandPalette({ open, onClose, onToggleActivity, onToggleSideba
         .catch((error: unknown) => {
           if (!controller.signal.aborted) {
             void logCaughtDiagnostic("interface.omnibox.search_failed", "Federated omnibox search could not reach Core.", error, "omnibox");
+            setRemoteResults([]);
             setSearchState("offline");
           }
         });

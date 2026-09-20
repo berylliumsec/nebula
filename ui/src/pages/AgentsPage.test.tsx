@@ -209,4 +209,27 @@ describe("mission activity", () => {
     (workspace.run as { status: string }).status = previousStatus;
     workspace.events = previousEvents;
   });
+
+  it("keeps the filter controls while a filter hides missions from a short history", async () => {
+    const user = userEvent.setup();
+    const mission = (index: number, status: string) => ({
+      ...workspace.run,
+      id: `run-${index}`,
+      title: `Mission ${index}`,
+      status,
+      updatedAt: new Date(Date.UTC(2026, 6, 18, 12, index)).toISOString(),
+    });
+    workspace.runs = Array.from({ length: 8 }, (_, index) => mission(index + 1, index % 2 ? "complete" : "failed"));
+    const { rerender } = render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Filter missions by status" }), "failed");
+    expect(within(screen.getByRole("navigation", { name: "Mission history" })).getAllByRole("button")).toHaveLength(4);
+
+    workspace.runs = [mission(2, "complete"), mission(4, "complete")];
+    rerender(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+    expect(screen.getByText("No missions match this search.")).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Filter missions by status" }), "all");
+    expect(within(screen.getByRole("navigation", { name: "Mission history" })).getAllByRole("button")).toHaveLength(2);
+    workspace.runs = [];
+  });
 });

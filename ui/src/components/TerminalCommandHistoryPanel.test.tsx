@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -227,5 +227,59 @@ describe("TerminalCommandHistoryPanel", () => {
     expect(screen.getByText("Output was not retained for this metadata-only record.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Raw" })).toBeDisabled();
     expect(api.terminalCommandOutput).not.toHaveBeenCalled();
+  });
+
+  it("ignores a Load more page that lands after the list was reloaded for another project", async () => {
+    const record = (id: string, command: string) => ({
+      id,
+      engagementId: "project-1",
+      sessionId: "terminal-1",
+      operatorId: "operator-1",
+      shellSequence: "1",
+      command,
+      commandSha256: "a".repeat(64),
+      cwd: "/workspace",
+      status: "completed",
+      exitCode: 0,
+      occurredAt: "2026-07-13T20:00:01Z",
+      rawOutputAvailable: false,
+      redactedOutputAvailable: false,
+      observedOutputBytes: 0,
+      capturedOutputBytes: 0,
+      outputSha256: "b".repeat(64),
+      outputTruncated: false,
+      outputPreview: "",
+      captureDecision: "metadata_only",
+      matchedTools: [],
+      recordingPolicyRevision: 0,
+      runtimeImageDigest: `sha256:${"c".repeat(64)}`,
+    });
+    const page = (records: ReturnType<typeof record>[], nextOffset?: number) => ({ records, total: records.length, offset: 0, limit: 100, nextOffset });
+    let releaseLoadMore!: (value: ReturnType<typeof page>) => void;
+    const listTerminalCommands = vi.fn((projectId: string, _search: string, offset: number) => {
+      if (offset > 0) return new Promise<ReturnType<typeof page>>((resolve) => { releaseLoadMore = resolve; });
+      return Promise.resolve(projectId === "project-2" ? page([record("command-other", "id")]) : page([record("command-first", "ls -la")], 100));
+    });
+    const api = {
+      terminalCommandHistoryStatus: vi.fn().mockResolvedValue({ engagementId: "project-1", enabled: true, captureMode: "selected_tools", recordCount: 3, recordedOutputCount: 0, metadataOnlyCount: 3, classificationFailureCount: 0, degradedCount: 0, truncatedCount: 0, auditGapCount: 0, capturedOutputBytes: 0 }),
+      listTerminalCommands,
+      terminalRecordingTools: vi.fn().mockResolvedValue({ engagementId: "project-1", inventoryStatus: "verified", runtimeImageDigest: `sha256:${"c".repeat(64)}`, manifestSha256: "d".repeat(64), defaultTools: ["nmap"], customTools: [], disabledTools: [], effectiveTools: ["nmap"], revision: 0 }),
+    } as unknown as ApiClient;
+    const user = userEvent.setup();
+    const { rerender } = render(<DialogProvider><TerminalCommandHistoryPanel api={api} engagementId="project-1" /></DialogProvider>);
+
+    expect(await screen.findByText("ls -la")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(listTerminalCommands).toHaveBeenLastCalledWith("project-1", "", 100, 100, undefined));
+
+    rerender(<DialogProvider><TerminalCommandHistoryPanel api={api} engagementId="project-2" /></DialogProvider>);
+    expect(await screen.findByText("id")).toBeVisible();
+    expect(screen.queryByText("ls -la")).not.toBeInTheDocument();
+
+    releaseLoadMore(page([record("command-late", "cat /etc/passwd")], 200));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(screen.queryByText("cat /etc/passwd")).not.toBeInTheDocument();
+    expect(screen.getByText("id")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 });
