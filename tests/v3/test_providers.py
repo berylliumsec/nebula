@@ -1873,3 +1873,89 @@ def test_retry_after_is_honored_within_the_bounded_wait():
     assert providers._retry_delay(policy, 8, None) <= (
         providers._MAX_RETRY_DELAY_SECONDS * 1.25
     )
+
+
+def test_openai_compatible_stream_surfaces_an_in_band_error_frame():
+    calls: list[int] = []
+    body = "\n\n".join(
+        [
+            'data: {"id":"chat-1","model":"test-model","choices":[{"delta":{"content":"partial"}}]}',
+            'data: {"id":"chat-1","error":{"message":"Provider returned error","code":502,'
+            '"metadata":{"raw":"{\\"error\\":{\\"message\\":\\"upstream overloaded\\"}}"}},'
+            '"choices":[{"delta":{},"finish_reason":"error"}]}',
+            "data: [DONE]",
+        ]
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(len(calls))
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("stream-error-frame"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(_chat_request())]
+
+    events = asyncio.run(collect())
+
+    assert len(calls) == 1
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.TEXT_DELTA,
+        StreamEventType.ERROR,
+    ]
+    assert "Provider returned error" in (events[-1].error or "")
+    assert "upstream overloaded" in (events[-1].error or "")
+
+
+def test_openai_compatible_stream_error_before_any_token_is_not_an_empty_reply():
+    body = "\n\n".join(
+        [
+            'data: {"error":{"message":"model is overloaded","code":503}}',
+            "data: [DONE]",
+        ]
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, text=body, headers={"content-type": "text/event-stream"}
+        )
+
+    provider = OpenAICompatibleProvider(
+        _retrying_config("stream-error-first"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    async def collect():
+        return [event async for event in provider.stream(_chat_request())]
+
+    events = asyncio.run(collect())
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert "model is overloaded" in (events[-1].error or "")
+
+
+def test_stream_error_frame_maps_context_length_to_the_typed_error():
+    frame = {
+        "error": {
+            "message": "This model's maximum context length is 8192 tokens",
+            "code": "context_length_exceeded",
+        }
+    }
+
+    assert isinstance(
+        providers._stream_error_frame(frame), providers.ProviderContextLengthError
+    )
+    assert (
+        providers._stream_error_frame({"choices": [{"delta": {"content": "x"}}]})
+        is None
+    )
+    assert providers._stream_error_frame({"error": None}) is None
