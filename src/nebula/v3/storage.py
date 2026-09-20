@@ -1318,6 +1318,15 @@ class NebulaStore:
                     EntityRow.kind.in_(("harness_turns", "harness_interactions")),
                     EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
                 ),
+                # Workspace checkpoints and native hook runs are captured for a
+                # conversation but carry the project's id; left behind they
+                # keep an otherwise empty project from being deleted.
+                and_(
+                    EntityRow.kind.in_(
+                        ("native_checkpoints", "native_hook_executions")
+                    ),
+                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+                ),
                 and_(
                     EntityRow.kind == "chat_subagents",
                     EntityRow.payload["parent_session_id"].as_string() == session_id,
@@ -1335,6 +1344,16 @@ class NebulaStore:
                     )
                 )
             owned_records = or_(*owned_predicates)
+            # Chat-origin tool calls key their budget counter by the turn id.
+            chat_turn_ids = select(EntityRow.id).where(
+                EntityRow.kind == "chat_turns",
+                EntityRow.payload["session_id"].as_string().in_(session_ids),
+            )
+            session.execute(
+                delete(RunBudgetCounterRow).where(
+                    RunBudgetCounterRow.run_id.in_(chat_turn_ids)
+                )
+            )
             # Operation events are an immutable audit ledger. As with deleted
             # missions, retain those records while removing the mutable chat,
             # harness-turn, and interaction entities that expose them in the UI.
@@ -1377,18 +1396,36 @@ class NebulaStore:
                 )
 
             session.execute(
+                delete(RunBudgetCounterRow).where(RunBudgetCounterRow.run_id == run_id)
+            )
+            session.execute(
                 delete(EntityRow).where(
-                    EntityRow.kind.in_(
-                        (
-                            "tasks",
-                            "agent_attempts",
-                            "tool_calls",
-                            "approvals",
-                            "harness_turns",
-                            "harness_interactions",
-                        )
-                    ),
-                    EntityRow.payload["run_id"].as_string() == run_id,
+                    or_(
+                        and_(
+                            EntityRow.kind.in_(
+                                (
+                                    "tasks",
+                                    "agent_attempts",
+                                    "tool_calls",
+                                    "approvals",
+                                    "harness_turns",
+                                    "harness_interactions",
+                                    # Browser autonomy is leased to one run; a
+                                    # surviving lease refuses the next one on
+                                    # that browser session until it expires.
+                                    "browser_automation_leases",
+                                    "browser_commands",
+                                    "browser_proxy_rules",
+                                )
+                            ),
+                            EntityRow.payload["run_id"].as_string() == run_id,
+                        ),
+                        and_(
+                            EntityRow.kind == "context_snapshots",
+                            EntityRow.payload["owner_type"].as_string() == "agent_run",
+                            EntityRow.payload["owner_id"].as_string() == run_id,
+                        ),
+                    )
                 )
             )
             result = session.execute(
@@ -1478,13 +1515,15 @@ class NebulaStore:
                 raise ConflictError(
                     "Project has queued follow-ups. Restore it and clear the queue before deleting."
                 )
-            run_ids = select(EntityRow.id).where(
+            # Counters are keyed by the mission id or, for chat-origin tool
+            # calls, by the chat turn id.
+            counter_owner_ids = select(EntityRow.id).where(
                 EntityRow.engagement_id == engagement_id,
-                EntityRow.kind == "runs",
+                EntityRow.kind.in_(("runs", "chat_turns")),
             )
             session.execute(
                 delete(RunBudgetCounterRow).where(
-                    RunBudgetCounterRow.run_id.in_(run_ids)
+                    RunBudgetCounterRow.run_id.in_(counter_owner_ids)
                 )
             )
             for table, column in (

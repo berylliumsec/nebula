@@ -236,9 +236,11 @@ def import_mcp_config(
 
     which = which or shutil.which
     servers = _servers(request.config)
+    # Server names are matched without regard to case, so ``GitHub`` in a
+    # later file updates the ``github`` profile instead of duplicating it.
     existing: dict[str, list[McpServerProfile]] = {}
-    for profile in _all_profiles(store):
-        existing.setdefault(profile.name, []).append(profile)
+    for profile in all_mcp_profiles(store):
+        existing.setdefault(profile.name.casefold(), []).append(profile)
 
     drafts: list[_Draft] = []
     entries: list[McpImportEntry] = []
@@ -247,12 +249,13 @@ def import_mcp_config(
         entry = McpImportEntry(source_name=source_name[:300], action="invalid")
         try:
             draft = _draft(source_name, raw, entry, request, which)
-            if draft.entry.name in claimed:
+            name_key = (draft.entry.name or "").casefold()
+            if name_key in claimed:
                 raise McpImportError(
                     f"another server in this file is also named {draft.entry.name!r}"
                 )
-            claimed.add(draft.entry.name or "")
-            matches = existing.get(draft.entry.name or "", [])
+            claimed.add(name_key)
+            matches = existing.get(name_key, [])
             if len(matches) > 1:
                 raise McpImportError(
                     f"{len(matches)} existing MCP servers are named "
@@ -274,6 +277,7 @@ def import_mcp_config(
             else:
                 entry.action = "replace" if current else "create"
                 draft.existing_id = current.id if current else None
+                draft.existing_revision = current.revision if current else None
                 entry.profile_id = draft.existing_id
                 _plan_new(draft, request)
                 drafts.append(draft)
@@ -945,7 +949,9 @@ def _apply(
             entry.profile_id = created.id
             return
         current = store.get(McpServerProfile, draft.existing_id)
-        if entry.action == "update" and current.revision != draft.existing_revision:
+        # Update and replace were both planned against one revision; a server
+        # edited since then is reported instead of silently overwritten.
+        if current.revision != draft.existing_revision:
             raise McpImportError(
                 f"{current.name} changed while importing; preview the file again"
             )
@@ -1047,7 +1053,7 @@ def _release_orphaned(
     if not references:
         return
     in_use: set[str] = set()
-    for profile in _all_profiles(store):
+    for profile in all_mcp_profiles(store):
         in_use |= _owned_references(profile)
     for reference in references - in_use:
         try:
@@ -1056,7 +1062,9 @@ def _release_orphaned(
             pass
 
 
-def _all_profiles(store: NebulaStore) -> list[McpServerProfile]:
+def all_mcp_profiles(store: NebulaStore) -> list[McpServerProfile]:
+    """Every saved MCP server profile, paged past the list limit."""
+
     profiles: list[McpServerProfile] = []
     while True:
         batch = store.list_entities(McpServerProfile, offset=len(profiles), limit=1000)

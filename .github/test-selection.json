@@ -1,18 +1,19 @@
 {
-  "change_digest": "91fdc20f231b625b7c79a3ba3b3fa82110b94418041f9d3e441e380fd7e9633a",
-  "reviewed_by": "Claude review of the chat-reconnection readiness gate",
-  "reason": "Both chat-reconnection tests have been failing on origin/main at every one of the six phone widths the reconnection config runs. After pairing, the spec waited for the desktop connection chip (a button labelled 'Nebula Core ready|degraded'), but the phone shell added by #355 hides that chip when Core is ready and hides the whole top bar on workbench routes, so the locator can never become visible at 320, 390 or 430 pixels. The gate only needs to know that pairing finished before the test navigates, so it now waits for the pairing form to close, which every width renders, and the following hydration assertion carries the 20 second budget the gate used to provide. Reproduced on pristine main (element not found after 20s) and verified fixed here.",
-  "exclusions": "No python tests: no src/nebula change. No frontend tests: no ui/src change, so no vitest file is affected. No native tests: no Tauri or Rust change. Playwright is limited to area:chat-reconnection because only that area's spec file changes; no other area reads it.",
+  "change_digest": "b5ba0989feb122363723f73b829e899a0b0247e6dbebd5ce260ce29461e828c5",
+  "reviewed_by": "Claude review of delete-cascades-mcp",
+  "reason": "Six storage and MCP import defects from the round-4 knowledge/data audit. Deleting a conversation left its native_checkpoints and native_hook_executions rows behind (they carry the project's engagement_id), so the now-empty project answered 409 to a direct delete; delete_chat_session now cascades both kinds by chat_session_id. delete_run cascaded tasks, attempts, tool calls, approvals and harness records but not the run-scoped browser_automation_leases, browser_commands and browser_proxy_rules or the run's context_snapshots, which orphaned the rows, blocked project deletion and kept an unexpired lease refusing the next one on that browser session; the cascade now covers them. run_budget_counters rows keyed by a chat-turn id (chat-origin tool calls) were never removed: delete_chat_session now deletes the counters of the session's turns, delete_run deletes the run's own counter, and delete_archived_engagement removes counters for chat_turns as well as runs. In the MCP importer, the replace path never recorded the revision the plan was drawn against, so only update refused a server edited between plan and apply; replace now carries existing_revision and _apply guards both actions. Server names were matched case-sensitively, so a file naming GitHub after github created a second profile and a second vault entry; existing profiles and the same-file claimed set are now keyed by casefold. The API and CLI MCP export read the first 1,000 profiles only; both now use the paging helper (renamed all_mcp_profiles) that import already used. tests/v3/test_storage.py gains test_delete_chat_session_removes_native_checkpoints_and_hook_executions, test_delete_run_removes_browser_automation_records_and_context_snapshots and test_deleting_a_chat_run_or_archive_removes_budget_counters; tests/v3/test_mcp_import.py gains test_apply_refuses_a_server_edited_while_importing (parametrized update/replace; the replace case fails on main), test_export_pages_through_every_server (1,001 profiles through the API route and the CLI) and test_server_names_match_case_insensitively. Each new test was run against the unpatched tree and failed for the defect it names before the fix.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through src/nebula/v3/api.py, storage.py and cli.py) is the real-Core journey suite, which never deletes a conversation that captured a checkpoint or fired a native hook, never deletes a mission that held a browser lease, and never exports MCP servers; area:mcp-import (matched through src/nebula/v3/mcp_import.py) imports three distinctly lower-case-named servers and updates them, never with --replace, mixed-case names or more than 1,000 profiles. The Python tests drive every changed path directly. No full suites.",
   "expected_tests": {
-    "python": 0,
+    "python": 56,
     "frontend": 0,
     "native": 0,
-    "playwright": 2
+    "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_storage.py",
+    "tests/v3/test_mcp_import.py"
+  ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:chat-reconnection"
-  ]
+  "playwright": []
 }
