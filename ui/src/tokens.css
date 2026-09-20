@@ -89,11 +89,69 @@
   --status-error-surface: color-mix(in srgb, var(--red) 10%, var(--surface-raised));
   --status-blocking-surface: color-mix(in srgb, var(--red) 17%, var(--surface-raised));
 
+  /* Code tokens. The editor reads these through CSS variables so one
+     highlight style serves every theme. Dark values sit on --canvas. */
+  --code-comment: #6f7c8b;
+  --code-keyword: #b493ff;
+  --code-string: #9ed6a2;
+  --code-escape: #f0a878;
+  --code-number: #f0a878;
+  --code-function: #7fc8f8;
+  --code-type: #6fd6c0;
+  --code-variable: #dfe5ec;
+  --code-property: #cbd5e1;
+  --code-constant: #f2c76c;
+  --code-tag: #e06e72;
+  --code-attribute: #f2c76c;
+  --code-operator: #9aa7b4;
+  --code-punctuation: #8896a5;
+  --code-meta: #9aa7b4;
+  --code-heading: #87d7ff;
+  --code-link: #87d7ff;
+  --code-invalid: #ff6b70;
+  --code-bracket-1: #f2c76c;
+  --code-bracket-2: #b493ff;
+  --code-bracket-3: #6fd6c0;
+  --code-indent-guide: rgb(223 229 236 / 13%);
+  --code-indent-guide-active: rgb(106 168 235 / 55%);
+  --code-minimap-ink: rgb(223 229 236 / 42%);
+  --code-minimap-slider: rgb(223 229 236 / 9%);
+  --code-minimap-slider-strong: rgb(223 229 236 / 18%);
+
   --side-width: 224px;
   --side-width-collapsed: 64px;
   --top-height: 56px;
   --activity-width: 340px;
   --radius: var(--radius-panel);
+}
+
+:root:is([data-theme="light"], [data-theme="zero-light"]) {
+  --code-comment: #5f6f7e;
+  --code-keyword: #7b3fd4;
+  --code-string: #1f7a4d;
+  --code-escape: #9a4d18;
+  --code-number: #9a4d18;
+  --code-function: #1a5fa8;
+  --code-type: #0f6f68;
+  --code-variable: #273544;
+  --code-property: #35475a;
+  --code-constant: #8a5a00;
+  --code-tag: #a52f3a;
+  --code-attribute: #8a5a00;
+  --code-operator: #55647a;
+  --code-punctuation: #5a6978;
+  --code-meta: #55647a;
+  --code-heading: #12508f;
+  --code-link: #1a5fa8;
+  --code-invalid: #ac4149;
+  --code-bracket-1: #8a5a00;
+  --code-bracket-2: #7b3fd4;
+  --code-bracket-3: #0f6f68;
+  --code-indent-guide: rgb(39 53 68 / 14%);
+  --code-indent-guide-active: rgb(40 105 173 / 55%);
+  --code-minimap-ink: rgb(39 53 68 / 46%);
+  --code-minimap-slider: rgb(39 53 68 / 9%);
+  --code-minimap-slider-strong: rgb(39 53 68 / 17%);
 }
 
 :root[data-theme="light"] {

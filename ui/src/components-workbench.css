@@ -1342,6 +1342,23 @@ kbd { font-size: 11px; }
 .code-editor-secondary-actions { flex: 1 1 auto; justify-content: flex-start; overflow-x: auto; scrollbar-width: thin; }
 .code-editor-secondary-actions .button, .code-editor-environment-action, .code-editor-save { flex: 0 0 auto; }
 .code-editor-dirty { flex: 0 0 auto; color: var(--green); font-size: 11px; font-weight: var(--weight-bold); }.code-editor-dirty.dirty { color: var(--yellow); }
+/* Symbol trail for the active file. Each segment reveals that folder in Files. */
+.code-editor-breadcrumbs { display: flex; min-height: 26px; align-items: center; gap: 2px; padding: 2px 9px; overflow-x: auto; border-bottom: 1px solid var(--border-soft); background: var(--surface); font: 11px var(--font-mono); scrollbar-width: none; }
+.code-editor-breadcrumbs::-webkit-scrollbar { display: none; }
+.code-editor-breadcrumbs > span { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.code-editor-breadcrumbs button { flex: 0 0 auto; padding: 2px 5px; border: 0; border-radius: 8px; color: var(--muted); background: transparent; font: inherit; white-space: nowrap; cursor: pointer; }
+.code-editor-breadcrumbs button:hover, .code-editor-breadcrumbs button:focus-visible { color: var(--text-strong); background: var(--surface-hover); }
+.code-editor-breadcrumbs > svg, .code-editor-breadcrumbs > span > svg { flex: 0 0 auto; color: var(--muted); opacity: .7; }
+.code-editor-breadcrumbs strong { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; padding: 0 4px; color: var(--text); font-size: 11px; font-weight: var(--weight-medium); white-space: nowrap; }
+/* An unsaved tab shows a dot where its close control sits, and swaps to the
+   close glyph on hover. Pointer-coarse devices keep both controls in place. */
+@media (hover: hover) {
+  .code-editor-tabs > div.dirty { position: relative; }
+  .code-editor-tabs > div.dirty > button:first-child i { position: absolute; top: 50%; right: 12px; margin: 0; transform: translateY(-50%); pointer-events: none; }
+  .code-editor-tabs > div.dirty > button:last-child svg { opacity: 0; }
+  .code-editor-tabs > div.dirty:hover > button:first-child i, .code-editor-tabs > div.dirty:focus-within > button:first-child i { opacity: 0; }
+  .code-editor-tabs > div.dirty:hover > button:last-child svg, .code-editor-tabs > div.dirty:focus-within > button:last-child svg { opacity: 1; }
+}
 .code-editor-mobile-only, .code-editor-mobile-title, .code-editor-mobile-tools-toggle, .code-editor-mobile-files-toggle, .code-editor-mobile-tools { display: none; }
 .code-editor-debug-entry { display: flex; min-height: 38px; align-items: center; justify-content: flex-end; gap: 10px; padding: 4px 10px; border-top: 1px solid var(--border-soft); background: var(--surface-muted); }
 .code-editor-debug-entry span { color: var(--muted); font-size: 11px; }
@@ -1387,7 +1404,8 @@ kbd { font-size: 11px; }
 .code-editor-pane > header { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 5px 3px 9px; overflow: hidden; color: var(--muted); border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); font: 11px var(--font-mono); }.code-editor-pane-focus { display: flex; min-width: 0; flex: 1; padding: 5px 3px; overflow: hidden; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }.code-editor-pane-focus span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.code-editor-pane-focus:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }.code-editor-pane .code-mirror-host { flex: 1 1 0; }.code-editor-surfaces.split .code-mirror-host { min-height: 0; }
 .code-editor-persistence-error { display: flex; align-items: center; gap: 9px; padding: 8px 10px; color: var(--yellow); border-bottom: 1px solid var(--border-soft); background: var(--yellow-muted); }.code-editor-persistence-error > span { display: grid; min-width: 0; flex: 1; gap: 2px; }.code-editor-persistence-error small { color: var(--muted-strong); }.code-editor-restore-retry { align-self: flex-start; margin: 5px 10px; }
 .editor-preferences-dialog { width: min(680px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; }.editor-preferences-dialog > header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }.editor-preferences-dialog h2 { margin: 2px 0 0; font-size: 16px; }.editor-preferences-dialog header small { color: var(--muted); }
-.editor-preference-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px 18px; }.editor-preference-fields > label:not(.editor-wrap-setting) { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.editor-preference-fields select { min-height: 36px; }.editor-wrap-setting { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }.editor-wrap-setting > span { display: grid; gap: 2px; }.editor-wrap-setting small { color: var(--muted); }
+.editor-preference-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 16px 18px; }.editor-preference-fields > label:not(.editor-toggle-setting) { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }.editor-preference-fields select { min-height: 36px; }.editor-toggle-setting { display: flex; grid-column: 1 / -1; align-items: center; gap: 9px; padding: 9px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); }.editor-toggle-setting > span { display: grid; gap: 2px; }.editor-toggle-setting small { color: var(--muted); font-size: 11px; }.editor-toggle-setting input { flex: 0 0 auto; }
+.editor-preference-note { margin: 0; padding: 0 18px 4px; color: var(--muted); font-size: 11px; }
 .editor-keybindings { display: grid; gap: 7px; padding: 0 18px 16px; }.editor-keybindings > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.editor-keybindings h3, .editor-keybindings p { margin: 0; }.editor-keybindings h3 { font-size: 13px; }.editor-keybindings p { color: var(--muted); font-size: 11px; }.editor-keybindings > label { display: grid; grid-template-columns: minmax(0, 1fr) 190px; align-items: center; gap: 12px; color: var(--muted-strong); font-size: 12px; }.editor-keybindings input { min-height: 36px; font-family: var(--font-mono); }.editor-keybindings input.invalid { border-color: var(--red); }
 .editor-preferences-dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
 .editor-environment-dialog { width: min(720px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); overflow: auto; }
@@ -1420,6 +1438,8 @@ kbd { font-size: 11px; }
 .inventory-disclosure[open] > summary { border-bottom: 1px solid var(--border-soft); }
 .inventory-disclosure > .runtime-resource-list { max-height: min(520px, 55vh); overflow: auto; padding: 12px; }
 .code-editor-main > footer { display: flex; min-height: 32px; align-items: center; gap: 13px; padding: 1px 8px 1px 10px; color: var(--muted); border-top: 1px solid var(--border-soft); background: var(--surface-muted); font-size: 11px; }
+.code-editor-main > footer button { min-height: 26px; padding: 2px 6px; border: 0; border-radius: 8px; color: inherit; background: transparent; font: inherit; white-space: nowrap; cursor: pointer; }
+.code-editor-main > footer button:hover, .code-editor-main > footer button:focus-visible { color: var(--text-strong); background: var(--surface-hover); }
 .code-editor-security-actions { display: flex; min-width: 0; align-items: center; gap: 5px; margin-left: auto; overflow-x: auto; }
 .code-editor-security-actions .button { flex: 0 0 auto; }
 .modal-surface.editor-search-dialog { display: grid; width: min(760px, calc(100vw - 32px)); max-height: min(680px, calc(100dvh - 32px)); grid-template-rows: auto auto auto auto minmax(180px, 1fr) auto; gap: 0; padding: 0; }
@@ -2335,7 +2355,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .editor-environment-dialog > footer > div .button { min-height: 44px; flex: 1; }
   .code-editor-environment-action { display: none; }
   .editor-preference-fields { grid-template-columns: 1fr; }
-  .editor-wrap-setting { grid-column: auto; min-height: 44px; }
+  .editor-toggle-setting { grid-column: auto; min-height: 44px; }
   .editor-keybindings > label { grid-template-columns: 1fr; gap: 4px; }
   .editor-keybindings input, .editor-preference-fields select { min-height: 44px; }
   .code-editor-mobile-only { display: inline-flex; }
@@ -2361,7 +2381,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .code-editor-conflict { grid-template-columns: auto minmax(0, 1fr); }
   .code-editor-conflict .button { grid-column: span 1; }
   .code-editor-main > footer { flex-wrap: wrap; }
-  .code-editor-main > footer > span:nth-child(3), .code-editor-main > footer > span:nth-child(4) { display: none; }
+  .code-editor-main > footer > :nth-child(3), .code-editor-main > footer > :nth-child(4) { display: none; }
+  .code-editor-breadcrumbs { display: none; }
   .code-editor-security-actions { width: 100%; margin-left: 0; }
   .code-editor-security-actions .button { min-height: 44px; flex: 1 0 auto; }
   .editor-search-modes button { min-height: 44px; }

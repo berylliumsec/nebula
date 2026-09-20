@@ -1,23 +1,30 @@
 {
-  "change_digest": "cad445108ed17347d9d6501495d0713d343e3af2861de29f5bfb79c41b4f4756",
-  "reviewed_by": "Codex review of reasoning-only final-answer recovery",
-  "reason": "A provider can complete final synthesis with reasoning but no operator-facing content and an ordinary stop finish reason. Core now identifies that response as reasoning_only across streaming, non-streaming, and post-tool synthesis, performs one bounded synthesis-only retry with more output room when the operator did not set a cap, retains safe per-attempt response metadata, and exposes a distinct retryable failure contract after exhaustion. Manual retry resumes the durable failed turn without replaying prior tool work. The selected Python tests cover direct, streaming API, and tool-loop recovery; provider-thinking Playwright verifies the exact visible retry workflow on desktop, Chromium mobile, and WebKit mobile; durable-conversation-core verifies production real-Core persistence and reload.",
-  "exclusions": "No frontend unit test is selected because the new action is an SSE-to-session integration exercised by the focused Playwright journey rather than an isolated component contract. No native tests because no Rust or desktop-shell code changed. Provider transport internals, model catalog, MCP, hooks, workspace mutation, unrelated chat workflows, and full suites are excluded. The calm-CSS audit is not selected because no styles changed; its existing repository-wide baseline violations remain unrelated.",
+  "change_digest": "54ba39dd765d721c1e199935e3273cf364ddddd372f7a8950a429c44c814c058",
+  "reviewed_by": "Claude review of the Coding editor parity change (syntax tokens, minimap, sticky scroll, indent guides, bracket colours, breadcrumbs, auto save)",
+  "reason": "The change is confined to the Workbench Coding panel and the design tokens it reads. Selected component and state tests cover the new pure logic (bracket depth scanning, indent measurement, active scope, sticky scopes, language glyphs), the token-only highlight contract, preference migration for records written before these settings existed, and the panel behaviour that can lose operator work: auto save writing only existing workspace files, refusing untitled drafts, and the breadcrumb and status-bar controls. The Playwright areas exercise the Coding journeys whose markup this touches (Save and reviewed actions, sidebar file scrolling, caret and syntax layers) plus the theme journey, because the new --code-* tokens are declared in tokens.css and resolve per theme.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python, Rust or Core file changed, so python and native selections are empty and the desktop-macOS job stays off. Provider, harness, chat, browser and settings journeys are untouched: the diff adds CodeMirror view extensions, one panel's chrome, two device-local preference groups and CSS custom properties, and changes no API call, no persisted Core state and no shared component. No real-Core or physical-device journey is selected because nothing in this change crosses the Core boundary; saving still goes through the existing reviewed uploadWorkspaceFile path with its conditional sha256.",
   "expected_tests": {
-    "python": 79,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 54,
     "native": 0,
-    "playwright": 10
+    "playwright": 19
   },
-  "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_api.py::test_chat_stream_names_exhausted_final_answer_recovery",
-    "tests/v3/test_chat_tool_loop.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/CodeEditorPanel.test.tsx",
+    "ui/src/components/CodeMirrorSurface.test.ts",
+    "ui/src/components/EditorPreferencesDialog.test.tsx",
+    "ui/src/components/editorDecorations.test.ts",
+    "ui/src/components/editorStickyScroll.test.ts",
+    "ui/src/components/editorTheme.test.ts",
+    "ui/src/components/fileIcons.test.ts",
+    "ui/src/components/useEditorSidebarWidth.test.tsx",
+    "ui/src/state/editorPreferences.test.ts"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "area:provider-thinking",
-    "area:durable-conversation-core"
+    "area:coding-makeover",
+    "area:editor-files-scroll",
+    "area:themes"
   ]
 }

@@ -1,11 +1,15 @@
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { bracketMatching, defaultHighlightStyle, foldGutter, foldKeymap, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { cursorMatchingBracket, defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { bracketMatching, foldGutter, foldKeymap, indentOnInput, StreamLanguage, indentUnit, syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
+import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { crosshairCursor, dropCursor, EditorView, GutterMarker, gutter, highlightActiveLine, highlightActiveLineGutter, highlightSpecialChars, keymap, lineNumbers, rectangularSelection } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap, type CompletionContext, type CompletionResult } from "@codemirror/autocomplete";
-import { highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
+import { gotoLine, highlightSelectionMatches, openSearchPanel, search, searchKeymap } from "@codemirror/search";
 import { openLintPanel } from "@codemirror/lint";
+import { bracketPairColors, indentGuides } from "./editorDecorations";
+import { minimap } from "./editorMinimap";
+import { stickyScroll } from "./editorStickyScroll";
+import { nebulaEditorTheme, nebulaHighlightStyle } from "./editorTheme";
 import { createLanguageServer, type LanguageServerState } from "../api/languageServer";
 import { findReferences, formatDocument, jumpToDefinition, renameSymbol } from "@codemirror/lsp-client";
 
@@ -34,6 +38,11 @@ interface CodeMirrorSurfaceProps {
   languageServer?: { apiBaseUrl: string; engagementId: string; token?: string; onState(state: LanguageServerState): void };
   breakpointLines?: number[];
   onToggleBreakpoint?(line: number): void;
+  bracketPairColors?: boolean;
+  gotoLineRequest?: number;
+  indentGuides?: boolean;
+  minimap?: boolean;
+  stickyScroll?: boolean;
 }
 
 class BreakpointMarker extends GutterMarker {
@@ -103,28 +112,7 @@ async function languageForPath(path: string): Promise<Extension> {
   return parser ? StreamLanguage.define(parser) : [];
 }
 
-const nebulaTheme = EditorView.theme({
-  "&": { width: "100%", height: "100%", color: "var(--text)", backgroundColor: "var(--canvas)", fontSize: "var(--editor-font-size, 13px)" },
-  ".cm-scroller": { overflow: "auto", fontFamily: "var(--font-mono)", lineHeight: "1.5" },
-  ".cm-content": { minHeight: "100%", caretColor: "var(--text-strong)", fontFamily: "inherit", padding: "10px 0", outline: "none" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text-strong)" },
-  "&.cm-focused": { outline: "none" },
-  ".cm-gutters": { color: "var(--muted)", backgroundColor: "var(--surface-muted)", borderRight: "1px solid var(--border-soft)" },
-  ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "color-mix(in srgb, var(--blue-muted) 42%, transparent)" },
-  ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": { borderRadius: "0", backgroundColor: "color-mix(in srgb, var(--blue) 35%, transparent)" },
-  ".cm-panels": { color: "var(--text)", backgroundColor: "var(--surface-raised)" },
-  ".cm-panels.cm-panels-top": { borderBottom: "1px solid var(--border)" },
-  ".cm-search": { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px", padding: "7px 9px" },
-  ".cm-search input": { minHeight: "32px", padding: "5px 8px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", color: "var(--text)", backgroundColor: "var(--canvas)", font: "12px var(--font-mono)" },
-  ".cm-search button": { minWidth: "32px", minHeight: "32px", border: "1px solid var(--border)", borderRadius: "var(--radius-control)", color: "var(--text)", backgroundColor: "var(--surface)", cursor: "pointer" },
-  ".cm-search button:hover, .cm-search button:focus-visible": { borderColor: "var(--blue)", backgroundColor: "var(--surface-hover)" },
-  ".cm-searchMatch": { backgroundColor: "var(--yellow-muted)", outline: "1px solid var(--yellow)" },
-  ".cm-foldGutter .cm-gutterElement": { cursor: "pointer" },
-  ".cm-debug-gutter .cm-gutterElement": { cursor: "pointer", minWidth: "15px" },
-  ".cm-debug-breakpoint": { display: "block", width: "9px", height: "9px", margin: "0 3px", borderRadius: "50%", background: "var(--red)", boxShadow: "0 0 0 1px color-mix(in srgb, var(--red) 70%, black)" },
-});
-
-export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, definitionRequest = 0, findRequest = 0, problemsRequest = 0, formatRequest = 0, referencesRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint }: CodeMirrorSurfaceProps) {
+export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath, fontSize = 13, onChange, onCursorChange, onFocus, onSave, onSelectionChange, completionSource, definitionRequest = 0, findRequest = 0, gotoLineRequest = 0, problemsRequest = 0, formatRequest = 0, referencesRequest = 0, renameRequest = 0, reveal, saveKey = "Mod-s", tabSize = 2, value, wordWrap = false, languageServer, breakpointLines = [], onToggleBreakpoint, bracketPairColors: colorBrackets = true, indentGuides: showIndentGuides = true, minimap: showMinimap = true, stickyScroll: showStickyScroll = true }: CodeMirrorSurfaceProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | undefined>(undefined);
   const languageRef = useRef(new Compartment());
@@ -132,6 +120,9 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   const keymapRef = useRef(new Compartment());
   const settingsRef = useRef(new Compartment());
   const breakpointRef = useRef(new Compartment());
+  const renderRef = useRef(new Compartment());
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
   const onSaveRef = useRef(onSave);
@@ -181,14 +172,15 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
           rectangularSelection(),
           crosshairCursor(),
           indentOnInput(),
-          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          syntaxHighlighting(nebulaHighlightStyle, { fallback: true }),
           bracketMatching(),
           closeBrackets(),
           highlightSelectionMatches(),
           highlightActiveLine(),
           EditorState.allowMultipleSelections.of(true),
-          nebulaTheme,
+          nebulaEditorTheme,
           settingsRef.current.of(editorSettings(tabSize, wordWrap)),
+          renderRef.current.of(renderExtensions({ colorBrackets, showIndentGuides, showMinimap, showStickyScroll }, () => filePathRef.current)),
           languageRef.current.of([]),
           attributesRef.current.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })),
           search({ top: true }),
@@ -260,6 +252,14 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   }, [fontSize, tabSize, wordWrap]);
 
   useEffect(() => {
+    // Indent guides and bracket colours are measured against the tab size, so a
+    // tab-size change has to rebuild them, not just the settings compartment.
+    viewRef.current?.dispatch({
+      effects: renderRef.current.reconfigure(renderExtensions({ colorBrackets, showIndentGuides, showMinimap, showStickyScroll }, () => filePathRef.current)),
+    });
+  }, [colorBrackets, showIndentGuides, showMinimap, showStickyScroll, tabSize]);
+
+  useEffect(() => {
     viewRef.current?.dispatch({ effects: keymapRef.current.reconfigure(editorKeymap(saveKey, () => onSaveRef.current())) });
   }, [saveKey]);
 
@@ -278,6 +278,11 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
     if (!problemsRequest || !viewRef.current) return;
     openLintPanel(viewRef.current);
   }, [problemsRequest]);
+
+  useEffect(() => {
+    if (!gotoLineRequest || !viewRef.current) return;
+    gotoLine(viewRef.current);
+  }, [gotoLineRequest]);
 
   useEffect(() => {
     if (formatRequest && viewRef.current) void formatDocument(viewRef.current);
@@ -310,6 +315,23 @@ export function CodeMirrorSurface({ active, ariaLabel = "Code editor", filePath,
   return <div className="code-mirror-host" data-selection-actions-disabled onFocusCapture={onFocus} ref={hostRef} />;
 }
 
+interface RenderOptions {
+  colorBrackets: boolean;
+  showIndentGuides: boolean;
+  showMinimap: boolean;
+  showStickyScroll: boolean;
+}
+
+/** Device-local rendering choices, grouped so one compartment carries them all. */
+function renderExtensions(options: RenderOptions, pathForSyntax: () => string): Extension {
+  return [
+    options.showIndentGuides ? indentGuides() : [],
+    options.colorBrackets ? bracketPairColors(pathForSyntax) : [],
+    options.showStickyScroll ? stickyScroll() : [],
+    options.showMinimap ? minimap() : [],
+  ];
+}
+
 function editorSettings(tabSize: 2 | 4, wordWrap: boolean): Extension {
   return [
     EditorState.tabSize.of(tabSize),
@@ -318,9 +340,35 @@ function editorSettings(tabSize: 2 | 4, wordWrap: boolean): Extension {
   ];
 }
 
+/**
+ * A cursor on the line above or below the outermost existing one.
+ *
+ * CodeMirror ships multi-selection but no binding for growing it vertically,
+ * which is the shortcut operators reach for first when they arrive from VS Code.
+ */
+function addCursorVertically(view: EditorView, down: boolean): boolean {
+  const { state } = view;
+  const ranges = state.selection.ranges;
+  const anchorRange = down ? ranges[ranges.length - 1] : ranges[0];
+  const line = state.doc.lineAt(anchorRange.head);
+  const target = down ? line.number + 1 : line.number - 1;
+  if (target < 1 || target > state.doc.lines) return false;
+  const nextLine = state.doc.line(target);
+  const head = Math.min(nextLine.from + (anchorRange.head - line.from), nextLine.to);
+  view.dispatch({
+    selection: EditorSelection.create([...ranges, EditorSelection.cursor(head)], ranges.length),
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 function editorKeymap(saveKey: string, onSave: () => void): Extension {
   return keymap.of([
     { key: saveKey, run: () => { onSave(); return true; } },
+    { key: "Mod-g", run: gotoLine, preventDefault: true },
+    { key: "Mod-Alt-ArrowUp", run: (view) => addCursorVertically(view, false), preventDefault: true },
+    { key: "Mod-Alt-ArrowDown", run: (view) => addCursorVertically(view, true), preventDefault: true },
+    { key: "Mod-Shift-\\", run: cursorMatchingBracket, preventDefault: true },
     indentWithTab,
     ...closeBracketsKeymap,
     ...completionKeymap,

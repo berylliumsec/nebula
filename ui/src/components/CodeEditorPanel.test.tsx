@@ -10,6 +10,7 @@ import { CodeEditorPanel } from "./CodeEditorPanel";
 import { DialogProvider } from "./DialogSystem";
 import { clearEditorSessions, loadEditorSessions } from "../state/editorSessionPersistence";
 import { ChromeProvider, type ChromeContextValue, type ContextualCommand } from "../state/ChromeContext";
+import { DEFAULT_EDITOR_PREFERENCES, type AutoSaveMode } from "../state/editorPreferences";
 
 beforeEach(() => {
   localStorage.clear();
@@ -701,5 +702,99 @@ describe("CodeEditorPanel", () => {
     act(() => commands.find((command) => command.id === "editor.debug")!.run());
     expect(await screen.findByRole("dialog", { name: "Python debugger" })).toBeVisible();
     expect(screen.getByText("Isolated launch review")).toBeVisible();
+  });
+  function chooseAutoSave(mode: AutoSaveMode) {
+    localStorage.setItem("nebula.editor.preferences.v1", JSON.stringify({ ...DEFAULT_EDITOR_PREFERENCES, autoSave: mode }));
+  }
+
+  const savedFile = {
+    engagementId: "project-1",
+    path: "tool.py",
+    size: 13,
+    sha256: "c".repeat(64),
+    overwritten: true,
+  };
+
+  it("auto-saves the open workspace file when focus leaves the editor", async () => {
+    chooseAutoSave("onFocusChange");
+    const user = userEvent.setup();
+    const uploadWorkspaceFile = vi.fn().mockResolvedValue(savedFile);
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('first')\n"])),
+      uploadWorkspaceFile,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    await user.clear(editor);
+    await user.type(editor, "print('auto')");
+    expect(uploadWorkspaceFile).not.toHaveBeenCalled();
+
+    fireEvent.blur(window);
+    await waitFor(() => expect(uploadWorkspaceFile).toHaveBeenCalledTimes(1));
+    expect(await (uploadWorkspaceFile.mock.calls[0][2] as Blob).text()).toBe("print('auto')");
+  });
+
+  it("auto-saves once editing settles when the delay mode is chosen", async () => {
+    chooseAutoSave("afterDelay");
+    const user = userEvent.setup();
+    const uploadWorkspaceFile = vi.fn().mockResolvedValue(savedFile);
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('first')\n"])),
+      uploadWorkspaceFile,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /tool\.py/ }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    await user.clear(editor);
+    await user.type(editor, "print('later')");
+    await waitFor(() => expect(uploadWorkspaceFile).toHaveBeenCalledTimes(1), { timeout: 4000 });
+  });
+
+  it("never auto-saves a draft that has no workspace file yet", async () => {
+    chooseAutoSave("onFocusChange");
+    const user = userEvent.setup();
+    const uploadWorkspaceFile = vi.fn().mockResolvedValue(savedFile);
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing()),
+      uploadWorkspaceFile,
+    });
+
+    await user.click((await screen.findAllByRole("button", { name: "New file" }))[0]);
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    await user.type(editor, "draft");
+    fireEvent.blur(window);
+
+    await waitFor(() => expect(screen.getByText("Unsaved")).toBeVisible());
+    expect(uploadWorkspaceFile).not.toHaveBeenCalled();
+  });
+
+  it("shows a clickable path trail and navigable status cells for the active file", async () => {
+    const user = userEvent.setup();
+    const listWorkspace = vi.fn().mockResolvedValue(listing([{
+      path: "scans/scan.py",
+      name: "scan.py",
+      kind: "file" as const,
+      size: 12,
+      modifiedAt: "2026-09-20T12:00:00Z",
+    }]));
+    renderPanel({
+      listWorkspace,
+      downloadWorkspaceFile: vi.fn().mockResolvedValue(new Blob(["print('x')\n"])),
+    });
+
+    await user.click(await screen.findByRole("button", { name: /scan\.py/ }));
+    const trail = await screen.findByRole("navigation", { name: "Active file path" });
+    expect(within(trail).getByRole("button", { name: "scans" })).toBeVisible();
+    expect(trail).toHaveTextContent("scan.py");
+
+    await user.click(within(trail).getByRole("button", { name: "scans" }));
+    await waitFor(() => expect(listWorkspace).toHaveBeenCalledWith("project-1", "scans", 0, expect.anything()));
+
+    await user.click(screen.getByRole("button", { name: /Ln 1, Col 1/ }));
+    await user.click(screen.getByRole("button", { name: /UTF-8/ }));
+    expect(await screen.findByRole("dialog", { name: "Editor settings and keybindings" })).toBeVisible();
   });
 });
