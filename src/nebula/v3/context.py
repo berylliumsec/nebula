@@ -609,6 +609,10 @@ class ContextCompactor:
                 error=safe_error,
             )
             self._persist(snapshot)
+            if isinstance(exc, ContextCapacityError):
+                # Keep the capacity subclass: chat maps it to a configuration
+                # error the operator must act on, not a retryable failure.
+                raise ContextCapacityError(safe_error, usage=usage) from exc
             raise ContextCompactionError(safe_error, usage=usage) from exc
         self._persist(snapshot)
         return CompactionResult(snapshot=snapshot, created=True)

@@ -1,16 +1,16 @@
 {
-  "change_digest": "0987aa77a4de017fec3e79fdd2c6b48f1646590247d0694afc160d2513456fb7",
-  "reviewed_by": "Claude review of chat image validation",
-  "reason": "validate_chat_image decoded every upload in full before checking its pixel count, so a few-KB PNG or WebP whose header declares a canvas under Pillow's 178-megapixel bomb error but over Nebula's 40-megapixel cap was decoded to hundreds of MB inside asyncio.to_thread before being refused; a handful of concurrent uploads could exhaust Core's memory. It also compared Pillow's detected MIME type to the declared one literally, and Pillow opens any JPEG whose MP header lists more than one picture (iPhone portrait shots, Samsung depth photos, bursts) as MPO with MIME image/mpo, so those photos were refused with 422 'declared image type does not match its bytes' although they are JPEG files the browser correctly declared as image/jpeg. The size check now runs from the header before load(), and image/mpo is treated as image/jpeg for the declaration check; decoding, transparency handling and preview generation are unchanged. The new test_chat_media covers the MPO acceptance (preview is a plain JPEG), the mismatch refusal, the header-only size refusal (load is patched to fail if called) and a small PNG round trip.",
-  "exclusions": "No frontend tests: no ui/ change; the fix only changes which server-side validation result the existing upload path returns. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_media.py) is the real-Core journey suite; the Python tests construct the MPO and oversized fixtures directly. No full suites.",
+  "change_digest": "9e363d53519f4cb911df333d080afd6afa5d10ea700ac99ff3c7f9eda6509600",
+  "reviewed_by": "Claude review of compaction capacity errors",
+  "reason": "ContextCompactor.compact wrapped every failure from the hierarchical memory pass in a plain ContextCompactionError after persisting the FAILED snapshot, so a ContextCapacityError (a window too small for a faithful summary, or derived context that cannot fit the compactor) lost its subclass. chat.py maps ContextCapacityError to a 422 ChatConfigurationError and the base class to a ChatCompactionError that api.py answers with 503, retryable=True and Retry-After: 1, so a deterministic capacity failure was presented to the operator as a transient outage and each client retry ran the same failing pass and persisted another FAILED snapshot. The except path now re-raises ContextCapacityError as ContextCapacityError with the same safe message and usage, and the base class otherwise. test_context gains a case with a 600-token window that asserts the capacity type reaches the caller, no provider request is made, and the FAILED snapshot is still persisted; the rest of the file covers the provenance-repair and hierarchical paths that share the except block.",
+  "exclusions": "No frontend tests: no ui/ change; the 422 versus 503 mapping already exists in chat.py and api.py. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for context.py) is the real-Core journey suite and does not drive compaction to a capacity failure. No full suites.",
   "expected_tests": {
-    "python": 4,
+    "python": 36,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_media.py"
+    "tests/v3/test_context.py"
   ],
   "frontend": [],
   "native": [],
