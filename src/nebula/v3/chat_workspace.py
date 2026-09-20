@@ -6,7 +6,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, exists, func
 from sqlalchemy.orm import aliased
 from .database import EntityRow
-from .domain import ChatBookmark, ChatMessage, ChatSession, Engagement
+from .domain import (
+    ChatBookmark,
+    ChatMessage,
+    ChatSession,
+    Engagement,
+    message_is_replaced,
+)
 from .storage import NebulaStore, NotFoundError
 
 
@@ -82,8 +88,12 @@ def workspace_router(store: NebulaStore) -> APIRouter:
         )
         with store.database.session() as database:
             rows = [
-                ChatMessage.model_validate(row.payload)
-                for row in database.scalars(statement)
+                message
+                for message in (
+                    ChatMessage.model_validate(row.payload)
+                    for row in database.scalars(statement)
+                )
+                if not message_is_replaced(message)
             ]
         items = []
         for message in rows[:limit]:

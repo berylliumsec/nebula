@@ -1,28 +1,31 @@
 {
-  "change_digest": "cfe01b59995d7feeffca7400a10ae6dbc0ad6c6e974da6ea63dc6f6a06a6cab5",
-  "reviewed_by": "Claude review of locked credential vault handling",
-  "reason": "CredentialStore.vault_available only checked that a trusted keyring backend existed with a positive priority, so a Linux host whose SecretService collection is locked \u2014 the normal state when Core runs headless under systemd, where nothing performs the PAM unlock a graphical login would \u2014 reported the vault as available. Every dialog that defaults to vault storage (the Jev key, provider credentials, harness and MCP credentials, VPN profile passwords) therefore offered a save that always failed with a 503. vault_state now reports available/locked/unavailable, probing the collection without ever raising a desktop prompt, vault_available derives from it, create/delete name the locked case, a GET /credentials/vault endpoint and the Jev status carry the state, and the four dialogs fall back to session storage with a note that names the remedy. test_credentials.py covers the locked, unlocked and unreachable states, the refused vault write, and the new endpoint and Jev status; test_mcp_import.py covers the import guard that now reads vault_state. useCredentialVault.test.tsx covers the shared hook and its copy, ToolSuggestions.test.tsx the locked Jev panel, HarnessSettings.test.tsx and EngagementPolicySettings.loading.test.tsx the dialogs and fixtures that carry the new field. A second commit moves that prompt-free probe into vault_probe.py so the sensitive diagnostic store shares it: its _vault_available only checked the backend's priority and then called keyring.get_password, which waits forever on a locked collection when no prompter is running (confirmed on the LAN Core host, where the call never returns), hanging Core the moment an operator switched sensitive-detail capture on. It now reads the lock state first and selects memory-only capture for anything but an unlocked, reachable vault. test_diagnostic_sensitive.py covers a locked vault selecting session memory with get_password and set_password wired to fail the test if they are reached. Merging main brought the scope tool-candidate fixture into EngagementPolicySettings.loading.test.tsx, which now carries both that mock and the vault_state field. Both vault fakes are SecretService subclasses with a fixed priority: reading keyring's own classproperty probes the session bus, which CI does not have, and the memory-only fallback test now pins keyring.get_keyring so an unlocked host vault cannot change what it covers.",
-  "exclusions": "No native tests: no Tauri or catalog change. No screenshot baselines change: the new notes render only when Core reports a vault that cannot take a secret, and every baseline captures a dialog-free surface. Playwright is limited to tool-suggestions, whose real-Core journey saves a Jev key against a host vault that is locked or absent, and mcp-import, which covers the MCP credential and import dialogs; both exercise the changed branch end to end. Other areas are excluded because the change is confined to credential storage copy and the persistence argument, with no routing, layout or theme effect. No full suites.",
+  "change_digest": "1474ba0d32dba7208067c2e58350ce18e69ba9d52fe1c8edbb52ce6c0193c8a9",
+  "reviewed_by": "Claude review of editing a sent message in place",
+  "reason": "Editing an operator message no longer forks. chat.py gains rewind_session, which retracts the edited message and every later message of that conversation (metadata retracted_at/retraction_id/retracted_reason plus a message_retractions entry on the session) and returns the retained and replaced records; _session_messages filters replaced turns unless include_replaced is asked for, and the new _next_sequence allocates above every record so a resent turn cannot reuse a retracted sequence. api.py adds POST chat/sessions/{id}/rewind and an include_replaced query on the messages endpoint. harnesses.py filters _chat_messages the same way, reads sequences with include_replaced=True, and adds rewind_chat_session, which forks the vendor session, rebinds the same chat session and re-arms the context handoff so only the retained prefix is replayed. chat_catchup.py, chat_results.py and chat_workspace.py skip replaced turns in catch-up, the results drawer, context sources and transcript search. tests/v3/test_chat.py covers the in-place replace, the model request that follows and the assistant-message/active-turn/foreign-message guards; test_chat_api.py covers the endpoint, the 409, include_replaced and that only one conversation exists afterwards; test_harnesses.py covers the vendor rollover, the handoff text and the next appended sequence; test_chat_catchup.py and test_chat_workspace.py hold the catch-up, search and results consumers of the same reads. On the interface, SessionsPage.tsx replaces Edit and branch with an inline editor and a replaced-messages disclosure, client.ts adds rewindChatSession and the include_replaced read, components.css styles the editor and the disclosure, and the guides catalog describes editing versus forking. App.test.tsx covers the rewind call, the resend body, the absent fork call and the disclosure; client.test.ts holds the wire mapping; guides.test.tsx holds the catalog copy. Playwright area:chat-edit-in-place runs the new mocked journey on desktop, mobile-chromium and mobile-chromium-small and the new real-Core journey on assistant-real-desktop and assistant-real-chromium-390; the three mocked assistant entries re-run the transcript journeys that this page and these Core reads sit inside. Two of those caught real fallout and are fixed here: real-core.spec.ts gated `**/chat/sessions/<id>/messages` with an exact glob that the new include_replaced query no longer matches, and interface.spec.ts reached Advanced settings through the bare /settings route, which does not show a section at phone widths.",
+  "exclusions": "No full suites and no native entries: no Rust or src-tauri file changed. Other Python suites are excluded because no storage migration or shared schema changed; ChatMessage keeps its shape and a conversation without an edit reads exactly as before. Frontend suites beyond the chat page's own tests, the API client and the guides catalog are excluded because no shared component, route or style outside .chat-message-edit* and .chat-replaced-* changed. The remaining Playwright areas are excluded because the only surfaces that changed are the operator message bubble and the new disclosure inside the transcript, which the themes, terminal, findings and settings captures never render; no screenshot baseline moves. mobile-webkit runs area:assistant but not the new journey, because the editor has no vendor-specific behaviour and the two chromium phone widths already bracket 320-430 px. entry:assistant/assistant-real-desktop is excluded and replaced by the two real-Core entries in area:chat-edit-in-place, which exercise this change end to end. That broad sweep currently fails on pristine origin/main (f411402) for two unrelated reasons, both reproduced in a detached main worktree: 'assistant upgrade foundation production LAN reads durable conversation' hangs on its `.assistant-search > summary` click, and 'stabilization real Core provider settings separate saving from health recovery' finds the Chat model select empty and disabled. Neither touches the edited-message path, and this workflow only runs on pull requests, so neither was caught on main.",
   "expected_tests": {
-    "python": 52,
-    "frontend": 34,
+    "python": 162,
+    "frontend": 116,
     "native": 0,
-    "playwright": 12
+    "playwright": 128
   },
   "python": [
-    "tests/v3/test_credentials.py",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_diagnostic_sensitive.py"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_chat_catchup.py",
+    "tests/v3/test_chat_workspace.py"
   ],
   "frontend": [
-    "ui/src/hooks/useCredentialVault.test.tsx",
-    "ui/src/components/ToolSuggestions.test.tsx",
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
+    "ui/src/App.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:tool-suggestions",
-    "area:mcp-import"
+    "area:chat-edit-in-place",
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
   ]
 }

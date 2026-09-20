@@ -347,6 +347,24 @@ textarea { border-radius: var(--radius-control); }
 .chat-composer { width: min(var(--chat-reading-track), calc(100% - 24px)); margin: 12px auto; border-radius: var(--radius-panel); background: var(--surface-muted); box-shadow: none; }
 .chat-composer textarea { min-height: 46px; padding: 13px 14px 4px; font-size: var(--type-reading); }
 .chat-composer footer { min-height: 44px; gap: 4px; padding: 2px 8px 8px; border-top: 0; }
+/* Editing a sent message keeps it in place: the bubble becomes an editor that
+   replaces this message and the turns below it in the same conversation. */
+.chat-message.operator.editing { width: 100%; max-width: var(--chat-reading-track); padding: 12px 14px; border: 1px solid var(--blue); background: var(--surface); }
+.chat-message.operator.editing header { display: none; }
+.chat-message.pending-replacement { opacity: 0.45; }
+.chat-message-edit { display: grid; gap: 10px; }
+.chat-message-edit textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-muted); font-size: var(--type-reading); resize: vertical; }
+.chat-message-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.chat-message-edit-actions small { flex: 1 1 200px; color: var(--muted); font-size: var(--type-meta); }
+.chat-replaced-group { width: 100%; max-width: var(--chat-reading-track); margin: 0 auto 28px; color: var(--muted); font-size: var(--type-meta); }
+.chat-replaced-group > summary { display: inline-flex; gap: 6px; align-items: center; width: max-content; padding: 5px 10px; border: 1px solid var(--border); border-radius: var(--radius-control); cursor: pointer; }
+.chat-replaced-group > summary::before { content: "▸"; }
+.chat-replaced-group[open] > summary::before { content: "▾"; }
+.chat-replaced-group > summary::marker, .chat-replaced-group > summary::-webkit-details-marker { content: ""; display: none; }
+.chat-replaced-note { margin: 8px 0 0; }
+.chat-replaced-message { margin-top: 8px; padding: 8px 12px; border-left: 2px solid var(--border); }
+.chat-replaced-message strong { display: block; margin-bottom: 2px; font-weight: var(--weight-semibold); }
+.chat-replaced-message p { margin: 0; white-space: pre-wrap; }
 .chat-message-actions { opacity: 0; }
 .chat-message:hover .chat-message-actions,
 .chat-message:focus-within .chat-message-actions { opacity: 1; }
