@@ -1,16 +1,16 @@
 {
-  "change_digest": "ae1c5e9a083ca6ad99d923bc7ba8b34ae7a0248177ff9c666f026f0e1771e451",
-  "reviewed_by": "Claude review of subagent restart reconciliation",
-  "reason": "SubagentService.reconcile_after_restart marked a child that Core interrupted at restart as INTERRUPTED and then only posted its report when the parent conversation was idle. A parent parked in wait_subagents (turn status WAITING_CALLBACK) survives the restart because ChatService.startup only interrupts ROUTING and FINALIZING turns, so pending_turn returned it, the idle-only branch was skipped, and nothing ever called _resume_waiting_parent: the parent showed 'Waiting for 1 subagent to report.' forever unless an operator posted a manual resume. The INTERRUPTED branch now delivers through _deliver, the same path a settled child uses, which resumes a waiting parent or posts the report once the parent is idle. test_chat_subagents gains a restart scenario with the parent waiting and asserts the parent turn completes and its reply is posted; the existing restart, wait, late-report, stop, limit and deletion scenarios in the same file cover the neighbouring paths.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_subagents.py) is the real-Core journey suite and cannot restart Core mid-turn; the Python scenario simulates the crash against the durable store. No full suites.",
+  "change_digest": "0987aa77a4de017fec3e79fdd2c6b48f1646590247d0694afc160d2513456fb7",
+  "reviewed_by": "Claude review of chat image validation",
+  "reason": "validate_chat_image decoded every upload in full before checking its pixel count, so a few-KB PNG or WebP whose header declares a canvas under Pillow's 178-megapixel bomb error but over Nebula's 40-megapixel cap was decoded to hundreds of MB inside asyncio.to_thread before being refused; a handful of concurrent uploads could exhaust Core's memory. It also compared Pillow's detected MIME type to the declared one literally, and Pillow opens any JPEG whose MP header lists more than one picture (iPhone portrait shots, Samsung depth photos, bursts) as MPO with MIME image/mpo, so those photos were refused with 422 'declared image type does not match its bytes' although they are JPEG files the browser correctly declared as image/jpeg. The size check now runs from the header before load(), and image/mpo is treated as image/jpeg for the declaration check; decoding, transparency handling and preview generation are unchanged. The new test_chat_media covers the MPO acceptance (preview is a plain JPEG), the mismatch refusal, the header-only size refusal (load is patched to fail if called) and a small PNG round trip.",
+  "exclusions": "No frontend tests: no ui/ change; the fix only changes which server-side validation result the existing upload path returns. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the remaining-core fallback for chat_media.py) is the real-Core journey suite; the Python tests construct the MPO and oversized fixtures directly. No full suites.",
   "expected_tests": {
-    "python": 10,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_subagents.py"
+    "tests/v3/test_chat_media.py"
   ],
   "frontend": [],
   "native": [],
