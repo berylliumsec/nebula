@@ -1410,6 +1410,17 @@ class OpenAICompatibleProvider(ModelProvider):
                         served = await self._openrouter_models_served_by(
                             client, {item.slug for item in upstream}
                         )
+                    alias_targets: dict[str, str] = {}
+                    try:
+                        if not response.is_error:
+                            alias_targets = await self._openrouter_alias_targets(
+                                client, response.json()
+                            )
+                    except (
+                        httpx.HTTPError,
+                        ValueError,
+                    ):  # diagnostic-expected: aliases keep the conservative cap; routing is unaffected
+                        alias_targets = {}
                 if response.is_error:
                     return ProviderHealth(
                         provider_id=self.config.id,
@@ -1422,6 +1433,14 @@ class OpenAICompatibleProvider(ModelProvider):
                         ),
                     )
                 descriptors = openrouter_models(response.json())
+                # The account catalog omits alias_target, so aliases arrive without
+                # the one field endpoint discovery needs.
+                descriptors = [
+                    item.model_copy(update={"alias_target": alias_targets[item.id]})
+                    if item.alias_target is None and item.id in alias_targets
+                    else item
+                    for item in descriptors
+                ]
                 detail = "Account model catalog loaded; inference is not yet verified."
                 if served is not None:
                     descriptors = [item for item in descriptors if item.id in served]
@@ -1462,6 +1481,31 @@ class OpenAICompatibleProvider(ModelProvider):
                 detail="OpenRouter model discovery failed. Check the connection and refresh.",
             )
 
+    async def _openrouter_public_catalog(
+        self, client: httpx.AsyncClient, params: dict[str, str]
+    ) -> list[ModelDescriptor]:
+        """Page the public catalog. Membership still comes from /models/user."""
+
+        models: list[ModelDescriptor] = []
+        for _page in range(20):
+            response = await client.get(
+                self._path("/v1/models"), params=params, timeout=10.0
+            )
+            response.raise_for_status()
+            payload = response.json()
+            models.extend(openrouter_models(payload))
+            links = payload.get("links") if isinstance(payload, dict) else None
+            following = links.get("next") if isinstance(links, dict) else None
+            offset = (
+                httpx.URL(following).params.get("offset")
+                if isinstance(following, str)
+                else None
+            )
+            if not offset:
+                break
+            params = {**params, "offset": offset}
+        return models
+
     async def _openrouter_models_served_by(
         self, client: httpx.AsyncClient, directory: set[str]
     ) -> set[str]:
@@ -1477,26 +1521,39 @@ class OpenAICompatibleProvider(ModelProvider):
         ]
         if not known:
             return set()
-        served: set[str] = set()
         params = {"providers": ",".join(known)}
-        for _page in range(20):
-            response = await client.get(
-                self._path("/v1/models"), params=params, timeout=10.0
-            )
-            response.raise_for_status()
-            payload = response.json()
-            served.update(item.id for item in openrouter_models(payload))
-            links = payload.get("links") if isinstance(payload, dict) else None
-            following = links.get("next") if isinstance(links, dict) else None
-            offset = (
-                httpx.URL(following).params.get("offset")
-                if isinstance(following, str)
-                else None
-            )
-            if not offset:
-                break
-            params = {**params, "offset": offset}
-        return served
+        return {
+            item.id for item in await self._openrouter_public_catalog(client, params)
+        }
+
+    async def _openrouter_alias_targets(
+        self, client: httpx.AsyncClient, account_payload: Any
+    ) -> dict[str, str]:
+        """Exact model each alias in the account catalog redirects to.
+
+        `/models/user` describes aliases without `alias_target`, so the model an
+        alias serves is only published in the public catalog. Nothing here decides
+        which models the operator may use; it fills one missing field on models
+        the account catalog already returned.
+        """
+
+        data = (
+            account_payload.get("data") if isinstance(account_payload, dict) else None
+        )
+        aliases = {
+            item["id"]
+            for item in (data if isinstance(data, list) else [])
+            if isinstance(item, dict)
+            and isinstance(item.get("id"), str)
+            and item["id"].startswith("~")
+        }
+        if not aliases:
+            return {}
+        return {
+            item.id: item.alias_target
+            for item in await self._openrouter_public_catalog(client, {})
+            if item.id in aliases and item.alias_target
+        }
 
     @property
     def openrouter_allowed_providers(self) -> list[str]:
