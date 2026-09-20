@@ -488,6 +488,81 @@ def test_openrouter_unverified_routes_use_safe_fallback_ceiling():
     assert limits.estimated is True
 
 
+def test_unverified_openrouter_sizes_to_the_primary_route_window():
+    profile = _profile(context_window=200_000, max_output_tokens=32_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+            "primary_route_context_window": 131_072,
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile, model="author/model-a", requested_output_tokens=32_000
+    )
+
+    assert limits.context_window == 131_072
+    # The same route publishes the completion limit, so the flat 2K floor lifts.
+    assert limits.max_output_tokens == 32_000
+    assert limits.route_limits_verified is False
+    assert limits.route_limits_required is True
+    assert limits.estimated is True
+
+
+def test_primary_route_window_never_widens_a_configured_ceiling():
+    profile = _profile(context_window=64_000, max_output_tokens=4_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+            "primary_route_context_window": 131_072,
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile, model="author/model-a", requested_output_tokens=32_000
+    )
+
+    assert limits.context_window == 64_000
+    assert limits.max_output_tokens == 4_000
+
+
+def test_verified_routes_outrank_the_primary_route_window():
+    profile = _profile(context_window=200_000, max_output_tokens=32_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": 200_000,
+            "max_output_tokens": 32_000,
+            "primary_route_context_window": 131_072,
+            "route_limits_verified": True,
+            "route_limits_checked_at": "2026-09-20T00:00:00+00:00",
+            "route_limits": [
+                {
+                    "provider_slug": "alpha",
+                    "context_window": 98_304,
+                    "max_input_tokens": 98_304,
+                    "max_output_tokens": 16_384,
+                    "status": 0,
+                    "supported_parameters": ["tools"],
+                }
+            ],
+        }
+    ]
+
+    limits = resolve_context_limits(profile, model="author/model-a")
+
+    assert limits.context_window == 98_304
+    assert limits.route_limits_verified is True
+    assert limits.estimated is False
+
+
 def test_token_estimation_and_security_identifier_retrieval_are_deterministic():
     assert estimate_tokens("hello") == 2
     assert estimate_tokens("你好", message_count=1) >= 10

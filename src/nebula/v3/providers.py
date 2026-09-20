@@ -1328,6 +1328,11 @@ class OpenAICompatibleProvider(ModelProvider):
                 # Operator-selected upstream providers: never route elsewhere.
                 payload["provider"] = {**payload.get("provider", {}), "only": allowed}
             payload["reasoning"] = {"exclude": False}
+            # OpenRouter compresses the middle of an oversized prompt by default
+            # on endpoints of 8K or less. Nebula sizes its own context and
+            # recovers from a rejected request, so take the error over silent
+            # truncation of material the caller believes was sent.
+            payload["plugins"] = [{"id": "context-compression", "enabled": False}]
             if request.tools:
                 # With require_parameters, any optional parameter the exact
                 # model does not advertise leaves no eligible endpoint.

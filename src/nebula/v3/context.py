@@ -273,15 +273,28 @@ def resolve_context_limits(
         input_limit = min(value for value in (input_limit, route_input_limit) if value)
     elif profile.provider_type == "openrouter":
         # Aggregate model metadata is not proof that every automatic route can
-        # accept that window. Stay conservative until the endpoint set is known.
+        # accept that window: `context_window` is the maximum across endpoints
+        # and automatic routing may land on a smaller one. Hold the request to
+        # the primary route OpenRouter publishes instead. Without that figure
+        # nothing bounds the routing set, so only the flat floor is safe.
+        primary_window = (
+            _positive_option(descriptor.get("primary_route_context_window"), 0)
+            if isinstance(descriptor, dict)
+            else 0
+        )
+        window_cap = primary_window or DEFAULT_CONTEXT_WINDOW
+        model_window = model_window or primary_window
         if model_window:
-            model_window = min(model_window, DEFAULT_CONTEXT_WINDOW)
+            model_window = min(model_window, window_cap)
         if configured_window:
-            configured_window = min(configured_window, DEFAULT_CONTEXT_WINDOW)
-        if model_output:
-            model_output = min(model_output, DEFAULT_MAX_OUTPUT_TOKENS)
-        if configured_output:
-            configured_output = min(configured_output, DEFAULT_MAX_OUTPUT_TOKENS)
+            configured_window = min(configured_window, window_cap)
+        if not primary_window:
+            # `max_output_tokens` is that same route's completion limit, so it
+            # needs no floor of its own once the route's window is known.
+            if model_output:
+                model_output = min(model_output, DEFAULT_MAX_OUTPUT_TOKENS)
+            if configured_output:
+                configured_output = min(configured_output, DEFAULT_MAX_OUTPUT_TOKENS)
     if model_window:
         context_window = min(
             value for value in (model_window, configured_window) if value
