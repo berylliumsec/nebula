@@ -44,12 +44,23 @@ const STATE_NAMES: Record<ChatGoal["status"], string> = {
   cancelled: "cancelled",
 };
 
-export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, onChange }: {
+export interface ProviderGoalDraft {
+  objective: string;
+  completionCriteria: string[];
+  plan: string[];
+  tokenBudget?: number;
+  timeBudgetSeconds?: number;
+  stepBudget?: number;
+  childBudget?: number;
+}
+
+export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, onCreate, onChange }: {
   api: ApiClient;
-  sessionId: string;
+  sessionId?: string;
   goal?: ChatGoal;
   skills?: HarnessSkillSummary[];
   liveTokenEstimate?: number;
+  onCreate?(draft: ProviderGoalDraft): Promise<ChatGoal>;
   onChange(goal: ChatGoal): void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -78,7 +89,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   }, [goal?.status]);
 
   const act = async (action: GoalAction) => {
-    if (!goal || busy) return;
+    if (!goal || !sessionId || busy) return;
     setBusy(true); setError(undefined);
     const body = (revision: number) => ({
       expectedRevision: revision,
@@ -139,7 +150,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     if (!objective.trim() || !completionCriteria.length || busy) return;
     setBusy(true); setError(undefined);
     try {
-      const created = await api.createChatGoal(sessionId, {
+      const draft: ProviderGoalDraft = {
         objective: objective.trim(),
         completionCriteria,
         plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
@@ -147,7 +158,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
         ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
         ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
         ...(childBudget ? { childBudget: Number(childBudget) } : {}),
-      });
+      };
+      let created: ChatGoal;
+      if (sessionId) created = await api.createChatGoal(sessionId, draft);
+      else if (onCreate) created = await onCreate(draft);
+      else throw new Error("Save the conversation before adding a goal.");
       onChange(created); setExpanded(false);
     } catch (caught) {
       void logCaughtDiagnostic("interface.goal.create_failed", "A conversation goal could not be created.", caught, "goal");
@@ -162,7 +177,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   };
 
   const saveSkills = async () => {
-    if (!goal || busy) return;
+    if (!goal || !sessionId || busy) return;
     const available = new Map([
       ...(skills ?? []).map(skill => [skill.path, skill] as const),
       ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),

@@ -16,7 +16,7 @@ import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
-import { estimateLiveTokens, ProviderGoalPanel } from "../components/ProviderGoalPanel";
+import { estimateLiveTokens, ProviderGoalPanel, type ProviderGoalDraft } from "../components/ProviderGoalPanel";
 import { ProviderSessionAdvanced } from "../components/ProviderSessionAdvanced";
 import { isGuideLayerTarget, useGuideAction } from "../guides/guideActions";
 import { ShowMeHow } from "../guides/ShowMeHow";
@@ -166,6 +166,7 @@ import {
 import { beginGuardedStream, detachChatStream } from "./chatStreamLifecycle";
 import { elapsedDetail, elapsedSince, formatLiveElapsed, formatTurnElapsed } from "./turnElapsed";
 import {
+  cancelActiveAssistantMessage,
   cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
@@ -814,6 +815,21 @@ export function SessionsPage() {
   const abortRef = useRef<AbortController | undefined>(undefined);
   const streamBackendRef = useRef<ChatCompletionRequest["backend"] | undefined>(undefined);
   const activeProviderTurnIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (runtimeKind !== "provider" || authoritativeState?.execution !== "cancelled") return;
+    const activeTurnId = activeProviderTurnIdRef.current;
+    if (activeTurnId && authoritativeState.turn_id && activeTurnId !== authoritativeState.turn_id) return;
+    // Core is authoritative even when another tab stopped the turn or this
+    // viewer missed the final stream event. Never leave a terminal turn's
+    // temporary bubble presenting itself as active provider work.
+    abortRef.current?.abort();
+    setMessages((current) => cancelActiveAssistantMessage(current));
+    setPendingResponse(undefined);
+    setWaitingCallback(undefined);
+    setChatReconnecting(false);
+    setSending(false);
+    activeProviderTurnIdRef.current = undefined;
+  }, [runtimeKind, authoritativeState?.execution, authoritativeState?.revision, authoritativeState?.turn_id]);
   const detachedStreamsRef = useRef(new WeakSet<AbortController>());
   const harnessFollowDetachRef = useRef<(() => void) | undefined>(undefined);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -1762,6 +1778,23 @@ export function SessionsPage() {
       setSessionId(selectedId);
       openSessionChatView(selectedId, true);
     }
+  };
+
+  const createGoalConversation = async (draft: ProviderGoalDraft): Promise<ChatGoal> => {
+    if (!api || !engagement) throw new Error("Select a project before adding a goal.");
+    if (!providerId || !model.trim()) throw new Error("Choose a provider and model before adding a goal.");
+    const created = await api.createChatGoalConversation({
+      engagementId: engagement.id,
+      providerId,
+      model: model.trim(),
+      toolsEnabled: canUseTools,
+      mcpServerIds: selectedMcpIds,
+      hookIds: selectedHookIds,
+      ...draft,
+    });
+    setProviderGoal(created.goal);
+    await refreshSessions(created.session.id);
+    return created.goal;
   };
 
   const refreshSessionActivity = useCallback(async () => {
@@ -3883,11 +3916,22 @@ export function SessionsPage() {
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
     abortRef.current?.abort();
+    activeProviderTurnIdRef.current = undefined;
     setPendingResponse(undefined);
     setHarnessProgress(undefined);
+    setMessages((current) => cancelActiveAssistantMessage(current));
     setSending(false);
     if (runtimeKind === "harness" && reloadSessionId) {
       await selectSession(reloadSessionId, false);
+    } else if (api && reloadSessionId) {
+      try {
+        setProviderGoal(await api.getChatGoal(reloadSessionId));
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) {
+          void logCaughtDiagnostic("interface.sessions.goal_stop_refresh_failed", "The paused goal could not be refreshed after stopping its response.", error, "goal");
+          setProviderGoalError(error instanceof Error ? error.message : "Goal status could not be refreshed.");
+        }
+      }
     }
     return true;
   };
@@ -4495,7 +4539,7 @@ export function SessionsPage() {
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {runtimeKind === "provider" && sessionId && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} onChange={setProviderGoal} />}</>}
+              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} onCreate={createGoalConversation} onChange={setProviderGoal} />}</>}
               {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} authoritativeStatus={authoritativeState?.detail} />}
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">

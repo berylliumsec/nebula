@@ -129,6 +129,29 @@ def test_goal_requires_explicit_start_and_revision_safe_lifecycle(tmp_path):
     assert store.count(ChatGoal) == 1
 
 
+def test_running_goal_read_reports_live_elapsed_without_changing_revision(
+    tmp_path, monkeypatch
+):
+    _, service = setup_goal(tmp_path)
+    created = service.create(
+        "session", GoalCreate(objective="Inspect", completion_criteria=["Done"])
+    )
+    started_at = datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(chat_goals_module, "utc_now", lambda: started_at)
+    running = service.write(
+        "session", GoalWrite(expected_revision=created.revision, action="start")
+    )
+    monkeypatch.setattr(
+        chat_goals_module, "utc_now", lambda: started_at + timedelta(seconds=125)
+    )
+
+    snapshot = service.read("session")
+
+    assert snapshot.elapsed_seconds == pytest.approx(125)
+    assert snapshot.revision == running.revision
+    assert service.get("session").elapsed_seconds == 0
+
+
 def test_goal_block_and_cancel_are_explicit_and_session_delete_cascades(tmp_path):
     store, service = setup_goal(tmp_path)
     goal = service.create(

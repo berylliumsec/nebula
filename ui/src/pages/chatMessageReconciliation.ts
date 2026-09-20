@@ -50,6 +50,21 @@ export function cancelStreamingAssistantMessage<T extends ReconciledConversation
     : message);
 }
 
+/** Settle the newest live assistant bubble when an operator stop wins the stream race. */
+export function cancelActiveAssistantMessage<T extends ReconciledConversationMessage>(
+  messages: T[],
+  detail = "Response stopped by the operator.",
+  now = Date.now(),
+): T[] {
+  const active = [...messages].reverse().find((message) => (
+    message.role === "assistant"
+    && (message.state === "streaming" || message.state === "waiting_approval")
+  ));
+  return active
+    ? cancelStreamingAssistantMessage(messages, active.id, detail, now)
+    : messages;
+}
+
 export function reconcileCompletedAssistantMessage(
   messages: ReconciledConversationMessage[],
   completed: CompletedAssistantMessage,

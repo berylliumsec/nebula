@@ -52,6 +52,24 @@ it("creates a durable draft from explicit objective and criteria", async () => {
   expect(onChange).toHaveBeenCalledWith(draft);
 });
 
+it("creates the conversation with its goal before the first message", async () => {
+  const onCreate = vi.fn().mockResolvedValue(draft);
+  const onChange = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} onCreate={onCreate} onChange={onChange} /></DialogProvider>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Add goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Start with a goal" } });
+  fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "First turn is linked" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+
+  await waitFor(() => expect(onCreate).toHaveBeenCalledWith({
+    objective: "Start with a goal",
+    completionCriteria: ["First turn is linked"],
+    plan: [],
+  }));
+  expect(onChange).toHaveBeenCalledWith(draft);
+});
+
 it("records explicit blocked and completed outcomes", async () => {
   const running: ChatGoal = { ...draft, status: "running", revision: 2 };
   const blocked: ChatGoal = { ...running, status: "blocked", blockedReason: "No new evidence", revision: 3 };

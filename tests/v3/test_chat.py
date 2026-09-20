@@ -1573,6 +1573,56 @@ def test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded(tmp_path
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("turn_is_goal_linked", [True, False])
+def test_cancelled_turn_pauses_the_session_goal_even_when_created_late(
+    tmp_path, turn_is_goal_linked
+):
+    store = NebulaStore(tmp_path / f"cancel-goal-{turn_is_goal_linked}.db")
+    engagement = store.create(Engagement(id="eng-cancel-goal", name="Goal stop"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-cancel-goal",
+            engagement_id=engagement.id,
+            title="Goal stop",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-cancel-goal",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Do bounded work",
+            completion_criteria=["Work is verified"],
+            status=ChatGoalStatus.RUNNING,
+            started_at=utc_now(),
+            active_since=utc_now(),
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-cancel-goal",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id if turn_is_goal_linked else None,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+
+    cancelled = ChatService(store).cancel_turn(turn.id)
+
+    paused = store.get(ChatGoal, goal.id)
+    assert cancelled.status == ChatTurnStatus.CANCELLED
+    assert paused.status == ChatGoalStatus.PAUSED
+    assert paused.active_since is None
+    assert paused.blocked_reason == (
+        "Response stopped by the operator. Resume the goal when ready."
+    )
+
+
 def test_provider_turn_and_goal_have_one_durable_worker_owner(tmp_path):
     store = NebulaStore(tmp_path / "chat-worker-owner.db")
     engagement = store.create(Engagement(id="eng-owner", name="Worker owner"))

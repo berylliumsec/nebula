@@ -18,6 +18,7 @@ from nebula.v3.domain import (
     Approval,
     ApprovalStatus,
     Asset,
+    ChatGoal,
     ChatSession,
     ChatGoalStatus,
     ChatTurn,
@@ -151,6 +152,75 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     )
     assert removed.status_code == 200, removed.text
     assert removed.json()["skill_snapshots"] == []
+
+
+def test_goal_conversation_exists_before_its_first_message(api):
+    client, store, _ = api
+    store.create(Engagement(id="goal-first-project", name="Goal first"))
+    provider = store.create(
+        ProviderProfile(
+            id="goal-first-provider",
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+        )
+    )
+
+    rejected = client.post(
+        "/api/v1/chat/goal-conversations",
+        headers=_auth(),
+        json={
+            "engagement_id": "goal-first-project",
+            "provider_id": provider.id,
+            "model": "missing-model",
+            "objective": "Invalid model must not create partial state",
+            "completion_criteria": ["Nothing is persisted"],
+        },
+    )
+    assert rejected.status_code == 409, rejected.text
+    assert store.list_entities(ChatSession) == []
+    assert store.list_entities(ChatGoal) == []
+
+    response = client.post(
+        "/api/v1/chat/goal-conversations",
+        headers=_auth(),
+        json={
+            "engagement_id": "goal-first-project",
+            "provider_id": provider.id,
+            "model": "model-a",
+            "tools_enabled": True,
+            "hook_ids": ["audit"],
+            "objective": "Investigate before the first message",
+            "completion_criteria": ["The first turn is goal linked"],
+            "plan": ["Inspect", "Validate"],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    created = response.json()
+    session = created["session"]
+    goal = created["goal"]
+    assert session["title"] == "Investigate before the first message"
+    assert session["metadata"] == {
+        "tools_enabled": True,
+        "mcp_server_ids": [],
+        "hook_ids": ["audit"],
+        "message_count": 0,
+        "last_sequence": 0,
+        "initial_title_state": "pending",
+    }
+    assert goal["session_id"] == session["id"]
+    assert goal["status"] == ChatGoalStatus.DRAFT.value
+    assert store.list_session_entities(ChatTurn, session["id"]) == []
+
+    started = client.post(
+        f"/api/v1/chat/sessions/{session['id']}/goal/actions",
+        headers=_auth(),
+        json={"expected_revision": goal["revision"], "action": "start"},
+    )
+    assert started.status_code == 200, started.text
+    assert started.json()["status"] == ChatGoalStatus.RUNNING.value
 
 
 def test_native_skill_catalog_uses_shared_agents_root_not_harness_roots(api, tmp_path):

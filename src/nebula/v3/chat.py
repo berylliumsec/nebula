@@ -1569,6 +1569,14 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
                     self._release_execution(prepared)
+                self._pause_running_session_goal(
+                    turn.session_id,
+                    (
+                        "Response stopped by the operator. Resume the goal when ready."
+                        if stopped
+                        else "Response failed before the goal finished. Review the error, then resume the goal."
+                    ),
+                )
             if turn is not None:
                 try:
                     await self.subagents.turn_settled(turn.id)
@@ -5412,9 +5420,56 @@ class ChatService:
             expected_revision=turn.revision,
         )
 
+    def _pause_running_session_goal(
+        self, session_id: str, reason: str
+    ) -> ChatGoal | None:
+        """Pause the conversation goal whenever its active response settles early.
+
+        The session lookup deliberately covers a goal created after the turn
+        began, when the immutable turn record cannot contain that goal's id.
+        """
+
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        goals = ChatGoalService(self.store)
+        last_error: ConflictError | None = None
+        for _ in range(3):
+            try:
+                goal = goals.get(session_id)
+            except NotFoundError:  # diagnostic-expected: goals are optional
+                return None
+            if goal.status != ChatGoalStatus.RUNNING:
+                return goal
+            try:
+                return goals.write(
+                    session_id,
+                    GoalWrite(
+                        expected_revision=goal.revision,
+                        action="pause",
+                        reason=reason,
+                    ),
+                )
+            except ConflictError as exc:  # diagnostic-expected: reread a concurrent goal update
+                last_error = exc
+        if last_error is not None:
+            record_caught_exception(
+                "chat",
+                "chat.goal.pause_after_turn_failed",
+                "A running goal could not be paused after its response stopped.",
+                last_error,
+                stage="provider-turn-stop",
+            )
+        return None
+
     def cancel_turn(self, turn_id: str) -> ChatTurn:
         turn = self.store.get(ChatTurn, turn_id)
-        if turn.status in {ChatTurnStatus.COMPLETE, ChatTurnStatus.CANCELLED}:
+        if turn.status == ChatTurnStatus.COMPLETE:
+            return turn
+        if turn.status == ChatTurnStatus.CANCELLED:
+            self._pause_running_session_goal(
+                turn.session_id,
+                "Response stopped by the operator. Resume the goal when ready.",
+            )
             return turn
         if turn.approval_id:
             approval = self.store.get(Approval, turn.approval_id)
@@ -5491,6 +5546,10 @@ class ChatService:
                     },
                     expected_revision=goal.revision,
                 )
+        self._pause_running_session_goal(
+            turn.session_id,
+            "Response stopped by the operator. Resume the goal when ready.",
+        )
         return cancelled
 
     def session_messages(

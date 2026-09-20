@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  cancelActiveAssistantMessage,
   cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
@@ -72,5 +73,16 @@ describe("cancelStreamingAssistantMessage", () => {
       id: "assistant-temp", content: "Partial", state: "cancelled", elapsedMs: 30_000, detail: "Response stopped by the operator.",
     });
     expect(result[0]).toBe(user);
+  });
+
+  it("settles the newest live bubble when the cancelled stream event loses the stop race", () => {
+    const older = { ...temporary, id: "assistant-old", state: "complete" as const };
+    const result = cancelActiveAssistantMessage(
+      [older, user, temporary],
+      undefined,
+      Date.parse("2026-01-01T00:00:31Z"),
+    );
+    expect(result[0]).toBe(older);
+    expect(result[2]).toMatchObject({ state: "cancelled", detail: "Response stopped by the operator." });
   });
 });

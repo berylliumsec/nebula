@@ -397,6 +397,100 @@ test("assistant upgrade real Core retains editable goal skills through source lo
   }
 });
 
+test("assistant upgrade real Core creates a goal before the first turn and pauses it on stop", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 30_000 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Goal lifecycle model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Goal lifecycle LAN browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Goal lifecycle LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    // Pairing returns to the workspace's saved surface; enter chat explicitly.
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "Assistant settings" });
+    await settings.getByRole("combobox", { name: "Chat runtime" }).selectOption("provider");
+    await settings.getByRole("combobox", { name: "Chat provider" }).selectOption(provider.id);
+    await expect(settings.getByRole("combobox", { name: "Chat model" })).toHaveValue("security-model", { timeout: 20_000 });
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+    await page.getByRole("button", { name: "Add goal" }).click();
+    await page.getByRole("textbox", { name: "Objective" }).fill("Prove goal-first conversation lifecycle");
+    await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nStopping pauses the goal");
+    await page.getByRole("button", { name: "Save draft" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
+    const sessionId = new URL(page.url()).searchParams.get("session")!;
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("draft");
+    const emptyMessages = await api.get(`chat/sessions/${sessionId}/messages`);
+    expect(emptyMessages.ok(), await emptyMessages.text()).toBe(true);
+    expect(await emptyMessages.json()).toEqual([]);
+    expect((await new AxeBuilder({ page }).include(".chat-goal-panel").analyze()).violations).toEqual([]);
+
+    await page.getByRole("button", { name: "Start" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    await composer.fill("Begin the goal-linked work and keep working until stopped.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Stop response" }).click();
+    const goalPanel = page.getByRole("region", { name: "Conversation goal" });
+    await expect(goalPanel).toContainText("paused", { timeout: 20_000 });
+    await expect(goalPanel).toContainText("Response stopped by the operator");
+    await expect(page.getByText("Waiting for provider", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/^Stopped(?: ·|$)/)).toBeVisible();
+    const messages = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string }>;
+    expect(messages.filter(message => message.role === "user")).toHaveLength(1);
+    const persistedGoal = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { linked_turn_ids: string[]; status: string };
+    expect(persistedGoal.linked_turn_ids).toHaveLength(1);
+    expect(persistedGoal.status).toBe("paused");
+    const sessionState = await (await api.get(`chat/sessions/${sessionId}/state`)).json() as { execution: string; busy: boolean; actions: string[] };
+    expect(sessionState).toMatchObject({ execution: "cancelled", busy: false });
+    expect(sessionState.actions).not.toContain("stop");
+
+    await page.reload();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
+    await page.getByRole("button", { name: "Resume" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 async function writeProjectHook(
   workspaceRoot: string,
   hookId: string,

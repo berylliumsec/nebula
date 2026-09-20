@@ -8877,6 +8877,43 @@ export class ApiClient {
     ).then(mapChatGoal);
   }
 
+  createChatGoalConversation(body: {
+    engagementId: string;
+    providerId: string;
+    model: string;
+    toolsEnabled: boolean;
+    mcpServerIds: string[];
+    hookIds: string[];
+    objective: string;
+    completionCriteria: string[];
+    plan?: string[];
+    tokenBudget?: number;
+    timeBudgetSeconds?: number;
+    stepBudget?: number;
+    childBudget?: number;
+  }): Promise<{ session: ChatSessionSummary; goal: ChatGoal }> {
+    return this.request<{session: WireChatSession; goal: Record<string, any>}>(
+      "chat/goal-conversations", {
+        method: "POST",
+        body: JSON.stringify({
+          engagement_id: body.engagementId,
+          provider_id: body.providerId,
+          model: body.model,
+          tools_enabled: body.toolsEnabled,
+          mcp_server_ids: body.mcpServerIds,
+          hook_ids: body.hookIds,
+          objective: body.objective,
+          completion_criteria: body.completionCriteria,
+          plan: body.plan ?? [],
+          token_budget: body.tokenBudget,
+          time_budget_seconds: body.timeBudgetSeconds,
+          step_budget: body.stepBudget,
+          child_budget: body.childBudget,
+        }),
+      },
+    ).then(value => ({ session: mapChatSession(value.session), goal: mapChatGoal(value.goal) }));
+  }
+
   writeChatGoal(sessionId: string, body: {
     expectedRevision: number;
     action: "start" | "pause" | "resume" | "cancel" | "block" | "complete";

@@ -7,7 +7,7 @@ from typing import Callable, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
@@ -15,6 +15,9 @@ from .domain import (
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    Engagement,
+    McpServerProfile,
+    ProviderProfile,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
@@ -44,6 +47,30 @@ class GoalSkillWrite(BaseModel):
     skills: list[SkillSelection] = Field(default_factory=list, max_length=20)
 
 
+class GoalConversationCreate(GoalCreate):
+    """Create a durable provider conversation before its first message."""
+
+    engagement_id: str = Field(min_length=1, max_length=200)
+    provider_id: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
+    tools_enabled: bool = False
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    hook_ids: list[str] = Field(default_factory=list, max_length=32)
+
+    @model_validator(mode="after")
+    def selections_are_unique(self) -> "GoalConversationCreate":
+        if len(self.mcp_server_ids) != len(set(self.mcp_server_ids)):
+            raise ValueError("MCP server selection contains duplicates")
+        if len(self.hook_ids) != len(set(self.hook_ids)):
+            raise ValueError("hook selection contains duplicates")
+        return self
+
+
+class GoalConversationCreated(BaseModel):
+    session: ChatSession
+    goal: ChatGoal
+
+
 class ChatGoalService:
     def __init__(self, store: NebulaStore):
         self.store = store
@@ -56,6 +83,15 @@ class ChatGoalService:
         if len(goals) > 1:
             raise ConflictError("conversation has more than one authoritative goal")
         return goals[0]
+
+    def read(self, session_id: str) -> ChatGoal:
+        """Return current presentation state without advancing durable revision."""
+        goal = self.get(session_id)
+        if goal.status != ChatGoalStatus.RUNNING:
+            return goal
+        return goal.model_copy(
+            update={"elapsed_seconds": goal.active_elapsed_seconds(utc_now())}
+        )
 
     def create(self, session_id: str, body: GoalCreate) -> ChatGoal:
         session = self.store.get(ChatSession, session_id)
@@ -84,6 +120,58 @@ class ChatGoalService:
             )
         )
 
+    def create_conversation(
+        self, body: GoalConversationCreate
+    ) -> GoalConversationCreated:
+        """Persist an empty conversation and its goal draft as one unit."""
+
+        self.store.get(Engagement, body.engagement_id)
+        provider = self.store.get(ProviderProfile, body.provider_id)
+        if not provider.enabled:
+            raise ConflictError("the selected provider is disabled")
+        if provider.model_allowlist and body.model not in provider.model_allowlist:
+            raise ConflictError(
+                f"model {body.model!r} is not allowed by provider {provider.id!r}"
+            )
+        for profile_id in body.mcp_server_ids:
+            profile = self.store.get(McpServerProfile, profile_id)
+            if not profile.enabled:
+                raise ConflictError(
+                    f"MCP server {profile.name!r} is disabled and cannot be selected"
+                )
+        session_id = str(uuid4())
+        title = " ".join(body.objective.split())[:300] or "Goal conversation"
+        session = ChatSession(
+            id=session_id,
+            engagement_id=body.engagement_id,
+            title=title,
+            provider_profile_id=provider.id,
+            model=body.model,
+            metadata={
+                "tools_enabled": body.tools_enabled,
+                "mcp_server_ids": body.mcp_server_ids,
+                "hook_ids": body.hook_ids,
+                "message_count": 0,
+                "last_sequence": 0,
+                "initial_title_state": "pending",
+            },
+        )
+        goal = ChatGoal(
+            id=str(uuid4()),
+            engagement_id=body.engagement_id,
+            session_id=session_id,
+            objective=body.objective,
+            completion_criteria=body.completion_criteria,
+            plan=body.plan,
+            token_budget=body.token_budget,
+            time_budget_seconds=body.time_budget_seconds,
+            step_budget=body.step_budget,
+            child_budget=body.child_budget,
+        )
+        with self.store.transaction() as transaction:
+            transaction.add_all([session, goal])
+        return GoalConversationCreated(session=session, goal=goal)
+
     def write(self, session_id: str, body: GoalWrite) -> ChatGoal:
         goal = self.get(session_id)
         if body.expected_revision != goal.revision:
@@ -109,6 +197,10 @@ class ChatGoalService:
                 "paused_at": now,
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
+                "blocked_reason": body.reason,
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
             }
             propagate = ChatGoalStatus.PAUSED
         elif body.action == "resume":
@@ -134,6 +226,9 @@ class ChatGoalService:
                 "completed_at": now,
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
             }
             propagate = ChatGoalStatus.CANCELLED
         elif body.action == "block":
@@ -147,6 +242,9 @@ class ChatGoalService:
                 "consecutive_stalls": max(3, goal.consecutive_stalls),
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
             }
         else:
             if goal.status != ChatGoalStatus.RUNNING:
@@ -160,6 +258,9 @@ class ChatGoalService:
                 "completion_evidence": body.completion_evidence,
                 "active_since": None,
                 "elapsed_seconds": goal.active_elapsed_seconds(now),
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
             }
         # Children are read before the unit of work opens and written inside
         # it, after the parent's guarded update: a revision conflict on either
@@ -335,9 +436,19 @@ def goals_router(
     router = APIRouter(tags=["chat"])
     service = ChatGoalService(store)
 
+    @router.post(
+        "/chat/goal-conversations",
+        response_model=GoalConversationCreated,
+        status_code=201,
+    )
+    def create_goal_conversation(
+        body: GoalConversationCreate,
+    ) -> GoalConversationCreated:
+        return service.create_conversation(body)
+
     @router.get("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
     def get_goal(session_id: str) -> ChatGoal:
-        return service.get(session_id)
+        return service.read(session_id)
 
     @router.post("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
     def create_goal(session_id: str, body: GoalCreate) -> ChatGoal:
