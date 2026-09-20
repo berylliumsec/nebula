@@ -108,11 +108,19 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     };
   }, [controlsOpen]);
 
+  const configRef = useRef(config);
+  configRef.current = config;
+  const analysisEnabled = config.suggestNextSteps || config.takeNotes;
+  const analysisBackendId = config.backendKind === "harness" ? config.harnessProfileId : config.providerId;
+  const analysisModel = config.model;
   useEffect(() => {
-    const backendId = config.backendKind === "harness" ? config.harnessProfileId : config.providerId;
-    if (savingToggle || (!config.suggestNextSteps && !config.takeNotes) || !runtimeStatus.ready || !backendId || !config.model) return;
+    if (savingToggle || !analysisEnabled || !runtimeStatus.ready || !analysisBackendId || !analysisModel) return;
     let active = true;
     const tick = async () => {
+      // Read the latest saved config through a ref: refresh() stores a fresh
+      // object every tick, and depending on it re-armed this effect and ran
+      // tick again at once instead of every 3 s.
+      const current = configRef.current;
       try {
         const [executions, missions, results] = await Promise.all([
           api.listExecutions(engagementId, { limit: 30 }),
@@ -123,7 +131,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
         const next = executions.items.filter((item) => ["completed", "failed", "timed_out"].includes(item.status) && !known.has(item.id)).sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))[0];
         if (next) {
           setBusy(true);
-          let generated = await api.generateExecutionDraft(next.id, config.providerId ?? "harness", config.model!, config.cloudConfirmed, config);
+          let generated = await api.generateExecutionDraft(next.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
           for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
             await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
             generated = await api.getGeneratedDraft(generated.id);
@@ -134,7 +142,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
             .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0];
           if (mission) {
             setBusy(true);
-            let generated = await api.generateMissionDraft(mission.id, config.providerId ?? "harness", config.model!, config.cloudConfirmed, config);
+            let generated = await api.generateMissionDraft(mission.id, current.providerId ?? "harness", current.model!, current.cloudConfirmed, current);
             for (let attempt = 0; attempt < 150 && generated.status === "generating"; attempt += 1) {
               await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
               generated = await api.getGeneratedDraft(generated.id);
@@ -150,7 +158,7 @@ export function PostToolAssistant({ api, engagementId, providers, harnesses, onR
     void tick();
     const timer = globalThis.setInterval(() => void tick(), 3000);
     return () => { active = false; globalThis.clearInterval(timer); };
-  }, [api, config, engagementId, refresh, runtimeStatus.ready, savingToggle]);
+  }, [analysisBackendId, analysisEnabled, analysisModel, api, engagementId, refresh, runtimeStatus.ready, savingToggle]);
 
   const toggle = async (key: "suggestNextSteps" | "takeNotes") => {
     const enabled = !config[key];

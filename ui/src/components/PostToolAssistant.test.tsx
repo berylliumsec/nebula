@@ -78,6 +78,26 @@ describe("PostToolAssistant", () => {
     expect(screen.queryByRole("link", { name: "Open Settings" })).toBeNull();
   });
 
+  it("polls finished work every few seconds instead of continuously", async () => {
+    const config: PostToolAssistantConfig = {
+      suggestNextSteps: true,
+      takeNotes: false,
+      backendKind: "harness",
+      harnessProfileId: harness.id,
+      model: harness.defaultModel,
+      cloudConfirmed: false,
+    };
+    const { api } = apiFor(config);
+    // Core answers every read with a fresh object, as any JSON client does.
+    (api.getPostToolAssistant as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ ...config }));
+    render(<PostToolAssistant api={api} engagementId="project-1" providers={[]} harnesses={[harness]} onRun={vi.fn()} />);
+
+    await waitFor(() => expect(api.listExecutions).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(api.listExecutions).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks enablement before runtime setup and explains how to resolve it", async () => {
     const user = userEvent.setup();
     const config: PostToolAssistantConfig = {
