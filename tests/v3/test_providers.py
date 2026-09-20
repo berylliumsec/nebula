@@ -2733,3 +2733,495 @@ def test_streaming_tool_calls_are_keyed_by_index_or_arrival_order():
     assert [(call.id, call.name, call.arguments) for call in calls] == [
         ("call_1", "lookup_asset", {"address": "x"})
     ]
+
+
+def _bedrock_client(monkeypatch, observed: dict, content: list[dict]):
+    class Client:
+        def converse(self, **kwargs):
+            observed.update(kwargs)
+            return {
+                "output": {"message": {"role": "assistant", "content": content}},
+                "stopReason": "tool_use",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            }
+
+    monkeypatch.setattr(providers.boto3, "client", lambda *args, **kwargs: Client())
+
+
+def _dotted_request(**extra):
+    from nebula.v3.providers import ModelToolResult
+
+    return ModelRequest(
+        messages=[ModelMessage(role="user", content="Search")],
+        tools=[TOOL, _DOTTED],
+        tool_results=[
+            ModelToolResult(
+                call_id="old", name="tool_output.search", arguments={}, output="{}"
+            )
+        ],
+        **extra,
+    )
+
+
+def _keyed_config(kind, flavor=None, **capabilities):
+    config = _config(kind, capabilities=ModelCapabilities(**capabilities))
+    return ProviderConfig(
+        **config.model_dump(exclude={"api_key_env", "flavor"}),
+        api_key_env="NEBULA_TEST_PROVIDER_KEY",
+        flavor=flavor or config.flavor,
+    )
+
+
+_WIRE_NAME = re.compile(r"[a-zA-Z0-9_-]{1,64}")
+
+_DOTTED = ToolDefinition(
+    name="tool_output.search",
+    description="Search tool output.",
+    input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+)
+
+
+def test_anthropic_health_follows_model_pagination(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+    pages = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        pages.append(dict(http_request.url.params))
+        if http_request.url.params.get("after_id") is None:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"id": "claude-a"}],
+                    "has_more": True,
+                    "first_id": "claude-a",
+                    "last_id": "claude-a",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": "claude-b"}, {"display_name": "invalid"}],
+                "has_more": False,
+                "first_id": "claude-b",
+                "last_id": "claude-b",
+            },
+        )
+
+    provider = AnthropicProvider(
+        _keyed_config(ProviderKind.ANTHROPIC), transport=httpx.MockTransport(handler)
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    assert health.models == ["claude-a", "claude-b"]
+    assert pages == [{"limit": "1000"}, {"limit": "1000", "after_id": "claude-a"}]
+
+
+def test_anthropic_tool_names_are_wire_safe_and_decoded(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+    observed = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        observed["payload"] = json.loads(http_request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "model": "test-model",
+                "stop_reason": "tool_use",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "use_1",
+                        "name": "tool_output_search",
+                        "input": {},
+                    }
+                ],
+                "usage": {"input_tokens": 2, "output_tokens": 1},
+            },
+        )
+
+    provider = AnthropicProvider(
+        _keyed_config(ProviderKind.ANTHROPIC, tools=True, strict_tools=True),
+        transport=httpx.MockTransport(handler),
+    )
+
+    response = asyncio.run(provider.complete(_dotted_request()))
+
+    payload = observed["payload"]
+    sent = [tool["name"] for tool in payload["tools"]]
+    replayed = payload["messages"][1]["content"][0]["name"]
+    for name in [*sent, replayed]:
+        assert _WIRE_NAME.fullmatch(name), name
+    assert response.tool_calls[0].name == "tool_output.search"
+
+
+def test_bedrock_sends_image_parts_as_converse_image_blocks(monkeypatch):
+    import base64
+
+    observed: dict = {}
+    _bedrock_client(monkeypatch, observed, [{"text": "A login form."}])
+    provider = BedrockProvider(_config(ProviderKind.BEDROCK))
+    screenshot = base64.b64encode(b"\x89PNG-bytes").decode("ascii")
+    request = ModelRequest(
+        messages=[
+            ModelMessage(role="system", content="Describe screenshots."),
+            ModelMessage(
+                role="user",
+                content=[
+                    {"type": "text", "text": "What is on screen?"},
+                    {"type": "image", "media_type": "image/png", "data": screenshot},
+                ],
+            ),
+        ]
+    )
+
+    response = asyncio.run(provider.complete(request))
+
+    assert response.text == "A login form."
+    assert observed["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"text": "What is on screen?"},
+                {
+                    "image": {
+                        "format": "png",
+                        "source": {"bytes": b"\x89PNG-bytes"},
+                    }
+                },
+            ],
+        }
+    ]
+    assert screenshot not in json.dumps(observed["messages"], default=str)
+    assert observed["system"] == [{"text": "Describe screenshots."}]
+
+    unsupported = ModelRequest(
+        messages=[
+            ModelMessage(
+                role="user",
+                content=[
+                    {"type": "image", "media_type": "image/svg+xml", "data": "PHN2Zz4="}
+                ],
+            )
+        ]
+    )
+    with pytest.raises(ProviderError, match="png, jpeg, gif or webp"):
+        asyncio.run(provider.complete(unsupported))
+
+
+def test_bedrock_tool_names_are_wire_safe_and_decoded(monkeypatch):
+    observed: dict = {}
+    _bedrock_client(
+        monkeypatch,
+        observed,
+        [
+            {
+                "toolUse": {
+                    "toolUseId": "use_1",
+                    "name": "tool_output_search",
+                    "input": {},
+                }
+            }
+        ],
+    )
+    provider = BedrockProvider(
+        _config(
+            ProviderKind.BEDROCK,
+            capabilities=ModelCapabilities(tools=True, strict_tools=True),
+        )
+    )
+
+    response = asyncio.run(provider.complete(_dotted_request()))
+
+    sent = [tool["toolSpec"]["name"] for tool in observed["toolConfig"]["tools"]]
+    replayed = observed["messages"][1]["content"][0]["toolUse"]["name"]
+    for name in [*sent, replayed]:
+        assert _WIRE_NAME.fullmatch(name), name
+    assert response.tool_calls[0].name == "tool_output.search"
+
+
+def test_gemini_function_calls_without_an_id_get_a_stable_one(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+    from nebula.v3.providers import ModelToolResult
+
+    observed = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        observed["payload"] = json.loads(http_request.content)
+        return httpx.Response(
+            200,
+            json={
+                "responseId": "gemini_7",
+                "candidates": [
+                    {
+                        "finishReason": "STOP",
+                        "content": {
+                            "parts": [
+                                {
+                                    "functionCall": {
+                                        "name": "lookup_asset",
+                                        "args": {"address": "10.0.0.1"},
+                                    }
+                                },
+                                {
+                                    "functionCall": {
+                                        "name": "lookup_asset",
+                                        "args": {"address": "10.0.0.2"},
+                                    }
+                                },
+                            ]
+                        },
+                    }
+                ],
+                "usageMetadata": {"totalTokenCount": 3},
+            },
+        )
+
+    provider = GeminiProvider(
+        _keyed_config(ProviderKind.GEMINI, tools=True, strict_tools=True),
+        transport=httpx.MockTransport(handler),
+    )
+    request = ModelRequest(
+        messages=[ModelMessage(role="user", content="inspect")], tools=[TOOL]
+    )
+
+    first = asyncio.run(provider.complete(request))
+    second = asyncio.run(provider.complete(request))
+
+    ids = [call.id for call in first.tool_calls]
+    assert all(ids) and len(set(ids)) == 2
+    assert ids == [call.id for call in second.tool_calls]
+    assert [call.arguments["address"] for call in first.tool_calls] == [
+        "10.0.0.1",
+        "10.0.0.2",
+    ]
+
+    # A synthesised id is Nebula's own and is not echoed back to Gemini; an id
+    # the model did send is replayed unchanged.
+    replay = request.model_copy(
+        update={
+            "tool_results": [
+                ModelToolResult(
+                    call_id=ids[0], name="lookup_asset", arguments={}, output="{}"
+                ),
+                ModelToolResult(
+                    call_id="fc_real", name="lookup_asset", arguments={}, output="{}"
+                ),
+            ]
+        }
+    )
+    asyncio.run(provider.complete(replay))
+    contents = observed["payload"]["contents"]
+    calls = [
+        part["functionCall"]
+        for item in contents
+        for part in item["parts"]
+        if "functionCall" in part
+    ]
+    results = [
+        part["functionResponse"]
+        for item in contents
+        for part in item["parts"]
+        if "functionResponse" in part
+    ]
+    assert "id" not in calls[0] and "id" not in results[0]
+    assert calls[1]["id"] == "fc_real" and results[1]["id"] == "fc_real"
+
+
+def test_gemini_health_follows_page_tokens_and_skips_unnamed_rows(monkeypatch):
+    monkeypatch.setenv("NEBULA_TEST_PROVIDER_KEY", "secret")
+    pages = []
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        pages.append(dict(http_request.url.params))
+        if http_request.url.params.get("pageToken") is None:
+            return httpx.Response(
+                200,
+                json={"models": [{"name": "models/gemini-a"}], "nextPageToken": "t2"},
+            )
+        return httpx.Response(
+            200,
+            json={"models": [{"displayName": "no name"}, {"name": "models/gemini-b"}]},
+        )
+
+    provider = GeminiProvider(
+        _keyed_config(ProviderKind.GEMINI), transport=httpx.MockTransport(handler)
+    )
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True
+    assert health.models == ["gemini-a", "gemini-b"]
+    assert pages == [{"pageSize": "1000"}, {"pageSize": "1000", "pageToken": "t2"}]
+
+
+def test_openai_health_skips_model_rows_without_an_id(provider_class, kind):
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "served-a"},
+                    {"object": "model"},
+                    "junk",
+                    {"id": 7},
+                    {"id": "served-b"},
+                ]
+            },
+        )
+
+    provider = provider_class(_config(kind), transport=httpx.MockTransport(handler))
+
+    health = asyncio.run(provider.health())
+
+    assert health.healthy is True, health.detail
+    assert health.models == ["served-a", "served-b"]
+
+
+def test_openai_responses_omits_temperature_for_reasoning_models():
+    provider = OpenAIResponsesProvider(_config(ProviderKind.OPENAI_RESPONSES))
+
+    def payload(model: str) -> dict:
+        request = ModelRequest(
+            model=model,
+            messages=[ModelMessage(role="user", content="Name this chat")],
+            temperature=0,
+        )
+        return provider._payload(request, model)
+
+    for model in (
+        "o1",
+        "o3-mini",
+        "o4-mini-2025-04-16",
+        "gpt-5",
+        "gpt-5-mini",
+        "gpt-5.1",
+    ):
+        assert "temperature" not in payload(model), model
+    for model in ("gpt-4.1", "gpt-4o-mini-2024-07-18", "test-model", "gpt-50"):
+        assert payload(model)["temperature"] == 0, model
+
+
+def test_openai_responses_tool_names_are_wire_safe_and_strict_is_schema_aware():
+    optional = ToolDefinition(
+        name="workspace.read",
+        description="Read a workspace file.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "line_count": {"type": "integer", "default": 200},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    )
+    observed = {}
+
+    def handler(http_request: httpx.Request) -> httpx.Response:
+        observed["payload"] = json.loads(http_request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "resp_1",
+                "model": "test-model",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "workspace_read",
+                        "arguments": '{"path": "notes.md"}',
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    provider = OpenAIResponsesProvider(
+        _config(
+            ProviderKind.OPENAI_RESPONSES,
+            capabilities=ModelCapabilities(tools=True, strict_tools=True),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+    request = _dotted_request()
+    request = request.model_copy(update={"tools": [*request.tools, optional]})
+
+    response = asyncio.run(provider.complete(request))
+
+    payload = observed["payload"]
+    tools = {tool["name"]: tool for tool in payload["tools"]}
+    replayed = [
+        item for item in payload["input"] if item.get("type") == "function_call"
+    ]
+    for name in [*tools, replayed[0]["name"]]:
+        assert _WIRE_NAME.fullmatch(name), name
+    assert tools["lookup_asset"]["strict"] is True
+    # A schema with an optional property or a default is rejected by strict
+    # mode, so strict is not requested for it.
+    assert "strict" not in tools["workspace_read"]
+    assert (
+        "strict" not in tools["tool_output_search"]
+        or tools["tool_output_search"]["strict"]
+    )
+    assert response.tool_calls[0].name == "workspace.read"
+    assert response.tool_calls[0].arguments == {"path": "notes.md"}
+
+
+def test_openai_strict_schema_check_covers_nested_objects():
+    from nebula.v3.providers import _openai_strict_schema
+
+    assert _openai_strict_schema(TOOL.input_schema) is True
+    assert _openai_strict_schema(
+        {"type": "object", "properties": {}, "additionalProperties": False}
+    )
+    assert not _openai_strict_schema({"type": "object", "properties": {}})
+    assert not _openai_strict_schema(
+        {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        }
+    )
+    assert not _openai_strict_schema(
+        {
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": {"b": {"type": "string", "default": "x"}},
+                    "required": ["b"],
+                    "additionalProperties": False,
+                }
+            },
+            "required": ["nested"],
+            "additionalProperties": False,
+        }
+    )
+    assert not _openai_strict_schema(
+        {
+            "type": "object",
+            "properties": {
+                "names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "uniqueItems": True,
+                }
+            },
+            "required": ["names"],
+            "additionalProperties": False,
+        }
+    )
+    # A property that happens to be called "default" is not the keyword.
+    assert _openai_strict_schema(
+        {
+            "type": "object",
+            "properties": {"default": {"type": "string"}},
+            "required": ["default"],
+            "additionalProperties": False,
+        }
+    )

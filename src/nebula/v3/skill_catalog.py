@@ -182,7 +182,10 @@ def _referenced_resources(
     references: list[SkillResourceReference] = []
     seen: set[str] = set()
     for raw_target in _MARKDOWN_LINK.findall(instructions):
-        target = raw_target.strip().split(maxsplit=1)[0].strip("<>")
+        words = raw_target.strip().split(maxsplit=1)
+        target = words[0].strip("<>") if words else ""
+        if not target:
+            raise ValueError("skill instructions contain a link with an empty target")
         parsed = urlsplit(target)
         if (
             parsed.scheme
