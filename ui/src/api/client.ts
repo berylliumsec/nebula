@@ -2562,6 +2562,10 @@ function mapProvider(value: WireProvider): ProviderHealth {
     state,
     enabled: value.enabled !== false,
     endpoint: value.endpoint ?? undefined,
+    // A stored profile carries no runtime catalog, so the allowed models stand in
+    // until a health check discovers the real list. Folding one of these records
+    // into a checked provider goes through providerWithDiscoveredModels, which
+    // keeps that discovery instead of emptying the operator's model picker.
     models: value.model_allowlist ?? [],
     availableModels: value.model_allowlist ?? [],
     modelAllowlist: value.model_allowlist ?? [],
