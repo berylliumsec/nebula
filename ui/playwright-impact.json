@@ -12,6 +12,7 @@
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking"]},
+    {"name": "activity-ledger", "patterns": ["ui/src/components/ActivityLedger*", "ui/src/components/activityLedger*", "ui/src/pages/harnessActivity*", "ui/src/mcpTools*"], "areas": ["activity-ledger"]},
     {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
     {"name": "mobile-layout", "patterns": ["ui/src/components/Mobile*", "ui/src/components/*Disclosure*", "ui/src/hooks/useMobile*"], "areas": ["mobile-layout"]},
@@ -898,6 +899,11 @@
       {"area":"assistant","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant|conversation|chat|harness model","runtime":"mock","shard":"1/1"},
       {"area":"assistant","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+    ],
+    "activity-ledger": [
+      {"area":"activity-ledger","project":"desktop","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work","runtime":"mock","shard":"1/1"},
+      {"area":"activity-ledger","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work","runtime":"mock","shard":"1/1"},
+      {"area":"activity-ledger","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work","runtime":"mock","shard":"1/1"}
     ],
     "inline-commentary": [
       {"area":"inline-commentary","project":"desktop","test_match":"tests/interface.spec.ts","grep":"completed harness output surfaces Grok commentary as live narrative","runtime":"mock","shard":"1/1"},
