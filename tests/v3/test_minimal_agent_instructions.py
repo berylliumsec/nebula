@@ -64,6 +64,15 @@ def test_chat_instructions_only_define_turn_protocol() -> None:
     )
 
 
+def test_only_the_tool_free_instructions_claim_the_turn_has_no_tools() -> None:
+    claim = "No tools are available in this turn."
+
+    assert claim in _CHAT_INSTRUCTIONS
+    assert claim not in _CHAT_BASE_INSTRUCTIONS
+    assert claim not in _CHAT_TOOL_INSTRUCTIONS
+    assert claim not in _CHAT_TOOL_RESULT_INSTRUCTIONS
+
+
 def test_browser_workflow_only_names_optional_capabilities() -> None:
     assert "browser.companion" in BROWSER_MODEL_WORKFLOW
     assert "model.transact" in BROWSER_MODEL_WORKFLOW

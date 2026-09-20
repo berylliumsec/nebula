@@ -1,29 +1,20 @@
 {
-  "change_digest": "7e3289dd22368fe6a0dff86112fe5f5d6abb68213b6793f4668b61c4e7dec4ed",
-  "reviewed_by": "Claude review of naming MCP tool calls by their server and tool wherever an operator reads one",
-  "reason": "An MCP call reached the conversation under the name that routes it. Core's broker builds mcp_tool_runtime_name() as mcp.<profile digest>.<tool> so two servers can expose the same tool, and that digest was the label on the activity-ledger entry and on the approval card. ToolSpec gains an optional display_name beside the runtime name; the new mcp_tool_display_name() sets it to \"<server> \u00b7 <tool>\" for every plugin build_mcp_tool_plugins() freezes and for the spec harnesses.py builds when Core brokers an MCP call for a harness; StoreToolLedger copies it into the approval's exact_request. chat.py sends it with tool_started and every tool_completed (live and on the three resume paths), stores it on the durable tool_history step when the spec has one, and copies it into the assistant message's tool_results, so a reloaded conversation reads the same name without re-deriving it. test_chat_tool_loop covers both directions: an MCP spec's readable name on both lifecycle events, the durable step and the stored message, and a fixed capability carrying no second name; test_mcp_probe covers the plugin's two names and the helper's bounds. test_harnesses re-runs because the harness MCP spec changed, test_action_broker because approvals now carry the extra key. On the UI side the new ui/src/mcpTools.ts decodes what a tool name alone allows -- Claude's mcp__<server>__<tool>, kept in step with _parse_claude_mcp_name, and Core's digest form, whose server is not recoverable -- so conversations recorded before display_name existed stop showing the digest. activityLedgerModel prefers the name Core sent, then the harness's own server_id (which client.ts now maps onto the activity event, and the reducer keeps on the item), then meaningfulLabel. The approval card prefers exact_request.display_name. Playwright is area:activity-ledger, the new narrow area for the one test that renders a ledger; it was run locally on the desktop project and passed.",
-  "exclusions": "No native tests: no Tauri or Rust change. No screenshot baselines: entry text changes only where an MCP tool is called, which no baseline fixture does; the ledger's layout, rows and controls are untouched. The impact rules also match area:assistant, area:chat-edit-in-place and area:provider-thinking for chat.py, harnesses.py and SessionsPage.tsx: the chat changes are additive payload keys on the tool lifecycle events plus one card field, and neither message editing, thinking rendering nor the conversation surface itself changes, so the ledger test covers what moved. area:mcp-import (8 real-core entries) is excluded because mcp.py gains a pure helper and one spec field while the import dialog, the probe and the handshake are untouched; tests/v3/test_mcp_import.py was run locally and is unaffected. area:core-api is excluded because no request or response schema changes -- ToolSpec and the approval's exact_request only gain optional keys. area:desktop-interface and area:mobile-layout were the fallback for harnessActivity.ts, activityLedgerModel.ts and the new mcpTools.ts, which the added activity-ledger rule now maps directly; that rule also clears the unmapped review blocker on mcpTools.ts. ui/src/api/client.ts and types.ts stay unmapped, as they are for every change: the mapping added there is one optional field each, covered by client.test.ts. ui/src/App.test.tsx is excluded: its \"keeps diagnostics out of the advanced view while preserving legacy hashes\" test fails the same way on a pristine origin/main at 48d2562 with this branch stashed, so it is a pre-existing failure and not this change.",
+  "change_digest": "8e172036b7eb8d16c62523fa6cd8b806fcc930d98e724af12c39b0f9cf504e96",
+  "reviewed_by": "Claude review of scoping the tool-free claim to the turns that really expose no functions",
+  "reason": "Every chat turn's base instructions started with \"No tools are available in this turn.\", and both tool paths prepend their own instructions to that same text rather than replacing it, so a tools-enabled turn was told to call a supplied function and, two lines later, that it had none; final synthesis, which supplies no functions of its own, repeated the claim after the tools had run. chat.py now builds the base from _CHAT_BASE_INSTRUCTIONS and attaches the claim through the new _tool_free_request() at the two sites that really expose no functions (_complete_claimed and stream, both reached only when prepared.tools_enabled is false) plus the tool-free half of the context-length retry in _recover_context_length_rejection. test_chat covers all three: the new prepare-level test asserts a tools-enabled turn (a skill with resources, so no command runtime is needed) starts at the neutral base and never carries the claim, and it fails on origin/main; test_local_chat_retrieves_only_its_engagement_and_persists now asserts a tool-free turn still opens with the exact sentence and sends no functions; test_confirmed_context_rejection_refreshes_compacts_and_retries_once asserts the rebuilt tool-free retry keeps it. test_chat_tool_loop asserts the routing steps and final synthesis all propagate the base instructions and none of them claims the turn has no tools. test_minimal_agent_instructions pins the constant split so the base cannot regain the sentence.",
+  "exclusions": "No frontend tests: no UI file changes. The operator-facing copy of these instructions, chat_results.py's context-sources endpoint, already branches on the session's tools_enabled and is untouched, so ChatRecordedContext renders the same text it did before for each kind of session. No native tests: no Tauri or Rust change. No screenshot baselines: nothing rendered changes. No Playwright: src/nebula/v3/chat.py matches the assistant rule (area:assistant, area:chat-edit-in-place, area:provider-thinking), but all three are mock-runtime browser tests whose stub provider never reads request instructions, and no request or response schema changes -- only the text Core sends a real provider. area:core-api is excluded for the same reason. tests/v3/test_chat_api.py, test_chat_subagents.py, test_chat_goals.py, test_chat_decisions.py, test_context.py, test_approval_continuation.py, test_api.py, test_browser_companion.py, test_application_model_admission.py, test_chat_workspace.py, test_chat_catchup.py, test_chat_queue.py, test_chat_media.py, test_chat_reconnection.py, test_chat_schedules.py, test_tool_catalog.py and test_specialist_tool_batches.py all build chat requests through the same assembly; they were run locally against this branch and pass, and none asserts the instruction text, so they are not selected.",
   "expected_tests": {
-    "python": 126,
-    "frontend": 106,
+    "python": 70,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python": [
+    "tests/v3/test_chat.py",
     "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_action_broker.py"
+    "tests/v3/test_minimal_agent_instructions.py"
   ],
-  "frontend": [
-    "ui/src/mcpTools.test.ts",
-    "ui/src/components/activityLedgerModel.test.ts",
-    "ui/src/components/AssistantApprovalDetails.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/pages/harnessActivity.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:activity-ledger"
-  ]
+  "playwright": []
 }
