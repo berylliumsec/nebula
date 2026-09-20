@@ -134,10 +134,47 @@ def _safe_text(path: Path, limit: int = 2 * 1024 * 1024) -> tuple[str, bool]:
     return data[:limit].decode("utf-8", errors="replace"), truncated
 
 
-def _targets(details: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+def _address_networks(value: str) -> list[str] | None:
+    """CIDRs for a single address, a network, or an ``a-b`` range; None otherwise."""
+
+    try:
+        return [str(ipaddress.ip_network(value, strict=False))]
+    except ValueError:
+        # diagnostic-expected: 2.x targets are also written as ranges and hostnames.
+        pass
+    first_text, separator, last_text = value.partition("-")
+    if not separator:
+        return None
+    try:
+        first = ipaddress.ip_address(first_text.strip())
+        last = ipaddress.ip_address(last_text.strip())
+    except ValueError:
+        # diagnostic-expected: hostnames contain hyphens too; the domain check runs next.
+        return None
+    if first.version != last.version or int(last) < int(first):
+        raise ValueError("address range is inverted or mixes IP versions")
+    return [str(network) for network in ipaddress.summarize_address_range(first, last)]
+
+
+def _domain_target(value: str) -> str | None:
+    """The scope-policy form of a hostname, or None when the policy rejects it."""
+
+    try:
+        return ScopePolicy(
+            engagement_id="validation", allowed_domains=[value]
+        ).allowed_domains[0]
+    except ValueError:
+        # diagnostic-expected: rejected hostnames are skipped with a receipt warning.
+        return None
+
+
+def _targets(
+    details: dict[str, Any],
+) -> tuple[list[str], list[str], list[str], list[str]]:
     cidrs: set[str] = set()
     domains: set[str] = set()
     urls: set[str] = set()
+    warnings: list[str] = []
 
     raw_targets = details.get("ip_addresses", [])
     if not isinstance(raw_targets, list):
@@ -147,16 +184,22 @@ def _targets(details: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
         if not value:
             continue
         try:
-            cidrs.add(str(ipaddress.ip_network(value, strict=False)))
-        except ValueError as caught_error:
-            record_caught_exception(
-                "storage",
-                "storage.importer.caught_failure_002",
-                "A handled storage operation raised an exception.",
-                caught_error,
-                stage="importer",
+            networks = _address_networks(value)
+        except ValueError as exc:
+            # diagnostic-expected: one unusable target is reported, not fatal.
+            warnings.append(f"skipped target {value!r}: {exc}")
+            continue
+        if networks is not None:
+            cidrs.update(networks)
+            continue
+        domain = _domain_target(value)
+        if domain is None:
+            warnings.append(
+                f"skipped target {value!r}: not an IP address, network, "
+                "address range, or hostname; add it to the scope manually"
             )
-            domains.add(value.lower().rstrip("."))
+            continue
+        domains.add(domain)
 
     raw_urls = details.get("urls", [])
     if not isinstance(raw_urls, list):
@@ -181,7 +224,7 @@ def _targets(details: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
                 stage="importer",
             )
             domains.add(parsed.hostname.lower().rstrip("."))
-    return sorted(cidrs), sorted(domains), sorted(urls)
+    return sorted(cidrs), sorted(domains), sorted(urls), warnings
 
 
 def _iter_regular_files(root: Path) -> Iterable[Path]:
@@ -289,7 +332,8 @@ class LegacyEngagementImporter:
             engagement_id = str(uuid4())
             scope_id = str(uuid4())
             report.target_engagement_id = engagement_id
-            cidrs, domains, urls = _targets(details)
+            cidrs, domains, urls, target_warnings = _targets(details)
+            report.warnings.extend(target_warnings)
             selected_tools = config.get("SELECTED_TOOLS", [])
             if not isinstance(selected_tools, list):
                 selected_tools = []
@@ -320,21 +364,16 @@ class LegacyEngagementImporter:
                 },
             )
             entities: list[Any] = [engagement, scope]
-            counts: Counter[str] = Counter(
-                {
-                    "engagements": 1,
-                    "scope_policies": 1,
-                    "tool_selections": len(selected_tools),
-                }
-            )
+            counts: Counter[str] = Counter({"engagements": 1, "scope_policies": 1})
 
             for cidr in cidrs:
+                network = ipaddress.ip_network(cidr)
                 entities.append(
                     Asset(
                         engagement_id=engagement_id,
-                        asset_type="network"
-                        if "/32" not in cidr and "/128" not in cidr
-                        else "host",
+                        asset_type="host"
+                        if network.prefixlen == network.max_prefixlen
+                        else "network",
                         name=cidr,
                         address=cidr,
                         metadata={"legacy_import": True},
@@ -440,8 +479,7 @@ class LegacyEngagementImporter:
                     report.warnings.append(
                         "external Chroma path was not imported without explicit approval"
                     )
-                    chroma_root = source_path / ".nebula-external-chroma-disabled"
-                if chroma_root.is_dir():
+                elif chroma_root.is_dir():
                     chroma_artifact_ids = []
                     for path in _chroma_files(chroma_root, source_path):
                         if path.resolve() in captured_paths:
@@ -471,6 +509,7 @@ class LegacyEngagementImporter:
                             )
                         )
                     counts["chroma_documents"] += len(documents)
+                    counts["observations"] += len(documents)
                     entities.append(
                         KnowledgeSource(
                             engagement_id=engagement_id,
