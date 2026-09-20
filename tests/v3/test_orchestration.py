@@ -140,7 +140,7 @@ class CompactingMissionProvider(ModelProvider):
                 {"summary": "Scope result compacted with canonical provenance."}
             )
         elif request.metadata.get("task_id") == "planning":
-            text = "scope-result " * 180
+            text = "scope-result " * 520
         else:
             text = "report drafted from compacted dependency context"
         return ModelResponse(
@@ -551,7 +551,7 @@ def test_mission_compacts_only_model_facing_dependency_context_and_charges_usage
             model_allowlist=["model-a"],
             metadata={
                 "default_model": "model-a",
-                "options": {"context_window": 600, "max_output_tokens": 100},
+                "options": {"context_window": 1_500, "max_output_tokens": 100},
             },
         )
     )
@@ -646,7 +646,7 @@ def test_mission_rejects_compaction_before_call_when_budget_is_insufficient(
             model_allowlist=["model-a"],
             metadata={
                 "default_model": "model-a",
-                "options": {"context_window": 600, "max_output_tokens": 100},
+                "options": {"context_window": 1_500, "max_output_tokens": 100},
             },
         )
     )
