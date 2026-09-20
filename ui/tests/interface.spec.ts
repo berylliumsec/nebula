@@ -8971,6 +8971,79 @@ test("stabilization goal mode keeps the panel and its actions on Core's revision
   expect(rejected).toEqual([]);
 });
 
+test("stabilization goal mode shows token progress before provider usage settles", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode('data: {"type":"started","provider_id":"provider-1","model":"model-1","session_id":"goal-live-chat","turn_id":"goal-live-turn"}\n\n'));
+          controller.enqueue(encoder.encode('data: {"type":"delta","provider_id":"provider-1","model":"model-1","delta":"A streamed answer is growing while the provider is still working."}\n\n'));
+          globalThis.setTimeout(() => {
+            controller.enqueue(encoder.encode('data: {"type":"done","provider_id":"provider-1","model":"model-1","session_id":"goal-live-chat","turn_id":"goal-live-turn","message":{"id":"goal-live-answer","role":"assistant","content":"A streamed answer is growing while the provider is still working."},"usage":{"input_tokens":18,"output_tokens":12,"total_tokens":30},"finish_reason":"stop","citations":[]}\n\n'));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          }, 1_500);
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await installReasoningProvider(page);
+  const goal = {
+    ...entity,
+    id: "goal-live",
+    engagement_id: "scratch-project",
+    session_id: "goal-live-chat",
+    objective: "Watch live usage",
+    completion_criteria: ["Usage is visible while streaming"],
+    plan: [],
+    current_step: 0,
+    status: "running",
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    elapsed_seconds: 0,
+    children_started: 0,
+    linked_turn_ids: [],
+    completion_evidence: [],
+    skill_snapshots: [],
+    revision: 2,
+  };
+  await page.route("**/api/v1/chat/sessions/*/goal", route => route.fulfill({ json: goal }));
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "goal-live-chat",
+        engagement_id: "scratch-project",
+        title: "Live goal",
+        backend: "provider",
+        provider_profile_id: reasoningProvider.id,
+        harness_profile_id: null,
+        harness_session_id: null,
+        model: "model-a",
+        metadata: {},
+      }] });
+    } else if (path.endsWith("/chat/sessions/goal-live-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/goal-live-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=goal-live-chat");
+
+  const panel = page.getByRole("region", { name: "Conversation goal" });
+  await page.getByPlaceholder("Ask about this project…").fill("Explain the current progress.");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const liveTokens = panel.getByTitle(/Estimated while this turn streams/);
+  await expect(liveTokens).toHaveText(/~[1-9][0-9]* tokens/);
+  await expect(page.getByText("A streamed answer is growing", { exact: false })).toBeVisible();
+  await expect(liveTokens).toHaveCount(0, { timeout: 10_000 });
+});
+
 
 const reasoningProvider = {
   ...entity,

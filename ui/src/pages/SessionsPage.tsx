@@ -16,7 +16,7 @@ import { ChatEvidence } from "../components/ChatEvidence";
 import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
-import { ProviderGoalPanel } from "../components/ProviderGoalPanel";
+import { estimateLiveTokens, ProviderGoalPanel } from "../components/ProviderGoalPanel";
 import { ProviderSessionAdvanced } from "../components/ProviderSessionAdvanced";
 import { isGuideLayerTarget, useGuideAction } from "../guides/guideActions";
 import { ShowMeHow } from "../guides/ShowMeHow";
@@ -779,6 +779,7 @@ export function SessionsPage() {
   const [queuedFollowUps, setQueuedFollowUps] = useState<ChatFollowUp[]>([]);
   const coreQueue = useChatQueue(api, sessionId);
   const [providerGoal, setProviderGoal] = useState<ChatGoal>();
+  const [liveGoalTokenEstimate, setLiveGoalTokenEstimate] = useState(0);
   const [providerGoalLoading, setProviderGoalLoading] = useState(false);
   const [providerGoalError, setProviderGoalError] = useState<string>();
   const [decisionSeed, setDecisionSeed] = useState<DecisionSeed>();
@@ -859,7 +860,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!api || !sessionId || runtimeKind !== "provider") {
-      setProviderGoal(undefined); setProviderGoalError(undefined); setProviderGoalLoading(false); return;
+      setProviderGoal(undefined); setLiveGoalTokenEstimate(0); setProviderGoalError(undefined); setProviderGoalLoading(false); return;
     }
     const controller = new AbortController();
     setProviderGoalLoading(true); setProviderGoalError(undefined);
@@ -903,6 +904,7 @@ export function SessionsPage() {
   const sessionActionsMenuRef = useRef<HTMLDivElement>(null);
   const streamDeltaRef = useRef(new Map<string, string>());
   const streamReasoningRef = useRef(new Map<string, string>());
+  const liveGoalStreamTextRef = useRef("");
   const streamFrameRef = useRef<number | undefined>(undefined);
   const draftStorageKeyRef = useRef("");
   const followUpStorageKeyRef = useRef("");
@@ -2852,9 +2854,17 @@ export function SessionsPage() {
     }
     if ((streamEvent.type === "delta" || streamEvent.type === "message_delta") && streamEvent.delta) {
       queueStreamDelta(assistantId, streamEvent.delta);
+      if (request.backend === "provider" && request.goalId) {
+        liveGoalStreamTextRef.current += streamEvent.delta;
+        setLiveGoalTokenEstimate(estimateLiveTokens(liveGoalStreamTextRef.current));
+      }
     }
     if (streamEvent.type === "reasoning_delta" && streamEvent.delta) {
       queueStreamReasoning(assistantId, streamEvent.delta);
+      if (request.backend === "provider" && request.goalId) {
+        liveGoalStreamTextRef.current += streamEvent.delta;
+        setLiveGoalTokenEstimate(estimateLiveTokens(liveGoalStreamTextRef.current));
+      }
     }
     if (streamEvent.type === "tool_started") {
       setHarnessProgress((current) => request.backend === "harness" ? {
@@ -2960,6 +2970,9 @@ export function SessionsPage() {
     if (streamEvent.type === "done") {
       setChatReconnecting(false);
       if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
+      if (request.backend === "provider" && request.goalId) {
+        setLiveGoalTokenEstimate(streamEvent.usage.totalTokens + (streamEvent.contextUsage?.totalTokens ?? 0));
+      }
       if (request.backend === "provider" && streamEvent.turnId && api) {
         void api.listChatHookExecutions(streamEvent.turnId).then(setHookExecutions).catch(error => {
           void logCaughtDiagnostic("interface.chat.hook_outcomes_failed", "Hook outcomes could not be loaded.", error, "chat-hooks");
@@ -3341,6 +3354,13 @@ export function SessionsPage() {
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setSending(true);
+    if (chatRequest.goalId) {
+      liveGoalStreamTextRef.current = content;
+      setLiveGoalTokenEstimate(estimateLiveTokens(content));
+    } else {
+      liveGoalStreamTextRef.current = "";
+      setLiveGoalTokenEstimate(0);
+    }
     if (runtimeKind === "harness") {
       setHarnessProgress({
         phase: "queued",
@@ -3376,6 +3396,11 @@ export function SessionsPage() {
       returnedSessionId = response?.sessionId ?? returnedSessionId;
       if (response && returnedSessionId) {
         await refreshSessions(returnedSessionId);
+        if (chatRequest.goalId) {
+          await readProviderGoal();
+          liveGoalStreamTextRef.current = "";
+          setLiveGoalTokenEstimate(0);
+        }
         if (runtimeKind === "provider") setRuntimeSwitchConfirmation(undefined);
         if (runtimeKind === "harness") {
           const authoritative = await api.listChatMessages(returnedSessionId);
@@ -3456,6 +3481,12 @@ export function SessionsPage() {
         streamBackendRef.current = undefined;
         setChatReconnecting(false);
         setSending(false);
+      }
+      if (chatRequest.goalId && !requestCompleted) {
+        void readProviderGoal().finally(() => {
+          liveGoalStreamTextRef.current = "";
+          setLiveGoalTokenEstimate(0);
+        });
       }
     }
   };
@@ -4464,7 +4495,7 @@ export function SessionsPage() {
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {runtimeKind === "provider" && sessionId && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId} goal={providerGoal} skills={harnessSkills} onChange={setProviderGoal} />}</>}
+              {runtimeKind === "provider" && sessionId && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} onChange={setProviderGoal} />}</>}
               {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} authoritativeStatus={authoritativeState?.detail} />}
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
