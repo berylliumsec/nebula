@@ -57,8 +57,8 @@ export const navigationItems: NavigationItem[] = [
     path: "/project",
     label: "Project",
     legacyLabel: "Engagement",
-    aliases: ["Overview", "Assets", "Evidence", "Knowledge", "Sources", "Engagement"],
-    description: "Project overview, assets, evidence, and sources",
+    aliases: ["Overview", "Assets", "Evidence", "Knowledge", "Sources", "Results", "Engagement"],
+    description: "Project overview, assets, evidence, sources, and published results",
     icon: FolderKanban,
     shortcut: "G P",
     group: "workspace",
@@ -93,6 +93,7 @@ const projectSurfaceItemPaths: Record<string, string> = {
   assets: "/project",
   evidence: "/project",
   sources: "/project",
+  results: "/project",
 };
 
 // Legacy top-level routes that render another item's page when no project is loaded.

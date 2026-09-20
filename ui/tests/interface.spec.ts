@@ -8721,3 +8721,253 @@ reloadTest("tool suggestions chip shows the live turn and survives reload", asyn
   await page.keyboard.press("Enter");
   await expect(restoredChip.getByText("mcp.tracker.get_issue")).toBeVisible();
 });
+
+/**
+ * Published structured results: whatever an agent hands the operator, shown
+ * without a registered schema. The fixture is deliberately generic — it is not
+ * a Nebula result type — so the journey proves the dashboard derives its views
+ * from the runtime shape alone.
+ */
+const publishedResults = [
+  {
+    ...entity,
+    id: "snapshot-2",
+    engagement_id: "scratch-project",
+    title: "Mapped the call graph",
+    summary: "Where the login path goes next",
+    producer: "dashboard.publish",
+    origin: "agent",
+    labels: [],
+    stats: { byte_size: 220, node_count: 14, max_depth: 3, root_type: "object", top_level_count: 3 },
+    has_hints: false,
+    preview: [{ key: "phase", value: "analysis", truncated: false }],
+    stream: "goal-1",
+    stream_label: "Refactor the auth handler",
+    sequence: 2,
+    chat_session_id: "results-chat",
+    tool_call_id: null,
+  },
+  {
+    ...entity,
+    id: "snapshot-1",
+    engagement_id: "scratch-project",
+    title: "Read the handler",
+    summary: "",
+    producer: "dashboard.publish",
+    origin: "agent",
+    labels: [],
+    stats: { byte_size: 90, node_count: 4, max_depth: 2, root_type: "object", top_level_count: 2 },
+    has_hints: false,
+    preview: [],
+    stream: "goal-1",
+    stream_label: "Refactor the auth handler",
+    sequence: 1,
+    chat_session_id: "results-chat",
+    tool_call_id: null,
+  },
+];
+
+const publishedPayloads: Record<string, unknown> = {
+  "snapshot-2": {
+    phase: "analysis",
+    checked_at: "2026-07-12T10:00:00Z",
+    callers: [
+      { symbol: "login", file: "auth/session.py", line: 42 },
+      { symbol: "refresh", file: "auth/session.py", line: 88 },
+    ],
+    nodes: [{ id: "login" }, { id: "verify" }],
+    edges: [{ source: "login", target: "verify" }],
+  },
+  "snapshot-1": {
+    language: "python",
+    code: "def login(request):\n    token = read_token(request)\n    return verify(token)",
+  },
+};
+
+async function installPublishedResults(page: Page) {
+  // Playwright globs stop at a path separator, so the collection and one
+  // result need their own patterns.
+  await page.route("**/api/v1/projects/*/structured-results**", async route => {
+    const url = new URL(route.request().url());
+    const identity = url.pathname.split("/").at(-1);
+    if (identity && identity !== "structured-results") {
+      const summary = publishedResults.find(item => item.id === identity);
+      if (!summary) return route.fulfill({ status: 404, json: { detail: "That result belongs to another project" } });
+      const { has_hints: _hints, preview: _preview, ...record } = summary;
+      return route.fulfill({ json: { ...record, result: publishedPayloads[identity], hints: null } });
+    }
+    const session = url.searchParams.get("chat_session_id");
+    const rows = session ? publishedResults.filter(item => item.chat_session_id === session) : publishedResults;
+    await route.fulfill({ json: rows });
+  });
+}
+
+test("stabilization Results explores a published result it has never seen and keeps the raw JSON", async ({ page }) => {
+  await installPublishedResults(page);
+  await page.goto("/projects/scratch-project/results/snapshot-2");
+
+  // The steps of one piece of work stay together, newest first.
+  const stream = page.getByRole("region", { name: "Stream Refactor the auth handler" });
+  await expect(stream.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
+  await expect(stream.getByRole("button", { name: /1\. Read the handler/ })).toBeVisible();
+
+  // Overview: top-level values, and the collections with their counts.
+  await expect(page.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("analysis")).toBeVisible();
+  await expect(page.getByRole("button", { name: /^callers/ })).toContainText("array · 2 items");
+
+  // A homogeneous collection becomes a sortable table with inferred columns.
+  await page.getByRole("tab", { name: "Table" }).click();
+  await expect(page).toHaveURL(/view=table/);
+  for (const column of ["symbol", "file", "line"]) {
+    await expect(page.getByRole("columnheader", { name: new RegExp(`^${column}`) })).toBeVisible();
+  }
+  const symbol = page.getByRole("columnheader", { name: /^symbol/ });
+  await expect(symbol).toHaveAttribute("aria-sort", "none");
+  await symbol.getByRole("button").click();
+  await expect(page.getByRole("columnheader", { name: /^symbol/ })).toHaveAttribute("aria-sort", "ascending");
+
+  // Relationships are offered because the result actually carries them, and
+  // the same relationships are readable without the picture.
+  await page.getByRole("tab", { name: "Relationships" }).click();
+  await expect(page.getByRole("table", { name: /Relationships in/ })).toContainText("verify");
+
+  // The tree reaches everything, and the raw view is the authority.
+  await page.getByRole("tab", { name: "Tree" }).click();
+  await page.getByRole("searchbox", { name: /Search property names/ }).fill("session.py");
+  await expect(page.getByRole("status").filter({ hasText: /match/ })).toBeVisible();
+
+  await page.getByRole("tab", { name: "Raw" }).click();
+  await expect(page.getByLabel("Raw result text")).toContainText('"symbol": "login"');
+  await expect(page.getByText("The result exactly as it was published")).toBeVisible();
+
+  const accessibility = await new AxeBuilder({ page }).include(".results-page").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("stabilization Results opens one detail inspector and returns focus when it closes", async ({ page }) => {
+  await installPublishedResults(page);
+  await page.goto("/projects/scratch-project/results/snapshot-2");
+
+  const opener = page.getByRole("button", { name: /^callers/ });
+  await opener.click();
+  const inspector = page.getByRole("complementary", { name: "callers" });
+  await expect(inspector.getByText("$.callers")).toBeVisible();
+  await expect(inspector.getByRole("button", { name: "Copy path" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Close detail" }).click();
+  await expect(page.getByText("$.callers")).toBeHidden();
+  await expect(opener).toBeFocused();
+
+  // The route back to the raw result changes the view, so closing the
+  // inspector then leaves focus on the selected tab rather than nowhere.
+  await opener.click();
+  await inspector.getByRole("button", { name: /Show in raw result/ }).click();
+  await expect(page.getByLabel("Raw result text")).toContainText('"callers"');
+  await page.getByRole("button", { name: "Close detail" }).click();
+  await expect(page.getByRole("tab", { name: "Raw" })).toBeFocused();
+});
+
+test("stabilization Results shows the assistant's snapshots beside the conversation", async ({ page }) => {
+  await installPublishedResults(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "results-chat", engagement_id: "scratch-project", title: "Refactor auth", backend: "provider", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/results-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/results-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=results-chat&drawer=visuals");
+
+  const panel = page.getByRole("region", { name: "Published results for this conversation" });
+  await expect(panel.getByRole("heading", { name: "Agent view" })).toBeVisible();
+  await expect(panel.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
+
+  // The newest snapshot opens by itself, explored by the same dashboard.
+  await expect(panel.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+  await expect(panel.getByRole("button", { name: /^callers/ })).toBeVisible();
+
+  // An earlier step stays open once it is chosen, and code reads as a block.
+  await panel.getByRole("button", { name: /1\. Read the handler/ }).click();
+  await expect(panel.locator(".structured-block-language")).toHaveText("python");
+  await expect(panel.getByText("def login(request):")).toBeVisible();
+
+  // The conversation is never the only way in.
+  await expect(panel.getByRole("link", { name: /Open in Results/ })).toHaveAttribute("href", "/projects/scratch-project/results/snapshot-1");
+});
+
+test("stabilization goal mode keeps the panel and its actions on Core's revision", async ({ page }) => {
+  // Core advances a goal on every turn it dispatches. A panel that read the
+  // goal once shows stale numbers and, worse, sends a stale revision with
+  // Pause or Cancel — which Core refuses, so the control looks inert.
+  const goal = {
+    ...entity,
+    id: "goal-1",
+    engagement_id: "scratch-project",
+    session_id: "goal-chat",
+    objective: "Refactor the auth handler",
+    completion_criteria: ["The handler is covered by tests"],
+    plan: [],
+    current_step: 0,
+    status: "running",
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    elapsed_seconds: 0,
+    children_started: 0,
+    linked_turn_ids: [],
+    completion_evidence: [],
+    skill_snapshots: [],
+    revision: 2,
+  };
+  let reads = 0;
+  const rejected: string[] = [];
+  await page.route("**/api/v1/chat/sessions/*/goal", async route => {
+    // The goal advances once after the panel opened, the way it does when the
+    // model takes a step. A read itself never changes it.
+    reads += 1;
+    if (reads === 2) {
+      goal.current_step += 1;
+      goal.revision += 1;
+    }
+    await route.fulfill({ json: goal });
+  });
+  await page.route("**/api/v1/chat/sessions/*/goal/actions", async route => {
+    const body = route.request().postDataJSON();
+    if (body.expected_revision !== goal.revision) {
+      rejected.push(`${body.action}@${body.expected_revision}`);
+      await route.fulfill({ status: 409, json: { detail: "goal changed on another device; reload before retrying" } });
+      return;
+    }
+    goal.status = body.action === "pause" ? "paused" : goal.status;
+    goal.revision += 1;
+    await route.fulfill({ json: goal });
+  });
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "goal-chat", engagement_id: "scratch-project", title: "Goal chat", backend: "provider", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/goal-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/goal-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=goal-chat");
+
+  const panel = page.getByRole("region", { name: "Conversation goal" });
+  await expect(panel.getByText("Refactor the auth handler")).toBeVisible();
+
+  // The panel follows Core rather than the moment the conversation opened.
+  const firstStep = await panel.locator("small").first().innerText();
+  await expect.poll(async () => panel.locator("small").first().innerText(), { timeout: 15_000 })
+    .not.toBe(firstStep);
+
+  // Pausing now carries the revision Core holds, so it takes effect.
+  await panel.getByRole("button", { name: "Pause" }).click();
+  await expect(panel.getByText(/paused/)).toBeVisible();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+  expect(rejected).toEqual([]);
+});
+

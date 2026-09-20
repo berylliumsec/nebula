@@ -547,6 +547,7 @@ READ_ONLY_RESOURCES = {
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
     "browser_companion_actions",
+    "structured_results",
     "chat_read_cursors",
     "chat_bookmarks",
     "guide_progress",
@@ -9769,6 +9770,13 @@ def create_app(
 
     app.include_router(
         results_router(store, artifact_store),
+        prefix=API_PREFIX,
+        dependencies=[Depends(require_auth)],
+    )
+    from .structured_results import structured_results_router
+
+    app.include_router(
+        structured_results_router(store),
         prefix=API_PREFIX,
         dependencies=[Depends(require_auth)],
     )

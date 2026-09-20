@@ -1,18 +1,20 @@
-import { BookOpen, FileSearch, LayoutDashboard, Network } from "lucide-react";
+import { BookOpen, FileSearch, LayoutDashboard, Network, Sparkles } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { projectRoot, projectSurface } from "../resourceRoutes";
 import { AssetsPage } from "./AssetsPage";
 import { EvidencePage } from "./EvidencePage";
 import { KnowledgePage } from "./KnowledgePage";
 import { OverviewPage } from "./OverviewPage";
+import { ResultsPage } from "./ResultsPage";
 
-type ProjectView = "overview" | "assets" | "evidence" | "sources";
+type ProjectView = "overview" | "assets" | "evidence" | "sources" | "results";
 
 const projectViews = [
   { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
   { id: "assets" as const, label: "Assets", icon: Network },
   { id: "evidence" as const, label: "Evidence", icon: FileSearch },
   { id: "sources" as const, label: "Sources", icon: BookOpen },
+  { id: "results" as const, label: "Results", icon: Sparkles },
 ];
 
 function isProjectView(value: string | null): value is ProjectView {
@@ -58,6 +60,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
       {view === "assets" ? <AssetsPage /> : null}
       {view === "evidence" ? <EvidencePage /> : null}
       {view === "sources" ? <KnowledgePage /> : null}
+      {view === "results" ? <ResultsPage /> : null}
     </div>
   );
 }

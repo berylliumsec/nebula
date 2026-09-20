@@ -51,7 +51,7 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
   if (!engagement) {
     if (surface === "findings") return route(<FindingsPage />);
     if (surface === "reports") return route(<ReportsPage />);
-    if (surface === "project" || surface === "assets" || surface === "evidence" || surface === "sources") {
+    if (surface === "project" || surface === "assets" || surface === "evidence" || surface === "sources" || surface === "results") {
       const view = surface === "project" ? undefined : surface;
       return route(<ProjectPage canonicalView={view ?? "overview"} />);
     }
@@ -64,7 +64,7 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
     if (requested === "application-model" || requested === "model") {
       return <Navigate to={`${projectSurface(engagement.id, "workbench")}?view=chat`} replace />;
     }
-    targetSurface = requested === "assets" || requested === "evidence" || requested === "sources" ? requested : undefined;
+    targetSurface = requested === "assets" || requested === "evidence" || requested === "sources" || requested === "results" ? requested : undefined;
   }
   if (surface === "project") params.delete("view");
   const objectId = targetSurface === "sources" ? params.get("source") : params.get("id");
@@ -107,6 +107,7 @@ export function App() {
       <Route path="assets/:resourceId?" element={route(<ProjectPage canonicalView="assets" />)} />
       <Route path="evidence/:resourceId?" element={route(<ProjectPage canonicalView="evidence" />)} />
       <Route path="sources/:resourceId?" element={route(<ProjectPage canonicalView="sources" />)} />
+      <Route path="results/:resourceId?" element={route(<ProjectPage canonicalView="results" />)} />
       <Route path="application-model" element={<RetiredModelRedirect />} />
       <Route path="findings/:resourceId?" element={route(<FindingsPage />)} />
       <Route path="reports/:resourceId?" element={route(<ReportsPage />)} />

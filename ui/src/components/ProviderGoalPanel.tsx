@@ -1,9 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-react";
-import type { ApiClient } from "../api/client";
+import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useConfirmation } from "./DialogSystem";
+
+type GoalAction = "start" | "pause" | "resume" | "cancel" | "block" | "complete";
+
+/**
+ * Active seconds as Core would compute them: what it has banked, plus the
+ * stretch still running. Reading the stored field alone leaves a running goal
+ * reporting the time it had at its last pause — usually zero.
+ */
+export function activeSeconds(goal: ChatGoal, now = Date.now()): number {
+  if (goal.status !== "running" || !goal.activeSince) return goal.elapsedSeconds;
+  const since = Date.parse(goal.activeSince);
+  if (Number.isNaN(since)) return goal.elapsedSeconds;
+  return goal.elapsedSeconds + Math.max(0, (now - since) / 1_000);
+}
+
+/** Which goal states each transition is allowed from, as Core enforces them. */
+const ALLOWED_FROM: Record<GoalAction, ChatGoal["status"][]> = {
+  start: ["draft"],
+  pause: ["running"],
+  resume: ["paused", "blocked"],
+  cancel: ["draft", "running", "paused", "blocked"],
+  block: ["running"],
+  complete: ["running"],
+};
+
+const STATE_NAMES: Record<ChatGoal["status"], string> = {
+  draft: "a draft",
+  running: "running",
+  paused: "paused",
+  blocked: "blocked",
+  completed: "completed",
+  cancelled: "cancelled",
+};
 
 export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
   api: ApiClient;
@@ -29,22 +62,52 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const confirm = useConfirmation();
+  // The active stretch advances between reads, so the panel ticks it locally.
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (goal?.status !== "running") return;
+    const timer = window.setInterval(() => setTick(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [goal?.status]);
 
-  const act = async (action: "start" | "pause" | "resume" | "cancel" | "block" | "complete") => {
+  const act = async (action: GoalAction) => {
     if (!goal || busy) return;
     setBusy(true); setError(undefined);
-    try {
-      onChange(await api.writeChatGoal(sessionId, {
-        expectedRevision: goal.revision,
-        action,
-        ...(action === "block" ? { reason: reason.trim() } : {}),
-        ...(action === "complete" ? {
-          completionSummary: summary.trim(),
-          completionEvidence: evidence.split("\n").map(item => item.trim()).filter(Boolean).map(detail => ({ kind: "operator_confirmation", detail })),
-        } : {}),
-      }));
+    const body = (revision: number) => ({
+      expectedRevision: revision,
+      action,
+      ...(action === "block" ? { reason: reason.trim() } : {}),
+      ...(action === "complete" ? {
+        completionSummary: summary.trim(),
+        completionEvidence: evidence.split("\n").map(item => item.trim()).filter(Boolean).map(detail => ({ kind: "operator_confirmation", detail })),
+      } : {}),
+    });
+    const settle = (updated: ChatGoal) => {
+      onChange(updated);
       setTransition(undefined); setReason(""); setSummary(""); setEvidence("");
+    };
+    try {
+      settle(await api.writeChatGoal(sessionId, body(goal.revision)));
     } catch (caught) {
+      // A goal advances on every turn Core dispatches, so the revision an
+      // operator is looking at goes stale while the model works. Read the
+      // goal again: if the transition still applies, their decision stands.
+      if (caught instanceof ApiError && caught.status === 409) {
+        try {
+          const current = await api.getChatGoal(sessionId);
+          onChange(current);
+          if (ALLOWED_FROM[action].includes(current.status)) {
+            settle(await api.writeChatGoal(sessionId, body(current.revision)));
+            return;
+          }
+          setError(`This goal is already ${STATE_NAMES[current.status]}, so it was not changed.`);
+          return;
+        } catch (retried) {
+          void logCaughtDiagnostic("interface.goal.retry_failed", "A conversation goal state change failed after its revision was refreshed.", retried, "goal");
+          setError(retried instanceof Error ? retried.message : "Goal state could not be changed.");
+          return;
+        }
+      }
       void logCaughtDiagnostic("interface.goal.transition_failed", "A conversation goal state change failed.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal state could not be changed.");
     } finally { setBusy(false); }
@@ -98,16 +161,28 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
       ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),
     ]);
     setBusy(true); setError(undefined);
+    const selection = selectedSkillPaths.flatMap(path => {
+      const skill = available.get(path);
+      return skill ? [{ name: skill.name, path: skill.path }] : [];
+    });
     try {
-      onChange(await api.replaceChatGoalSkills(sessionId, {
-        expectedRevision: goal.revision,
-        skills: selectedSkillPaths.flatMap(path => {
-          const skill = available.get(path);
-          return skill ? [{ name: skill.name, path: skill.path }] : [];
-        }),
-      }));
+      onChange(await api.replaceChatGoalSkills(sessionId, { expectedRevision: goal.revision, skills: selection }));
       setEditingSkills(false);
     } catch (caught) {
+      // Same stale-revision recovery as a transition: the model working does
+      // not withdraw the operator's choice of skills.
+      if (caught instanceof ApiError && caught.status === 409) {
+        try {
+          const current = await api.getChatGoal(sessionId);
+          onChange(await api.replaceChatGoalSkills(sessionId, { expectedRevision: current.revision, skills: selection }));
+          setEditingSkills(false);
+          return;
+        } catch (retried) {
+          void logCaughtDiagnostic("interface.goal.skills_retry_failed", "Conversation goal skills could not be changed after a revision refresh.", retried, "goal");
+          setError(retried instanceof Error ? retried.message : "Goal skills could not be changed.");
+          return;
+        }
+      }
       void logCaughtDiagnostic("interface.goal.skills_failed", "Conversation goal skills could not be changed.", caught, "goal");
       setError(caught instanceof Error ? caught.message : "Goal skills could not be changed.");
     } finally { setBusy(false); }
@@ -136,7 +211,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, onChange }: {
     ...goal.skillSnapshots.map(skill => [skill.path, skill] as const),
   ]).values()];
   return <section className="chat-goal-panel" aria-label="Conversation goal" data-guide="goal-panel">
-    <header><span><Flag size={14} /><strong>{goal.objective}</strong></span><small>{goal.status.replaceAll("_", " ")} · step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""} · {goal.usage.totalTokens.toLocaleString()} tokens · {Math.floor(goal.elapsedSeconds)}s active{goal.childBudget !== undefined ? ` · ${goal.childrenStarted}/${goal.childBudget} children` : ""} · {goal.skillSnapshots.length} skills</small></header>
+    <header><span><Flag size={14} /><strong>{goal.objective}</strong></span><small>{goal.status.replaceAll("_", " ")} · step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""} · {goal.usage.totalTokens.toLocaleString()} tokens · {Math.floor(activeSeconds(goal, tick))}s active{goal.childBudget !== undefined ? ` · ${goal.childrenStarted}/${goal.childBudget} children` : ""} · {goal.skillSnapshots.length} skills</small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}

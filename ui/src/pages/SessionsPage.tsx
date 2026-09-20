@@ -25,6 +25,7 @@ import { ChatAttachments } from "../components/ChatAttachments";
 import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarget } from "../components/EnvironmentTargetPicker";
 import { sshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
+import { ChatResultStream, useStructuredResults, useUnseenCount } from "../components/structured-result";
 import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
@@ -319,6 +320,9 @@ interface HarnessProgress {
 const ContainerTerminalPanel = lazy(() => import("../components/ContainerTerminalPanel").then((module) => ({ default: module.ContainerTerminalPanel })));
 const CodeEditorPanel = lazy(() => import("../components/CodeEditorPanel").then((module) => ({ default: module.CodeEditorPanel })));
 const CHAT_COMPOSER_MAX_HEIGHT = 160;
+// How often a running goal is read back while it works. Core owns its step,
+// usage and revision; the panel only mirrors them.
+const GOAL_REFRESH_MS = 5_000;
 
 interface ConversationMessage extends ReconciledConversationMessage {}
 
@@ -563,8 +567,10 @@ export function SessionsPage() {
   const [conversationPanelOpen, setConversationPanelOpen] = useState(
     () => readConversationPanelOpen(localStorage),
   );
-  const drawerTab = searchParams.get("drawer") === "results" ? "results" : "context";
-  const sessionInspectorOpen = ["context", "results"].includes(searchParams.get("drawer") ?? "");
+  const requestedDrawer = searchParams.get("drawer") ?? "";
+  const drawerTab: "context" | "results" | "visuals" =
+    requestedDrawer === "results" ? "results" : requestedDrawer === "visuals" ? "visuals" : "context";
+  const sessionInspectorOpen = ["context", "results", "visuals"].includes(requestedDrawer);
   const setSessionInspectorOpen = (value: boolean | ((open: boolean) => boolean)) => {
     const open = typeof value === "function" ? value(sessionInspectorOpen) : value;
     updateSearchParams(next => {if(open) next.set("drawer", drawerTab); else next.delete("drawer");});
@@ -644,6 +650,18 @@ export function SessionsPage() {
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
   const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
+  // Snapshots the assistant published for this conversation. The badge counts
+  // what arrived while the operator was not looking; it never steals focus.
+  const publishedResults = useStructuredResults(api, engagement?.id, {
+    chatSessionId: sessionId,
+    live: view === "chat" && Boolean(sessionId),
+    limit: 50,
+  });
+  const { unseen: publishedUnseen } = useUnseenCount(
+    publishedResults.items,
+    sessionInspectorOpen && drawerTab === "visuals",
+  );
+
   const [providerId, setProviderId] = useState("");
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
@@ -809,6 +827,30 @@ export function SessionsPage() {
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
   const previousChatSendingRef = useRef(false);
+  const providerGoalSettledRef = useRef(false);
+
+  // Core advances a goal on every turn it dispatches — step, usage, elapsed
+  // time and therefore its revision — so a goal read once at open is stale as
+  // soon as the model works. Reading it again is what keeps the panel honest
+  // and keeps an operator's Pause/Cancel from failing on a stale revision.
+  const readProviderGoal = useCallback(async (signal?: AbortSignal): Promise<ChatGoal | undefined> => {
+    if (!api || !sessionId || runtimeKind !== "provider") return undefined;
+    try {
+      const goal = await api.getChatGoal(sessionId, signal);
+      setProviderGoal(goal);
+      setProviderGoalError(undefined);
+      return goal;
+    } catch (caught) {
+      if (signal?.aborted) return undefined; // diagnostic-expected: superseded by a newer session load
+      if (caught instanceof ApiError && caught.status === 404) {
+        setProviderGoal(undefined); // diagnostic-expected: this conversation has no goal yet
+        return undefined;
+      }
+      void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
+      setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
+      return undefined;
+    }
+  }, [api, runtimeKind, sessionId]);
 
   useEffect(() => {
     if (!api || !sessionId || runtimeKind !== "provider") {
@@ -816,14 +858,30 @@ export function SessionsPage() {
     }
     const controller = new AbortController();
     setProviderGoalLoading(true); setProviderGoalError(undefined);
-    void api.getChatGoal(sessionId, controller.signal).then(setProviderGoal).catch((caught) => {
-      if (controller.signal.aborted) return; // diagnostic-expected: superseded by a newer session load
-      if (caught instanceof ApiError && caught.status === 404) { setProviderGoal(undefined); return; } // diagnostic-expected: no goal yet
-      void logCaughtDiagnostic("interface.sessions.goal_load_failed", "The conversation goal could not be loaded.", caught, "goal");
-      setProviderGoalError(caught instanceof Error ? caught.message : "Goal could not be loaded.");
-    }).finally(() => { if (!controller.signal.aborted) setProviderGoalLoading(false); });
+    void readProviderGoal(controller.signal).finally(() => { if (!controller.signal.aborted) setProviderGoalLoading(false); });
     return () => controller.abort();
-  }, [api, sessionId, runtimeKind]);
+  }, [api, readProviderGoal, runtimeKind, sessionId]);
+
+  // A running goal changes while the model works, and again when the turn
+  // ends. Both are read back so the panel's numbers and its revision track
+  // Core rather than the moment the conversation was opened.
+  useEffect(() => {
+    if (!api || !sessionId || runtimeKind !== "provider") return;
+    if (providerGoal?.status !== "running" && !sending) return;
+    const controller = new AbortController();
+    const timer = window.setInterval(() => void readProviderGoal(controller.signal), GOAL_REFRESH_MS);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, providerGoal?.status, readProviderGoal, runtimeKind, sending, sessionId]);
+
+  useEffect(() => {
+    if (!providerGoalSettledRef.current) { providerGoalSettledRef.current = true; return; }
+    if (sending || !providerGoal) return;
+    const controller = new AbortController();
+    void readProviderGoal(controller.signal);
+    return () => controller.abort();
+    // A finished turn is the moment the goal's step and usage are final.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sending]);
   const lastModelDiscoveryProviderIdRef = useRef<string | undefined>(undefined);
   const attemptedToolVerificationRef = useRef(new Set<string>());
   const runtimeDefaultEngagementRef = useRef<string | undefined>(undefined);
@@ -4414,7 +4472,7 @@ export function SessionsPage() {
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><button className={`button quiet chat-composer-icon${publishedUnseen > 0 ? " needs-attention" : ""}`} type="button" aria-label={publishedUnseen > 0 ? `Agent view, ${publishedUnseen} new` : "Agent view"} title="Visuals the assistant published for this conversation" aria-expanded={drawerTab === "visuals" && sessionInspectorOpen} disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", drawerTab === "visuals" && sessionInspectorOpen ? "context" : "visuals");})}><Sparkles size={18} aria-hidden="true" />{publishedUnseen > 0 && <span className="chat-composer-badge">{publishedUnseen > 9 ? "9+" : publishedUnseen}</span>}</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{sending && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>
@@ -4627,7 +4685,8 @@ export function SessionsPage() {
         </section>
 
         {(view === "chat" || view === "browser") && sessionInspectorOpen && <ChatWorkspaceDrawer overlay={view === "browser"} tab={drawerTab} onTab={tab => updateSearchParams(next => {next.set("drawer", tab);})} onClose={() => setSessionInspectorOpen(false)}>
-          {drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
+          {drawerTab === "visuals" ? api && engagement && sessionId ? <ChatResultStream key={`visuals:${sessionId}`} api={api} projectId={engagement.id} sessionId={sessionId} /> : <p>Published snapshots appear after the first saved turn.</p>
+          : drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
           {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
           <section><h3>Prepared for your next message</h3>{assistantDrafts.length ? assistantDrafts.map((item, index) => <details key={index}><summary>{item.source.label}{item.truncated ? " · excerpt" : ""}</summary><pre>{item.text}</pre></details>) : <p>No selected excerpts attached.</p>}<p>{pendingImages.length} image attachment{pendingImages.length === 1 ? "" : "s"}</p></section>
           {runtimeKind === "provider" && api && sessionId && <ProviderSessionAdvanced api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}
