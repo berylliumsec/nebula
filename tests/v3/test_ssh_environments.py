@@ -532,3 +532,43 @@ def test_remote_command_timeout_stops_the_process(monkeypatch):
     )
 
     assert timed_out and exit_code is None
+
+
+def _process_alive(pid):
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as handle:
+            state = handle.read().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return False
+    return state != "Z"
+
+
+def test_cancelled_remote_command_stops_the_process(monkeypatch, tmp_path):
+    import os
+    import signal
+    import time
+
+    _local_shell(monkeypatch)
+    marker = tmp_path / "pid"
+    command = f"echo $$ > {shlex.quote(str(marker))}; exec sleep 30"
+
+    async def scenario():
+        task = asyncio.create_task(
+            environments.run_remote_command(
+                "lab", command, cwd=None, timeout_seconds=60
+            )
+        )
+        while not marker.exists() or not marker.read_text().strip():
+            await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        return int(marker.read_text())
+
+    pid = asyncio.run(scenario())
+    deadline = time.monotonic() + 2
+    while _process_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if _process_alive(pid):
+        os.killpg(pid, signal.SIGKILL)
+        pytest.fail("the remote command kept running after the turn was cancelled")

@@ -20,7 +20,7 @@ from typing import Callable, Protocol, cast
 import keyring
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from .vault_probe import vault_state
+from .vault_probe import resolve_vault_backend, vault_state
 
 SENSITIVE_DETAIL_SCHEMA = "nebula.diagnostic-sensitive-detail/v1"
 SENSITIVE_DETAIL_SERVICE = "io.berylliumsec.nebula.diagnostic-details"
@@ -91,16 +91,37 @@ class SensitiveDiagnosticStore:
                 Exception
             ):  # diagnostic-expected: an unavailable vault selects memory-only capture
                 keyring_backend = None
-        self._keyring = keyring_backend
+        self._keyring = resolve_vault_backend(keyring_backend)
         self._key: bytes | None = None
         self._durable = False
         if self.enabled:
+            self._activate()
+
+    def _activate(self) -> None:
+        if self._key is None:
             self._initialize_key()
-            if self._durable:
-                self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with self._suppress_os_error():
-                    self.root.chmod(0o700)
-            self.prune()
+        if self._durable:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with self._suppress_os_error():
+                self.root.chmod(0o700)
+        self.prune()
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Apply a capture preference change without discarding captured detail.
+
+        Memory-only detail (a locked or absent vault) exists only in this
+        instance, so a preference save must not rebuild the store: every
+        earlier "Reveal detail" would fail although the record still offers
+        it. The key is set up once, so detail captured before a toggle stays
+        readable after it.
+        """
+
+        with self._lock:
+            if enabled == self.enabled:
+                return
+            self.enabled = enabled
+            if enabled:
+                self._activate()
 
     class _suppress_os_error:
         def __enter__(self) -> None:

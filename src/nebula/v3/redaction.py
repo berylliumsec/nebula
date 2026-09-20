@@ -12,13 +12,26 @@ _PRIVATE_KEY = re.compile(
 )
 _BEARER_TOKEN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+# A Basic credential pair is base64 (mixed case, digits, "+", "/" or "="),
+# which prose such as "Basic authentication" is not.
+_BASIC_AUTH = re.compile(
+    r"\b(?i:basic)\s+(?=[A-Za-z0-9+/]*(?:[0-9+/=]|[a-z][A-Za-z0-9+/]*[A-Z]))"
+    r"[A-Za-z0-9+/]{12,}={0,2}"
+)
 _KNOWN_TOKEN = re.compile(
     r"\b(?:AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|"
-    r"sk-[A-Za-z0-9_-]{20,})\b"
+    r"github_pat_[A-Za-z0-9_]{22,}|sk-[A-Za-z0-9_-]{20,}|"
+    r"AIza[0-9A-Za-z_-]{35}|xox[abeprs]-[A-Za-z0-9-]{10,})\b"
+)
+_QUERY_SECRET = re.compile(
+    r"(?i)([?&](?:key|api[_-]?key|apikey|token|access[_-]?token|auth[_-]?token|"
+    r"auth|sig|signature|secret|client[_-]?secret|password|passwd)=)"
+    r"(?!\[REDACTED)[^&\s\"'#<>]{12,}"
 )
 _LABELED_SECRET = re.compile(
-    r"(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|password|"
-    r"passwd|secret)\b\s*[:=]\s*[\"']?)[^\s\"',;]{8,}"
+    r"(?i)(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|"
+    r"aws[_-]?secret[_-]?access[_-]?key|client[_-]?secret|password|"
+    r"passwd|secret)\b\s*[:=]\s*[\"']?)(?!\[REDACTED)[^\s\"',;]{8,}"
 )
 _PRIVATE_KEY_BEGIN = re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")
 _BIDI_CONTROLS = {
@@ -40,8 +53,10 @@ _BIDI_CONTROLS = {
 def redact_text(value: str) -> str:
     redacted = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", value)
     redacted = _BEARER_TOKEN.sub("Bearer [REDACTED]", redacted)
+    redacted = _BASIC_AUTH.sub("Basic [REDACTED]", redacted)
     redacted = _JWT.sub("[REDACTED JWT]", redacted)
     redacted = _KNOWN_TOKEN.sub("[REDACTED TOKEN]", redacted)
+    redacted = _QUERY_SECRET.sub(r"\1[REDACTED]", redacted)
     return _LABELED_SECRET.sub(r"\1[REDACTED]", redacted)
 
 

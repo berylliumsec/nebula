@@ -190,3 +190,50 @@ def test_session_memory_detail_is_byte_capped_and_evicts_oldest_first(
         retained += 1
     assert 0 < retained <= fits
     assert retained * MAX_SENSITIVE_DETAIL_BYTES <= MAX_SENSITIVE_MEMORY_BYTES
+
+
+class TrustedVault(FakeVault):
+    __module__ = "keyring.backends.SecretService"
+
+
+class ChainedVault:
+    """Stand in for keyring.backends.chainer.ChainerBackend."""
+
+    __module__ = "keyring.backends.chainer"
+    priority = 10.0
+
+    def __init__(self, *backends) -> None:
+        self.backends = list(backends)
+
+
+def test_chained_keyring_selects_its_trusted_member_for_the_detail_key(
+    tmp_path,
+) -> None:
+    plaintext = FakeVault()
+    vault = TrustedVault()
+
+    store = SensitiveDiagnosticStore(
+        tmp_path, enabled=True, keyring_backend=ChainedVault(plaintext, vault)
+    )
+
+    assert store.persistence == "encrypted-vault"
+    assert vault.values and not plaintext.values
+
+
+def test_capture_preference_change_keeps_memory_only_detail(tmp_path) -> None:
+    store = SensitiveDiagnosticStore(tmp_path, enabled=False, keyring_backend=None)
+    store._keyring = None  # no host vault: memory-only capture
+
+    store.set_enabled(True)
+    assert store.persistence == "session-memory"
+    capture = store.capture(
+        "err_kept", "secret-ish detail", source="core", application_version="3.0.0"
+    )
+    assert capture.available is True
+
+    store.set_enabled(True)
+    assert store.reveal("err_kept") == "secret-ish detail"
+    store.set_enabled(False)
+    assert store.persistence == "disabled"
+    store.set_enabled(True)
+    assert store.reveal("err_kept") == "secret-ish detail"

@@ -288,6 +288,25 @@ def _describe(environment: SshEnvironment) -> str:
     return "\n".join(lines)
 
 
+STOP_GRACE_SECONDS = 5
+
+
+async def _stop_process_group(process: asyncio.subprocess.Process) -> None:
+    """Stop ssh and, through it, the remote command; escalate if it lingers."""
+
+    for signum in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:  # diagnostic-expected: the command already exited
+            break
+        try:
+            await asyncio.wait_for(process.wait(), timeout=STOP_GRACE_SECONDS)
+        except asyncio.TimeoutError:  # diagnostic-expected: escalates to SIGKILL
+            continue
+        break
+    await process.wait()
+
+
 async def run_remote_command(
     alias: str,
     command: str,
@@ -324,11 +343,17 @@ async def run_remote_command(
         await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
     except asyncio.TimeoutError:  # diagnostic-expected: timed-out result
         timed_out = True
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:  # diagnostic-expected: the command already exited
-            pass
-        await process.wait()
+        await _stop_process_group(process)
+    except (
+        asyncio.CancelledError
+    ):  # diagnostic-expected: a stopped turn stops its remote command
+        # The stop signal goes out before the cancellation propagates, so
+        # pressing Stop on a turn ends the remote command instead of leaving
+        # it running until its timeout. The output is discarded, so the
+        # readers are released rather than drained.
+        await _stop_process_group(process)
+        readers.cancel()
+        raise
     stdout, stderr = await readers
     return (None if timed_out else process.returncode), stdout, stderr, timed_out
 

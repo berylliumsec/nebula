@@ -30,12 +30,36 @@ TRUSTED_VAULT_BACKEND_MODULES = frozenset(
     }
 )
 
+# keyring selects its chainer when more than one backend is viable (a KDE
+# desktop with kwallet and SecretService, say). The chain is not a vault
+# Nebula supports, but one of its members may be.
+CHAINER_BACKEND_MODULE = "keyring.backends.chainer"
+
 CaughtHandler = Callable[[Exception], None]
 
 
 class KeyringBackend(Protocol):
     @property
     def priority(self) -> float: ...
+
+
+def resolve_vault_backend(backend: Any) -> Any:
+    """The backend to talk to: a chainer's first trusted member, else ``backend``.
+
+    Without this a host whose keyring picks ``ChainerBackend`` is reported as
+    "vault unavailable" although its SecretService member works.
+    """
+
+    if backend is None or type(backend).__module__ != CHAINER_BACKEND_MODULE:
+        return backend
+    try:
+        members = list(backend.backends)
+    except Exception:  # diagnostic-expected: an unreadable chain fails the module check
+        return backend
+    for member in members:
+        if type(member).__module__ in TRUSTED_VAULT_BACKEND_MODULES:
+            return member
+    return backend
 
 
 def backend_usable(
@@ -46,6 +70,7 @@ def backend_usable(
 ) -> bool:
     """Whether this backend is a supported vault, without touching the vault."""
 
+    backend = resolve_vault_backend(backend)
     if backend is None:
         return False
     if not trust_backend and type(backend).__module__ not in (
@@ -105,6 +130,7 @@ def vault_state(
     Reporting that as available offers a save that always fails.
     """
 
+    backend = resolve_vault_backend(backend)
     if not backend_usable(backend, trust_backend=trust_backend, on_caught=on_caught):
         return "unavailable"
     if isinstance(backend, Keyring):
@@ -113,9 +139,11 @@ def vault_state(
 
 
 __all__ = [
+    "CHAINER_BACKEND_MODULE",
     "TRUSTED_VAULT_BACKEND_MODULES",
     "VaultState",
     "backend_usable",
+    "resolve_vault_backend",
     "secret_service_collection",
     "secret_service_state",
     "vault_state",

@@ -7389,10 +7389,11 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def list_vpn_profiles() -> list[dict[str, Any]]:
-        return [
-            public_vpn_profile(profile)
-            for profile in store.list_entities(VpnProfile, limit=1_000)
-        ]
+        profiles = list(store.list_entities(VpnProfile, limit=1_000))
+        # Vault status opens a D-Bus connection; keep that off the event loop.
+        return await asyncio.to_thread(
+            lambda: [public_vpn_profile(profile) for profile in profiles]
+        )
 
     @app.post(
         f"{API_PREFIX}/vpn-profiles",
@@ -7434,7 +7435,7 @@ def create_app(
             except Exception:
                 await asyncio.to_thread(credentials.delete, secret.reference)
                 raise
-            return public_vpn_profile(profile)
+            return await asyncio.to_thread(public_vpn_profile, profile)
         except VpnProfileError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except CredentialError as exc:
@@ -8483,7 +8484,7 @@ def create_app(
     )
     async def provider_credential_status(reference: str) -> CredentialStatus:
         try:
-            return credentials.status(reference)
+            return await asyncio.to_thread(credentials.status, reference)
         except ValueError as exc:
             record_caught_exception(
                 "api",
