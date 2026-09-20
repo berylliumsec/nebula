@@ -17,6 +17,7 @@ from uuid import NAMESPACE_URL, uuid5
 from .domain import Approval, ChatTokenUsage, RiskClass, RunBudget, ScopePolicy
 from .orchestration import (
     MissionError,
+    call_records,
     MissionPlan,
     PlannedTask,
     SpecialistApprovalRequired,
@@ -55,6 +56,17 @@ _ROLE_BY_PREFIX: tuple[tuple[str, SpecialistRole], ...] = (
     ("searchsploit.", SpecialistRole.VULNERABILITY_INTELLIGENCE),
     ("semgrep.", SpecialistRole.CODE_ANALYSIS),
 )
+FINISH_TOOL = "nebula.finish_task"
+
+
+def _recorded_call_ids(output: Mapping[str, Any]) -> list[str]:
+    return [
+        str(record["model_call_id"])
+        for record in call_records(output)
+        if isinstance(record.get("model_call_id"), str)
+    ]
+
+
 _RISK_PRIORITY = {
     RiskClass.LOCAL_READ: 0,
     RiskClass.WORKSPACE_WRITE: 1,
@@ -267,41 +279,70 @@ class BrokeredToolSpecialist:
 
         response = await self.provider.complete(self._routing_request(context, allowed))
         usage = (response.usage.input_tokens, response.usage.output_tokens)
-        call = self._one_routing_call(response)
-        if call.name == "nebula.finish_task":
-            return self._finish_result(context, call.arguments, usage)
+        # The whole response is validated before any of it reaches the broker,
+        # so a malformed batch still produces no partial effect.
+        batch = self._routing_batch(response, context, allowed)
+        if batch[0].name == FINISH_TOOL:
+            return self._finish_result(context, batch[0].arguments, usage)
 
-        if call.name not in allowed:
-            raise MissionError(f"model requested unavailable tool {call.name!r}")
-
-        invocation_id = str(
-            uuid5(
-                NAMESPACE_URL,
-                (
-                    f"nebula:model-tool:{context.run_id}:{context.task.id}:"
-                    f"{context.turn_index}:{call.id}"
-                ),
+        executed: list[SpecialistResult] = []
+        slots = context.remaining_tool_calls
+        for call in batch:
+            if self.specs[call.name].budget_class != "artifact_query":
+                if slots is not None and slots <= 0:
+                    # An earlier call in this batch spent the last slot. The
+                    # queued remainder is dropped rather than spent, and the
+                    # next turn routes again with what the mission can afford.
+                    break
+                if slots is not None:
+                    slots -= 1
+            invocation_id = str(
+                uuid5(
+                    NAMESPACE_URL,
+                    (
+                        f"nebula:model-tool:{context.run_id}:{context.task.id}:"
+                        f"{context.turn_index}:{call.id}"
+                    ),
+                )
             )
-        )
-        invocation = ToolInvocation(
-            id=invocation_id,
-            engagement_id=context.engagement_id,
-            run_id=context.run_id,
-            task_id=context.task.id,
-            tool_name=call.name,
-            arguments=call.arguments,
-            workspace=self.workspace,
-            idempotency_key=(
-                f"task:{context.task.id}:turn:{context.turn_index}:model-call:{call.id}"
-            ),
-            requested_by=self.role.value,
-        )
-        return await self._execute_invocation(
-            context,
-            invocation,
-            model_call_id=call.id,
-            usage=usage,
-        )
+            invocation = ToolInvocation(
+                id=invocation_id,
+                engagement_id=context.engagement_id,
+                run_id=context.run_id,
+                task_id=context.task.id,
+                tool_name=call.name,
+                arguments=call.arguments,
+                workspace=self.workspace,
+                idempotency_key=(
+                    f"task:{context.task.id}:turn:{context.turn_index}:"
+                    f"model-call:{call.id}"
+                ),
+                requested_by=self.role.value,
+            )
+            try:
+                executed.append(
+                    await self._execute_invocation(
+                        context,
+                        invocation,
+                        model_call_id=call.id,
+                        # One routing call produced the batch, so its spend is
+                        # charged once, to the first call that runs.
+                        usage=usage if not executed else (0, 0),
+                    )
+                )
+            except SpecialistApprovalRequired as pause:
+                # The calls that already ran are handed to the mission with the
+                # checkpoint, so their observations survive the pause and are
+                # never executed a second time on resume.
+                if executed:
+                    pause.partial_result = self._merge_turn(executed)
+                raise
+        if not executed:
+            raise MissionError(
+                "the routing batch could not run a call within the mission "
+                "tool-call budget"
+            )
+        return self._merge_turn(executed)
 
     def _routing_request(
         self, context: SpecialistContext, allowed: frozenset[str]
@@ -314,7 +355,10 @@ class BrokeredToolSpecialist:
             messages=[ModelMessage(role="user", content=self._prompt(context))],
             tools=tools,
             tool_choice=ToolChoice.REQUIRED,
-            parallel_tool_calls=False,
+            # A model may batch independent actions into one routing response.
+            # The specialist still brokers them one at a time, in order, so
+            # every call keeps its own invocation, budget slot and approval.
+            parallel_tool_calls=True,
             tool_results=self._provider_tool_history(context),
             max_output_tokens=self.max_output_tokens,
             metadata=self._metadata(context),
@@ -517,13 +561,13 @@ class BrokeredToolSpecialist:
         if not isinstance(rationale, str) or not rationale.strip():
             raise MissionError("finish_task requires a non-empty rationale")
 
-        tool_turns = [
-            turn
+        recorded = [
+            record
             for turn in context.prior_turns
-            if isinstance(turn.output.get("model_call_id"), str)
+            for record in call_records(turn.output)
         ]
-        if status == "complete" and tool_turns:
-            last_status = tool_turns[-1].output.get("status")
+        if status == "complete" and recorded:
+            last_status = recorded[-1].get("status")
             if last_status in {"failed", "denied", "incomplete"}:
                 raise MissionError(
                     "cannot complete while the latest tool result is unresolved; "
@@ -551,13 +595,14 @@ class BrokeredToolSpecialist:
         )
         observations = [
             {
-                "tool": turn.output.get("tool"),
-                "status": turn.output.get("status"),
+                "tool": record.get("tool"),
+                "status": record.get("status"),
                 "summary": turn.summary,
                 "evidence_ids": turn.evidence_ids,
             }
             for turn in context.prior_turns
-            if turn.output.get("tool")
+            for record in call_records(turn.output)
+            if record.get("tool")
         ]
         return SpecialistResult(
             summary=summary.strip(),
@@ -577,14 +622,92 @@ class BrokeredToolSpecialist:
         )
 
     @staticmethod
-    def _one_routing_call(response: Any) -> Any:
+    def _routing_batch(
+        response: Any,
+        context: SpecialistContext,
+        allowed: frozenset[str],
+    ) -> list[Any]:
+        """Validate a whole routing response before any of it reaches the broker.
+
+        A response may carry several independent routing actions. Rejecting a
+        malformed batch as a unit keeps the guarantee that a bad routing step
+        never produces a partial effect.
+        """
+
         if response.text.strip():
             raise MissionError("specialist returned prose during required routing")
-        if len(response.tool_calls) != 1:
-            raise MissionError(
-                "specialist must request exactly one sequential routing action"
-            )
-        return response.tool_calls[0]
+        if not response.tool_calls:
+            raise MissionError("specialist returned no routing action")
+        seen = {
+            call_id
+            for turn in context.prior_turns
+            for call_id in _recorded_call_ids(turn.output)
+        }
+        batch: list[Any] = []
+        for call in response.tool_calls:
+            if call.id in seen:
+                raise MissionError(
+                    "specialist repeated a completed routing call id; "
+                    "refusing duplicate execution"
+                )
+            seen.add(call.id)
+            if call.name == FINISH_TOOL:
+                if not batch:
+                    batch.append(call)
+                # A finish queued behind tool calls never runs: the next turn
+                # must inspect those observations before finishing.
+                break
+            if call.name not in allowed:
+                raise MissionError(f"model requested unavailable tool {call.name!r}")
+            batch.append(call)
+        return batch
+
+    def _merge_turn(self, results: list[SpecialistResult]) -> SpecialistResult:
+        """Fold the calls a batch executed into the turn's single result."""
+
+        if len(results) == 1:
+            return results[0]
+        records = [result.output for result in results]
+        status = next(
+            (
+                str(record.get("status"))
+                for record in records
+                if record.get("status") != "complete"
+            ),
+            "complete",
+        )
+        return SpecialistResult(
+            summary="; ".join(result.summary for result in results)[:8_000],
+            rationale=(
+                f"brokered {len(results)} calls in one turn; the next turn must "
+                "inspect these observations before finishing"
+            ),
+            outcome=SpecialistOutcome.CONTINUE,
+            output={"status": status, "calls": records},
+            evidence_ids=list(
+                dict.fromkeys(
+                    evidence_id
+                    for result in results
+                    for evidence_id in result.evidence_ids
+                )
+            ),
+            reproducible_steps=list(
+                dict.fromkeys(
+                    step for result in results for step in result.reproducible_steps
+                )
+            ),
+            candidate_finding_ids=list(
+                dict.fromkeys(
+                    finding_id
+                    for result in results
+                    for finding_id in result.candidate_finding_ids
+                )
+            ),
+            input_tokens=sum(result.input_tokens for result in results),
+            output_tokens=sum(result.output_tokens for result in results),
+            cost_usd=sum(result.cost_usd for result in results),
+            tool_calls=sum(result.tool_calls for result in results),
+        )
 
     def _routing_instructions(self, context: SpecialistContext) -> str:
         budget_note = (
@@ -602,8 +725,12 @@ class BrokeredToolSpecialist:
             )
         )
         return (
-            "Call exactly one supplied routing action and return no prose. Finish with "
-            "nebula.finish_task. " + budget_note
+            "Call one or more supplied routing actions and return no prose. Request "
+            "several actions in the same response when they do not depend on each "
+            "other; keep an action that needs an earlier observation for a later "
+            "response. Nebula brokers a batch one call at a time, in the order you "
+            "asked for. Finish with nebula.finish_task in a response of its own, "
+            "once the observations you need are in hand. " + budget_note
         )
 
     def _prompt(self, context: SpecialistContext) -> str:
@@ -613,7 +740,12 @@ class BrokeredToolSpecialist:
                 "turn": index + 1,
                 "summary": turn.summary[:500],
                 "status": turn.output.get("status"),
-                "tool": turn.output.get("tool"),
+                "tool": ", ".join(
+                    str(record.get("tool"))
+                    for record in call_records(turn.output)
+                    if record.get("tool")
+                )
+                or None,
             }
             for index, turn in enumerate(earlier)
         ]
@@ -653,30 +785,31 @@ class BrokeredToolSpecialist:
                 break
         for index in sorted(selected_indexes):
             turn = context.prior_turns[index]
-            call_id = turn.output.get("model_call_id")
-            tool_name = turn.output.get("tool")
-            provider_result = turn.output.get("provider_result")
-            if (
-                not isinstance(call_id, str)
-                or not isinstance(tool_name, str)
-                or not isinstance(provider_result, (dict, str))
-            ):
-                continue
-            arguments = turn.output.get("arguments")
-            history.append(
-                ModelToolResult(
-                    call_id=call_id,
-                    name=tool_name,
-                    arguments=arguments if isinstance(arguments, dict) else {},
-                    output=sanitize_model_history_result(
-                        provider_result,
-                        tool_call_id=call_id,
-                        tool_name=tool_name,
-                        trusted_result=turn.output.get("trusted_result") is True,
-                    ),
-                    is_error=turn.output.get("status") != "complete",
+            for record in call_records(turn.output):
+                call_id = record.get("model_call_id")
+                tool_name = record.get("tool")
+                provider_result = record.get("provider_result")
+                if (
+                    not isinstance(call_id, str)
+                    or not isinstance(tool_name, str)
+                    or not isinstance(provider_result, (dict, str))
+                ):
+                    continue
+                arguments = record.get("arguments")
+                history.append(
+                    ModelToolResult(
+                        call_id=call_id,
+                        name=tool_name,
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        output=sanitize_model_history_result(
+                            provider_result,
+                            tool_call_id=call_id,
+                            tool_name=tool_name,
+                            trusted_result=record.get("trusted_result") is True,
+                        ),
+                        is_error=record.get("status") != "complete",
+                    )
                 )
-            )
         return history
 
     @staticmethod
@@ -728,16 +861,17 @@ class BrokeredToolSpecialist:
         arguments: dict[str, Any],
     ) -> None:
         for turn in reversed(context.prior_turns):
-            if turn.output.get("status") not in {"failed", "denied", "incomplete"}:
-                continue
-            if (
-                turn.output.get("tool") == tool_name
-                and turn.output.get("arguments") == arguments
-            ):
-                raise MissionError(
-                    "the model repeated a failed invocation unchanged; inspect the "
-                    "prior error and change the tool or arguments"
-                )
+            for record in call_records(turn.output):
+                if record.get("status") not in {"failed", "denied", "incomplete"}:
+                    continue
+                if (
+                    record.get("tool") == tool_name
+                    and record.get("arguments") == arguments
+                ):
+                    raise MissionError(
+                        "the model repeated a failed invocation unchanged; inspect "
+                        "the prior error and change the tool or arguments"
+                    )
 
     @staticmethod
     def _safe_text(value: str) -> str:

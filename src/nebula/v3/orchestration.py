@@ -84,10 +84,15 @@ class SpecialistApprovalRequired(ApprovalRequired):
         *,
         usage: ChatTokenUsage | None = None,
         cost_usd: float = 0.0,
+        partial_result: "SpecialistResult | None" = None,
     ) -> None:
         super().__init__(approval)
         self.usage = usage or ChatTokenUsage()
         self.cost_usd = cost_usd
+        # Calls a batched turn completed before the checkpoint. They are
+        # persisted with the pause so the observations survive it and the
+        # resumed task never runs them again.
+        self.partial_result = partial_result
 
 
 class SpecialistRole(str, Enum):
@@ -171,6 +176,22 @@ class SpecialistResult(BaseModel):
     tool_calls: int = Field(default=0, ge=0)
 
 
+def call_records(output: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """The brokered calls a specialist turn recorded, oldest first.
+
+    A turn that ran a batch stores one record per call under ``calls``; a turn
+    that ran a single call stores that call at the top level, the shape every
+    mission persisted before batches existed.
+    """
+
+    batched = output.get("calls")
+    if isinstance(batched, list):
+        return [record for record in batched if isinstance(record, Mapping)]
+    if isinstance(output.get("model_call_id"), str):
+        return [output]
+    return []
+
+
 def _model_safe_specialist_result(result: SpecialistResult) -> dict[str, Any]:
     """Strip legacy raw action payloads only at the model-delivery boundary."""
 
@@ -178,22 +199,31 @@ def _model_safe_specialist_result(result: SpecialistResult) -> dict[str, Any]:
     output = payload.get("output")
     if not isinstance(output, dict):
         return payload
-    tool_name = output.get("tool")
-    model_call_id = output.get("model_call_id")
-    provider_result = output.get("provider_result")
-    if (
-        isinstance(tool_name, str)
-        and isinstance(model_call_id, str)
-        and isinstance(provider_result, (dict, str))
-    ):
-        output["provider_result"] = sanitize_model_history_result(
-            provider_result,
-            tool_call_id=model_call_id,
-            tool_name=tool_name,
-            trusted_result=output.get("trusted_result") is True,
-        )
-        for legacy_field in ("stdout", "stderr", "raw_output"):
-            output.pop(legacy_field, None)
+    batched = output.get("calls")
+    # A batched turn carries one record per brokered call; a single-call turn
+    # carries that call at the top level.
+    records = (
+        [record for record in batched if isinstance(record, dict)]
+        if isinstance(batched, list)
+        else [output]
+    )
+    for record in records:
+        tool_name = record.get("tool")
+        model_call_id = record.get("model_call_id")
+        provider_result = record.get("provider_result")
+        if (
+            isinstance(tool_name, str)
+            and isinstance(model_call_id, str)
+            and isinstance(provider_result, (dict, str))
+        ):
+            record["provider_result"] = sanitize_model_history_result(
+                provider_result,
+                tool_call_id=model_call_id,
+                tool_name=tool_name,
+                trusted_result=record.get("trusted_result") is True,
+            )
+            for legacy_field in ("stdout", "stderr", "raw_output"):
+                record.pop(legacy_field, None)
     return payload
 
 
@@ -932,7 +962,9 @@ class MissionRuntime:
                 context_cost += approval_cost
                 return (
                     task,
-                    None,
+                    # Calls a batched turn completed before the checkpoint, so
+                    # the pause keeps their observations instead of losing them.
+                    getattr(exc, "partial_result", None),
                     exc.approval,
                     None,
                     context_usage,
@@ -1007,6 +1039,19 @@ class MissionRuntime:
                 result = None
                 approval = None
             if approval:
+                # A batched turn can pause part way through. What it already
+                # brokered is persisted here so the resumed task sees those
+                # observations and never runs those calls again.
+                partial_total = 0
+                if result is not None:
+                    token_input += result.input_tokens
+                    token_output += result.output_tokens
+                    cost += result.cost_usd
+                    tool_calls += result.tool_calls
+                    partial_total = result.input_tokens + result.output_tokens
+                    task_history.setdefault(task.id, []).append(
+                        result.model_dump(mode="json")
+                    )
                 # A human checkpoint is a continuation of the same attempt, not
                 # a model/tool failure and therefore consumes no retry budget.
                 attempts[task.id] = max(0, attempts[task.id] - 1)
@@ -1034,8 +1079,14 @@ class MissionRuntime:
                     attempt_entity.id,
                     {
                         "status": TaskStatus.WAITING_APPROVAL,
-                        "tokens_used": attempt_entity.tokens_used + context_total,
-                        "cost_usd": attempt_entity.cost_usd + context_cost,
+                        "tokens_used": (
+                            attempt_entity.tokens_used + context_total + partial_total
+                        ),
+                        "cost_usd": (
+                            attempt_entity.cost_usd
+                            + context_cost
+                            + (result.cost_usd if result is not None else 0.0)
+                        ),
                     },
                     expected_revision=attempt_entity.revision,
                 )
@@ -1710,7 +1761,11 @@ class MissionRuntime:
         for task_id, raw_results in result_groups:
             for raw in raw_results:
                 result = SpecialistResult.model_validate(raw)
-                tool = str(result.output.get("tool") or "")
+                tool = ", ".join(
+                    str(record.get("tool"))
+                    for record in call_records(result.output)
+                    if record.get("tool")
+                )
                 key = (task_id, tool, result.summary)
                 if key in seen:
                     continue
