@@ -120,6 +120,35 @@ class ChatScheduleService:
             expected_revision=schedule.revision,
         )
 
+    def reconcile(self, schedule: ChatSchedule) -> ChatSchedule | None:
+        """Retire a schedule whose conversation is gone; pause one whose provider is.
+
+        Older releases left schedule rows behind when their conversation was
+        deleted, and a provider profile can be removed after a schedule was
+        created. Neither may raise out of the scheduler tick, which would stop
+        every other schedule from firing.
+        """
+
+        try:
+            self.store.get(ChatSession, schedule.session_id)
+        except NotFoundError:  # diagnostic-expected: the conversation was deleted; its schedule has nothing to run
+            self.store.delete(ChatSchedule, schedule.id)
+            return None
+        try:
+            self.store.get(ProviderProfile, schedule.provider_profile_id)
+        except NotFoundError:  # diagnostic-expected: the provider was removed; keep the schedule for the operator to repoint
+            return self.store.update(
+                ChatSchedule,
+                schedule.id,
+                {
+                    "enabled": False,
+                    "last_status": "skipped",
+                    "skip_reason": "Provider was removed; choose a provider for this conversation and enable the schedule again.",
+                },
+                expected_revision=schedule.revision,
+            )
+        return schedule
+
     def revalidate(self, schedule: ChatSchedule) -> str | None:
         profile = self.store.get(ProviderProfile, schedule.provider_profile_id)
         if not profile.enabled:

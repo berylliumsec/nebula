@@ -1890,7 +1890,16 @@ def create_app(
             async def _chat_schedule_loop() -> None:
                 while True:
                     await asyncio.sleep(15)
-                    await provider_chat.fire_due_schedules()
+                    try:
+                        await provider_chat.fire_due_schedules()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.schedule_tick_failed",
+                            "A provider chat scheduling pass failed; the next pass retries.",
+                            exc,
+                            stage="schedule",
+                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),

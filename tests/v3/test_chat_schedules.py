@@ -111,3 +111,70 @@ def test_schedule_http_create_uses_json_body(tmp_path):
     )
     assert created.status_code == 200, created.text
     assert created.json()["interval_seconds"] == 3600
+
+
+def _scheduled_session(store: NebulaStore, session_id: str = "session"):
+    profile = store.create(
+        ProviderProfile(
+            id="provider",
+            name="Provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            metadata={"default_model": "model-a"},
+        )
+    )
+    store.create(
+        ChatSession(
+            id=session_id,
+            engagement_id="project",
+            title="Scheduled",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    schedules = ChatScheduleService(store)
+    schedule = schedules.create(session_id, ScheduleCreate(interval_seconds=3600))
+    return store.update(
+        type(schedule),
+        schedule.id,
+        {"next_run_at": utc_now() - timedelta(seconds=1)},
+        expected_revision=schedule.revision,
+    )
+
+
+def test_deleting_a_conversation_removes_its_schedule(tmp_path):
+    store = NebulaStore(tmp_path / "schedules.db")
+    store.create(Engagement(id="project", name="Project"))
+    schedule = _scheduled_session(store)
+
+    store.delete_chat_session("session")
+
+    assert store.list_entities(type(schedule)) == []
+
+
+def test_orphaned_schedule_does_not_stop_the_scheduler(tmp_path):
+    store = NebulaStore(tmp_path / "schedules.db")
+    store.create(Engagement(id="project", name="Project"))
+    orphan = _scheduled_session(store, "orphan")
+    # A schedule row that outlived its conversation (older Core releases left it behind).
+    store.delete(ChatSession, "orphan")
+
+    asyncio.run(ChatService(store).fire_due_schedules())
+
+    assert store.list_entities(type(orphan)) == []
+
+
+def test_schedule_without_its_provider_is_paused_not_fatal(tmp_path):
+    store = NebulaStore(tmp_path / "schedules.db")
+    store.create(Engagement(id="project", name="Project"))
+    schedule = _scheduled_session(store)
+    store.delete(ProviderProfile, "provider")
+
+    asyncio.run(ChatService(store).fire_due_schedules())
+
+    latest = ChatScheduleService(store).get("session")
+    assert latest.enabled is False
+    assert latest.last_status == "skipped"
+    assert "Provider was removed" in (latest.skip_reason or "")
+    assert latest.revision == schedule.revision + 1

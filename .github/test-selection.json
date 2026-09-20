@@ -1,20 +1,17 @@
 {
-  "change_digest": "67310dfcae2066f28ba5637999ca21c928b97875ecb37094a0eac90793419d11",
-  "reviewed_by": "Claude review of per-conversation record lookups",
-  "reason": "ChatService.pending_turn, ChatGoalService.get, ChatScheduleService.get and ToolOutputService._call_artifacts each read the first 1,000-row page of a whole entity kind (list_entities orders oldest first) and filtered by session or tool call in Python. Once Core holds more than 1,000 chat turns in total, pending_turn stops seeing any newer conversation's active turn, so the guards on sending, editing in place, scheduling and subagent delivery silently stop working; past 1,000 goals or schedules a newer conversation's goal or schedule is reported missing (GET 404, POST creates a duplicate, schedules skip with 'No conversation goal'); past ~1,000 artifacts in a project tool_output.search returns no matches for newer calls. NebulaStore.list_session_entities and list_tool_call_artifacts now filter on the JSON payload in SQL, and _persist_turn_inputs uses the same query. test_session_record_lookups pins each lookup beyond the first thousand rows; the goal, schedule, storage and specialist-batch suites cover the callers (the specialist loop reads tool output through _call_artifacts).",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through storage.py) is the real-Core journey suite; no HTTP contract or rendered state changes, and the defect only appears past 1,000 rows, which the Python tests build directly. No full suites.",
+  "change_digest": "ee2b15f466b0a4b787e25fe67a9de25061551ec1e25ac52bffd0eef76f4ab157",
+  "reviewed_by": "Claude review of provider chat schedule resilience",
+  "reason": "Deleting a conversation left its chat_schedules row behind (delete_chat_session never listed that kind), and the scheduler's per-tick loop called ChatScheduleService.revalidate, whose store.get on the missing conversation or provider raised NotFoundError straight out of fire_due_schedules. _chat_schedule_loop had no guard, so that one orphan ended the 'nebula-chat-schedules' task and every other schedule stopped firing until Core restarted, where it died again 15 s later. delete_chat_session now removes chat_schedules with the conversation; ChatScheduleService.reconcile drops a schedule whose conversation is gone and pauses (enabled=false, skip_reason) one whose provider is gone, which ProviderSessionAdvanced already renders; fire_due_schedules fires each schedule inside its own ConflictError/NotFoundError guard; and the API loop records a failed tick instead of ending. test_chat_schedules covers the cascade, the orphan, and the missing-provider pause; test_storage covers delete_chat_session's owned-record cascade.",
+  "exclusions": "No frontend tests: no ui/ change; the paused reason reuses the existing schedule status line. No native tests: no Tauri or Rust change. No Playwright: area:core-api (matched through api.py/storage.py) is the real-Core journey suite and does not create or fire chat schedules; the fix is exercised by the Python suites listed here. No full suites.",
   "expected_tests": {
-    "python": 44,
+    "python": 23,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_chat_goals.py",
     "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_specialist_tool_batches.py"
+    "tests/v3/test_storage.py"
   ],
   "frontend": [],
   "native": [],

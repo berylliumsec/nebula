@@ -54,6 +54,7 @@ from .domain import (
     ChatBackend,
     ChatMessage,
     ChatRole,
+    ChatSchedule,
     ChatSession,
     ChatGoal,
     ChatGoalStatus,
@@ -180,6 +181,8 @@ from .tool_results import (
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
+    from .chat_goals import ChatGoalService
+    from .chat_schedules import ChatScheduleService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
 
 
@@ -1105,64 +1108,92 @@ class ChatService:
 
         from .chat_goals import ChatGoalService
         from .chat_schedules import ChatScheduleService
-        from .storage import NotFoundError
+        from .storage import ConflictError, NotFoundError
 
         schedules = ChatScheduleService(self.store)
         goals = ChatGoalService(self.store)
         for schedule in schedules.due():
-            reason = schedules.revalidate(schedule)
-            if reason:
-                schedules.skip(schedule, reason)
-                continue
-            if self.pending_turn(schedule.session_id) is not None:
-                schedules.skip(schedule, "Previous turn is still active.")
-                continue
             try:
-                goal = goals.get(schedule.session_id)
-            except NotFoundError:  # diagnostic-expected: missing goal is recorded as a schedule skip receipt
-                schedules.skip(schedule, "No conversation goal is available.")
-                continue
-            if goal.status != ChatGoalStatus.RUNNING:
-                schedules.skip(
-                    schedule,
-                    f"Goal is {goal.status.value}; scheduled work waits for Start.",
-                )
-                continue
-            try:
-                prepared = self.prepare(
-                    ChatCompletionRequest(
-                        provider_id=schedule.provider_profile_id,
-                        engagement_id=schedule.engagement_id,
-                        session_id=schedule.session_id,
-                        goal_id=goal.id,
-                        model=schedule.model,
-                        messages=[
-                            ChatRequestMessage(
-                                role=ChatRole.USER,
-                                content="Continue the scheduled conversation goal.",
-                            )
-                        ],
-                        include_knowledge=False,
-                    )
-                )
-                completion = await self.complete(prepared)
-                schedules.record_run(
-                    schedule,
-                    turn_id=completion.turn_id or "",
-                    status="complete",
-                )
-            except Exception as exc:
+                await self._fire_schedule(schedule, schedules, goals)
+            except (
+                ConflictError,
+                NotFoundError,
+            ) as exc:  # diagnostic-expected: the schedule changed or was removed while firing; the next tick rereads it
                 record_caught_exception(
                     "chat",
-                    "chat.schedule.failed",
-                    "A scheduled provider chat occurrence failed.",
+                    "chat.schedule.changed_while_firing",
+                    "A scheduled provider chat occurrence changed while it was firing.",
                     exc,
                     stage="schedule",
                 )
-                schedules.skip(
-                    schedule,
-                    "Scheduled occurrence failed; it was not retried overlapping.",
+
+    async def _fire_schedule(
+        self,
+        schedule: ChatSchedule,
+        schedules: ChatScheduleService,
+        goals: ChatGoalService,
+    ) -> None:
+        from .storage import NotFoundError
+
+        reconciled = schedules.reconcile(schedule)
+        if reconciled is None or not reconciled.enabled:
+            return
+        schedule = reconciled
+        reason = schedules.revalidate(schedule)
+        if reason:
+            schedules.skip(schedule, reason)
+            return
+        if self.pending_turn(schedule.session_id) is not None:
+            schedules.skip(schedule, "Previous turn is still active.")
+            return
+        try:
+            goal = goals.get(schedule.session_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: missing goal is recorded as a schedule skip receipt
+            schedules.skip(schedule, "No conversation goal is available.")
+            return
+        if goal.status != ChatGoalStatus.RUNNING:
+            schedules.skip(
+                schedule,
+                f"Goal is {goal.status.value}; scheduled work waits for Start.",
+            )
+            return
+        try:
+            prepared = self.prepare(
+                ChatCompletionRequest(
+                    provider_id=schedule.provider_profile_id,
+                    engagement_id=schedule.engagement_id,
+                    session_id=schedule.session_id,
+                    goal_id=goal.id,
+                    model=schedule.model,
+                    messages=[
+                        ChatRequestMessage(
+                            role=ChatRole.USER,
+                            content="Continue the scheduled conversation goal.",
+                        )
+                    ],
+                    include_knowledge=False,
                 )
+            )
+            completion = await self.complete(prepared)
+            schedules.record_run(
+                schedule,
+                turn_id=completion.turn_id or "",
+                status="complete",
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.schedule.failed",
+                "A scheduled provider chat occurrence failed.",
+                exc,
+                stage="schedule",
+            )
+            schedules.skip(
+                schedule,
+                "Scheduled occurrence failed; it was not retried overlapping.",
+            )
 
     async def shutdown(self) -> None:
         # Cancellation below is Core stopping, not an operator stop.
