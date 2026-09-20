@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from nebula.v3.chat import ChatError, ChatService, PreparedChat
+from nebula.v3.chat import (
+    _CHAT_BASE_INSTRUCTIONS,
+    ChatError,
+    ChatService,
+    PreparedChat,
+)
 from nebula.v3.domain import (
     Approval,
     ChatGoal,
@@ -244,6 +249,39 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
     failed = store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert failed.execution_claim_id is None
+
+
+def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="The safe tool returned a."),
+    ]
+    _, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    prepared.model_request = prepared.model_request.model_copy(
+        update={"instructions": _CHAT_BASE_INSTRUCTIONS}
+    )
+
+    asyncio.run(service.complete(prepared))
+
+    turn_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert len(turn_requests) == 3
+    for request in turn_requests:
+        instructions = request.instructions or ""
+        assert _CHAT_BASE_INSTRUCTIONS in instructions
+        assert "No tools are available" not in instructions
+    # The last request is final synthesis: it carries no functions, but tools
+    # did run, so it must not tell the operator the turn had none.
+    assert turn_requests[-1].tools == []
 
 
 def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):

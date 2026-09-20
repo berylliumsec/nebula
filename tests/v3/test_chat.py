@@ -372,6 +372,10 @@ def test_confirmed_context_rejection_refreshes_compacts_and_retries_once(
         for request in provider.requests
         if request.metadata.get("context_length_recovery") == "1"
     )
+    assert retried.tools == []
+    assert (retried.instructions or "").startswith(
+        "No tools are available in this turn. "
+    )
     limits = json.loads(retried.metadata["resolved_context_limits"])
     assert limits["context_window"] == 4_000
     assert limits["metadata_revision"] != "wide-routes"
@@ -805,6 +809,50 @@ def test_provider_skill_resources_are_exposed_only_through_bounded_reader(
         )
     )
     assert result.output["content"] == "Run the focused checks."
+
+
+def test_tool_enabled_turn_instructions_never_claim_the_turn_has_no_tools(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-tool-instructions.db")
+    workspace = tmp_path / "workspace"
+    skill_path = workspace / ".agents" / "skills" / "review" / "SKILL.md"
+    resource = skill_path.parent / "references" / "checklist.md"
+    resource.parent.mkdir(parents=True)
+    skill_path.write_text(
+        "Read [the checklist](references/checklist.md).", encoding="utf-8"
+    )
+    resource.write_text("Run the focused checks.", encoding="utf-8")
+    engagement = store.create(Engagement(id="eng-tool-prompt", name="Tool prompt"))
+    payload = _profile(local=True).model_dump(mode="python")
+    payload["capabilities"]["tool_calling"] = True
+    payload["capability_verifications"] = {
+        "model-a": {"model": "model-a", "status": "verified"}
+    }
+    profile = store.create(ProviderProfile.model_validate(payload))
+    provider = FakeProvider(profile.id, local=True)
+    provider.config.capabilities.tools = True
+    provider.config.capabilities.strict_tools = True
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store, workspace_resolver=lambda _: workspace)
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            skill={"name": "review", "path": str(skill_path.resolve())},
+            messages=[{"role": "user", "content": "$review inspect it"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    # Routing and synthesis prepend their own instructions to this text, so a
+    # tool-free claim here would contradict the functions they supply.
+    assert prepared.tools_enabled is True
+    instructions = prepared.model_request.instructions or ""
+    assert instructions.startswith(chat_module._CHAT_BASE_INSTRUCTIONS)
+    assert "No tools are available" not in instructions
 
 
 def test_restart_interrupts_turns_and_blocks_unknown_tool_replay(tmp_path, monkeypatch):
@@ -1397,6 +1445,8 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
         if not request.metadata.get("operation")
     )
     instructions = final_request.instructions or ""
+    assert instructions.startswith("No tools are available in this turn. ")
+    assert final_request.tools == []
     assert "BEGIN REFERENCE DATA (JSON)" in instructions
     assert "Cite provided references with [source_id:chunk_id]." in instructions
     assert "CROSS_ENGAGEMENT_SECRET" not in instructions

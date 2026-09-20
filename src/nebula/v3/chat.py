@@ -601,9 +601,12 @@ _CHAT_BASE_INSTRUCTIONS = (
     "Answer the operator's request. Cite provided references with [source_id:chunk_id]."
 )
 
-_CHAT_INSTRUCTIONS = (
-    """No tools are available in this turn. """ + _CHAT_BASE_INSTRUCTIONS
-)
+# Routing and synthesis prepend their own instructions to the same base text,
+# so the tool-free claim is attached to the one request that carries it rather
+# than baked into the base every turn inherits.
+_NO_TOOL_PREFIX = "No tools are available in this turn. "
+
+_CHAT_INSTRUCTIONS = _NO_TOOL_PREFIX + _CHAT_BASE_INSTRUCTIONS
 
 _CHAT_TOOL_INSTRUCTIONS = (
     """Call one or more supplied functions and return no prose. Request several
@@ -658,6 +661,14 @@ def _routing_input_schema(spec: Any) -> dict[str, Any]:
             "description": "Engagement workspace root; supplied by Nebula Core.",
         }
     return schema
+
+
+def _tool_free_request(request: ModelRequest) -> ModelRequest:
+    """Only a request that exposes no functions tells the model it has none."""
+
+    return request.model_copy(
+        update={"instructions": _NO_TOOL_PREFIX + (request.instructions or "")}
+    )
 
 
 def _tool_inventory_instructions(specs: Any) -> str:
@@ -1663,7 +1674,9 @@ class ChatService:
         operator_decisions = decision_snapshot(
             self.store, session.id if session else None, engagement_id
         )
-        instructions = _CHAT_INSTRUCTIONS + decision_instructions(operator_decisions)
+        instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
+            operator_decisions
+        )
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
@@ -2327,7 +2340,9 @@ class ChatService:
             if completed is None:
                 raise ChatError("command response ended before final synthesis")
             return completed
-        request = self._fit_turn_goal_request(prepared, prepared.model_request)
+        request = self._fit_turn_goal_request(
+            prepared, _tool_free_request(prepared.model_request)
+        )
         response = await self._complete_with_context_recovery(prepared, request)
         if prepared.turn is not None:
             self._assert_execution_owner(prepared)
@@ -2503,7 +2518,7 @@ class ChatService:
                 "instructions": (
                     _CHAT_TOOL_INSTRUCTIONS + "\n\n" + instructions
                     if failed_request.tools
-                    else instructions
+                    else _NO_TOOL_PREFIX + instructions
                 ),
                 "tools": failed_request.tools,
                 "tool_results": failed_request.tool_results,
@@ -2720,7 +2735,9 @@ class ChatService:
                 yield item
             return
         completed = False
-        request = self._fit_turn_goal_request(prepared, prepared.model_request)
+        request = self._fit_turn_goal_request(
+            prepared, _tool_free_request(prepared.model_request)
+        )
         async for event in self._stream_with_context_recovery(prepared, request):
             if event.type == StreamEventType.STARTED:
                 continue
