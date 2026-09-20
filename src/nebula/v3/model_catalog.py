@@ -19,9 +19,13 @@ class ModelDescriptor(BaseModel):
     # Preserve decimal strings and upstream billing keys/units, including zero.
     pricing: dict[str, str] = Field(default_factory=dict)
     expiration_date: str | None = None
+    # Exact model an alias ("~author/family-latest") currently redirects to.
+    alias_target: str | None = None
     route_limits: list["ModelRouteDescriptor"] = Field(default_factory=list)
     route_limits_verified: bool = False
     route_limits_checked_at: str | None = None
+    # Slug whose endpoints were measured; an alias is measured through its target.
+    route_limits_source_model: str | None = None
 
 
 # Descriptor keys owned by endpoint verification, not by catalog discovery.
@@ -30,7 +34,61 @@ ROUTE_LIMIT_FIELDS = (
     "route_limits_verified",
     "route_limits_checked_at",
     "route_limits_error",
+    "route_limits_source_model",
 )
+
+
+def _slug(value: Any) -> str | None:
+    return (
+        value.strip()
+        if isinstance(value, str) and value.strip() and len(value) <= 500
+        else None
+    )
+
+
+def find_model_descriptor(descriptors: Any, model: str | None) -> dict[str, Any] | None:
+    """Locate the stored descriptor for one exact model id."""
+
+    if model is None or not isinstance(descriptors, list):
+        return None
+    return next(
+        (
+            item
+            for item in descriptors
+            if isinstance(item, dict) and item.get("id") == model
+        ),
+        None,
+    )
+
+
+def route_discovery_model(descriptor: Any, model: str) -> str:
+    """Endpoint discovery targets the concrete model, never the alias.
+
+    OpenRouter publishes an empty endpoint set for alias models: they carry no
+    routes of their own and redirect to whichever model the catalog names as
+    their target.
+    """
+
+    if not isinstance(descriptor, dict):
+        return model
+    return _slug(descriptor.get("alias_target")) or model
+
+
+def route_limits_verified(descriptor: Any, model: str) -> bool:
+    """Endpoint limits hold only while they describe the slug routing serves.
+
+    An alias that has moved on to a newer model keeps its recorded routes, but
+    they no longer prove anything, so the conservative cap applies until the
+    new target is measured.
+    """
+
+    if (
+        not isinstance(descriptor, dict)
+        or descriptor.get("route_limits_verified") is not True
+    ):
+        return False
+    measured = _slug(descriptor.get("route_limits_source_model")) or model
+    return measured == route_discovery_model(descriptor, model)
 
 
 class ModelRouteDescriptor(BaseModel):
@@ -88,6 +146,8 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
         description = item.get("description")
         canonical_slug = item.get("canonical_slug")
         expiration_date = item.get("expiration_date")
+        alias_target = item.get("alias_target")
+        alias_target = alias_target if isinstance(alias_target, dict) else {}
         models.setdefault(
             identity,
             ModelDescriptor(
@@ -114,6 +174,7 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
                     if isinstance(expiration_date, str) and expiration_date.strip()
                     else None
                 ),
+                alias_target=_slug(alias_target.get("slug")),
             ),
         )
     return list(models.values())

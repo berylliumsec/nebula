@@ -103,6 +103,7 @@ Sources: [key metadata](https://openrouter.ai/docs/api/api-reference/api-keys/ge
 | `context_length`, `top_provider.max_completion_tokens` | Catalog context/output hints; validate against compatible endpoint limits before execution. |
 | `pricing` | Decimal monetary values with explicit units. Display token prices per million; preserve other billing units separately. Missing price is unknown, not free. |
 | `expiration_date` | Warn about retirement and preserve the saved model ID in historical sessions. |
+| `alias_target.slug` | Exact model an alias (`~author/family-latest`) redirects to. Aliases publish no endpoints of their own, so endpoint discovery and context sizing measure the target; recorded limits lapse when the target moves. |
 | Endpoint `provider_name`, `tag`, `supported_parameters`, limits and pricing | Advanced hosting preference and route compatibility; distinct from model publisher and Nebula's OpenRouter connection. |
 
 The source schemas are the catalog and endpoint documentation linked above. Catalog
@@ -362,7 +363,10 @@ catalog, persists its revision, and sizes every request from the minimum context
 input and output ceilings across active routes that support the request's required
 parameters. Missing or invalid endpoint metadata fails closed to Nebula's labeled
 8,192-token safe ceiling; the session details distinguish that estimate from verified
-route capacity. Remaining G6 work includes tokenizer integrations, route/model
+route capacity. Alias models are measured through the catalog's `alias_target`,
+because the alias itself returns an empty endpoint set; the descriptor records which
+slug was measured, and limits revert to the safe ceiling once the alias redirects
+somewhere those routes never described. Remaining G6 work includes tokenizer integrations, route/model
 downgrade UX and operator-facing compaction-budget settings. Active goals now reserve their remaining
 token budget before a compactor call and charge every successful or failed summary
 attempt to cumulative goal usage. A durable pending approval/recovery turn rejects a

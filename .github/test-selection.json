@@ -1,27 +1,21 @@
 {
-  "change_digest": "7e4aa028768c0554e50a2cfdaac176a5637c6eb0370e779efe2e03d3ec32f3d1",
-  "reviewed_by": "Claude review of the assistant model picker's state authority",
-  "reason": "A saved provider's Chat model picker went empty in Assistant settings. Discovery does arrive: SessionsPage's discovery effect calls refreshProvider, which folds the health check's models into the cached provider. The capability verification that follows the first model selection then calls verifyProviderCapabilities, whose second request re-reads the provider profile, and a profile record carries only the allowed models and state \"unchecked\". WorkspaceContext replaced the checked provider with that record, so models emptied, the reconciliation effect cleared the selected model, and the select stayed disabled at \"\" because discovery does not re-run for the same provider id. A profile with no allowed-model list - the common local/vLLM shape this real-Core journey creates - lost every model this way, while a profile with an allowlist only lost its descriptors and unlisted discoveries, which is why the mocked suites never caught it. ui/src/api/providerRuntime.ts adds providerWithDiscoveredModels and providersWithDiscoveredModels: folding a profile record into a checked provider keeps the discovered catalog, descriptors, latency and lastCheckedAt, re-derives the selectable models from that record's allowed models, and keeps the health verdict only when the last check succeeded on a profile that stayed enabled, so a failed or disabled state never sticks. WorkspaceContext.tsx routes its bootstrap list, the providers retry, updateProvider, reverifyProvider and setProviderEnabled through it, and refreshProvider keeps the newer of the cached and reported revisions, because a health check that started before a PATCH reports the pre-PATCH revision and made the next enable conflict. runtimeDefaults.ts adds providerDefaultModel - the saved default while the runtime still reports it, otherwise the first discovered model, the rule aiRuntimes already applies to AI writing and browser automation - and defaultModelRuntime plus the four SessionsPage provider selections use it, so selecting a provider restores the default saved in Settings instead of the runtime's first model. client.ts only records the invariant beside mapProvider. ui/src/api/providerRuntime.test.ts covers the fold, the narrowed allowlist, the failed check, the disabled and re-enabled profile, the changed endpoint and the list form; runtimeDefaults.test.ts covers the default rule; App.test.tsx, client.test.ts and WorkspaceContext.recovery.test.tsx are the existing consumers of the changed modules. Playwright: the real-Core stabilization journey now discovers two models so the saved default is distinguishable from the runtime's first one, and after the profile read asserts that the picker stays enabled and still lists every discovered model; the mocked assistant settings journey mocks the verification round trip and asserts the same, and fails on this branch when the fold is reverted. entry:assistant on desktop, mobile-chromium and mobile-webkit re-runs the chat journeys that this picker and these provider reads sit inside - it caught the first version of the fold, which let a failed health check stick and left the provider unselectable after a project switch - and entry:stabilization-core/assistant-real-desktop runs the repaired real-Core journey together with the rest of that area.",
-  "exclusions": "No Python and no native entries: the diff is UI-only, no Core route, storage or Rust file changed, and Core's provider contract is untouched. Frontend files beyond the chat page's component test, the API client wire test, the two changed api/ modules' tests and the WorkspaceContext test are excluded because no shared component, route or style changed and no screenshot baseline moves. entry:assistant/assistant-real-desktop is excluded because it carries no grep and would re-run all of real-core.spec.ts rather than the chat journeys this change touches; the stabilization entry already exercises the repaired journey against real Core on a LAN origin. The phone-width real-Core projects are excluded because the stabilization area catalogues only assistant-real-desktop and this journey fails at the device-pairing step on pristine origin/main at 390 px, reproduced in a detached main worktree at 427833f before any change here; phone coverage for this picker comes from the mocked assistant entries on mobile-chromium and mobile-webkit. No full suites, and no other Playwright area is selected because the only changed surfaces are the chat runtime selects and the cached provider records behind them.",
+  "change_digest": "316ed1704bffce946508f236c2e0cee52cdca3a9fd39f6332b44f9f4ccf11e35",
+  "reviewed_by": "Claude review of OpenRouter alias models pinned to the 8,192-token safe ceiling",
+  "reason": "OpenRouter alias models (`~deepseek/deepseek-flash-latest` and the other 17 `~author/family-latest` entries) publish an empty endpoint set: the live API returns `{\"endpoints\": []}` for the alias and 22 routes for its target `deepseek/deepseek-v4.1-flash`. `openrouter_route_limits` therefore raised \"OpenRouter returned no eligible model endpoints\" for every alias, capability verification stored `route_limits_verified: false`, and `resolve_context_limits` clamped the model to `DEFAULT_CONTEXT_WINDOW` (8,192) less 2,048 reserved output, so a 27k-token conversation could not dispatch against a model the catalog advertises at 1,048,576. This is not the #362 retention regression: there were never any route limits to retain. The catalog publishes `alias_target.slug`, so discovery now resolves the alias before calling the endpoints API and records `route_limits_source_model`; limits count as verified only while the measured slug is still the alias target, so a family that ships a new model falls back to the safe ceiling until the new target is measured. The four suites selected are the only ones that exercise model descriptors: test_providers covers catalog parsing of `alias_target` and the alias-specific discovery error, test_context covers sizing from target routes and the lapse when the target moves, test_api covers capability verification measuring the target and persisting the measured slug, and test_chat covers the prepare-time route refresh never asking the alias for endpoints.",
+  "exclusions": "No frontend unit tests: ui/src is untouched, and the wire mapping for the context limits payload is unchanged (no new field reaches the UI). No native tests: no Tauri or catalog-code change. No screenshot baselines: no rendered surface changes. No Playwright: alias sizing depends on the live OpenRouter catalog and endpoint API, which the Playwright stubs do not model, and the real-Core journeys assert conversation behaviour rather than provider route discovery. tests/test_playwright_impact.py is excluded because ui/playwright-impact.json is unchanged. No full suites: the selection is limited to the four v3 suites that touch model descriptors and route limits.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 132,
+    "python": 161,
+    "frontend": 0,
     "native": 0,
-    "playwright": 150
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/api/providerRuntime.test.ts",
-    "ui/src/api/runtimeDefaults.test.ts",
-    "ui/src/api/client.test.ts",
-    "ui/src/App.test.tsx",
-    "ui/src/state/WorkspaceContext.recovery.test.tsx"
+  "python": [
+    "tests/v3/test_api.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_providers.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:stabilization-core/assistant-real-desktop",
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit"
-  ]
+  "playwright": []
 }

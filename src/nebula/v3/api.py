@@ -416,7 +416,9 @@ from .model_catalog import (
     OPENROUTER_PROVIDER_DIRECTORY_URL,
     ROUTE_LIMIT_FIELDS,
     UpstreamProvider,
+    find_model_descriptor,
     openrouter_upstream_providers,
+    route_discovery_model,
 )
 from .providers import (
     ModelMessage,
@@ -11482,6 +11484,10 @@ async def _verify_provider_capability(
     )
     route_limits: list[Any] | None = None
     route_limits_error: str | None = None
+    # An alias carries no endpoints of its own; measure the model it redirects to.
+    discovery_model = route_discovery_model(
+        find_model_descriptor(profile.metadata.get("model_descriptors"), model), model
+    )
     try:
         provider_runtime = (provider_factory or provider_from_profile)(probe_profile)
         response = await asyncio.wait_for(
@@ -11547,7 +11553,7 @@ async def _verify_provider_capability(
             else:
                 try:
                     route_limits = await asyncio.wait_for(
-                        route_loader(model), timeout=15
+                        route_loader(discovery_model), timeout=15
                     )
                 except Exception as route_exc:
                     record_caught_exception(
@@ -11604,6 +11610,7 @@ async def _verify_provider_capability(
                 "route_limits_verified": route_limits is not None,
                 "route_limits_checked_at": checked_at,
                 "route_limits_error": route_limits_error,
+                "route_limits_source_model": discovery_model,
             }
         )
         metadata["model_descriptors"] = descriptors
@@ -11611,6 +11618,7 @@ async def _verify_provider_capability(
             json.dumps(
                 {
                     "model": model,
+                    "measured": discovery_model,
                     "checked_at": checked_at,
                     "routes": descriptor["route_limits"],
                 },

@@ -399,6 +399,74 @@ def test_openrouter_context_limits_filter_routes_by_required_parameters():
         )
 
 
+def test_openrouter_alias_serves_the_routes_measured_through_its_target():
+    profile = _profile()
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "~author/family-latest",
+            "context_window": 1_048_576,
+            "max_output_tokens": 262_144,
+            "alias_target": "author/model-a",
+            "route_limits_verified": True,
+            "route_limits_source_model": "author/model-a",
+            "route_limits": [
+                {
+                    "provider_name": "wide",
+                    "context_window": 1_000_000,
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                    "supported_parameters": ["tools"],
+                    "status": 0,
+                }
+            ],
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile, model="~author/family-latest", required_parameters={"tools"}
+    )
+
+    assert limits.context_window == 1_000_000
+    assert limits.route_limits_verified is True
+    assert limits.estimated is False
+
+
+def test_openrouter_alias_routes_stop_counting_once_the_target_moves():
+    profile = _profile()
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "~author/family-latest",
+            "context_window": 1_048_576,
+            "max_output_tokens": 262_144,
+            # The catalog now redirects the alias somewhere the routes never
+            # described, so the recorded limits prove nothing.
+            "alias_target": "author/model-b",
+            "route_limits_verified": True,
+            "route_limits_source_model": "author/model-a",
+            "route_limits": [
+                {
+                    "provider_name": "wide",
+                    "context_window": 1_000_000,
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                    "supported_parameters": ["tools"],
+                    "status": 0,
+                }
+            ],
+        }
+    ]
+
+    limits = resolve_context_limits(
+        profile, model="~author/family-latest", required_parameters={"tools"}
+    )
+
+    assert limits.context_window == 8_192
+    assert limits.route_limits_verified is False
+    assert limits.estimated is True
+
+
 def test_openrouter_unverified_routes_use_safe_fallback_ceiling():
     profile = _profile(context_window=200_000, max_output_tokens=32_000)
     profile.provider_type = "openrouter"

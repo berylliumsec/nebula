@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from nebula.v3 import providers
+from nebula.v3.model_catalog import openrouter_models
 from nebula.v3.providers import (
     AnthropicProvider,
     GeminiProvider,
@@ -945,6 +946,54 @@ def test_openrouter_loads_exact_endpoint_limits_for_automatic_routing():
     assert routes[0].max_input_tokens == 120_000
     assert routes[1].context_window == 65_536
     assert routes[0].supported_parameters == ["tools", "max_tokens"]
+
+
+def test_openrouter_catalog_records_the_model_an_alias_redirects_to():
+    descriptors = openrouter_models(
+        {
+            "data": [
+                {
+                    "id": "~author/family-latest",
+                    "name": "Author: Family Latest",
+                    "canonical_slug": "~author/family-latest",
+                    "context_length": 1_048_576,
+                    "alias_target": {
+                        "name": "Author: Model A",
+                        "slug": "author/model-a",
+                    },
+                },
+                {
+                    "id": "author/model-a",
+                    "name": "Author: Model A",
+                    "context_length": 1_048_576,
+                },
+            ]
+        }
+    )
+
+    alias, exact = descriptors
+    assert alias.alias_target == "author/model-a"
+    assert exact.alias_target is None
+
+
+def test_openrouter_alias_endpoint_discovery_explains_the_empty_route_set():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        # Aliases redirect to another model and publish no endpoints of their own.
+        return httpx.Response(
+            200, json={"data": {"id": "~author/family-latest", "endpoints": []}}
+        )
+
+    provider = OpenAICompatibleProvider(
+        config_from_catalog(
+            provider_id="openrouter-routes",
+            flavor=ProviderFlavor.OPENROUTER,
+            api_key_value="test-key",
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ProviderError, match="alias models publish no endpoints"):
+        asyncio.run(provider.openrouter_route_limits("~author/family-latest"))
 
 
 def test_openrouter_rejects_incomplete_endpoint_limits():
