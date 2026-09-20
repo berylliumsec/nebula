@@ -19,8 +19,11 @@ from nebula.v3.domain import (
     ContextSourceReference,
     Engagement,
     Evidence,
+    HarnessKind,
+    HarnessProfile,
     OperatorProfile,
     ProviderProfile,
+    RunBackend,
     SourceSnapshot,
 )
 from nebula.v3.exporter import ExportError, export_engagement
@@ -484,3 +487,43 @@ def test_export_includes_temporary_assistant_sessions_with_their_messages(tmp_pa
     with zipfile.ZipFile(destination) as archive:
         sessions = json.loads(archive.read("entities/chat_sessions.json"))
     assert [item["id"] for item in sessions] == [popup.id]
+
+
+def test_export_keeps_harness_profile_for_run_with_supervisor_provider(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    provider = store.create(
+        ProviderProfile(name="Supervisor provider", provider_type="openai")
+    )
+    harness = store.create(
+        HarnessProfile(
+            name="Export harness",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/usr/bin/codex",
+        )
+    )
+    engagement = store.create(Engagement(name="Harness run with supervisor"))
+    store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Supervised harness run",
+            backend=RunBackend.HARNESS,
+            supervisor_provider_id=provider.id,
+            harness_profile_id=harness.id,
+        )
+    )
+    destination = tmp_path / "harness-run.zip"
+
+    manifest = export_engagement(
+        engagement_id=engagement.id,
+        destination=destination,
+        store=store,
+        artifact_store=artifacts,
+    )
+
+    assert manifest.entity_counts.get("providers", 0) == 1
+    assert manifest.entity_counts.get("harnesses", 0) == 1
+    with zipfile.ZipFile(destination) as archive:
+        assert [
+            item["id"] for item in json.loads(archive.read("entities/harnesses.json"))
+        ] == [harness.id]

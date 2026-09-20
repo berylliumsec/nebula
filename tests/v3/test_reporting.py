@@ -195,3 +195,169 @@ def test_report_and_bundle_api_are_authenticated_and_sensitive_export_is_explici
         with zipfile.ZipFile(bundle_path) as archive:
             assert "entities/report_renders.json" in archive.namelist()
             assert "operation_events.json" in archive.namelist()
+
+
+def _probe_verify(artifacts: ArtifactStore, monkeypatch) -> list[bool]:
+    """Record, per verify() call, whether it ran on a thread with a running loop."""
+
+    on_loop: list[bool] = []
+    original = artifacts.verify
+
+    def verify(artifact):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            on_loop.append(False)
+        else:
+            on_loop.append(True)
+        return original(artifact)
+
+    monkeypatch.setattr(artifacts, "verify", verify)
+    return on_loop
+
+
+@async_test
+async def test_pdf_export_hashes_artifacts_off_the_event_loop(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Off-loop hashing"))
+    attachment = store.create(
+        artifacts.put_bytes(
+            b"capture bytes", engagement_id=engagement.id, filename="capture.bin"
+        )
+    )
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="Hashed off the loop",
+            artifact_ids=[attachment.id],
+        )
+    )
+    service = ReportRenderService(store=store, artifact_store=artifacts)
+    on_loop = _probe_verify(artifacts, monkeypatch)
+
+    queued = await service.request_render(report.id, report_revision=report.revision)
+    await service._tasks[queued.id]
+    assert store.get(ReportRender, queued.id).status == ReportRenderStatus.COMPLETED
+    cached = await service.request_render(report.id, report_revision=report.revision)
+    assert cached.id == queued.id
+
+    # The attachment is hashed for the snapshot and the cached PDF is re-verified.
+    assert len(on_loop) >= 2
+    assert not any(on_loop)
+
+
+def test_pdf_download_route_verifies_off_the_event_loop(tmp_path, monkeypatch):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Off-loop download"))
+    report = store.create(Report(engagement_id=engagement.id, title="Downloaded"))
+    on_loop = _probe_verify(artifacts, monkeypatch)
+    headers = {"Authorization": "Bearer test-token"}
+
+    with TestClient(
+        create_app(store, artifact_store=artifacts, auth_token="test-token")
+    ) as client:
+        queued = client.post(
+            f"/api/v1/reports/{report.id}/renders",
+            headers=headers,
+            json={"report_revision": report.revision},
+        )
+        assert queued.status_code == 202
+        render_id = queued.json()["id"]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            detail = client.get(f"/api/v1/report-renders/{render_id}", headers=headers)
+            if detail.json()["status"] in {"completed", "failed", "interrupted"}:
+                break
+            time.sleep(0.02)
+        assert detail.json()["status"] == "completed"
+        pdf = client.get(f"/api/v1/report-renders/{render_id}/pdf", headers=headers)
+        assert pdf.status_code == 200
+
+    assert len(on_loop) >= 1
+    assert not any(on_loop)
+
+
+@async_test
+async def test_glyph_warnings_are_aggregated_into_one_bounded_warning(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Glyph warnings"))
+    service = ReportRenderService(store=store, artifact_store=artifacts)
+    emoji = ["💥", "🚀", "🧪"]
+    dense_text = "".join(chr(0x4E00 + offset) for offset in range(300))
+    observation_ids = []
+    for symbol in emoji:
+        note = store.create(
+            Observation(
+                engagement_id=engagement.id,
+                observation_type="note",
+                title=f"Note {symbol}",
+                body="Plain body.",
+            )
+        )
+        observation_ids.append(note.id)
+    dense = store.create(
+        Observation(
+            engagement_id=engagement.id,
+            observation_type="note",
+            title="Dense note",
+            body=dense_text,
+        )
+    )
+    observation_ids.append(dense.id)
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="Many unsupported glyphs",
+            observation_ids=observation_ids,
+        )
+    )
+    unsupported = {
+        ord(character) for character in "".join(emoji) + dense_text
+    } - service.supported_codepoints
+    assert len(unsupported) > 100
+
+    queued = await service.request_render(report.id, report_revision=report.revision)
+    await service._tasks[queued.id]
+    completed = store.get(ReportRender, queued.id)
+
+    assert completed.status == ReportRenderStatus.COMPLETED
+    glyph_warnings = [
+        warning
+        for warning in completed.warnings
+        if warning.startswith("Unsupported glyphs replaced")
+    ]
+    assert len(glyph_warnings) == 1
+    warning = glyph_warnings[0]
+    assert f"{len(unsupported)} code points" in warning
+    assert "4 fields" in warning
+    assert len(warning) < 600
+
+
+@async_test
+async def test_render_reports_a_corrupt_artifact_row_as_an_integrity_conflict(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "nebula.db")
+    artifacts = ArtifactStore(tmp_path / "artifacts")
+    engagement = store.create(Engagement(name="Corrupt artifact row"))
+    stored = artifacts.put_bytes(
+        b"attached", engagement_id=engagement.id, filename="attached.txt"
+    )
+    corrupt = store.create(stored.model_copy(update={"storage_path": "../outside"}))
+    report = store.create(
+        Report(
+            engagement_id=engagement.id,
+            title="Corrupt attachment",
+            artifact_ids=[corrupt.id],
+        )
+    )
+    service = ReportRenderService(store=store, artifact_store=artifacts)
+
+    with pytest.raises(ReportRenderError, match="integrity verification") as excinfo:
+        await service.request_render(report.id, report_revision=report.revision)
+
+    assert excinfo.value.code == "artifact_integrity"
+    assert excinfo.value.status_code == 409

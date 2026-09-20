@@ -238,10 +238,11 @@ def _include_referenced_globals(
                 possible_operator_ids.add(entity.requested_by)
                 if entity.decided_by:
                     possible_operator_ids.add(entity.decided_by)
-            elif isinstance(entity, AgentRun) and entity.supervisor_provider_id:
-                provider_ids.add(entity.supervisor_provider_id)
-            elif isinstance(entity, AgentRun) and entity.harness_profile_id:
-                harness_profile_ids.add(entity.harness_profile_id)
+            elif isinstance(entity, AgentRun):
+                if entity.supervisor_provider_id:
+                    provider_ids.add(entity.supervisor_provider_id)
+                if entity.harness_profile_id:
+                    harness_profile_ids.add(entity.harness_profile_id)
             elif isinstance(entity, AgentAttempt) and entity.provider_profile_id:
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, OperatorExecution):

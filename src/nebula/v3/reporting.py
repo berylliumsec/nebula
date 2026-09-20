@@ -13,6 +13,7 @@ import hashlib
 import io
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -63,6 +64,7 @@ FONT_FILES = {
     "mono": "NotoSansMono-Regular.ttf",
     "mono_bold": "NotoSansMono-Bold.ttf",
 }
+GLYPH_WARNING_LISTED_CODEPOINTS = 40
 
 
 class ReportRenderError(RuntimeError):
@@ -71,6 +73,15 @@ class ReportRenderError(RuntimeError):
         self.code = code
         self.detail = detail
         self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class _PreparedRender:
+    report: Report
+    snapshot: dict[str, Any]
+    snapshot_bytes: bytes
+    fingerprint: str
+    cached: ReportRender | None
 
 
 class ReportRenderService:
@@ -153,27 +164,20 @@ class ReportRenderService:
     async def request_render(
         self, report_id: str, *, report_revision: int
     ) -> ReportRender:
+        # Assembling the snapshot hashes every referenced artifact, so it runs
+        # off the event loop and outside the render lock; the lock only
+        # serializes queueing below.
+        prepared = await asyncio.to_thread(
+            self._prepare_render, report_id, report_revision
+        )
+        if prepared.cached is not None:
+            return prepared.cached
+        report = prepared.report
+        snapshot = prepared.snapshot
+        fingerprint = prepared.fingerprint
         async with self._lock:
-            report = self.store.get(Report, report_id)
-            if report.revision != report_revision:
-                raise ReportRenderError(
-                    "report_revision_stale",
-                    "save the report revision before exporting PDF",
-                )
-            snapshot = self._canonical_snapshot(report)
-            snapshot_bytes = _canonical_json(snapshot)
-            fingerprint = hashlib.sha256(snapshot_bytes).hexdigest()
-            for prior in self._all_renders(report.engagement_id):
-                if (
-                    prior.input_fingerprint == fingerprint
-                    and prior.status == ReportRenderStatus.COMPLETED
-                    and prior.pdf_artifact_id
-                ):
-                    artifact = self.store.get(Artifact, prior.pdf_artifact_id)
-                    if self.artifact_store.verify(artifact):
-                        return prior
             snapshot_artifact = self.artifact_store.put_bytes_with_status(
-                snapshot_bytes,
+                prepared.snapshot_bytes,
                 engagement_id=report.engagement_id,
                 filename=f"report-{report.id}-r{report.revision}-snapshot.json",
                 media_type="application/json",
@@ -226,6 +230,41 @@ class ReportRenderService:
             self._tasks[render.id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(render.id, None))
             return render
+
+    def _prepare_render(self, report_id: str, report_revision: int) -> _PreparedRender:
+        """Build the snapshot and look for a verified completed render of it.
+
+        Runs on a worker thread: it hashes every referenced artifact and the
+        cached PDF, which must not stall the event loop.
+        """
+
+        report = self.store.get(Report, report_id)
+        if report.revision != report_revision:
+            raise ReportRenderError(
+                "report_revision_stale",
+                "save the report revision before exporting PDF",
+            )
+        snapshot = self._canonical_snapshot(report)
+        snapshot_bytes = _canonical_json(snapshot)
+        fingerprint = hashlib.sha256(snapshot_bytes).hexdigest()
+        cached: ReportRender | None = None
+        for prior in self._all_renders(report.engagement_id):
+            if (
+                prior.input_fingerprint == fingerprint
+                and prior.status == ReportRenderStatus.COMPLETED
+                and prior.pdf_artifact_id
+            ):
+                artifact = self.store.get(Artifact, prior.pdf_artifact_id)
+                if self.artifact_store.verify(artifact):
+                    cached = prior
+                    break
+        return _PreparedRender(
+            report=report,
+            snapshot=snapshot,
+            snapshot_bytes=snapshot_bytes,
+            fingerprint=fingerprint,
+            cached=cached,
+        )
 
     def pdf(self, render_id: str) -> tuple[Artifact, Path]:
         render = self.store.get(ReportRender, render_id)
@@ -472,8 +511,11 @@ class ReportRenderService:
 
     def _build_pdf(self, snapshot: dict[str, Any]) -> tuple[bytes, list[str]]:
         warnings: list[str] = []
+        unsupported_codepoints: set[int] = set()
+        unsupported_fields = 0
 
         def safe(value: Any) -> str:
+            nonlocal unsupported_fields
             text = "" if value is None else str(value)
             replaced = []
             unsupported: set[int] = set()
@@ -488,10 +530,8 @@ class ReportRenderService:
                     unsupported.add(codepoint)
                     replaced.append("□")
             if unsupported:
-                label = ", ".join(f"U+{value:04X}" for value in sorted(unsupported))
-                warning = f"Unsupported glyphs replaced: {label}"
-                if warning not in warnings:
-                    warnings.append(warning)
+                unsupported_fields += 1
+                unsupported_codepoints.update(unsupported)
             return "".join(replaced)
 
         def markup(value: Any) -> str:
@@ -774,6 +814,10 @@ class ReportRenderService:
                 super().__init__(*args, **kwargs)
 
         document.build(story, canvasmaker=InvariantCanvas)
+        if unsupported_codepoints:
+            # One bounded summary per render: a warning per field could exceed
+            # ReportRender.warnings' limit and fail a PDF that was built.
+            warnings.append(_glyph_warning(unsupported_codepoints, unsupported_fields))
         return output.getvalue(), warnings
 
     def _event(
@@ -825,6 +869,22 @@ def _fact_table(rows: list[list[Any]]) -> Table:
         )
     )
     return table
+
+
+def _glyph_warning(codepoints: set[int], field_count: int) -> str:
+    """Summarize every unsupported glyph of a render in one bounded string."""
+
+    ordered = sorted(codepoints)
+    listed = ", ".join(
+        f"U+{value:04X}" for value in ordered[:GLYPH_WARNING_LISTED_CODEPOINTS]
+    )
+    remaining = len(ordered) - min(len(ordered), GLYPH_WARNING_LISTED_CODEPOINTS)
+    fields = "1 field" if field_count == 1 else f"{field_count} fields"
+    points = "1 code point" if len(ordered) == 1 else f"{len(ordered)} code points"
+    summary = f"Unsupported glyphs replaced in {fields} ({points}): {listed}"
+    if remaining:
+        summary += f" and {remaining} more"
+    return summary
 
 
 def _canonical_json(value: Any) -> bytes:
