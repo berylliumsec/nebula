@@ -26,6 +26,7 @@ from .automation_runtime import (
     ProcessIORequest,
     RunCommandRequest,
 )
+from .context import default_output_tokens
 from .domain import (
     AgentRun,
     Approval,
@@ -768,7 +769,12 @@ class AutomationToolPlatform:
             workspace=components.workspace,
             specs=specialist_specs,
             model=run.supervisor_model,
-            max_output_tokens=min(2_048, run.budget.max_tokens or 2_048),
+            max_output_tokens=default_output_tokens(
+                self.store,
+                run.supervisor_provider_id,
+                run.supervisor_model or provider.config.default_model,
+                token_budget=run.budget.max_tokens,
+            ),
         )
         return MissionComponents(
             supervisor=ToolMissionSupervisor(action_specs),

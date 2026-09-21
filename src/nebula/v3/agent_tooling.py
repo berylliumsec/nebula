@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from .context import DEFAULT_MAX_OUTPUT_TOKENS
 from .domain import Approval, ChatTokenUsage, RiskClass, RunBudget, ScopePolicy
 from .orchestration import (
     MissionError,
@@ -239,7 +240,7 @@ class BrokeredToolSpecialist:
         workspace: Path,
         specs: Mapping[str, ToolSpec],
         model: str | None = None,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> None:
         if not provider.config.enabled:
             raise MissionError(f"provider {provider.config.id!r} is disabled")

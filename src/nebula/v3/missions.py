@@ -19,6 +19,7 @@ from typing import Any
 from uuid import uuid4
 
 from .browser_automation import BrowserAutonomyRequestModel
+from .context import default_output_tokens
 from .domain import (
     AgentAttempt,
     AgentRun,
@@ -1144,11 +1145,15 @@ class MissionService:
             if run.metadata.get("stages"):
                 components.context["stages"] = run.metadata["stages"]
             return components
-        max_tokens = run.budget.max_tokens or 2_048
         specialist = ModelSpecialist(
             provider,
             model=run.supervisor_model,
-            max_output_tokens=min(2_048, max_tokens),
+            max_output_tokens=default_output_tokens(
+                self.store,
+                run.supervisor_provider_id,
+                run.supervisor_model or provider.config.default_model,
+                token_budget=run.budget.max_tokens,
+            ),
         )
         stages = run.metadata.get("stages")
         return MissionComponents(

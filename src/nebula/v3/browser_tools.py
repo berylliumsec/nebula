@@ -43,6 +43,7 @@ from .domain import (
     ToolCallStatus,
 )
 from .agent_tooling import BrokeredToolSpecialist, ToolMissionSupervisor
+from .context import default_output_tokens
 from .missions import MissionComponents, MissionConfigurationError
 from .orchestration import SpecialistRole
 from .providers import ModelProvider
@@ -895,7 +896,12 @@ class BrowserAutomationToolPlatform:
             workspace=workspace,
             specs={name: specs[name] for name in selected},
             model=run.supervisor_model,
-            max_output_tokens=min(2_048, run.budget.max_tokens or 2_048),
+            max_output_tokens=default_output_tokens(
+                self.store,
+                run.supervisor_provider_id,
+                run.supervisor_model or provider.config.default_model,
+                token_budget=run.budget.max_tokens,
+            ),
         )
         return MissionComponents(
             supervisor=ToolMissionSupervisor({name: specs[name] for name in selected}),

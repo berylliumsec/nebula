@@ -45,6 +45,7 @@ from .domain import (
     utc_now,
 )
 from .context import (
+    DEFAULT_MAX_OUTPUT_TOKENS,
     ContextCallBudget,
     ContextCapacityError,
     ContextCompactionError,
@@ -353,7 +354,7 @@ class ModelSpecialist:
         *,
         role: SpecialistRole = SpecialistRole.SCOPE_PLANNING,
         model: str | None = None,
-        max_output_tokens: int = 2048,
+        max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
     ) -> None:
         if not provider.config.enabled:
             raise MissionError(f"provider {provider.config.id!r} is disabled")
