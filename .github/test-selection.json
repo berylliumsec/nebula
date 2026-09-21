@@ -1,7 +1,7 @@
 {
-  "change_digest": "aa135bf9108853b629c9d60f851afc0be8010a020a5c0289ef80017a7a974dc7",
+  "change_digest": "3551e2862d268c3b06439f8a0e4cbc20d74c99837a205035549f54bb23042cd7",
   "reviewed_by": "Codex focused review of protected failed-provider capture",
-  "reason": "The Core change captures raw failed provider responses or malformed tool arguments only in opt-in protected diagnostic detail. Select exact provider parsing, fail-closed routing, sensitive-store isolation, and existing protected-reveal UI coverage.",
+  "reason": "The Core change captures raw failed provider responses or malformed tool arguments only in opt-in protected diagnostic detail. Select exact provider parsing, fail-closed routing, sensitive-store isolation, and existing protected-reveal UI coverage. CI mypy verifies the matching standalone Kali diagnostic signature.",
   "exclusions": "Full suites, unrelated chat/provider scenarios, native tests, and Playwright are excluded. No UI implementation, API shape, browser-origin behavior, or interaction changed; mocked browser journeys would not prove protected Core capture. The real-Core deployment and authenticated health check are verified separately.",
   "expected_tests": {
     "python": 8,

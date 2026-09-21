@@ -28,6 +28,7 @@ else:
         *,
         stage: str,
         metadata: Mapping[str, Any] | None = None,
+        sensitive_detail: str | None = None,
     ) -> str | None:
         """Skip host diagnostics when this file runs standalone in the image build."""
 
