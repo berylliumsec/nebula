@@ -352,14 +352,19 @@ def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
 
 
 @pytest.mark.parametrize(
-    "tool_call,detail",
+    "tool_call,expected",
     [
         (
             {
                 "id": "tool_1",
                 "function": {"name": "lookup_asset", "arguments": '{"address":'},
             },
-            "malformed tool arguments",
+            (
+                "tool_1",
+                {},
+                "arguments were not valid JSON: Expecting value: line 1 column 12 "
+                "(char 11)",
+            ),
         ),
         (
             {
@@ -369,13 +374,19 @@ def test_openai_compatible_reads_reasoning_details_without_a_plain_channel():
                     "arguments": {"address": "10.0.0.9"},
                 },
             },
-            "malformed tool call",
+            (None, {"address": "10.0.0.9"}, None),
         ),
     ],
 )
-def test_openai_compatible_rejects_partial_or_unidentified_tool_calls(
-    tool_call, detail
+def test_openai_compatible_returns_partial_or_unidentified_tool_calls(
+    tool_call, expected
 ):
+    """A call Core cannot read goes back to the model; it never fails the reply.
+
+    Unreadable arguments come back empty with the decoder's reason, and a call
+    without an id gets one Core mints, as the AI SDK does.
+    """
+
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -403,15 +414,23 @@ def test_openai_compatible_rejects_partial_or_unidentified_tool_calls(
         transport=httpx.MockTransport(handler),
     )
 
-    with pytest.raises(ProviderError, match=detail):
-        asyncio.run(
-            provider.complete(
-                ModelRequest(
-                    messages=[ModelMessage(role="user", content="continue")],
-                    tools=[TOOL],
-                )
+    result = asyncio.run(
+        provider.complete(
+            ModelRequest(
+                messages=[ModelMessage(role="user", content="continue")],
+                tools=[TOOL],
             )
         )
+    )
+
+    [call] = result.tool_calls
+    call_id, arguments, reason = expected
+    assert call.id == call_id if call_id else call.id.startswith("call_")
+    assert (call.name, call.arguments, call.invalid_reason) == (
+        "lookup_asset",
+        arguments,
+        reason,
+    )
 
 
 @pytest.mark.parametrize("capture_enabled", [False, True])
@@ -476,15 +495,15 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
     )
 
     try:
-        with pytest.raises(ProviderError, match="malformed tool arguments") as caught:
-            asyncio.run(
-                provider.complete(
-                    ModelRequest(
-                        messages=[ModelMessage(role="user", content="continue")],
-                        tools=[TOOL],
-                    )
+        # The call goes back to the model; its text stays in the diagnostic.
+        result = asyncio.run(
+            provider.complete(
+                ModelRequest(
+                    messages=[ModelMessage(role="user", content="continue")],
+                    tools=[TOOL],
                 )
             )
+        )
         assert manager.flush()
         if capture_enabled:
             captured = next(
@@ -498,7 +517,13 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
     finally:
         manager.close()
 
-    assert isinstance(caught.value.__cause__, json.JSONDecodeError)
+    [call] = result.tool_calls
+    assert call.arguments == {}
+    assert call.invalid_reason == (
+        "arguments were not valid JSON: Expecting ',' delimiter: line 1 column 31 "
+        "(char 30)"
+    )
+    assert "sensitive.example" not in call.invalid_reason
     records = [
         json.loads(line)
         for line in (manager.log_dir / "providers.log").read_text().splitlines()
@@ -2452,12 +2477,13 @@ def test_stream_error_frame_maps_transient_codes_to_overload():
     assert not isinstance(rejected, ProviderOverloadedError)
 
 
-def test_a_streamed_nameless_tool_fragment_is_reported_as_a_rejected_call():
+def test_a_streamed_nameless_tool_fragment_is_reported_as_an_attempted_call():
     """DeepSeek via OpenRouter: a nameless call carrying two bytes of arguments.
 
     A request that offered no tools can only get a call the model was not
-    allowed to make, so the stream says a call was attempted and rejected
-    rather than reporting an ordinary provider failure.
+    allowed to make. The stream completes with that call, marked with why it
+    cannot run, so the caller sees an attempted call rather than an ordinary
+    provider failure.
     """
 
     body = "\n\n".join(
@@ -2497,11 +2523,13 @@ def test_a_streamed_nameless_tool_fragment_is_reported_as_a_rejected_call():
 
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
-        StreamEventType.ERROR,
+        StreamEventType.TOOL_CALL,
+        StreamEventType.COMPLETED,
     ]
-    assert events[-1].tool_call_rejected is True
-    assert events[-1].retryable is False
-    assert "malformed tool arguments" in (events[-1].error or "")
+    call = events[1].tool_call
+    assert (call.name, call.arguments) == (providers.INVALID_TOOL_CALL_NAME, {})
+    assert call.invalid_reason.startswith("the call did not name a tool")
+    assert events[-1].response.tool_calls == [call]
 
 
 @pytest.mark.parametrize(

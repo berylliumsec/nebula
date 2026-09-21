@@ -692,9 +692,10 @@ class BrokeredToolSpecialist:
 
         A response may carry several independent routing actions. A call Core
         will not run (a tool that is not offered, a call cut off by the output
-        limit, a repeat of a call that already ran) is kept in order, flagged
-        with the reason, and answered with a failed observation instead of
-        failing the turn. The broker never sees it.
+        limit or one the adapter could not read, a repeat of a call that
+        already ran) is kept in order, flagged with the reason, and answered
+        with a failed observation instead of failing the turn. The broker
+        never sees it.
         """
 
         seen: set[str] = set()
@@ -753,7 +754,7 @@ class BrokeredToolSpecialist:
                     response,
                     context,
                 )
-                if identity in ran.get(issued.id, []):
+                if issued.invalid_reason is None and identity in ran.get(issued.id, []):
                     actions.append(
                         _RoutingAction(
                             call,
@@ -777,6 +778,28 @@ class BrokeredToolSpecialist:
                         "the output token limit, so its arguments may be cut "
                         "off. Re-issue it with complete arguments, in a shorter "
                         "response if needed.",
+                        provider_call_id=reissued,
+                    )
+                )
+                continue
+            if call.invalid_reason is not None:
+                # The adapter could not read the call, so it has no arguments
+                # to run; the model reads why and re-issues it.
+                self._routing_warning(
+                    "missions.routing.invalid_call",
+                    "A specialist made a tool call Core could not read; the call "
+                    "was answered with a failed observation.",
+                    response,
+                    context,
+                    tool=call.name,
+                )
+                actions.append(
+                    _RoutingAction(
+                        call,
+                        "invalid_call",
+                        f"Tool call {call.name!r} was not run: "
+                        f"{call.invalid_reason}; re-issue the call with "
+                        "complete, valid JSON arguments.",
                         provider_call_id=reissued,
                     )
                 )

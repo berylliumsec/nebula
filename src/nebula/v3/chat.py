@@ -1001,9 +1001,9 @@ def _normalize_routing_arguments(
 
 
 # How many routing responses in a row may end with Core answering their calls
-# itself (an unavailable tool, a cut-off call, a replayed call) before the turn
-# stops routing and answers from the results it has, like Cline's mistake
-# counter. Any call that runs resets the count.
+# itself (an unavailable tool, or a cut-off, unreadable or replayed call) before
+# the turn stops routing and answers from the results it has, like Cline's
+# mistake counter. Any call that runs resets the count.
 _ROUTING_DEVIATION_LIMIT = 3
 # A call Core answered without running it spends no budget.
 _REFUSED_BUDGET_CLASS = "refused"
@@ -1016,6 +1016,29 @@ _TRUNCATED_CALL_REFUSAL = (
     "complete, so it did not run. Re-issue the call with complete arguments."
 )
 _TOOL_CHOICE_REJECTION = re.compile(r"tool[_ ]?choice", re.IGNORECASE)
+
+
+def _unreadable_call_refusal(
+    call: ModelToolCall, offered_names: Sequence[str] | None
+) -> str:
+    """What the model reads for a call Core could not read.
+
+    Codex answers "failed to parse function arguments" and the AI SDK inserts
+    a tool error for an invalid call: the model corrects the call instead of
+    the turn failing. The reason is the decoder's, never the text it read.
+    ``offered_names`` lists the tools when the call named none of them.
+    """
+
+    refusal = (
+        f"This call did not run: {call.invalid_reason}; re-issue the call with "
+        "complete, valid JSON arguments."
+    )
+    if offered_names is not None:
+        refusal += (
+            " Call one of the offered tools, or finish_response when no tool is "
+            f"needed. Offered tools: {', '.join(offered_names)}."
+        )
+    return refusal
 
 
 @dataclass(frozen=True)
@@ -3772,8 +3795,8 @@ class ChatService:
                             stage="routing",
                             retryable=True,
                             safe_failure_cause=(
-                                "The model repeatedly called unavailable, cut-off "
-                                "or already-run tools."
+                                "The model repeatedly called unavailable, cut-off, "
+                                "unreadable or already-run tools."
                             ),
                             metadata={
                                 "provider": prepared.provider_profile.id,
@@ -4948,10 +4971,10 @@ class ChatService:
         """Sort a whole routing response before any of it reaches a broker.
 
         A response may carry several independent calls. A call Core cannot run
-        (an unavailable tool, or one the output limit cut off) is answered
-        with an error the model can correct, as Codex, Cline and pi-mono do,
-        while the calls beside it still run. Nothing Core could not validate
-        ever executes.
+        (an unavailable tool, one the output limit cut off, or one the adapter
+        could not read) is answered with an error the model can correct, as
+        Codex, Cline and pi-mono do, while the calls beside it still run.
+        Nothing Core could not validate ever executes.
         """
 
         seen = {
@@ -4972,11 +4995,11 @@ class ChatService:
                     # Route again, so the model can re-issue the calls it
                     # lost before the turn finishes.
                     break
-                if call.arguments:
+                if call.arguments or call.invalid_reason is not None:
                     # The finish tool is a control signal with no effect, so
                     # whatever a lax route let the model put in it carries
-                    # nothing. Only the argument names are recorded: a value
-                    # may be the model's answer.
+                    # nothing, readable or not. Only the argument names are
+                    # recorded: a value may be the model's answer.
                     record_diagnostic(
                         "warning",
                         "chat",
@@ -4992,17 +5015,24 @@ class ChatService:
                         metadata={
                             "argument_keys": sorted(
                                 str(key)[:64] for key in call.arguments
-                            )[:16]
+                            )[:16],
+                            **(
+                                {"unreadable_arguments": True}
+                                if call.invalid_reason is not None
+                                else {}
+                            ),
                         },
                     )
-                    call = call.model_copy(update={"arguments": {}})
+                    call = call.model_copy(
+                        update={"arguments": {}, "invalid_reason": None}
+                    )
                 # Finishing ends the turn, so calls queued behind it never run.
                 batch.append(_RoutedCall(call))
                 break
             repeated_id = call.id in seen
             seen.add(call.id)
             provider_call: dict[str, Any] | None = None
-            if call.name == CATALOG_CALL:
+            if call.name == CATALOG_CALL and call.invalid_reason is None:
                 target = unwrap_call(call.arguments, deferred_names)
                 # An unknown target stays a catalog call; its broker
                 # answers with an error the model can correct.
@@ -5013,7 +5043,13 @@ class ChatService:
                     )
             refusal: str | None = None
             if truncated:
+                # An unreadable call cut off by the output limit was cut off,
+                # not badly written: the model is told that.
                 refusal = _TRUNCATED_CALL_REFUSAL
+            elif call.invalid_reason is not None:
+                refusal = _unreadable_call_refusal(
+                    call, None if call.name in budgeted_names else offered_names
+                )
             elif call.name not in budgeted_names:
                 refusal = (
                     f"{call.name!r} cannot run: its budget for this turn is "

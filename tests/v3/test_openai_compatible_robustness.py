@@ -328,19 +328,23 @@ def test_null_tool_calls_and_null_choices_are_read_safely():
     assert result.text == ""
 
 
-def test_a_tool_call_with_a_null_function_is_a_provider_error():
-    with pytest.raises(ProviderError, match="malformed tool call"):
-        _complete_with(
-            _completion(
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [{"id": "c1", "type": "function", "function": None}],
-                },
-                finish="tool_calls",
-            ),
-            _with_tools(),
-        )
+def test_a_tool_call_with_a_null_function_is_returned_for_the_model():
+    result = _complete_with(
+        _completion(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": None}],
+            },
+            finish="tool_calls",
+        ),
+        _with_tools(),
+    )
+
+    # The call names no function, so it cannot run; the model is told why.
+    [call] = result.tool_calls
+    assert (call.id, call.name, call.arguments) == ("c1", "invalid_tool_call", {})
+    assert call.invalid_reason == "the call did not name a tool"
 
 
 def test_a_non_json_200_body_is_a_provider_response_error():
@@ -1011,24 +1015,27 @@ def test_double_encoded_arguments_that_decode_to_an_object_are_accepted():
     assert result.tool_calls[0].arguments == {"address": "a"}
 
     # A string that is not an encoded object is still refused.
-    with pytest.raises(ProviderError, match="non-object tool arguments"):
-        _complete_with(
-            _completion(
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "c1",
-                            "type": "function",
-                            "function": {
-                                "name": "lookup_asset",
-                                "arguments": json.dumps(json.dumps(["a"])),
-                            },
-                        }
-                    ],
-                },
-                finish="tool_calls",
-            ),
-            _with_tools(),
-        )
+    refused = _complete_with(
+        _completion(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_asset",
+                            "arguments": json.dumps(json.dumps(["a"])),
+                        },
+                    }
+                ],
+            },
+            finish="tool_calls",
+        ),
+        _with_tools(),
+    )
+
+    [call] = refused.tool_calls
+    assert call.arguments == {}
+    assert call.invalid_reason == "arguments were not a JSON object"
