@@ -215,6 +215,10 @@ CODEX_APP_SERVER_READ_CHUNK_BYTES = 1024 * 1024
 CODEX_APP_SERVER_STDERR_ERROR_CHARS = 800
 CODEX_APP_SERVER_STDERR_SETTLE_SECONDS = 1.0
 JSONRPC_METHOD_NOT_FOUND = -32601
+# The Codex TUI declines a server request it will not answer with this code
+# (tui/src/app/app_server_requests.rs); Codex reads any error as a decline.
+JSONRPC_SERVER_ERROR = -32000
+JSONRPC_INVALID_REQUEST = -32600
 # Codex starts the next turn of an active goal itself, about 1-2 s after the
 # previous one completes. A goal that stays active without one is left alone.
 CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
@@ -1975,6 +1979,52 @@ def _discard_queued_session_replay(events: asyncio.Queue[Any]) -> None:
             return
 
 
+_CODEX_APPROVAL_REQUESTS = frozenset(
+    {
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "execCommandApproval",
+        "applyPatchApproval",
+    }
+)
+# Server requests a running turn presents to the operator.
+_CODEX_OPERATOR_REQUESTS = _CODEX_APPROVAL_REQUESTS | {
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+}
+_CODEX_WITHDRAWN_REASON = (
+    "Codex withdrew this request: the turn it belonged to ended or was replaced."
+)
+
+
+def _codex_withdrew(frame: Any, request_id: Any, thread_id: str | None) -> bool:
+    """Whether ``frame`` is Codex resolving ``request_id`` without the operator.
+
+    Codex resolves every pending request of a thread when a turn completes, is
+    interrupted or another turn starts, then sends ``serverRequest/resolved``
+    and no longer reads an answer (app-server ``abort_pending_server_requests``).
+    """
+
+    if not isinstance(frame, dict) or frame.get("method") != "serverRequest/resolved":
+        return False
+    params = frame.get("params")
+    return (
+        isinstance(params, dict)
+        and params.get("requestId") == request_id
+        and params.get("threadId") in {None, thread_id}
+    )
+
+
+def _codex_turn_already_ended(error: HarnessProviderError) -> bool:
+    """Codex's answer to ``turn/interrupt`` for a turn that is no longer active."""
+
+    message = error.data.get("message") if isinstance(error.data, dict) else None
+    return error.code == JSONRPC_INVALID_REQUEST and message == (
+        "no active turn to interrupt"
+    )
+
+
 class CodexAppServerConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/codex-v2"
 
@@ -2001,6 +2051,104 @@ class CodexAppServerConnection(HarnessConnection):
         self.active_turn_id: str | None = None
         self.last_turn_id: str | None = None
         self._awaiting_goal_turn = False
+        # Frames read while waiting for an operator decision, in arrival order.
+        self._backlog: deque[dict[str, Any] | BaseException] = deque()
+        # The turn a turn/interrupt already ended, so a second stop is a no-op.
+        self._interrupted_turn_id: str | None = None
+
+    async def _answer_requests_left_between_turns(self) -> list[str]:
+        """Clear frames no turn read, answering the server requests among them.
+
+        Resumed harnesses own their conversation state, so notifications queued
+        while the session opened or between turns are historical replay, not
+        this turn's output. A server request among them still waits for a reply
+        (a turn Codex ran on its own, a thread-level request), so each one Codex
+        has not withdrawn is declined as the Codex TUI declines a request it
+        will not answer; Codex reads the error as a decline. Returns the
+        methods declined.
+        """
+
+        frames: list[Any] = list(self._backlog)
+        self._backlog.clear()
+        while True:
+            try:
+                frames.append(self.rpc.events.get_nowait())
+            except asyncio.QueueEmpty:
+                # diagnostic-expected: QueueEmpty terminates the non-blocking drain.
+                break
+        withdrawn = {
+            frame["params"].get("requestId")
+            for frame in frames
+            if isinstance(frame, dict)
+            and frame.get("method") == "serverRequest/resolved"
+            and isinstance(frame.get("params"), dict)
+        }
+        declined: list[str] = []
+        for frame in frames:
+            if (
+                not isinstance(frame, dict)
+                or frame.get("id") is None
+                or not isinstance(frame.get("method"), str)
+                or frame["id"] in withdrawn
+            ):
+                continue
+            method = frame["method"][:200]
+            if method in _CODEX_OPERATOR_REQUESTS:
+                await self.rpc.respond_error(
+                    frame["id"],
+                    JSONRPC_SERVER_ERROR,
+                    f"Nebula was not running a turn to answer the {method} request",
+                )
+            else:
+                await self.rpc.respond_error(
+                    frame["id"],
+                    JSONRPC_METHOD_NOT_FOUND,
+                    f"Nebula does not support the {method} request",
+                )
+            declined.append(method)
+        return declined
+
+    async def _next_frame(
+        self, timeout: float | None = None
+    ) -> dict[str, Any] | BaseException:
+        if self._backlog:
+            return self._backlog.popleft()
+        if timeout is None:
+            return await self.rpc.events.get()
+        return await asyncio.wait_for(self.rpc.events.get(), timeout)
+
+    async def _await_operator(
+        self, request_id: Any, decision: asyncio.Future[Any]
+    ) -> Any | None:
+        """Wait for the operator's answer to a request unless Codex withdraws it.
+
+        Frames that arrive meanwhile keep their order for the turn loop. Returns
+        None when Codex resolved the request itself; it then reads no answer.
+        """
+
+        while not decision.done():
+            # diagnostic-expected: this getter is consumed here or cancelled below.
+            getter = asyncio.ensure_future(self.rpc.events.get())
+            try:
+                await asyncio.wait(
+                    {decision, getter}, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                if not getter.done():
+                    getter.cancel()
+                    await asyncio.wait({getter})
+                if getter.cancelled():
+                    frame = None
+                else:
+                    frame = getter.result()
+                    # Keep a frame read just before a cancellation.
+                    self._backlog.append(frame)
+            if frame is not None and _codex_withdrew(
+                frame, request_id, self.external_session_id
+            ):
+                self._backlog.pop()
+                return None
+        return decision.result()
 
     async def run_turn(
         self,
@@ -2011,9 +2159,7 @@ class CodexAppServerConnection(HarnessConnection):
         skill: HarnessSkillInvocation | None = None,
         images: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[HarnessEvent]:
-        # Resumed harnesses own their conversation state. Notifications queued
-        # while opening that session are historical replay, not this turn's output.
-        _discard_queued_session_replay(self.rpc.events)
+        declined_requests = await self._answer_requests_left_between_turns()
         self._awaiting_goal_turn = False
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for image in images or []:
@@ -2049,6 +2195,18 @@ class CodexAppServerConnection(HarnessConnection):
             external_session_id=self.external_session_id,
             external_turn_id=self.active_turn_id,
         )
+        for request_method in declined_requests:
+            yield HarnessEvent(
+                type="notice",
+                vendor=HarnessKind.CODEX_APP_SERVER,
+                external_turn_id=self.active_turn_id,
+                title="Codex request declined",
+                summary=(
+                    f"Declined the Codex request {request_method}, sent while no "
+                    "Nebula turn was running."
+                ),
+                payload={"severity": "warning", "method": request_method},
+            )
         message_parts: list[str] = []
         authoritative_message: str | None = None
         message_phases: dict[str, str] = {}
@@ -2065,15 +2223,14 @@ class CodexAppServerConnection(HarnessConnection):
         continuation_deadline: float | None = None
         while True:
             if continuation_deadline is None:
-                raw = await self.rpc.events.get()
+                raw = await self._next_frame()
             else:
                 try:
-                    raw = await asyncio.wait_for(
-                        self.rpc.events.get(),
+                    raw = await self._next_frame(
                         max(
                             0.0,
                             continuation_deadline - asyncio.get_running_loop().time(),
-                        ),
+                        )
                     )
                 except TimeoutError:
                     # diagnostic-expected: no continuation means Codex is done with this turn.
@@ -2108,13 +2265,7 @@ class CodexAppServerConnection(HarnessConnection):
                     external_turn_id=self.active_turn_id,
                 )
                 continue
-            if method in {
-                "item/commandExecution/requestApproval",
-                "item/fileChange/requestApproval",
-                "item/permissions/requestApproval",
-                "execCommandApproval",
-                "applyPatchApproval",
-            }:
+            if method in _CODEX_APPROVAL_REQUESTS:
                 async for event in self._approval(raw, method, params):
                     yield event
                 continue
@@ -2156,7 +2307,25 @@ class CodexAppServerConnection(HarnessConnection):
                         "questions": _bounded(questions, limit=8_000),
                     },
                 )
-                resolved = await decision
+                resolved = await self._await_operator(raw.get("id"), decision)
+                if resolved is None:
+                    yield HarnessEvent(
+                        type="interaction",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=str(params.get("itemId") or interaction_id),
+                        item_kind="tool",
+                        item_status="cancelled",
+                        title="Input request withdrawn",
+                        summary=_CODEX_WITHDRAWN_REASON,
+                        payload={
+                            "interaction_id": interaction_id,
+                            "kind": "user_input",
+                            "withdrawn": True,
+                            "reason": _CODEX_WITHDRAWN_REASON,
+                        },
+                    )
+                    continue
                 await self.rpc.respond(
                     raw.get("id"),
                     _codex_user_input_response(
@@ -2238,7 +2407,25 @@ class CodexAppServerConnection(HarnessConnection):
                         "response_schema": _bounded(requested_schema, limit=16_000),
                     },
                 )
-                resolved = await decision
+                resolved = await self._await_operator(raw.get("id"), decision)
+                if resolved is None:
+                    yield HarnessEvent(
+                        type="interaction",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.active_turn_id,
+                        item_id=str(params.get("elicitationId") or interaction_id),
+                        item_kind="tool",
+                        item_status="cancelled",
+                        title=f"{server_name or 'MCP'} input request withdrawn",
+                        summary=_CODEX_WITHDRAWN_REASON,
+                        payload={
+                            "interaction_id": interaction_id,
+                            "kind": "mcp_elicitation",
+                            "withdrawn": True,
+                            "reason": _CODEX_WITHDRAWN_REASON,
+                        },
+                    )
+                    continue
                 accepted = resolved.get("action") == "answer"
                 await self.rpc.respond(
                     raw.get("id"),
@@ -2838,6 +3025,10 @@ class CodexAppServerConnection(HarnessConnection):
                 "turn/aborted",
                 "thread/compacted",
             }:
+                rerouted_to = params.get("toModel")
+                if method == "model/rerouted" and isinstance(rerouted_to, str):
+                    # The server answered with another model; it prices what follows.
+                    turn_usage.reroute(rerouted_to)
                 yield HarnessEvent(
                     type="notice",
                     vendor=HarnessKind.CODEX_APP_SERVER,
@@ -2997,7 +3188,32 @@ class CodexAppServerConnection(HarnessConnection):
                 summary="The harness is waiting for an operator decision.",
                 payload={"category": category, "arguments": request.arguments},
             )
-        decision = await ticket.decision
+        decision = await self._await_operator(raw.get("id"), ticket.decision)
+        if decision is None:
+            yield HarnessEvent(
+                type="approval",
+                approval_id=ticket.approval_id,
+                tool_call_id=ticket.tool_call_id,
+                item_id=ticket.tool_call_id or ticket.approval_id,
+                parent_item_id=str(params.get("itemId") or params.get("callId") or "")
+                or None,
+                item_kind=(
+                    "command"
+                    if category == "command"
+                    else "file_change"
+                    if category == "file"
+                    else "tool"
+                ),
+                item_status="cancelled",
+                title="Approval withdrawn",
+                summary=_CODEX_WITHDRAWN_REASON,
+                payload={
+                    "category": category,
+                    "withdrawn": True,
+                    "reason": _CODEX_WITHDRAWN_REASON,
+                },
+            )
+            return
         allowed = decision.allowed
         response: dict[str, Any]
         if method in {
@@ -3030,10 +3246,13 @@ class CodexAppServerConnection(HarnessConnection):
 
     async def interrupt(self) -> None:
         if self.active_turn_id:
-            await self.rpc.request(
-                "turn/interrupt",
-                {"threadId": self.external_session_id, "turnId": self.active_turn_id},
-            )
+            turn_id = self.active_turn_id
+            if turn_id == self._interrupted_turn_id:
+                # Stop already ended this turn; the cancelled turn task's own
+                # cleanup asks again before anything read its turn/completed.
+                return
+            await self._interrupt_turn(turn_id)
+            self._interrupted_turn_id = turn_id
             return
         if not self._awaiting_goal_turn:
             return
@@ -3047,10 +3266,19 @@ class CodexAppServerConnection(HarnessConnection):
         )
         started = self.rpc.running_turns.get(self.external_session_id or "")
         if started:
+            await self._interrupt_turn(started)
+
+    async def _interrupt_turn(self, turn_id: str) -> None:
+        try:
             await self.rpc.request(
                 "turn/interrupt",
-                {"threadId": self.external_session_id, "turnId": started},
+                {"threadId": self.external_session_id, "turnId": turn_id},
             )
+        except HarnessProviderError as exc:  # diagnostic-expected: a turn that already ended is the stop's goal, as the Codex SDK treats it
+            # The official SDK treats this invalid-request reply as a stop that
+            # has nothing left to do (sdk/python client.py _interrupt_goal_operation).
+            if not _codex_turn_already_ended(exc):
+                raise
 
     async def close(self) -> None:
         await self.rpc.close()
@@ -3198,7 +3426,8 @@ class _CodexTurnUsage:
     example on a rate-limit refresh). The first update counts its ``last`` (the
     baseline is ``total - last``); later updates count how much ``total`` grew.
     Each increment is priced on its own, so a per-request long-context price
-    tier is never applied to the sum of several requests.
+    tier is never applied to the sum of several requests, and with the model
+    that served it: after ``model/rerouted`` that is the rerouted model.
     """
 
     def __init__(self, model: str) -> None:
@@ -3206,7 +3435,19 @@ class _CodexTurnUsage:
         self.pricing = codex_model_pricing(model)
         self.counts = _codex_token_counts(None)
         self.cost_usd = 0.0
+        # Estimated cost by the priced model that served it.
+        self.model_costs: dict[str, float] = {}
         self.total: dict[str, int] | None = None
+
+    def reroute(self, model: str) -> None:
+        self.model = model
+        self.pricing = codex_model_pricing(model)
+
+    def _add_cost(self, counts: Mapping[str, int]) -> None:
+        cost = self._cost(counts)
+        self.cost_usd += cost
+        if self.pricing is not None:
+            self.model_costs[self.model] = self.model_costs.get(self.model, 0.0) + cost
 
     def _cost(self, counts: Mapping[str, int]) -> float:
         if self.pricing is None:
@@ -3235,16 +3476,29 @@ class _CodexTurnUsage:
                 increment = {key: total[key] - previous[key] for key in total}
             self.total = total
             self.counts = {key: self.counts[key] + increment[key] for key in increment}
-            self.cost_usd += self._cost(increment)
+            self._add_cost(increment)
         else:
             # Without a cumulative total an update describes one request.
             self.counts = last
-            self.cost_usd = self._cost(last)
+            self.cost_usd = 0.0
+            self.model_costs = {}
+            self._add_cost(last)
         input_tokens = self.counts["input_tokens"]
         output_tokens = self.counts["output_tokens"]
         context_window = usage.get("modelContextWindow")
-        pricing = self.pricing
-        cost_usd = self.cost_usd if pricing is not None else None
+        cost_usd = self.cost_usd if self.model_costs else None
+        model_usage: dict[str, Any] = {}
+        for model, model_cost in self.model_costs.items():
+            pricing = codex_model_pricing(model)
+            if pricing is None:
+                continue
+            model_usage[model] = {
+                "cost_usd": model_cost,
+                "pricing_basis": "standard_api_equivalent",
+                "pricing_model": pricing.model,
+                "pricing_verified_on": CATALOG_VERIFIED_ON,
+                "pricing_source": pricing.source_url,
+            }
         detailed = HarnessDetailedUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -3259,19 +3513,7 @@ class _CodexTurnUsage:
             # The context meter shows how full the latest request's prompt was.
             context_used=last["input_tokens"],
             cost_usd=cost_usd,
-            model_usage=(
-                {
-                    self.model: {
-                        "cost_usd": cost_usd,
-                        "pricing_basis": "standard_api_equivalent",
-                        "pricing_model": pricing.model,
-                        "pricing_verified_on": CATALOG_VERIFIED_ON,
-                        "pricing_source": pricing.source_url,
-                    }
-                }
-                if pricing is not None
-                else {}
-            ),
+            model_usage=model_usage,
         )
         return (
             ChatTokenUsage(
@@ -4096,6 +4338,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         sdk: Any,
         external_session_id: str | None,
         workspace: Path,
+        acknowledges_user_messages: bool = False,
     ) -> None:
         self.client = client
         self.permission_handler = permission_handler
@@ -4109,6 +4352,14 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         # a stop or failure can still interrupt it and drain its tail; left in
         # the stream, that tail would answer the next prompt.
         self._vendor_turn_open = False
+        # steer() guidance the CLI has not yet taken into a turn. Guidance that
+        # arrives after the last tool call is queued and answered in a CLI turn
+        # of its own once the running one's result is out.
+        self._unacknowledged_steers: list[str] = []
+        # Whether this CLI echoes stdin messages as a turn takes them
+        # (--replay-user-messages), which tells absorbed guidance from queued.
+        # The echo of a prompt only comes with the turn's first message.
+        self._cli_acknowledges = acknowledges_user_messages
         self._consumer_idle = asyncio.Event()
         self._consumer_idle.set()
         self._settle_lock = asyncio.Lock()
@@ -4167,6 +4418,12 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         detailed_usage = HarnessDetailedUsage()
         checkpoint_id: str | None = None
         before = _workspace_snapshot(self.workspace)
+        prompt_acknowledged = False
+        # Answers of earlier CLI turns this Nebula turn followed for guidance.
+        answers: list[str] = []
+        earlier_usage: HarnessDetailedUsage | None = None
+        guidance_deadline: float | None = None
+        loop = asyncio.get_running_loop()
 
         def close_narration() -> list[HarnessEvent]:
             nonlocal commentary_sequence
@@ -4191,7 +4448,19 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             for out_of_band_event in out_of_band:
                 yield out_of_band_event
             while True:
-                message = await self._next_message()
+                if guidance_deadline is None:
+                    message = await self._next_message()
+                else:
+                    try:
+                        message = await asyncio.wait_for(
+                            self._next_message(),
+                            max(0.0, guidance_deadline - loop.time()),
+                        )
+                    except asyncio.TimeoutError:  # diagnostic-expected: the CLI took the guidance into the finished turn without echoing it
+                        self._unacknowledged_steers.clear()
+                        self._vendor_turn_open = False
+                        break
+                    guidance_deadline = None
                 class_name = type(message).__name__
                 if class_name == "StreamEvent":
                     event = getattr(message, "event", None)
@@ -4422,6 +4691,16 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         payload=_bounded(rate_limit, limit=8_000),
                     )
                     continue
+                replayed = _claude_replayed_text(message)
+                if replayed is not None:
+                    # The CLI echoing a stdin message as a turn takes it: an
+                    # acknowledgment, not content of the answer.
+                    self._cli_acknowledges = True
+                    if not prompt_acknowledged and replayed == prompt:
+                        prompt_acknowledged = True
+                    else:
+                        self._acknowledge_steers(replayed)
+                    continue
                 if class_name in {"AssistantMessage", "UserMessage"}:
                     parent = (
                         str(getattr(message, "parent_tool_use_id", "") or "") or None
@@ -4555,13 +4834,23 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         )
                     continue
                 if class_name == "ResultMessage":
-                    self._vendor_turn_open = False
+                    # Guidance the CLI has not taken yet is answered by the
+                    # next CLI turn; that answer belongs to this Nebula turn,
+                    # and left in the stream it would answer the next prompt.
+                    guidance_pending = (
+                        bool(self._unacknowledged_steers) and self._cli_acknowledges
+                    )
+                    self._vendor_turn_open = guidance_pending
                     self._learn_session(message)
                     raw_usage = getattr(message, "usage", None) or {}
                     detailed_usage = _claude_detailed_usage(
                         raw_usage,
                         result=message,
                     )
+                    if earlier_usage is not None:
+                        detailed_usage = _claude_combined_usage(
+                            earlier_usage, detailed_usage
+                        )
                     usage = detailed_usage.basic()
                     denials = getattr(message, "permission_denials", None)
                     errors = getattr(message, "errors", None)
@@ -4603,7 +4892,35 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                     raw_result = getattr(message, "result", None)
                     if isinstance(raw_result, str) and raw_result.strip():
                         result_text = raw_result
-                    break
+                    if not guidance_pending:
+                        self._unacknowledged_steers.clear()
+                        break
+                    if not parts and fallback_parts:
+                        parts.append("".join(fallback_parts))
+                        yield HarnessEvent(
+                            type="message_delta",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            delta=parts[-1],
+                        )
+                    answer = result_text or "".join(parts)
+                    if answer:
+                        answers.append(answer)
+                        yield HarnessEvent(
+                            type="message_delta",
+                            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                            delta="\n\n",
+                        )
+                    earlier_usage = detailed_usage
+                    parts.clear()
+                    fallback_parts.clear()
+                    streamed_text = False
+                    result_text = None
+                    stream_blocks.clear()
+                    stream_message_ids.clear()
+                    streamed_thinking.clear()
+                    # The CLI starts the queued turn as soon as this one ends.
+                    guidance_deadline = loop.time() + HARNESS_INTERRUPT_TIMEOUT_SECONDS
+                    continue
                 yield HarnessEvent(
                     type="notice",
                     vendor=HarnessKind.CLAUDE_AGENT_SDK,
@@ -4645,7 +4962,11 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             yield HarnessEvent(
                 type="completed",
                 vendor=HarnessKind.CLAUDE_AGENT_SDK,
-                message=result_text or "".join(parts),
+                message="\n\n".join(
+                    answer
+                    for answer in (*answers, result_text or "".join(parts))
+                    if answer
+                ),
                 external_session_id=self.external_session_id,
             )
         finally:
@@ -4656,6 +4977,13 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         if not self.active:
             raise HarnessStateError("Claude session has no active turn to steer")
         await self.client.query(text)
+        self._unacknowledged_steers.append(text)
+
+    def _acknowledge_steers(self, replayed: str) -> None:
+        # The CLI takes queued guidance together, joined with newlines.
+        self._unacknowledged_steers = [
+            text for text in self._unacknowledged_steers if text not in replayed
+        ]
 
     async def interrupt(self) -> None:
         async with self._settle_lock:
@@ -4772,6 +5100,8 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 # The previous turn ended on Nebula's side without a stop that
                 # settled it (its generator was closed or its stop failed).
                 await self._settle_open_turn()
+            # Guidance steers only the turn it was sent to.
+            self._unacknowledged_steers.clear()
             return await self._drain_injected_turns()
 
     async def _settle_open_turn(self) -> None:
@@ -4792,6 +5122,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         """
 
         settled = False
+        guidance_turn = False
         try:
             await self._sdk_call(self.client.interrupt())
             # A turn generator that is still reading consumes the aborted turn
@@ -4802,9 +5133,23 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 if isinstance(item, _ClaudeStreamFailure) and not item.transport:
                     continue  # An unreadable message of the discarded tail.
                 message = self._unwrap(item)
+                replayed = _claude_replayed_text(message)
                 if type(message).__name__ == "ResultMessage":
                     self._learn_session(message)
+                    if self._unacknowledged_steers and self._cli_acknowledges:
+                        # Queued guidance survives an interrupt and runs as a
+                        # turn of its own next; that turn is stopped as well.
+                        self._unacknowledged_steers.clear()
+                        guidance_turn = True
+                        continue
                     self._vendor_turn_open = False
+                elif guidance_turn:
+                    # The first message after the result starts that turn.
+                    guidance_turn = False
+                    await self._sdk_call(self.client.interrupt())
+                elif replayed is not None:
+                    self._cli_acknowledges = True
+                    self._acknowledge_steers(replayed)
             settled = True
         finally:
             if not settled:
@@ -4867,6 +5212,51 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             ):
                 deadline = loop.time() + HARNESS_INTERRUPT_TIMEOUT_SECONDS
         return events
+
+
+def _claude_replayed_text(message: Any) -> str | None:
+    """The text of a stdin message the CLI echoes back (--replay-user-messages).
+
+    Tool results and injected turns carry content blocks; only the prompts and
+    guidance Nebula writes as plain text come back as a string.
+    """
+
+    if type(message).__name__ != "UserMessage":
+        return None
+    content = getattr(message, "content", None)
+    return content if isinstance(content, str) else None
+
+
+def _claude_combined_usage(
+    earlier: HarnessDetailedUsage, later: HarnessDetailedUsage
+) -> HarnessDetailedUsage:
+    """Usage of consecutive CLI turns that answered one Nebula turn.
+
+    Token counts and durations are reported per CLI turn and add up; the CLI's
+    ``total_cost_usd`` covers its whole session, so the later value stands.
+    """
+
+    def added(first: int | None, second: int | None) -> int | None:
+        if first is None and second is None:
+            return None
+        return (first or 0) + (second or 0)
+
+    return later.model_copy(
+        update={
+            "input_tokens": earlier.input_tokens + later.input_tokens,
+            "output_tokens": earlier.output_tokens + later.output_tokens,
+            "total_tokens": earlier.total_tokens + later.total_tokens,
+            "cached_input_tokens": earlier.cached_input_tokens
+            + later.cached_input_tokens,
+            "cache_creation_input_tokens": earlier.cache_creation_input_tokens
+            + later.cache_creation_input_tokens,
+            "cache_read_input_tokens": earlier.cache_read_input_tokens
+            + later.cache_read_input_tokens,
+            "duration_ms": added(earlier.duration_ms, later.duration_ms),
+            "duration_api_ms": added(earlier.duration_api_ms, later.duration_api_ms),
+            "num_turns": added(earlier.num_turns, later.num_turns),
+        }
+    )
 
 
 CLAUDE_TASK_MESSAGES = frozenset(
@@ -7092,6 +7482,10 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             "env": _scrubbed_claude_environment(),
             "include_partial_messages": True,
             "include_hook_events": True,
+            # Echo each stdin message when a turn takes it, so steer guidance
+            # absorbed into the running turn is told from guidance queued as
+            # a turn of its own (and the SDK's documented rewind points).
+            "extra_args": {"replay-user-messages": None},
             "enable_file_checkpointing": (
                 native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
             ),
@@ -7167,6 +7561,7 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             sdk=sdk,
             external_session_id=request.session.external_session_id,
             workspace=request.workspace,
+            acknowledges_user_messages=True,
         )
 
 
@@ -9763,6 +10158,11 @@ class HarnessRuntimeService:
                         usage = event.usage
                     elif event.type in {"tool_started", "tool_completed"}:
                         event = self._record_tool_event(turn, session, event)
+                    elif (
+                        event.type in {"approval", "interaction"}
+                        and event.payload.get("withdrawn") is True
+                    ):
+                        await self._retire_withdrawn_request(event)
                     yield self._persist_activity(turn, session, event)
                     if interrupted_reason or terminal_error:
                         break
@@ -13279,6 +13679,74 @@ class HarnessRuntimeService:
                 interaction_id,
                 action="expire",
                 response={},
+            )
+
+    async def _retire_withdrawn_request(self, event: HarnessEvent) -> None:
+        """Expire an operator request the harness stopped waiting for.
+
+        No answer can reach the harness any more, so the card must not stay
+        pending; a decision the operator already recorded is left as it is.
+        """
+
+        reason = str(
+            event.payload.get("reason") or "The harness withdrew this request."
+        )[:1_000]
+        if event.type == "interaction":
+            interaction_id = event.payload.get("interaction_id")
+            if not isinstance(interaction_id, str):
+                return
+            try:
+                await self.resolve_interaction(
+                    interaction_id, action="expire", response={}
+                )
+            except (
+                HarnessStateError,
+                NotFoundError,
+            ):  # diagnostic-expected: the operator answered first; the harness no longer reads it
+                return
+            return
+        approval_id = event.approval_id
+        if not approval_id:
+            return
+        future = self._approval_futures.pop(approval_id, None)
+        self._broker_approval_ids.discard(approval_id)
+        try:
+            approval = self.store.get(Approval, approval_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: a removed request has no card to retire
+            approval = None
+        if approval is not None and approval.status == ApprovalStatus.PENDING:
+            self.store.update(
+                Approval,
+                approval.id,
+                {
+                    "status": ApprovalStatus.EXPIRED,
+                    "decided_by": "harness",
+                    "decided_at": utc_now(),
+                    "decision_note": reason,
+                },
+                expected_revision=approval.revision,
+            )
+            if approval.tool_call_id:
+                call = self.store.get(ToolCall, approval.tool_call_id)
+                if call.status == ToolCallStatus.WAITING_APPROVAL:
+                    self.store.update(
+                        ToolCall,
+                        call.id,
+                        {
+                            "status": ToolCallStatus.CANCELLED,
+                            "error": reason,
+                            "completed_at": utc_now(),
+                        },
+                        expected_revision=call.revision,
+                    )
+        if future is not None and not future.done():
+            # Releases the turn's waiting-approval state like any decision.
+            future.set_result(
+                HarnessPermissionDecision(
+                    allowed=False, approval_id=approval_id, reason=reason
+                )
             )
 
     async def resolve_interaction(
