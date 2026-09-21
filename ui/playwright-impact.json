@@ -42,9 +42,9 @@
       {"area":"ssh-environments","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"}
     ],
     "assistant-settings-navigation": [
-      {"area":"assistant-settings-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata and harness model options","runtime":"mock","shard":"1/1"},
-      {"area":"assistant-settings-navigation","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata and harness model options","runtime":"mock","shard":"1/1"},
-      {"area":"assistant-settings-navigation","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata and harness model options","runtime":"mock","shard":"1/1"}
+      {"area":"assistant-settings-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-settings-navigation","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-settings-navigation","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant settings expose provider metadata","runtime":"mock","shard":"1/1"}
     ],
     "provider-runtime-switch": [
       {"area":"provider-runtime-switch","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade provider model switch keeps the saved model until compaction is confirmed|assistant upgrade switching to an unverified model verifies it instead of refusing|assistant upgrade model and effort stay editable while a response runs","runtime":"mock","shard":"1/1"},

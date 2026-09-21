@@ -1,24 +1,22 @@
 {
-  "change_digest": "7ddd245930d6e14deb2f000943274008fe6a9094f15572a3d8f7103fa2b11fce",
-  "reviewed_by": "Claude review of the Agent view drawer removal",
-  "reason": "The operator pointed out that the Agent view already floats over the chat area, so the conversation-details drawer's Agent view tab (Agent view heading, Pop out, Open in Results, the snapshot explorer) is redundant. ChatWorkspaceDrawer now offers Context, Results and Subagents. AgentViewPanel loses its 'Dock in conversation details' button, agentViewGeometry loses the docked/floating placement preference, and ChatResultStream, which only rendered the docked tab, is deleted with its test and its CSS; AgentViewBody keeps the shared .chat-result-stream-body/-detail rules. SessionsPage drops the placement state, the docked effect and the drawer branch; the composer's Agent view button now always toggles the floating panel, and a saved ?drawer=visuals link opens the floating view and removes the parameter (replace navigation).",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python or native tests: no Python or Rust changed. Frontend selects AgentViewPanel.test.tsx, the only structured-result test touching the removed dock and placement code. Playwright selects structured-results (the Agent view journeys, including the rewritten legacy-link, narrowest-view and no-dock tests) and conversation-details (the drawer tabs), and the assistant entries on desktop, mobile-chromium and mobile-webkit because SessionsPage changed; counts overlap where titles match both. No real-Core entry: real-core.spec.ts never referenced the Agent view tab. Locally the assistant desktop run had one failure in 'streaming chat follows the bottom without overriding reader scroll intent', which passed 3/3 on rerun and does not touch this code.",
+  "change_digest": "a8af5b4a76adb2feb04246bc9dca7ac6692626c50d79d498515fec6d0e5f1477",
+  "reviewed_by": "Codex review of saved-chat provider-to-harness switching",
+  "reason": "Selecting a saved provider conversation clears its harness identity, so switching to Agent harness must acquire an available harness and model even when the catalog resolves later. The selection verifies deterministic React state plus the assistant-settings journey across desktop Chromium and emulated mobile Chromium/WebKit.",
+  "exclusions": "Full backend and frontend suites, unrelated chat/provider/harness tests, Python and native tests, physical devices, and unrelated Playwright areas are excluded. The server runtime handoff contract and API shapes are unchanged; this defect is confined to UI catalog/session state ownership. No origin-sensitive browser API changed.",
   "expected_tests": {
     "python": 0,
-    "frontend": 12,
+    "frontend": 40,
     "native": 0,
-    "playwright": 178
+    "playwright": 6
   },
   "python": [],
   "frontend": [
-    "ui/src/components/structured-result/AgentViewPanel.test.tsx"
+    "ui/src/App.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:structured-results",
-    "area:conversation-details",
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit"
+    "entry:assistant-settings-navigation/desktop",
+    "entry:assistant-settings-navigation/mobile-chromium",
+    "entry:assistant-settings-navigation/mobile-webkit"
   ]
 }
