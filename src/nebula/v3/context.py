@@ -462,6 +462,15 @@ def estimate_model_request(request: ModelRequest) -> int:
         total += estimate_tokens(
             json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
         )
+    # What a tool showed the model (a screenshot) is left out of the dump
+    # above; it is counted as the message content it is sent as.
+    attachments = [
+        ModelMessage(role="user", content=result.attachments)
+        for result in request.tool_results
+        if result.attachments
+    ]
+    if attachments:
+        total += estimate_messages(attachments)
     return total
 
 

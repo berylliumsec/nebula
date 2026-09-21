@@ -23,6 +23,7 @@ import threading
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
@@ -1055,6 +1056,36 @@ class _RoutedCall:
     refusal: str | None = None
     # The provider reused a call id this turn already recorded.
     repeated_id: bool = False
+    # Tool-history fields that let the provider see the call again as part
+    # of the response that issued it (see ``_with_replay_state``).
+    replay: dict[str, Any] = field(default_factory=dict)
+
+
+# Tool-history fields a replay reads; a rewritten entry keeps them.
+_REPLAY_FIELDS = ("response_group", "reasoning_state", "provider_metadata")
+
+
+def _with_replay_state(
+    batch: list[_RoutedCall], response: ModelResponse
+) -> list[_RoutedCall]:
+    """Tag one routing response's calls for replay on later steps.
+
+    Every call gets the response's group key, so the provider is sent the
+    calls back as the single message that issued them. The response's
+    reasoning state is kept once, on the first call: Core records that call
+    whether it runs, is refused, or waits for approval.
+    """
+
+    group = uuid4().hex
+    tagged: list[_RoutedCall] = []
+    for index, routed in enumerate(batch):
+        replay: dict[str, Any] = {"response_group": group}
+        if index == 0 and response.reasoning_state:
+            replay["reasoning_state"] = response.reasoning_state
+        if routed.call.provider_metadata:
+            replay["provider_metadata"] = routed.call.provider_metadata
+        tagged.append(dataclass_replace(routed, replay=replay))
+    return tagged
 
 
 def _routing_thoughts(response: ModelResponse) -> str:
@@ -3896,10 +3927,7 @@ class ChatService:
                             # at a time, in the requested order, so every
                             # call keeps its own step, budget, and approval.
                             "parallel_tool_calls": True,
-                            "tool_results": self._provider_tool_history(turn),
-                            "messages": self._browser_screenshot_messages(
-                                prepared, turn
-                            ),
+                            "tool_results": self._replayed_tool_history(prepared, turn),
                         }
                     )
                     routing = self._fit_turn_goal_request(prepared, routing)
@@ -4069,13 +4097,16 @@ class ChatService:
                         break
                     # Every call is sorted before any of them executes, so a
                     # call Core cannot validate never reaches the broker.
-                    batched_calls = self._routing_batch(
+                    batched_calls = _with_replay_state(
+                        self._routing_batch(
+                            response,
+                            turn,
+                            budgeted_names,
+                            deferred_names,
+                            set(components.specs),
+                            [spec.name for spec in available_specs],
+                        ),
                         response,
-                        turn,
-                        budgeted_names,
-                        deferred_names,
-                        set(components.specs),
-                        [spec.name for spec in available_specs],
                     )
                 routed = batched_calls.pop(0)
                 call, provider_call = routed.call, routed.provider_call
@@ -4112,7 +4143,13 @@ class ChatService:
                     call = call.model_copy(update={"id": f"nbc{turn.next_step:06d}"})
                 if refusal is not None:
                     turn, refused_events = self._refused_tool_step(
-                        turn, known_spec, call, provider_call, refusal, issued_call_id
+                        turn,
+                        known_spec,
+                        call,
+                        provider_call,
+                        refusal,
+                        issued_call_id,
+                        replay=routed.replay,
                     )
                     for refused_event in refused_events:
                         yield refused_event
@@ -4168,6 +4205,7 @@ class ChatService:
                     entry["provider_call"] = provider_call
                 if issued_call_id is not None:
                     entry["issued_call_id"] = issued_call_id
+                entry.update(routed.replay)
                 try:
                     if (
                         call.name in CATALOG_DISCOVERY_NAMES
@@ -4351,8 +4389,7 @@ class ChatService:
                     "tools": [],
                     "tool_choice": ToolChoice.AUTO,
                     "parallel_tool_calls": False,
-                    "tool_results": self._provider_tool_history(turn),
-                    "messages": self._browser_screenshot_messages(prepared, turn),
+                    "tool_results": self._replayed_tool_history(prepared, turn),
                 }
             )
             final_request = self._fit_turn_goal_request(prepared, final_request)
@@ -4949,15 +4986,38 @@ class ChatService:
         )
         return self._retrieve_operator_help(queries, token_budget=token_budget)
 
-    def _browser_screenshot_messages(
+    def _replayed_tool_history(
         self, prepared: PreparedChat, turn: ChatTurn
-    ) -> list[ModelMessage]:
-        messages = list(prepared.model_request.messages)
+    ) -> list[ModelToolResult]:
+        """The turn's tool results as the provider is sent them again.
+
+        The newest browser screenshot travels with the result of the step that
+        captured it, after its call, instead of as a user message ahead of
+        every call. Older screenshots are not resent.
+        """
+
+        history = self._provider_tool_history(turn)
+        screenshot = self._browser_screenshot(prepared, turn)
+        if screenshot is None:
+            return history
+        call_id, parts = screenshot
+        return [
+            result.model_copy(update={"attachments": parts})
+            if result.call_id == call_id
+            else result
+            for result in history
+        ]
+
+    def _browser_screenshot(
+        self, prepared: PreparedChat, turn: ChatTurn
+    ) -> tuple[str, list[dict[str, Any]]] | None:
+        """The turn's newest browser screenshot and the call that captured it."""
+
         if (
             self.artifact_store is None
             or not prepared.provider_profile.capabilities.vision
         ):
-            return messages
+            return None
         for entry in reversed(turn.tool_history):
             if (
                 entry.get("name") != "browser.companion"
@@ -4981,26 +5041,20 @@ class ChatService:
                     raise ChatConfigurationError(
                         "Browser screenshot ownership could not be verified."
                     )
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=[
-                            {
-                                "type": "text",
-                                "text": "Historical page screenshot captured by browser.companion.",
-                            },
-                            {
-                                "type": "image",
-                                "media_type": "image/png",
-                                "data": base64.b64encode(
-                                    self.artifact_store.read(artifact)
-                                ).decode(),
-                            },
-                        ],
-                    )
-                )
-                return messages
-        return messages
+                return str(entry.get("model_call_id") or ""), [
+                    {
+                        "type": "text",
+                        "text": "Historical page screenshot captured by browser.companion.",
+                    },
+                    {
+                        "type": "image",
+                        "media_type": "image/png",
+                        "data": base64.b64encode(
+                            self.artifact_store.read(artifact)
+                        ).decode(),
+                    },
+                ]
+        return None
 
     def _tool_index(self) -> ToolIndex | None:
         index = self.knowledge_index
@@ -5180,11 +5234,14 @@ class ChatService:
         provider_call: dict[str, Any] | None,
         detail: str,
         issued_call_id: str | None,
+        *,
+        replay: dict[str, Any] | None = None,
     ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
         """Answer a call Core will not run with an error the model can act on.
 
         The broker never sees the call and it spends no budget. The model
-        reads the error as that call's result and routes again.
+        reads the error as that call's result and routes again. The call stays
+        part of the response that issued it when that response is replayed.
         """
 
         step = turn.next_step
@@ -5207,6 +5264,7 @@ class ChatService:
             **({"display_name": display_name} if display_name else {}),
             **({"provider_call": provider_call} if provider_call is not None else {}),
             **({"issued_call_id": issued_call_id} if issued_call_id else {}),
+            **(replay or {}),
         }
         turn = self._save_tool_step(turn, entry)
         common = {
@@ -5253,6 +5311,9 @@ class ChatService:
             # see the tool_catalog.call it actually issued.
             provider_call = entry.get("provider_call")
             issued = provider_call if isinstance(provider_call, dict) else entry
+            group = entry.get("response_group")
+            state = entry.get("reasoning_state")
+            metadata = entry.get("provider_metadata")
             history.append(
                 ModelToolResult(
                     call_id=str(entry["model_call_id"]),
@@ -5260,6 +5321,11 @@ class ChatService:
                     arguments=dict(issued.get("arguments") or {}),
                     output=output,
                     is_error=entry.get("status") != "complete",
+                    # Entries recorded before these existed replay one call
+                    # per message, as they always did.
+                    response_group=group if isinstance(group, str) else None,
+                    reasoning_state=state if isinstance(state, dict) else None,
+                    provider_metadata=metadata if isinstance(metadata, dict) else None,
                 )
             )
         return history
@@ -5403,6 +5469,9 @@ class ChatService:
             "arguments": {},
             "budget_class": "delivery",
             "delivered_by_core": True,
+            # The model issued no response for this step: it is replayed as
+            # a batch of its own, with no reasoning.
+            "response_group": f"core-{step}",
             "status": "complete",
             "provider_result": serialize_model_result(output),
             "trusted_result": True,
@@ -6565,6 +6634,10 @@ class ChatService:
             "trusted_result": False,
             "result_summary": note[:1_000],
         }
+        for item in turn.tool_history:
+            if item.get("tool_call_id") == call.id:
+                # The step stays part of the response that issued it.
+                entry.update({key: item[key] for key in _REPLAY_FIELDS if key in item})
         history = [
             item for item in turn.tool_history if item.get("tool_call_id") != call.id
         ]

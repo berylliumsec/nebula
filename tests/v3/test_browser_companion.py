@@ -613,6 +613,7 @@ def test_screenshot_tool_persists_owned_image_and_replays_without_recapture(
                 "name": "browser.companion",
                 "status": "complete",
                 "tool_call_id": invocation.id,
+                "model_call_id": "call-1",
                 "artifacts": result.output["artifacts"],
             }
         ]
@@ -621,10 +622,11 @@ def test_screenshot_tool_persists_owned_image_and_replays_without_recapture(
             provider_profile=SimpleNamespace(capabilities=SimpleNamespace(vision=True)),
         )
         owner = SimpleNamespace(store=store, artifact_store=artifacts)
-        messages = ChatService._browser_screenshot_messages(owner, prepared, turn)
-        assert messages[-1].content[1]["data"] == image_data
+        call_id, parts = ChatService._browser_screenshot(owner, prepared, turn)
+        assert call_id == "call-1"
+        assert parts[1]["data"] == image_data
         prepared.provider_profile.capabilities.vision = False
-        assert ChatService._browser_screenshot_messages(owner, prepared, turn) == []
+        assert ChatService._browser_screenshot(owner, prepared, turn) is None
 
     asyncio.run(run())
     assert (
