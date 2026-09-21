@@ -1300,7 +1300,9 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     return ProviderError(message)
 
 
-def _arguments(value: Any) -> dict[str, Any]:
+def _arguments(
+    value: Any, *, diagnostic_metadata: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     if not value:
@@ -1308,14 +1310,36 @@ def _arguments(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError) as exc:
+        metadata = {
+            **(diagnostic_metadata or {}),
+            "format": "json",
+        }
+        if isinstance(value, str):
+            encoded = value.encode("utf-8", errors="surrogatepass")
+            metadata.update(
+                {
+                    "byte_count": len(encoded),
+                    "fingerprint": hashlib.sha256(encoded).hexdigest(),
+                }
+            )
+        if isinstance(exc, json.JSONDecodeError):
+            # The decoder's reason and coordinates identify the malformed
+            # shape without retaining the arguments, which may contain a
+            # command, credential or other operator data.
+            metadata["validation"] = (
+                f"{exc.msg}; line {exc.lineno}; column {exc.colno}; character {exc.pos}"
+            )
+        failure = ProviderError("provider returned malformed tool arguments")
+        failure.__cause__ = exc
         record_caught_exception(
             "providers",
-            "providers.providers.caught_failure_005",
-            "A handled providers operation raised an exception.",
-            exc,
-            stage="providers",
+            "providers.tool_arguments.invalid_json",
+            "A provider returned tool arguments that were not valid JSON.",
+            failure,
+            stage="tool_arguments",
+            metadata=metadata,
         )
-        raise ProviderError("provider returned malformed tool arguments") from exc
+        raise failure from exc
     if not isinstance(parsed, dict):
         raise ProviderError("provider returned non-object tool arguments")
     return parsed
@@ -1890,16 +1914,27 @@ class OpenAICompatibleProvider(ModelProvider):
         data = response.json()
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
-        calls = [
-            _normalized_tool_call(
-                id=item.get("id", ""),
-                name=_decode_tool_name(
-                    request, item.get("function", {}).get("name", "")
-                ),
-                arguments=_arguments(item.get("function", {}).get("arguments")),
+        calls: list[ToolCall] = []
+        for item in message.get("tool_calls", []):
+            function = item.get("function", {})
+            name = _decode_tool_name(request, function.get("name", ""))
+            calls.append(
+                _normalized_tool_call(
+                    id=item.get("id", ""),
+                    name=name,
+                    arguments=_arguments(
+                        function.get("arguments"),
+                        diagnostic_metadata={
+                            "adapter": self.config.flavor.value,
+                            "model_id": data.get("model") or model,
+                            "provider": self.config.id,
+                            "status": choice.get("finish_reason"),
+                            "tool_id": name,
+                            "vendor_request_id": data.get("id"),
+                        },
+                    ),
+                )
             )
-            for item in message.get("tool_calls", [])
-        ]
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model") or model,
@@ -2301,14 +2336,26 @@ async def _stream_openai_compatible(
                 "provider stream ended before the reply completed: no finish "
                 "reason or [DONE] frame arrived"
             )
-        calls = [
-            _normalized_tool_call(
-                id=value["id"],
-                name=_decode_tool_name(request, value["name"]),
-                arguments=_arguments(value["arguments"]),
+        calls: list[ToolCall] = []
+        for _, value in sorted(call_parts.items()):
+            name = _decode_tool_name(request, value["name"])
+            calls.append(
+                _normalized_tool_call(
+                    id=value["id"],
+                    name=name,
+                    arguments=_arguments(
+                        value["arguments"],
+                        diagnostic_metadata={
+                            "adapter": provider.config.flavor.value,
+                            "model_id": response_model,
+                            "provider": provider.config.id,
+                            "status": finish_reason,
+                            "tool_id": name,
+                            "vendor_request_id": response_id,
+                        },
+                    ),
+                )
             )
-            for _, value in sorted(call_parts.items())
-        ]
         for call in calls:
             yield ModelStreamEvent(type=StreamEventType.TOOL_CALL, tool_call=call)
         final = ModelResponse(
