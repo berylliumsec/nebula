@@ -375,11 +375,11 @@ export const guideCatalog: GuideDefinition[] = [
       {
         title: "Continue a harness chat as a mission",
         body: [
-          "In a Codex or Grok conversation, Continue as mission in the session details panel hands the work to a background mission, so it keeps going while you do something else.",
+          "In a Codex or Grok conversation, open the conversation's actions menu and choose Continue as mission. The work moves to a background mission and keeps going while you do something else.",
         ],
-        route: context => workbench(context, { view: "chat", drawer: "context" }),
+        route: context => workbench(context, { view: "chat" }),
         target: "continue-mission",
-        targetMissing: "Continue as mission appears in the session details panel of a harness conversation. Switch the runtime to Harness to use it.",
+        targetMissing: "Continue as mission sits in the conversation's actions menu, next to its title. Open that menu in a harness conversation; switch the runtime to Harness if the entry is not there.",
         requiresProject: true,
       },
       {
