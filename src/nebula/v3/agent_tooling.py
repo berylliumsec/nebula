@@ -13,7 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .context import DEFAULT_MAX_OUTPUT_TOKENS
 from .domain import Approval, ChatTokenUsage, RiskClass, RunBudget, ScopePolicy
@@ -67,6 +67,10 @@ _FINISH_FIELDS = frozenset({"status", "summary", "rationale"})
 _OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 # Routing responses in a row that ran nothing before the task stops as blocked.
 _MAX_CONSECUTIVE_ROUTING_DEVIATIONS = 3
+# Record fields that let a later turn replay a routing response as the one
+# message that issued it (see ``_with_replay_state``). They are for the
+# provider that made the response, never for another task or model.
+_REPLAY_FIELDS = ("response_group", "reasoning_state", "provider_metadata")
 _NO_ACTION_FEEDBACK = (
     "Your previous response contained no routing action. Call one of the "
     f"supplied tools, or call {FINISH_TOOL} with status, summary and rationale "
@@ -370,7 +374,10 @@ class BrokeredToolSpecialist:
                 # never executed a second time on resume.
                 if executed:
                     pause.partial_result = self._with_commentary(
-                        self._merge_turn(executed), commentary
+                        self._merge_turn(
+                            self._with_replay_state(executed, actions, response)
+                        ),
+                        commentary,
                     )
                 raise
         if not executed:
@@ -378,7 +385,10 @@ class BrokeredToolSpecialist:
                 "the routing batch could not run a call within the mission "
                 "tool-call budget"
             )
-        turn = self._with_commentary(self._merge_turn(executed), commentary)
+        turn = self._with_commentary(
+            self._merge_turn(self._with_replay_state(executed, actions, response)),
+            commentary,
+        )
         if brokered:
             return turn
         # Nothing ran: every call in the response was answered unrun.
@@ -1027,7 +1037,16 @@ class BrokeredToolSpecialist:
         )
         blocked.output["routing_deviation"] = True
         if records:
-            blocked.output["calls"] = [dict(record) for record in records]
+            # The blocked result is what later tasks and the mission read;
+            # replay state belongs to this task's routing history alone.
+            blocked.output["calls"] = [
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in _REPLAY_FIELDS
+                }
+                for record in records
+            ]
         commentary = turn.output.get("commentary")
         return self._with_commentary(
             blocked, commentary if isinstance(commentary, str) else ""
@@ -1047,6 +1066,31 @@ class BrokeredToolSpecialist:
                 context,
             )
         return self._safe_text(response.text)
+
+    @staticmethod
+    def _with_replay_state(
+        results: list[SpecialistResult],
+        actions: list[_RoutingAction],
+        response: Any,
+    ) -> list[SpecialistResult]:
+        """Tag one routing response's call records for replay on later turns.
+
+        Every record gets the response's group key, so the provider is sent
+        the calls back as the single message that issued them, as chat does.
+        The response's reasoning state is kept once, on the first record, and
+        each call keeps its own provider metadata. ``results`` follow
+        ``actions`` in order: each action the batch reached left one record.
+        """
+
+        group = uuid4().hex
+        state = getattr(response, "reasoning_state", None)
+        for index, (result, action) in enumerate(zip(results, actions)):
+            result.output["response_group"] = group
+            if index == 0 and state:
+                result.output["reasoning_state"] = state
+            if action.call.provider_metadata:
+                result.output["provider_metadata"] = action.call.provider_metadata
+        return results
 
     @staticmethod
     def _with_commentary(result: SpecialistResult, commentary: str) -> SpecialistResult:
@@ -1223,6 +1267,9 @@ class BrokeredToolSpecialist:
                 ):
                     continue
                 arguments = record.get("arguments")
+                group = record.get("response_group")
+                state = record.get("reasoning_state")
+                metadata = record.get("provider_metadata")
                 history.append(
                     ModelToolResult(
                         call_id=call_id,
@@ -1235,6 +1282,13 @@ class BrokeredToolSpecialist:
                             trusted_result=record.get("trusted_result") is True,
                         ),
                         is_error=record.get("status") != "complete",
+                        # Turns recorded before these existed replay one call
+                        # per message, as they always did.
+                        response_group=group if isinstance(group, str) else None,
+                        reasoning_state=state if isinstance(state, dict) else None,
+                        provider_metadata=(
+                            metadata if isinstance(metadata, dict) else None
+                        ),
                     )
                 )
         return history

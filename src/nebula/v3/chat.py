@@ -1186,15 +1186,12 @@ def _routing_thoughts(response: ModelResponse) -> str:
     Text next to a tool call narrates the call ("I'll read the value first").
     The synthesis writes the operator's answer, so the text is commentary: it
     joins the step's thinking instead of failing the turn. A control frame
-    Core could not read is never shown.
+    Core could not read is never shown, wherever it starts: the commentary
+    ends where the frame begins.
     """
 
-    commentary = response.text.strip()
-    if (
-        not response.tool_calls
-        or not commentary
-        or _is_provider_control_frame(commentary)
-    ):
+    commentary = _operator_answer_text(response.text)
+    if not response.tool_calls or not commentary:
         return response.reasoning
     return _joined_reasoning(response.reasoning, commentary)
 
@@ -3523,7 +3520,9 @@ class ChatService:
                 "the provider rejected the request context after tool routing began; "
                 "Nebula will not repeat tool work"
             )
-        if prepared.session is None or prepared.source_request is None:
+        if (
+            prepared.session is None and prepared.pending_session is None
+        ) or prepared.source_request is None:
             raise ChatConfigurationError(
                 "the provider rejected the request context and the durable conversation "
                 "could not be reassembled safely"
@@ -3531,7 +3530,11 @@ class ChatService:
         refreshed = await self._refresh_context_metadata(
             prepared.provider_profile.id, prepared.provider, prepared.resolved_model
         )
-        canonical = self._session_messages(prepared.session)
+        canonical = (
+            self._session_messages(prepared.session)
+            if prepared.session is not None
+            else []
+        )
         # The canonical transcript stands for what each turn was sent with,
         # including the context the operator selected for this very turn.
         messages = [
@@ -3542,6 +3545,22 @@ class ChatService:
             ).model_copy(update={"content": _stored_model_text(item)})
             for item in canonical
         ]
+        if not prepared.inputs_persisted:
+            # A turn completed without a durable turn record (a plain
+            # complete()) writes its messages only with the answer, and a
+            # brand-new conversation is not stored at all yet. What this
+            # request adds is the end of the conversation, sent the way
+            # prepare sent it: selected context on the operator's message.
+            added = list(prepared.new_messages)
+            if added and prepared.context_attachments:
+                added[-1] = added[-1].model_copy(
+                    update={
+                        "content": _content_with_selected_context(
+                            added[-1].content, prepared.context_attachments
+                        )
+                    }
+                )
+            messages.extend(added)
         goal = self.store.get(ChatGoal, turn.goal_id) if turn and turn.goal_id else None
         budget = ContextCallBudget(
             max_tokens=(

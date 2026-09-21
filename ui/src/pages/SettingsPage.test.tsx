@@ -148,6 +148,22 @@ describe("settings page dialogs", () => {
     expect(within(dialog).getByRole("button", { name: "Close provider dialog" })).toBeEnabled();
   });
 
+  it("describes the output default Core sizes from the model", async () => {
+    const user = userEvent.setup();
+    renderSettings("/settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    const field = within(dialog).getByLabelText("Maximum output tokens");
+
+    // A blank field no longer means a flat 2,048: Core sizes each reply from
+    // the model's own limit (resolve_context_limits).
+    expect(field).toHaveAttribute("placeholder", "Sized from the model");
+    expect(field).toHaveAccessibleDescription(
+      "Leave blank to size each reply from the model: its published output limit, up to 32,000 tokens and a quarter of the context window, or 2,048 when the limit is unknown. A value here caps every reply.",
+    );
+  });
+
   it("trims the operator display name and refuses a blank one", async () => {
     workspace.createOperatorProfile.mockResolvedValue(undefined);
     const user = userEvent.setup();
