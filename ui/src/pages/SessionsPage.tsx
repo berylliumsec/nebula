@@ -13,11 +13,10 @@ import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
 import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
-import { ChatDecisions, type DecisionSeed } from "../components/ChatDecisions";
 import { useChatQueue } from "./useChatQueue";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
 import { estimateLiveTokens, ProviderGoalPanel, type ProviderGoalDraft } from "../components/ProviderGoalPanel";
-import { ProviderSessionAdvanced } from "../components/ProviderSessionAdvanced";
+import { ProviderGoalChildren } from "../components/ProviderGoalChildren";
 import { isGuideLayerTarget, useGuideAction } from "../guides/guideActions";
 import { ShowMeHow } from "../guides/ShowMeHow";
 import { ChatWorkspaceDrawer } from "../components/ChatWorkspaceDrawer";
@@ -27,7 +26,6 @@ import { sshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, ChatResultStream, readPlacement, useStructuredResults, useUnseenCount, writePlacement, type AgentViewPlacement } from "../components/structured-result";
 import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
-import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
@@ -810,7 +808,6 @@ export function SessionsPage() {
   const [liveGoalTokenEstimate, setLiveGoalTokenEstimate] = useState(0);
   const [providerGoalLoading, setProviderGoalLoading] = useState(false);
   const [providerGoalError, setProviderGoalError] = useState<string>();
-  const [decisionSeed, setDecisionSeed] = useState<DecisionSeed>();
   const [expandedContextIndex, setExpandedContextIndex] = useState<number>();
   const [contextStatus, setContextStatus] = useState<ContextStatus>();
   const [contextStatusError, setContextStatusError] = useState<string>();
@@ -4637,7 +4634,7 @@ export function SessionsPage() {
                         ].filter(Boolean).join(" · ");
                         return <details className="chat-message-usage"><summary>{summary}</summary>{tokens && <span>{tokens.inputTokens.toLocaleString()} input · {tokens.outputTokens.toLocaleString()} output</span>}{detail && <span>{detail}</span>}</details>;
                       })()}
-                      {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={NotebookPen} label="Save as decision" onClick={event => {const selection = window.getSelection(); const container = event.currentTarget.closest(".chat-message"); const exact = selection && container?.contains(selection.anchorNode) && container.contains(selection.focusNode) ? selection.toString() : ""; const text = exact || message.content; setDecisionSeed({messageId: message.id, text, selection: text}); setSessionInspectorOpen(true); updateSearchParams(next => {next.set("drawer", "context");});}} /><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
+                      {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
                     </div>
                     {messageReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                   </article>
@@ -4973,13 +4970,7 @@ export function SessionsPage() {
               ["Corrections", activeContextStatus.snapshot.memory.corrections],
               ["Open questions", activeContextStatus.snapshot.memory.openQuestions],
             ] as const).map(([label, items]) => items.length ? <section key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={`${label}-${index}`}>{item.text}</li>)}</ul></section> : null)}<small>{activeContextStatus.snapshot.sourceReferences.length} source reference{activeContextStatus.snapshot.sourceReferences.length === 1 ? "" : "s"} · private reasoning is not stored</small></div></details>}</> : <p>Context status has not been recorded yet.</p>}</section>
-          {runtimeKind === "provider" && api && sessionId && <ProviderSessionAdvanced api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}
-          {api && sessionId && <ChatDecisions key={`decisions:${sessionId}`} api={api} sessionId={sessionId} seed={decisionSeed} onSeedConsumed={() => setDecisionSeed(undefined)} onMessage={(id, sourceSession) => {if (sourceSession && sourceSession !== sessionId) {updateSearchParams(next => {next.set("session", sourceSession); next.set("message", id); next.delete("drawer");});} else openDrawerMessage(id);}} />}
-          {api && sessionId && <ChatRecordedContext key={`recorded-context:${sessionId}`} api={api} sessionId={sessionId} onMessage={openDrawerMessage} />}
-
-
-
-        <details><summary>Technical session details</summary>          <dl><div><dt>Active operator</dt><dd>{activeOperator?.displayName ?? "No active operator"}</dd></div><div><dt>Conversation</dt><dd>{conversationOpen ? sessionId ? sessions.find((session) => session.id === sessionId)?.title ?? "Saved chat" : "Unsaved chat" : "None selected"}</dd></div><div><dt>Runtime</dt><dd>{runtimeKind === "harness" ? selectedHarness?.name ?? "Harness" : selectedProvider?.name ?? "Not selected"}</dd></div>{runtimeKind === "harness" && <div><dt>Model configuration</dt><dd>{model || "Not selected"}{harnessReasoningEffort ? ` · ${harnessReasoningEffort} effort` : ""}{harnessServiceTier ? ` · ${harnessServiceTier} speed` : ""}</dd></div>}{runtimeKind === "harness" && harnessSessionId && <div><dt>Harness session</dt><dd><code title={harnessSessionId}>{harnessSessionId}</code></dd></div>}<div><dt>Code Run</dt><dd><span className={`status-dot ${executionCapabilities?.ready ? "healthy" : "unavailable"}`} /> {executionCapabilities?.ready ? "Review available" : "Unavailable"}</dd></div></dl></details></>}
+          {runtimeKind === "provider" && api && sessionId && <ProviderGoalChildren api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}</>}
         </ChatWorkspaceDrawer>}
       </div>
       <nav className="mobile-companion-nav" aria-label="Mobile operator navigation">

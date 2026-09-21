@@ -8678,36 +8678,6 @@ export class ApiClient {
     return this.request<void>(`chat/temporary-sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE", keepalive: true });
   }
 
-  listChatCheckpoints(sessionId: string): Promise<Array<{
-    id: string; label: string; files: Array<{ path: string; sha256: string; size: number }>; createdAt: string;
-  }>> {
-    return this.request<Array<{
-      id: string; label: string; files: Array<{ path: string; sha256: string; size: number }>; created_at: string;
-    }>>(`chat/sessions/${encodeURIComponent(sessionId)}/checkpoints`).then(items => items.map(item => ({
-      id: item.id, label: item.label, files: item.files, createdAt: item.created_at,
-    })));
-  }
-
-  captureChatCheckpoint(sessionId: string, body: { label: string; paths: string[] }) {
-    return this.request<Record<string, unknown>>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
-      { method: "POST", body: JSON.stringify(body) },
-    );
-  }
-
-  previewChatCheckpoint(checkpointId: string) {
-    return this.request<Array<{ path: string; sha256: string; size: number; status: string }>>(
-      `chat/checkpoints/${encodeURIComponent(checkpointId)}/preview`,
-    );
-  }
-
-  restoreChatCheckpoint(checkpointId: string) {
-    return this.request<Array<{ path: string; status: string }>>(
-      `chat/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
-      { method: "POST" },
-    );
-  }
-
   listGoalChildren(sessionId: string): Promise<ChatGoal[]> {
     return this.request<Array<Record<string, any>>>(
       `chat/sessions/${encodeURIComponent(sessionId)}/goal/children`,
@@ -8728,30 +8698,6 @@ export class ApiClient {
         }),
       },
     ).then(mapChatGoal);
-  }
-
-  getChatSchedule(sessionId: string) {
-    return this.request<{
-      id: string; interval_seconds: number; next_run_at: string; enabled: boolean;
-      last_status?: string | null; skip_reason?: string | null; revision: number;
-    }>(`chat/sessions/${encodeURIComponent(sessionId)}/schedule`);
-  }
-
-  createChatSchedule(sessionId: string, intervalSeconds: number) {
-    return this.request<Record<string, unknown>>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/schedule`,
-      { method: "POST", body: JSON.stringify({ interval_seconds: intervalSeconds }) },
-    );
-  }
-
-  writeChatSchedule(sessionId: string, body: { expectedRevision: number; enabled: boolean }) {
-    return this.request<Record<string, unknown>>(
-      `chat/sessions/${encodeURIComponent(sessionId)}/schedule/actions`,
-      {
-        method: "POST",
-        body: JSON.stringify({ expected_revision: body.expectedRevision, enabled: body.enabled }),
-      },
-    );
   }
 
   forkChatSession(
