@@ -1,28 +1,21 @@
 {
-  "change_digest": "818284514768766d7dec6c1ffbd40a3168a5abda0b07a074004db7eb2f16af98",
-  "reviewed_by": "Claude review of two-way subagent messaging",
-  "reason": "Supervisors and subagents could only exchange the task and the final report, and several failures (settle exceptions, unposted reports, goal continuation) only reached the diagnostics log. This adds a durable ChatSubagentMessage entity and ChatSubagent.rounds; message_subagent / subagent.message (working child reads it before its next step, a paused question takes it as the answer, a finished child runs another round); message_parent (optionally waiting for a reply) and read_parent_messages on every subagent turn, which therefore always routes tools; delivery to a waiting parent (waits end on messages and open questions), a working provider parent (Core-added list_subagents step with no budget), a running Codex/Claude harness (steer), Grok (updates on subagent tool results) and an idle parent (posted subagent_message plus next-prompt context); questions to a parent that cannot answer are closed with the reason. Reports carry error, last_step, tool_failures and undelivered_messages; settle exceptions fail the subagent with the cause; goal continuation failures pause the goal. test_chat_subagents.py and test_harness_provider_subagents.py carry 10 new tests (two-way messages mid-work, question answered by a waiting parent, question to an idle parent, new round, failure details, bookkeeping failure, unread messages on stop, harness question/answer, harness steer, harness next-turn delivery). The other files cover the provider tool loop, turn resume, goals, harness runtime, tool catalog/suggestion spec sets, storage deletion and CRUD registration. Verified live on a throwaway Core against OpenRouter (Claude Haiku 4.5, gpt-4.1-mini), Codex and Grok.",
-  "exclusions": "No UI, native or Playwright change: the list API only gains additive fields (rounds, question) and new posted messages use metadata.kind subagent_message, which the transcript renders as a plain assistant message. test_browser_companion.py is left out because it needs a real Chromium and does not touch subagents.",
+  "change_digest": "4d65d4518f3087eca5dc436a5247852f65f8d56cd2f5a19393ac8d1449e25446",
+  "reviewed_by": "Claude review of Grok /goal final messages",
+  "reason": "Live Grok (1.0.34, grok-4.6) /goal runs showed two defects in the chat reply. (1) Grok's goal mode runs planner, implementer and skeptic roles that narrate as commentary, so a monitored /goal run's only answer text was the final role's closing word: a blocked goal ended the chat with just 'Refuted'. _run_harness_command now replaces that reply, for monitored Grok goals that stop, with _goal_outcome_message: outcome, elapsed time and tokens from the goal snapshot, the objective, Grok's last message, and a next step (/goal status or /goal resume). /goal status, pause and clear keep Grok's own reply. (2) After streaming its final answer in chunks, goal mode sent the whole answer again as one chunk (recorded: 70 chunks then one 214-character chunk equal to their join), so the reply appeared twice; ordinary Grok turns were checked live and do not do this. GrokAcpConnection.run_turn now drops a closing chunk that exactly repeats the text streamed since the last tool call. Verified end to end through a scratch Core built from this branch (project in host mode, Grok profile with workspace write and shell): '/goal add f_to_c and pytest tests' completed in 270 s and 125k tokens, the project's 3 tests pass, and the reply read 'Goal complete after 4 min 24 s and 124,939 tokens' with the objective and Grok's summary; replaying the recorded 71 chunks through the fixed code yields the summary once. test_harness_commands.py carries the new and updated tests; the other files are the suites that drive the Grok and Codex connections, _run_harness_command and the harness runtime.",
+  "exclusions": "Backend-only change inside the Grok connection and the harness /goal command path; no UI, API shape or native code changed, so no frontend, Playwright or native tests apply. test_browser_companion.py is left out: it only lists Codex models and needs a real Chromium.",
   "expected_tests": {
-    "python": 389,
+    "python": 228,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_harness_commands.py",
+    "tests/v3/test_harness_adapters.py",
     "tests/v3/test_harnesses.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_chat_reconnection.py",
-    "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_api_crud_validation.py"
+    "tests/v3/test_harness_connection_state.py",
+    "tests/v3/test_approval_handoff.py",
+    "tests/v3/test_harness_provider_subagents.py"
   ],
   "frontend": [],
   "native": [],
