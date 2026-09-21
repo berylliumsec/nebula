@@ -1,34 +1,25 @@
 {
-  "change_digest": "c2adcb043ff582e1818afbc18fa6b5a62b049ddbc101360798e79e695e58fbda",
-  "reviewed_by": "Claude review of harness provider subagents",
-  "reason": "Harness chats (Codex, Grok) can delegate to one provider model as a subagent. ChatCompletionRequest gains subagent_provider_id/subagent_model; HarnessRuntimeService.prepare_chat validates them through SubagentService.validate_harness_setting (enabled provider, allowlisted and tool-verified model, local-only projects refuse cloud, a cloud provider must permit sensitive data), stores the choice on the chat and harness session, and snapshots it on the turn. The gateway catalog offers subagent.start/wait/list/stop while the setting is on, the developer instructions name the model, and a change reopens the vendor connection (subagent_binding_changed). _gateway_subagent records each call as a ToolCall and drives the existing SubagentService: start creates a ChatSubagent (new fields parent_backend, provider_profile_id, model, reported_at) on the chosen model with the session's MCP servers, the command runtime only when both sides have it, and no SSH hosts; wait is bounded per harness kind (300/600 s Codex, 60/120 s Grok) and wakes on settles; the harness turn's end stops children of a stopped turn and posts finished reports; unreported reports are prepended to the next harness prompt once. Provider-chat subagents keep their behaviour apart from views now naming the model. test_harness_provider_subagents.py drives a scripted harness connection through start/wait/list, late reports reaching the next turn once, a bounded wait, stopping, the catalog/reconnect/instructions following the setting, validation and privacy refusals, delegated-work item kinds, and per-kind wait limits. test_chat_subagents.py guards the provider-parent path; test_harnesses.py and test_harness_adapters.py cover the gateway, connection and instructions code in harnesses.py; test_chat.py, test_chat_queue.py and test_chat_api.py cover the request model, queue dispatch and API wiring. Frontend: HarnessSubagentSettings.test.tsx covers the new Assistant settings section, ChatSubagentPane.test.tsx the harness pane copy and result-card model, client.test.ts the request/session wire mapping. Playwright: the chat-subagents area now also runs the new harness delegation journey on desktop and both phones, and entry:assistant covers SessionsPage (settings popover, request body, rail/pane gating).",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The provider-reasoning area is selected because the SessionsPage request builder next to reasoning effort changed. Other areas that SessionsPage/chat.py/harnesses.py map to (chat-edit-in-place, provider-thinking, conversation-details) run inside the assistant grep, which was run locally on desktop, mobile-chromium and mobile-webkit and passes. activity-ledger is not selected: harnessActivity/ActivityLedger did not change; the backend only relabels subagent.* gateway calls as the existing subagent kind, covered by test_harness_provider_subagents.py. core-api is not selected: the new ChatSubagent and request fields are optional with defaults and the REST paths are covered by test_chat_api.py. test_chat_schedules.py was run locally and passes. ui/src/App.test.tsx 'keeps diagnostics out of the advanced view' fails identically on pristine origin/main and is unrelated.",
+  "change_digest": "55e797ac4246fd4a2571dcfaed591cc5c1aed048371b7b80a61f5c0e9f239155",
+  "reviewed_by": "Claude review of the settings legacy-hash test",
+  "reason": "App.test.tsx 'keeps diagnostics out of the advanced view while preserving legacy hashes' failed on origin/main whenever the file ran. #407 (0244d71) made the router location own the SettingsPage section, but the test still planted #security-settings with window.history.replaceState and rendered a MemoryRouter at a bare /settings, so the router effect correctly settled on Setup. Under BrowserRouter the router hash is the address-bar hash, so that state cannot occur in the app; the test now passes the legacy hash through the router. It passed alone only because the lazy SettingsPage seeded its first render from window.location.hash and findByRole read the DOM before the router effect ran; the initial section and advanced group now come from the router location, so the first paint agrees with the effect (the old test now fails deterministically alone too). Frontend: App.test.tsx carries the fixed test; SettingsPage.test.tsx and SettingsLens.test.tsx cover section routing from the router, tab/group hash rewrites and the embedded lens path that keeps using embeddedTarget. Playwright: appearance-settings deep-links /settings#appearance-settings and asserts Advanced is aria-current (the production legacy-hash path); settings-search covers catalog routes into sections; critical-workspaces desktop/compact screenshot /settings on first paint.",
+  "exclusions": "No Python or native changes. entry:critical-workspaces/narrow is not selected: its 'critical workspaces remain visually stable' and 'Light preserves each critical workspace hierarchy' fail on pristine origin/main (a20c6ea) at the Project screenshot (project-narrow-narrow / project-light-narrow, 15434 and 12222 px) because the Project tab bar now wraps 'Results' onto a second line at narrow width, with identical pixel counts with and without this change; the loop stops before Settings, so the narrow Settings screenshots (Zero Dark and Light) were run locally with the loop limited to Settings and pass. The whole ui vitest suite (159 files, 1042 tests) was run locally and passes. Other areas SettingsPage.tsx falls back to (desktop-interface, mobile-layout) are broad fallbacks; the section-state change is covered by the selected areas.",
   "expected_tests": {
-    "python": 282,
-    "frontend": 93,
+    "python": 0,
+    "frontend": 46,
     "native": 0,
-    "playwright": 165
+    "playwright": 18
   },
-  "python": [
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_chat_api.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
-    "ui/src/api/client.test.ts"
+    "ui/src/App.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/SettingsLens.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:chat-subagents",
-    "area:provider-reasoning",
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit"
+    "area:appearance-settings",
+    "area:settings-search",
+    "entry:critical-workspaces/desktop",
+    "entry:critical-workspaces/compact"
   ]
 }
