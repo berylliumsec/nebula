@@ -1,38 +1,19 @@
 {
-  "change_digest": "2df5610cf5d429ceb5601e33fe2fc4f0b4532600510eea81c49744827c215041",
-  "reviewed_by": "Claude review of operator-set subagent limits",
-  "reason": "Subagents lose their fixed caps (3 running per conversation, 6 per parent response). ChatCompletionRequest gains max_active_subagents (1-100, default none); provider chats keep it in the turn request_snapshot and session metadata and pass it through schedules and goal continuations, harness chats keep it as provider_subagent.max_active, which _subagent_binding includes so a change reopens the vendor connection with instructions stating the limit. SubagentService.start refuses a start only at an operator-set limit. The UI adds a shared Running at once field to the harness subagent settings and the provider Subagents toggle, sends the field only when set, reads it back from either metadata shape, and the Subagents pane stops assuming three slots. Selected Python files cover subagent start/limits, harness gateway binding and instructions, schedules, goal continuation, queueing, chat API and the harness instruction builders; frontend files cover the field, pane and client mapping; chat-subagents exercises both settings surfaces end to end, provider-reasoning covers the request builder beside reasoning effort, and the assistant entries cover the SessionsPage settings popover.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust or packaging changed. No real-Core Playwright: the request and metadata contract is covered by the Python chat API and harness tests plus the mocked end-to-end settings flows. Only the harness-instruction case of test_browser_companion.py is selected; its real-Chromium capture tests need a browser the Python CI job does not install and are unaffected by this change.",
+  "change_digest": "dde601105821f2eab95bcffe499888a15c4dcb99f386a27f985f7772f04e3400",
+  "reviewed_by": "Claude review of subagent reasoning-level selection",
+  "reason": "Subagents always ran at the provider model's default reasoning level: neither start tool took a level and the child request never carried one, so a parent set to high delegated at the default. The selected files cover both parents end to end. A provider parent's child inherits the conversation's level, an explicit level overrides it, an unknown level is refused without a child, and the start result and list view report the level. A harness parent's child inherits the harness session's level, takes an explicit override through the gateway schema, and keeps the model default under a vendor-only level. A goal continuing on late reports now sends the conversation's current level (the new goal test fails on the old code with None). The remaining cases in both files guard the unchanged start, wait, stop, restart and delivery paths that the changed start and continuation code runs through.",
+  "exclusions": "No frontend, Playwright, native or production-build gates apply: the UI does not read the new view field, and the operator settings, persistence schema (one optional record field, no migration) and packaging are unchanged. test_chat_goals.py is excluded because chat.py's own goal continuation is untouched; its subagent-report sibling is covered by the new case. test_harnesses.py and test_harness_adapters.py are excluded because the harness change is limited to the subagent.start gateway schema and pass-through, which the selected harness subagent file exercises. Full suites and live provider calls are excluded.",
   "expected_tests": {
-    "python": 320,
-    "frontend": 95,
+    "python": 28,
+    "frontend": 0,
     "native": 0,
-    "playwright": 165
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_provider_subagents.py",
     "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_chat_schedules.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
-    "tests/v3/test_minimal_agent_instructions.py"
+    "tests/v3/test_harness_provider_subagents.py"
   ],
-  "frontend": [
-    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
-    "ui/src/api/client.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:chat-subagents",
-    "area:provider-reasoning",
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit"
-  ]
+  "playwright": []
 }

@@ -2,7 +2,9 @@ import asyncio
 import json
 from pathlib import Path
 
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
+from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.domain import (
     ChatMessage,
     ChatSession,
@@ -898,6 +900,166 @@ def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report
         messages = _messages(store, parent_session_id)
         assert [item for item in messages if item.metadata.get("kind")] == []
         assert messages[-1].content == "Delegation failed; reviewing inline."
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Map the API routes.",
+                    name="Routes",
+                    context=None,
+                    reasoning_effort=None,
+                ),
+                _call(
+                    "p2",
+                    "start_subagent",
+                    task="List the config files.",
+                    name="Config",
+                    context=None,
+                    reasoning_effort="low",
+                ),
+                _call(
+                    "p3",
+                    "start_subagent",
+                    task="Guess.",
+                    name="Bad level",
+                    context=None,
+                    reasoning_effort="extreme",
+                ),
+                _call("p4", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p5"),
+                _response(text="Both reported."),
+            ],
+            child=[_response(text="Done."), _response(text="Done.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Split the work.",
+                allow_subagents=True,
+                reasoning_effort="high",
+            )
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+
+        child_efforts = {
+            request.messages[-1].content: request.reasoning_effort
+            for request in provider.child_requests
+        }
+        assert child_efforts == {
+            "Map the API routes.": "high",
+            "List the config files.": "low",
+        }
+        records = {item.name: item for item in store.list_entities(ChatSubagent)}
+        assert {name: item.reasoning_effort for name, item in records.items()} == {
+            "Routes": "high",
+            "Config": "low",
+        }
+        assert chat.subagents.view(records["Routes"])["reasoning_effort"] == "high"
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert [entry["status"] for entry in parent.tool_history[:3]] == [
+            "complete",
+            "complete",
+            "failed",
+        ]
+        # The delegating model is told which level each child got.
+        started = json.loads(parent.tool_history[0]["provider_result"])
+        assert started["reasoning_effort"] == "high"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Review the auth module.",
+                    name="Auth",
+                    context=None,
+                ),
+                _finish("p2"),
+                _response(text="Started a review."),
+                _finish("p3"),
+                _response(text="Folded the review into the goal."),
+            ],
+            child=[_response(text="Cookies lack SameSite.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        # Goal turns with tools publish a dashboard.
+        chat.artifact_store = ArtifactStore(tmp_path / "artifacts")
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Review auth.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        (record,) = store.list_entities(ChatSubagent)
+        assert record.status == ChatSubagentStatus.RUNNING
+
+        # The reply belonged to a goal that is still running, and the operator
+        # raised the conversation's level after it.
+        goals = ChatGoalService(store)
+        draft = goals.create(
+            prepared.session.id,
+            GoalCreate(
+                objective="Review auth",
+                completion_criteria=["Findings are reported"],
+                step_budget=1,
+            ),
+        )
+        goal = goals.write(
+            prepared.session.id,
+            GoalWrite(expected_revision=draft.revision, action="start"),
+        )
+        parent = store.get(ChatTurn, parent_turn_id)
+        store.update(
+            ChatTurn,
+            parent.id,
+            {"goal_id": goal.id},
+            expected_revision=parent.revision,
+        )
+        session = store.get(ChatSession, prepared.session.id)
+        store.update(
+            ChatSession,
+            session.id,
+            {"metadata": {**session.metadata, "reasoning_effort": "high"}},
+            expected_revision=session.revision,
+        )
+
+        provider.child_gate.set()
+        await _until(
+            lambda: any(
+                "Subagent reports are ready" in str(request.messages[-1].content)
+                for request in provider.parent_requests
+            )
+        )
+        continued = next(
+            request
+            for request in provider.parent_requests
+            if "Subagent reports are ready" in str(request.messages[-1].content)
+        )
+        assert continued.reasoning_effort == "high"
         await chat.shutdown()
 
     asyncio.run(scenario())

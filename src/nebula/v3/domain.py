@@ -3822,6 +3822,8 @@ class ChatSubagent(Entity):
     child_turn_id: str | None = Field(default=None, max_length=200)
     provider_profile_id: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=500)
+    # The reasoning level the child was asked for; None is the model's default.
+    reasoning_effort: str | None = Field(default=None, max_length=20)
     # When a harness parent received the report, through subagent.wait or at
     # the start of its next turn. Provider parents read reports from history.
     reported_at: datetime | None = None

@@ -65,6 +65,7 @@ from .chat import (
 from .chat_subagents import (
     HARNESS_WAIT_DEFAULT_SECONDS,
     HARNESS_WAIT_MAX_SECONDS,
+    SUBAGENT_EFFORT_DESCRIPTION,
     SubagentService,
     harness_subagent_instructions,
     subagent_limit,
@@ -130,6 +131,7 @@ from .domain import (
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
+from .providers import REASONING_EFFORTS
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .mcp import (
@@ -384,6 +386,11 @@ def _gateway_subagent_tools(
                         "type": "string",
                         "maxLength": 40_000,
                         "description": "Facts from this conversation the subagent needs.",
+                    },
+                    "reasoning_effort": {
+                        "type": "string",
+                        "enum": list(REASONING_EFFORTS),
+                        "description": SUBAGENT_EFFORT_DESCRIPTION,
                     },
                 },
                 "required": ["task"],
@@ -10098,11 +10105,13 @@ class HarnessRuntimeService:
                     task=str(arguments.get("task") or ""),
                     name=arguments.get("name"),
                     context=arguments.get("context"),
+                    reasoning_effort=arguments.get("reasoning_effort"),
                 )
                 result: dict[str, Any] = {
                     "subagent_id": record.id,
                     "name": record.name,
                     "model": record.model,
+                    "reasoning_effort": record.reasoning_effort or "model default",
                     "status": "running",
                     "note": "Running in parallel. Call subagent.wait when you need its report.",
                 }
